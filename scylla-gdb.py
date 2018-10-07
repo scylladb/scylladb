@@ -3,6 +3,8 @@ import re
 from operator import attrgetter
 from collections import defaultdict
 import re
+import sys
+import struct
 import random
 
 def template_arguments(gdb_type):
@@ -85,6 +87,31 @@ class intrusive_set:
         for n in self.__visit(self.root):
             yield n
 
+class std_map:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, ref):
+        container_type = ref.type.strip_typedefs()
+        kt = container_type.template_argument(0)
+        vt = container_type.template_argument(1)
+        self.value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
+        self.root = ref['_M_t']['_M_impl']['_M_header']['_M_parent']
+
+    def __visit(self, node):
+        if node:
+            for n in self.__visit(node['_M_left']):
+                yield n
+
+            value = (node + 1).cast(self.value_type.pointer()).dereference()
+            yield value['first'], value['second']
+
+            for n in self.__visit(node['_M_right']):
+                yield n
+
+    def __iter__(self):
+        for n in self.__visit(self.root):
+            yield n
+
 class intrusive_set_external_comparator:
     size_t = gdb.lookup_type('size_t')
 
@@ -144,6 +171,9 @@ class std_vector:
         while i != end:
             yield i.dereference()
             i += 1
+
+    def __getitem__(self, item):
+        return (self.ref['_M_impl']['_M_start'] + item).dereference()
 
     def __nonzero__(self):
         return self.__len__() > 0
@@ -327,6 +357,16 @@ def list_unordered_map(map, cache=True):
         yield (pc['first'], pc['second'])
         p = p['_M_nxt']
     raise StopIteration()
+
+def list_unordered_set(map, cache=True):
+    value_type = map.type.template_argument(0)
+    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>' ).pointer()
+    h = map['_M_h']
+    p = h['_M_before_begin']['_M_nxt']
+    while p:
+        pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
+        yield pc.dereference()
+        p = p['_M_nxt']
 
 class scylla(gdb.Command):
     def __init__(self):
@@ -1366,6 +1406,83 @@ class scylla_find(gdb.Command):
         for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
             gdb.execute("scylla ptr 0x%x" % (obj + off))
 
+
+class std_unique_ptr:
+    def __init__(self, obj):
+        self.obj = obj
+
+    def dereference(self):
+        return self.obj['_M_t']['_M_t']['_M_head_impl'].dereference()
+
+    def __getitem__(self, item):
+        return self.dereference()[item]
+
+    def address(self):
+        return self.dereference().address
+
+    def __nonzero__(self):
+        return bool(self.obj['_M_t']['_M_t']['_M_head_impl'])
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+
+class sharded:
+    def __init__(self, val):
+        self.val = val
+
+    def local(self):
+        shard = int(gdb.parse_and_eval('\'seastar\'::local_engine->_id'))
+        return std_vector(self.val['_instances'])[shard]['service']['_p']
+
+
+def ip_to_str(val, byteorder):
+    return '%d.%d.%d.%d' % (struct.unpack('BBBB', val.to_bytes(4, byteorder=byteorder))[::-1])
+
+
+class scylla_netw(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla netw', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        ms = sharded(gdb.parse_and_eval('netw::_the_messaging_service')).local()
+        gdb.write('Dropped messages: %s\n' % ms['_dropped_messages'])
+        gdb.write('Outgoing connections:\n')
+        for (addr, shard_info) in list_unordered_map(ms['_clients']['_M_elems'][0]):
+            ip = ip_to_str(int(addr['addr']['_addr']['ip']['raw']), byteorder=sys.byteorder)
+            client = shard_info['rpc_client']['_p']
+            rpc_client = std_unique_ptr(client['_p'])
+            gdb.write('IP: %s, (netw::messaging_service::rpc_protocol_client_wrapper*) %s:\n' % (ip, client))
+            gdb.write('  stats: %s\n' % rpc_client['_stats'])
+            gdb.write('  outstanding: %d\n' % int(rpc_client['_outstanding']['_M_h']['_M_element_count']))
+
+        servers = [
+            std_unique_ptr(ms['_server']['_M_elems'][0]),
+            std_unique_ptr(ms['_server']['_M_elems'][1]),
+        ]
+        for srv in servers:
+            if srv:
+                gdb.write('Server: resources=%s\n' % srv['_resources_available'])
+                gdb.write('Incoming connections:\n')
+                for clnt in list_unordered_set(srv['_conns']):
+                    conn = clnt['_p'].cast(clnt.type.template_argument(0).pointer())
+                    ip = ip_to_str(int(conn['_info']['addr']['u']['in']['sin_addr']['s_addr']), byteorder='big')
+                    port = int(conn['_info']['addr']['u']['in']['sin_port'])
+                    gdb.write('%s:%d: \n' % (ip, port))
+                    gdb.write('   %s\n' % (conn['_stats']))
+
+
+class scylla_gms(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla gms', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
+        for (endpoint, state) in list_unordered_map(gossiper['endpoint_state_map']):
+            ip = ip_to_str(int(endpoint['_addr']['ip']['raw']), byteorder=sys.byteorder)
+            gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
+            for app_state, value in std_map(state['_application_state']):
+                gdb.write('  %s: {version=%d, value=%s}\n' % (app_state, value['version'], value['value']))
+
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -1389,3 +1506,5 @@ scylla_tasks()
 scylla_find()
 scylla_task_histogram()
 scylla_active_sstables()
+scylla_netw()
+scylla_gms()
