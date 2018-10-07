@@ -186,10 +186,6 @@ public:
                                    schema_ptr view_schema);
 
 private:
-    static stdx::optional<secondary_index::index> find_idx(database& db,
-                                                           schema_ptr schema,
-                                                           ::shared_ptr<restrictions::statement_restrictions> restrictions);
-
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
                                                                                      service::query_state& state, const query_options& options) override;
 

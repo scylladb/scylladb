@@ -164,6 +164,13 @@ public:
     }
 
     /**
+     * Determines the index to be used with the restriction.
+     * @param db - the database context (for extracting index manager)
+     * @return If an index can be used, an optional containing this index, otherwise an empty optional.
+     */
+    std::optional<secondary_index::index> find_idx(secondary_index::secondary_index_manager& sim) const;
+
+    /**
      * Checks if the partition key has some unrestricted components.
      * @return <code>true</code> if the partition key has some unrestricted components, <code>false</code> otherwise.
      */
