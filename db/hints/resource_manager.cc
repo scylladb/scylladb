@@ -201,14 +201,18 @@ future<> resource_manager::prepare_per_device_limits() {
         auto it = _per_device_limits_map.find(device_id);
         if (it == _per_device_limits_map.end()) {
             return is_mountpoint(shard_manager.hints_dir().parent_path()).then([this, device_id, &shard_manager](bool is_mountpoint) {
-                // By default, give each group of managers 10% of the available disk space. Give each shard an equal share of the available space.
-                size_t max_size = boost::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
-                // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
-                // Then, reserve 90% of all space instead of 10% above.
-                if (is_mountpoint) {
-                    max_size *= 9;
+                auto [it, inserted] = _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{});
+                // Since we possibly deferred, we need to recheck the _per_device_limits_map.
+                if (inserted) {
+                    // By default, give each group of managers 10% of the available disk space. Give each shard an equal share of the available space.
+                    it->second.max_shard_disk_space_size = boost::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
+                    // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
+                    // Then, reserve 90% of all space instead of 10% above.
+                    if (is_mountpoint) {
+                        it->second.max_shard_disk_space_size *= 9;
+                    }
                 }
-                _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{{std::ref(shard_manager)}, max_size});
+                it->second.managers.emplace_back(std::ref(shard_manager));
             });
         } else {
             it->second.managers.emplace_back(std::ref(shard_manager));
