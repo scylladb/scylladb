@@ -76,7 +76,7 @@ bool selector_factories::uses_function(const sstring& ks_name, const sstring& fu
     return false;
 }
 
-void selector_factories::add_selector_for_ordering(const column_definition& def, uint32_t index) {
+void selector_factories::add_selector_for_post_processing(const column_definition& def, uint32_t index) {
     _factories.emplace_back(simple_selector::new_factory(def.name_as_text(), index, def.type));
 }
 
