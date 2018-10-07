@@ -143,3 +143,11 @@ rows_assertions result_msg_assertions::is_rows() {
 result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg) {
     return result_msg_assertions(msg);
 }
+
+rows_assertions rows_assertions::with_serialized_columns_count(size_t columns_count) {
+    size_t serialized_column_count = _rows->rs().get_metadata().column_count();
+    if (serialized_column_count != columns_count) {
+        fail(sprint("Expected %d serialized columns(s) but got %d", columns_count, serialized_column_count));
+    }
+    return {*this};
+}
