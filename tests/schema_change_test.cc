@@ -189,6 +189,26 @@ SEASTAR_TEST_CASE(test_column_is_dropped) {
     });
 }
 
+SEASTAR_TEST_CASE(test_static_column_is_dropped) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+        e.execute_cql("create table tests.table1 (pk int, c1 int, c2 int static, primary key (pk, c1));").get();
+
+        e.execute_cql("alter table tests.table1 drop c2;").get();
+        e.execute_cql("alter table tests.table1 add s1 int static;").get();
+        schema_ptr s = e.db().local().find_schema("tests", "table1");
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c1")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c2")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s1")));
+
+        e.execute_cql("alter table tests.table1 drop s1;").get();
+        s = e.db().local().find_schema("tests", "table1");
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c1")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c2")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("s1")));
+    });
+}
+
 SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
