@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstdint>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/memory.hh>
@@ -78,8 +79,8 @@ private:
     shard_managers_set& _shard_managers;
     per_device_limits_map& _per_device_limits_map;
 
-    seastar::gate _gate;
-    seastar::timer<timer_clock_type> _timer;
+    future<> _started = make_ready_future<>();
+    seastar::abort_source _as;
     int _files_count = 0;
 
 public:

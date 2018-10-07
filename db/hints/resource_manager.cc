@@ -27,6 +27,7 @@
 #include "lister.hh"
 #include "disk-error-handler.hh"
 #include "seastarx.hh"
+#include <seastar/core/sleep.hh>
 
 namespace db {
 namespace hints {
@@ -65,19 +66,20 @@ const std::chrono::seconds space_watchdog::_watchdog_period = std::chrono::secon
 space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)
     : _shard_managers(managers)
     , _per_device_limits_map(per_device_limits_map)
-    , _timer([this] { on_timer(); })
 {}
 
 void space_watchdog::start() {
-    _timer.arm(timer_clock_type::now());
+    _started = seastar::async([this] {
+        while (!_as.abort_requested()) {
+            on_timer();
+            seastar::sleep_abortable(_watchdog_period, _as).get();
+        }
+    }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
 }
 
 future<> space_watchdog::stop() noexcept {
-    try {
-        return _gate.close().finally([this] { _timer.cancel(); });
-    } catch (...) {
-        return make_exception_future<>(std::current_exception());
-    }
+    _as.request_abort();
+    return std::move(_started);
 }
 
 future<> space_watchdog::scan_one_ep_dir(boost::filesystem::path path, manager& shard_manager, ep_key_type ep_key) {
@@ -95,10 +97,8 @@ future<> space_watchdog::scan_one_ep_dir(boost::filesystem::path path, manager& 
 }
 
 void space_watchdog::on_timer() {
-    with_gate(_gate, [this] {
-        return futurize_apply([this] {
+        futurize_apply([this] {
             _total_size = 0;
-
             return do_for_each(_shard_managers, [this] (manager& shard_manager) {
                 shard_manager.clear_eps_with_pending_hints();
 
@@ -167,10 +167,7 @@ void space_watchdog::on_timer() {
             for (manager& shard_manager : _shard_managers) {
                 shard_manager.forbid_hints();
             }
-        }).finally([this] {
-            _timer.arm(_watchdog_period);
-        });
-    });
+        }).get();
 }
 
 future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
