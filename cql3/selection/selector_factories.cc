@@ -53,6 +53,7 @@ selector_factories::selector_factories(std::vector<::shared_ptr<selectable>> sel
     : _contains_write_time_factory(false)
     , _contains_ttl_factory(false)
     , _number_of_aggregate_factories(0)
+    , _number_of_factories_for_post_processing(0)
 {
     _factories.reserve(selectables.size());
 
@@ -78,6 +79,7 @@ bool selector_factories::uses_function(const sstring& ks_name, const sstring& fu
 
 void selector_factories::add_selector_for_post_processing(const column_definition& def, uint32_t index) {
     _factories.emplace_back(simple_selector::new_factory(def.name_as_text(), index, def.type));
+    ++_number_of_factories_for_post_processing;
 }
 
 std::vector<::shared_ptr<selector>> selector_factories::new_instances() const {

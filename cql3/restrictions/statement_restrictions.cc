@@ -350,6 +350,39 @@ std::optional<secondary_index::index> statement_restrictions::find_idx(secondary
     return std::nullopt;
 }
 
+std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(database& db) const {
+    std::vector<const column_definition*> column_defs_for_filtering;
+    if (need_filtering()) {
+        auto& sim = db.find_column_family(_schema).get_index_manager();
+        std::optional<secondary_index::index> opt_idx = find_idx(sim);
+        auto column_uses_indexing = [&opt_idx] (const column_definition* cdef) {
+            return opt_idx && opt_idx->depends_on(*cdef);
+        };
+        if (_partition_key_restrictions->needs_filtering(*_schema)) {
+            for (auto&& cdef : _partition_key_restrictions->get_column_defs()) {
+                if (!column_uses_indexing(cdef)) {
+                    column_defs_for_filtering.emplace_back(cdef);
+                }
+            }
+        }
+        if (_clustering_columns_restrictions->needs_filtering(*_schema)) {
+            column_id first_non_prefix_id = _schema->clustering_key_columns().begin()->id +
+                    _clustering_columns_restrictions->prefix_size(_schema);
+            for (auto&& cdef : _clustering_columns_restrictions->get_column_defs()) {
+                if ((cdef->id >= first_non_prefix_id) && (!column_uses_indexing(cdef))) {
+                    column_defs_for_filtering.emplace_back(cdef);
+                }
+            }
+        }
+        for (auto&& cdef : _nonprimary_key_restrictions->get_column_defs()) {
+            if (!column_uses_indexing(cdef)) {
+                column_defs_for_filtering.emplace_back(cdef);
+            }
+        }
+    }
+    return column_defs_for_filtering;
+}
+
 void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index, bool for_view, bool allow_filtering) {
     // If there is a queriable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:

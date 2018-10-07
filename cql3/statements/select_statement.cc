@@ -1099,6 +1099,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
     }
 
     check_needs_filtering(restrictions);
+    ensure_filtering_columns_retrieval(db, selection, restrictions);
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
     if (restrictions->uses_secondary_indexing()) {
@@ -1318,6 +1319,23 @@ void select_statement::check_needs_filtering(::shared_ptr<restrictions::statemen
                 "Cannot execute this query as it might involve data filtering and "
                     "thus may have unpredictable performance. If you want to execute "
                     "this query despite the performance unpredictability, use ALLOW FILTERING");
+        }
+    }
+}
+
+/**
+ * Adds columns that are needed for the purpose of filtering to the selection.
+ * The columns that are added to the selection are columns that
+ * are needed for filtering on the coordinator but are not part of the selection.
+ * The columns are added with a meta-data indicating they are not to be returned
+ * to the user.
+ */
+void select_statement::ensure_filtering_columns_retrieval(database& db,
+                                        ::shared_ptr<selection::selection> selection,
+                                        ::shared_ptr<restrictions::statement_restrictions> restrictions) {
+    for (auto&& cdef : restrictions->get_column_defs_for_filtering(db)) {
+        if (!selection->has_column(*cdef)) {
+            selection->add_column_for_post_processing(*cdef);
         }
     }
 }

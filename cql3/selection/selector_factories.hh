@@ -74,6 +74,11 @@ private:
      */
     uint32_t _number_of_aggregate_factories;
 
+    /**
+     * The number of factories that are only for post processing.
+     */
+    uint32_t _number_of_factories_for_post_processing;
+
 public:
     /**
      * Creates a new <code>SelectorFactories</code> instance and collect the column definitions.
@@ -112,7 +117,7 @@ public:
      */
     bool contains_only_aggregate_functions() const {
         auto size = _factories.size();
-        return size != 0 && _number_of_aggregate_factories == size;
+        return size != 0 && _number_of_aggregate_factories  == (size - _number_of_factories_for_post_processing);
     }
 
     /**
