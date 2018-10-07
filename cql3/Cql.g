@@ -894,8 +894,8 @@ alterKeyspaceStatement returns [shared_ptr<cql3::statements::alter_keyspace_stat
 
 /**
  * ALTER COLUMN FAMILY <CF> ALTER <column> TYPE <newtype>;
- * ALTER COLUMN FAMILY <CF> ADD <column> <newtype>;
- * ALTER COLUMN FAMILY <CF> DROP <column>;
+ * ALTER COLUMN FAMILY <CF> ADD <column> <newtype>; | ALTER COLUMN FAMILY <CF> ADD (<column> <newtype>,<column1> <newtype1>..... <column n> <newtype n>)
+ * ALTER COLUMN FAMILY <CF> DROP <column>; | ALTER COLUMN FAMILY <CF> DROP ( <column>,<column1>.....<column n>)
  * ALTER COLUMN FAMILY <CF> WITH <property> = <value>;
  * ALTER COLUMN FAMILY <CF> RENAME <column> TO <column>;
  */
@@ -903,21 +903,38 @@ alterTableStatement returns [shared_ptr<alter_table_statement> expr]
     @init {
         alter_table_statement::type type;
         auto props = make_shared<cql3::statements::cf_prop_defs>();
+        std::vector<alter_table_statement::column_change> column_changes;
         std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>, shared_ptr<cql3::column_identifier::raw>>> renames;
-        bool is_static = false;
     }
     : K_ALTER K_COLUMNFAMILY cf=columnFamilyName
-          ( K_ALTER id=cident K_TYPE v=comparatorType { type = alter_table_statement::type::alter; }
-          | K_ADD   id=cident v=comparatorType ({ is_static=true; } K_STATIC)? { type = alter_table_statement::type::add; }
-          | K_DROP  id=cident                         { type = alter_table_statement::type::drop; }
+          ( K_ALTER id=cident K_TYPE v=comparatorType { type = alter_table_statement::type::alter; column_changes.emplace_back(alter_table_statement::column_change{id, v}); }
+          | K_ADD                                     { type = alter_table_statement::type::add; }
+            (          id=cident   v=comparatorType   s=cfisStatic { column_changes.emplace_back(alter_table_statement::column_change{id,  v,  s});  }
+            | '('     id1=cident  v1=comparatorType  s1=cfisStatic { column_changes.emplace_back(alter_table_statement::column_change{id1, v1, s1}); }
+                 (',' idn=cident  vn=comparatorType  sn=cfisStatic { column_changes.emplace_back(alter_table_statement::column_change{idn, vn, sn}); } )* ')'
+            )
+          | K_DROP                                    { type = alter_table_statement::type::drop; }
+            (          id=cident { column_changes.emplace_back(alter_table_statement::column_change{id});  }
+            | '('     id1=cident { column_changes.emplace_back(alter_table_statement::column_change{id1}); }
+                 (',' idn=cident { column_changes.emplace_back(alter_table_statement::column_change{idn}); } )* ')'
+            )
           | K_WITH  properties[props]                 { type = alter_table_statement::type::opts; }
           | K_RENAME                                  { type = alter_table_statement::type::rename; }
                id1=cident K_TO toId1=cident { renames.emplace_back(id1, toId1); }
                ( K_AND idn=cident K_TO toIdn=cident { renames.emplace_back(idn, toIdn); } )*
           )
     {
-        $expr = ::make_shared<alter_table_statement>(std::move(cf), type, std::move(id),
-            std::move(v), std::move(props), std::move(renames), is_static);
+        $expr = ::make_shared<alter_table_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames));
+    }
+    ;
+
+cfisStatic returns [bool isStaticColumn]
+    @init{
+        bool isStatic = false;
+    }
+    : (K_STATIC { isStatic=true; })?
+    {
+        $isStaticColumn = isStatic;
     }
     ;
 
