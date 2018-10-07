@@ -69,6 +69,8 @@ private:
     class drain_tag {};
     using drain = seastar::bool_class<drain_tag>;
 
+    friend class space_watchdog;
+
 public:
     class end_point_hints_manager {
     public:
@@ -617,6 +619,8 @@ private:
     ///
     /// \param endpoint node that left the cluster
     void drain_for(gms::inet_address endpoint);
+
+    void update_backlog(size_t backlog, size_t max_backlog);
 
 public:
     ep_managers_map_type::iterator find_ep_manager(ep_key_type ep_key) noexcept {

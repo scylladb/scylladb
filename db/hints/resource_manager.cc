@@ -155,17 +155,9 @@ void space_watchdog::on_timer() {
             adjusted_quota = per_device_limits.max_shard_disk_space_size - delta;
         }
 
-        bool can_hint = _total_size < adjusted_quota;
-        resource_manager_logger.trace("space_watchdog: total_size ({}) {} max_shard_disk_space_size ({})", _total_size, can_hint ? "<" : ">=", adjusted_quota);
-
-        if (!can_hint) {
-            for (manager& shard_manager : per_device_limits.managers) {
-                shard_manager.forbid_hints_for_eps_with_pending_hints();
-            }
-        } else {
-            for (manager& shard_manager : per_device_limits.managers) {
-                shard_manager.allow_hints();
-            }
+        resource_manager_logger.trace("space_watchdog: consuming {}/{} bytes", _total_size, adjusted_quota);
+        for (manager& shard_manager : per_device_limits.managers) {
+            shard_manager.update_backlog(_total_size, adjusted_quota);
         }
     }
 }
