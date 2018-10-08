@@ -1705,8 +1705,17 @@ future<> storage_proxy::send_to_endpoint(
     utils::latency_counter lc;
     lc.start();
 
-    // View updates use consistency level ANY in order to fall back to hinted handoff in case of a failed update
-    db::consistency_level cl = (type == db::write_type::VIEW) ? db::consistency_level::ANY : db::consistency_level::ONE;
+    stdx::optional<clock_type::time_point> timeout;
+    db::consistency_level cl;
+    if (type == db::write_type::VIEW) {
+        // View updates use consistency level ANY in order to fall back to hinted handoff in case of a failed update.
+        // They also have a near-infinite timeout to avoid incurring the extra work of writting hints and to apply
+        // backpressure.
+        timeout = clock_type::now() + 5min;
+        cl = db::consistency_level::ANY;
+    } else {
+        cl = db::consistency_level::ONE;
+    }
     return mutate_prepare(std::array{std::move(m)}, cl, type,
             [this, target = std::array{target}, pending_endpoints = std::move(pending_endpoints), &stats] (
                 std::unique_ptr<mutation_holder>& m,
@@ -1733,8 +1742,8 @@ future<> storage_proxy::send_to_endpoint(
             std::move(dead_endpoints),
             nullptr,
             stats);
-    }).then([this, cl] (std::vector<unique_response_handler> ids) {
-        return mutate_begin(std::move(ids), cl);
+    }).then([this, cl, timeout = std::move(timeout)] (std::vector<unique_response_handler> ids) mutable {
+        return mutate_begin(std::move(ids), cl, std::move(timeout));
     }).then_wrapped([p = shared_from_this(), lc, &stats] (future<>&& f) {
         return p->mutate_end(std::move(f), lc, stats, nullptr);
     });
