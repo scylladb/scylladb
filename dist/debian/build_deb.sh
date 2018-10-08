@@ -122,6 +122,13 @@ if is_debian_variant && [ ! -f /usr/share/doc/python-pkg-resources/copyright ]; 
     sudo apt-get install -y python-pkg-resources
 fi
 
+if [ "$ID" = "ubuntu" ] && [ ! -f /usr/share/keyrings/debian-archive-keyring.gpg ]; then
+    sudo apt-get install -y debian-archive-keyring
+fi
+if [ "$ID" = "debian" ] && [ ! -f /usr/share/keyrings/ubuntu-archive-keyring.gpg ]; then
+    sudo apt-get install -y ubuntu-archive-keyring
+fi
+
 if [ -z "$TARGET" ]; then
     if is_debian_variant; then
         if [ ! -f /usr/bin/lsb_release ]; then
