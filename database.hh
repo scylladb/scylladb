@@ -280,6 +280,9 @@ struct cf_stats {
     int64_t clustering_filter_fast_path_count = 0;
     // how many sstables survived the clustering key checks
     int64_t surviving_sstables_after_clustering_filter = 0;
+
+    // How many view updates were dropped due to overload.
+    int64_t dropped_view_updates = 0;
 };
 
 class table;

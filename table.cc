@@ -71,6 +71,15 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
 }
 
 future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source) const {
+    if (!_config.view_update_concurrency_semaphore->current()) {
+        // We don't have resources to generate view updates for this write. If we reached this point, we failed to
+        // throttle the client. The memory queue is already full, waiting on the semaphore would cause this node to
+        // run out of memory, and generating hints would ultimately result in the disk queue being full too. We don't
+        // drop the base write, which could create inconsistencies between base replicas. So we dolefully continue,
+        // and note the fact we dropped a view update.
+        ++_config.cf_stats->dropped_view_updates;
+        return make_ready_future<row_locker::lock_holder>();
+    }
     auto& base = schema();
     m.upgrade(base);
     auto views = affected_views(base, m);

@@ -2355,6 +2355,9 @@ database::setup_metrics() {
                        sm::description("Counts sstables that survived the clustering key filtering. "
                                        "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
+        sm::make_derive("dropped_view_updates", _cf_stats.dropped_view_updates,
+                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. ")),
+
         sm::make_derive("total_writes", _stats->total_writes,
                        sm::description("Counts the total number of successful write operations performed by this shard.")),
 
@@ -4512,10 +4515,8 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             std::move(views),
             flat_mutation_reader_from_mutations({std::move(m)}),
             std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
-        return seastar::get_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates), timeout).then(
-                [this, base_token = std::move(base_token), updates = std::move(updates)] (db::timeout_semaphore_units units) mutable {
-            db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units)).handle_exception([] (auto ignored) { });
-        });
+        auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
+        db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units)).handle_exception([] (auto ignored) { });
     });
 }
 
