@@ -4478,6 +4478,10 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
 future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout) const {
     //FIXME: Avoid unfreezing here.
     auto m = fm.unfreeze(s);
+    return push_view_replica_updates(s, std::move(m), timeout);
+}
+
+future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout) const {
     auto& base = schema();
     m.upgrade(base);
     auto views = affected_views(base, m);
