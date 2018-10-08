@@ -83,7 +83,7 @@ The `-c1 -m1G` arguments limit this Seastar-based test to a single system thread
 
 ### Preparing patches
 
-All changes to Scylla are submitted as patches to the public mailing list. Once a patch is approved by one of the maintainers of the project, it is committed to the maintainers' copy of the repository at https://github.com/scylladb/scylla.
+All changes to Scylla are submitted as patches to the public [mailing list](mailto:scylladb-dev@googlegroups.com). Once a patch is approved by one of the maintainers of the project, it is committed to the maintainers' copy of the repository at https://github.com/scylladb/scylla.
 
 Detailed instructions for formatting patches for the mailing list and advice on preparing good patches are available at the [ScyllaDB website](http://docs.scylladb.com/contribute/). There are also some guidelines that can help you make the patch review process smoother:
 
