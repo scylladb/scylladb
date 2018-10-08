@@ -314,9 +314,7 @@ public:
             } else {
                 seastar::memory::on_alloc_point(); // for exception safety tests
                 other._buffer.reserve(other._buffer.size() + _buffer.size());
-                for (auto&& mf : _buffer) {
-                    other._buffer.emplace_back(std::move(mf));
-                }
+                std::move(_buffer.begin(), _buffer.end(), std::back_inserter(other._buffer));
                 _buffer.clear();
                 other._buffer_size += std::exchange(_buffer_size, 0);
             }
