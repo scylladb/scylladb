@@ -151,31 +151,7 @@ private:
 
     friend class result_memory_limiter;
 public:
-    // State of a accounter on another shard. Used to pass information about
-    // the size of the result so far in range queries.
-    class foreign_state {
-        size_t _used_memory;
-        size_t _max_result_size;
-    public:
-        foreign_state(size_t used_mem, size_t max_result_size)
-                : _used_memory(used_mem), _max_result_size(max_result_size) { }
-        size_t used_memory() const { return _used_memory; }
-        size_t max_result_size() const { return _max_result_size; }
-    };
-public:
     result_memory_accounter() = default;
-
-    // This constructor is used in cases when a result is produced on multiple
-    // shards (range queries). foreign_accounter is an accounter that, possibly,
-    // exist on the other shard and is used for merging the result. This
-    // accouter will learn how big the total result alread is and limit the
-    // part produced on this shard so that after merging the final result
-    // does not exceed the individual limit.
-    result_memory_accounter(result_memory_limiter& limiter, foreign_state fstate) noexcept
-        : _limiter(&limiter)
-        , _total_used_memory(fstate.used_memory())
-        , _maximum_result_size(fstate.max_result_size())
-    { }
 
     result_memory_accounter(result_memory_accounter&& other) noexcept
         : _limiter(std::exchange(other._limiter, nullptr))
@@ -201,10 +177,6 @@ public:
     }
 
     size_t used_memory() const { return _used_memory; }
-
-    foreign_state state_for_another_shard() {
-        return foreign_state(_used_memory, _maximum_result_size);
-    }
 
     // Consume n more bytes for the result. Returns stop_iteration::yes if
     // the result cannot grow any more (taking into account both individual
