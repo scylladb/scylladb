@@ -319,7 +319,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
     }).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_range_tombstones_at_page_boundaries) {
+SEASTAR_THREAD_TEST_CASE(test_range_tombstones) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
@@ -327,13 +327,14 @@ SEASTAR_THREAD_TEST_CASE(test_range_tombstones_at_page_boundaries) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = create_test_cf(env, 10, 10, {6, 2});
+        // Delete 20 rows after each 5 undeleted ones.
+        auto [s, pkeys] = create_test_cf(env, 2, 50, {5, 20});
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
         // Then do a paged range-query
-        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 7, [&] (size_t page) {
+        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, [&] (size_t page) {
             check_cache_population(env.db(), 1);
             BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
             BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0);
