@@ -4463,3 +4463,61 @@ SEASTAR_THREAD_TEST_CASE(test_complex_column_zero_subcolumns_read) {
     r.produces_end_of_stream();
 }
 
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    // Following tests run on files in tests/sstables/3.x/uncompressed/read_two_rows_fast_forwarding
+    // They were created using following CQL statements:
+    //
+    // CREATE TABLE two_rows_fast_forwarding (pk int, ck int, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+    // INSERT INTO two_rows_fast_forwarding (pk, ck, rc) VALUES (0, 7, 7);
+    // INSERT INTO two_rows_fast_forwarding (pk, ck, rc) VALUES (0, 8, 8);
+
+    static const sstring path = "tests/sstables/3.x/uncompressed/read_two_rows_fast_forwarding";
+    static thread_local const schema_ptr s =
+        schema_builder("test_ks", "two_rows_fast_forwarding")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("rc", int32_type)
+            .build();
+    sstable_assertions sst(s, path);
+    sst.load();
+
+    auto to_pkey = [&] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*s, bytes);
+        return dht::global_partitioner().decorate_key(*s, pk);
+    };
+
+    auto to_ckey = [&] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        return clustering_key::from_single_value(*s, bytes);
+    };
+
+    auto rc_cdef = s->get_column_definition(to_bytes("rc"));
+    BOOST_REQUIRE(rc_cdef);
+
+    auto to_expected = [rc_cdef] (int val) {
+        return std::vector<flat_reader_assertions::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
+    };
+
+    auto r = assert_that(sst.read_range_rows_flat(query::full_partition_range,
+                                                  s->full_slice(),
+                                                  default_priority_class(),
+                                                  no_resource_tracking(),
+                                                  streamed_mutation::forwarding::yes));
+    r.produces_partition_start(to_pkey(0))
+        .produces_end_of_stream();
+
+    r.fast_forward_to(to_ckey(2), to_ckey(3));
+    r.produces_end_of_stream();
+
+    r.fast_forward_to(to_ckey(4), to_ckey(5));
+    r.produces_end_of_stream();
+
+    r.fast_forward_to(to_ckey(6), to_ckey(9));
+    r.produces_row(to_ckey(7), to_expected(7))
+        .produces_row(to_ckey(8), to_expected(8))
+        .produces_end_of_stream();
+}
+

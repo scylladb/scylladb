@@ -908,6 +908,7 @@ class mp_row_consumer_m : public consumer_m {
             }
             break;
         case mutation_fragment_filter::result::store_and_finish:
+            _reader->on_end_of_stream();
             _stored.emplace<clustering_row>(std::move(cr));
             return proceed::no;
         }
@@ -927,6 +928,7 @@ class mp_row_consumer_m : public consumer_m {
             }
             break;
         case mutation_fragment_filter::result::store_and_finish:
+            _reader->on_end_of_stream();
             _stored.emplace<range_tombstone>(std::move(rt));
             return proceed::no;
         }
@@ -979,18 +981,17 @@ public:
             return proceed::no;
         }
 
-        std::visit(overloaded_functor{
+        return std::visit(overloaded_functor{
             [this] (clustering_row&& cr) {
-                maybe_push_row(std::move(cr));
+                return maybe_push_row(std::move(cr));
             },
             [this] (range_tombstone&& rt) {
-                maybe_push_range_tombstone(std::move(rt));
+                return maybe_push_range_tombstone(std::move(rt));
             },
             [] (std::monostate) {
+                return proceed::yes;
             }
         }, std::exchange(_stored, std::monostate{}));
-
-        return proceed::yes;
     }
 
     std::optional<position_in_partition_view> maybe_skip() {
