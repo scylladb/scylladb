@@ -46,8 +46,8 @@ selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, s
                               _is_writetime ? "writeTime" : "ttl",
                               def->name()));
     }
-    if (def->type->is_collection()) {
-        throw exceptions::invalid_request_exception(sprint("Cannot use selection function %s on collections",
+    if (def->type->is_multi_cell()) {
+        throw exceptions::invalid_request_exception(sprint("Cannot use selection function %s on non-frozen collections",
                                                         _is_writetime ? "writeTime" : "ttl"));
     }
 

@@ -1119,7 +1119,7 @@ SEASTAR_TEST_CASE(test_functions) {
 static const api::timestamp_type the_timestamp = 123456789;
 SEASTAR_TEST_CASE(test_writetime_and_ttl) {
     return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table cf (p1 varchar primary key, i int);").discard_result().then([&e] {
+        return e.execute_cql("create table cf (p1 varchar primary key, i int, fc frozen<set<int>>, c set<int>);").discard_result().then([&e] {
             auto q = sprint("insert into cf (p1, i) values ('key1', 1) using timestamp %d;", the_timestamp);
             return e.execute_cql(q).discard_result();
         }).then([&e] {
@@ -1129,6 +1129,19 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
                 .with_rows({{
                      {long_type->decompose(int64_t(the_timestamp))},
                  }});
+        }).then([&e] {
+            return async([&e] {
+                auto ts1 = the_timestamp + 1;
+                e.execute_cql(sprint("UPDATE cf USING TIMESTAMP %d SET fc = {1}, c = {2} WHERE p1 = 'key1'", ts1)).get();
+                auto msg1 = e.execute_cql("SELECT writetime(fc) FROM cf").get0();
+                assert_that(msg1).is_rows()
+                    .with_rows({{
+                         {long_type->decompose(int64_t(ts1))},
+                     }});
+                auto msg2f = futurize_apply([&] { return e.execute_cql("SELECT writetime(c) FROM cf"); });
+                msg2f.wait();
+                assert_that_failed(msg2f);
+            });
         });
     });
 }
