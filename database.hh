@@ -883,8 +883,7 @@ private:
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
             std::vector<view_ptr>&& views,
             mutation&& m,
-            flat_mutation_reader_opt existings,
-            db::timeout_clock::time_point timeout) const;
+            flat_mutation_reader_opt existings) const;
 
     mutable row_locker _row_locker;
     future<row_locker::lock_holder> local_base_lock(

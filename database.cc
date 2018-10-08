@@ -4507,14 +4507,13 @@ static size_t memory_usage_of(const std::vector<frozen_mutation_and_schema>& ms)
 future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         std::vector<view_ptr>&& views,
         mutation&& m,
-        flat_mutation_reader_opt existings,
-        db::timeout_clock::time_point timeout) const {
+        flat_mutation_reader_opt existings) const {
     auto base_token = m.token();
     return db::view::generate_view_updates(
             base,
             std::move(views),
             flat_mutation_reader_from_mutations({std::move(m)}),
-            std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+            std::move(existings)).then([this, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
         db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units)).handle_exception([] (auto ignored) { });
     });
