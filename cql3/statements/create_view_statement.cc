@@ -315,6 +315,27 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         throw exceptions::invalid_request_exception(sprint("No columns are defined for Materialized View other than primary key"));
     }
 
+    // The unique feature of a filter by a non-key column is that the
+    // value of such column can be updated - and also be expired with TTL
+    // and cause the view row to appear and disappear. We don't currently
+    // support support this case - see issue #3430, and neither does
+    // Cassandra - see see CASSANDRA-13798 and CASSANDRA-13832.
+    // Actually, as CASSANDRA-13798 explains, the problem is "the liveness of
+    // view row is now depending on multiple base columns (multiple filtered
+    // non-pk base column + base column used in view pk)". When the filtered
+    // column *is* the base column added to the view pk, we don't have this
+    // problem. And this case actually works correctly.
+    auto non_pk_restrictions = restrictions->get_non_pk_restriction();
+    if (non_pk_restrictions.size() == 1 && has_non_pk_column &&
+            std::find(target_primary_keys.begin(), target_primary_keys.end(), non_pk_restrictions.cbegin()->first) != target_primary_keys.end()) {
+        // This case (filter by new PK column of the view) works, as explained above
+    } else if (!non_pk_restrictions.empty()) {
+        auto column_names = ::join(", ", non_pk_restrictions | boost::adaptors::map_keys | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)));
+        throw exceptions::invalid_request_exception(sprint(
+                "Non-primary key columns cannot be restricted in the SELECT statement used for materialized view %s creation (got restrictions on: %s)",
+                column_family(), column_names));
+    }
+
     schema_builder builder{keyspace(), column_family()};
     auto add_columns = [this, &builder] (std::vector<const column_definition*>& defs, column_kind kind) mutable {
         for (auto* def : defs) {
