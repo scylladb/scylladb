@@ -488,6 +488,7 @@ private:
     utils::phased_barrier _pending_reads_phaser;
 public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst);
+    void move_sstable_from_staging_in_thread(sstables::shared_sstable sst);
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
