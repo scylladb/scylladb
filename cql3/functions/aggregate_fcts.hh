@@ -258,7 +258,7 @@ public:
         if (!_max) {
             return {};
         }
-        return data_type_for<Type>()->decompose(Type{*_max});
+        return data_type_for<Type>()->decompose(data_value(Type{*_max}));
     }
     virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
@@ -305,7 +305,7 @@ public:
         if (!_min) {
             return {};
         }
-        return data_type_for<Type>()->decompose(Type{*_min});
+        return data_type_for<Type>()->decompose(data_value(Type{*_min}));
     }
     virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
