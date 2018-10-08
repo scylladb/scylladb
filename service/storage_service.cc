@@ -303,7 +303,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                         gossiper.check_knows_remote_features(local_features, peer_features);
                     }
 
-                    gossiper.reset_endpoint_state_map();
+                    gossiper.reset_endpoint_state_map().get();
                     for (auto ep : loaded_endpoints) {
                         gossiper.add_saved_endpoint(ep);
                     }
@@ -317,7 +317,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
             slogger.info("Checking remote features with gossip");
             gossiper.do_shadow_round().get();
             gossiper.check_knows_remote_features(local_features);
-            gossiper.reset_endpoint_state_map();
+            gossiper.reset_endpoint_state_map().get();
             for (auto ep : loaded_endpoints) {
                 gossiper.add_saved_endpoint(ep);
             }
@@ -1543,7 +1543,7 @@ future<> storage_service::check_for_endpoint_collision() {
                             throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while consistent_rangemovement is true (check_for_endpoint_collision)");
                         } else {
                             gossiper.goto_shadow_round();
-                            gossiper.reset_endpoint_state_map();
+                            gossiper.reset_endpoint_state_map().get();
                             found_bootstrapping_node = true;
                             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
                             slogger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elapsed) (check_for_endpoint_collision)", addr, state, elapsed);
@@ -1555,7 +1555,7 @@ future<> storage_service::check_for_endpoint_collision() {
             }
         } while (found_bootstrapping_node);
         slogger.info("Checking bootstrapping/leaving/moving nodes: ok (check_for_endpoint_collision)");
-        gossiper.reset_endpoint_state_map();
+        gossiper.reset_endpoint_state_map().get();
     });
 }
 
@@ -1605,8 +1605,9 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
         auto tokens = get_tokens_for(replace_address);
         // use the replacee's host Id as our own so we receive hints, etc
         return db::system_keyspace::set_local_host_id(host_id).discard_result().then([replace_address, tokens = std::move(tokens)] {
-            gms::get_local_gossiper().reset_endpoint_state_map(); // clean up since we have what we need
-            return make_ready_future<std::unordered_set<token>>(std::move(tokens));
+            return gms::get_local_gossiper().reset_endpoint_state_map().then([tokens = std::move(tokens)] { // clean up since we have what we need
+                return make_ready_future<std::unordered_set<token>>(std::move(tokens));
+            });
         });
     });
 }

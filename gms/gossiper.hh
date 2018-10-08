@@ -418,7 +418,7 @@ public:
     stdx::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const;
 
     // removes ALL endpoint states; should only be called after shadow gossip
-    void reset_endpoint_state_map();
+    future<> reset_endpoint_state_map();
 
     std::unordered_map<inet_address, endpoint_state>& get_endpoint_states();
 
