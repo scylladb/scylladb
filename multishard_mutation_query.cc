@@ -470,6 +470,9 @@ read_context::ready_to_save_state* read_context::prepare_reader_for_saving(
     if (stopped_reader_fut.failed()) {
         mmq_log.debug("Failed to stop reader on shard {}: {}", shard, stopped_reader_fut.get_exception());
         ++_db.local().get_stats().multishard_query_failed_reader_stops;
+        // We don't want to leave the reader in dismantling state, lest stop()
+        // will try to wait on the reader_fut again and crash the application.
+        rs = {};
         return nullptr;
     }
 
@@ -609,9 +612,17 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
             }
 
             if (auto* maybe_future_dismantling_state = std::get_if<future_dismantling_state>(&rs)) {
-                return maybe_future_dismantling_state->fut.then([this, &rs,
-                        finish_saving = std::move(finish_saving)] (dismantling_state&& next_state) mutable {
-                    rs = std::move(next_state);
+                return maybe_future_dismantling_state->fut.then_wrapped([this, &rs,
+                        finish_saving = std::move(finish_saving)] (future<dismantling_state>&& next_state_fut) mutable {
+                    if (next_state_fut.failed()) {
+                        mmq_log.debug("Failed to stop reader: {}", next_state_fut.get_exception());
+                        ++_db.local().get_stats().multishard_query_failed_reader_stops;
+                        // We don't want to leave the reader in future dismantling state, lest
+                        // stop() will try to wait on the fut again and crash the application.
+                        rs = {};
+                        return make_ready_future<>();
+                    }
+                    rs = next_state_fut.get0();
                     return finish_saving(std::get<dismantling_state>(rs));
                 });
             }
