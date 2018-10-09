@@ -320,6 +320,9 @@ public:
     const tracing::trace_state_ptr& get_trace_state() const {
         return _trace_state;
     }
+    storage_proxy::write_stats& stats() {
+        return _stats;
+    }
     friend storage_proxy;
 };
 
@@ -470,6 +473,12 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
             if (e.handler->_cl == db::consistency_level::ANY && hints) {
                 slogger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
             }
+            if (e.handler->_cl_achieved) { // For CL=ANY this can still be false
+                for (auto&& ep : e.handler->get_targets()) {
+                    ++e.handler->stats().background_replica_writes_failed.get_ep_stat(ep);
+                }
+                e.handler->stats().background_writes_failed += int(!e.handler->get_targets().empty());
+            }
         }
 
         e.handler->on_timeout();
@@ -545,22 +554,26 @@ storage_proxy_stats::split_stats::split_stats(const sstring& category, const sst
 storage_proxy_stats::write_stats::write_stats()
 : writes_attempts(storage_proxy::COORDINATOR_STATS_CATEGORY, "total_write_attempts", "total number of write requests", "mutation_data")
 , writes_errors(storage_proxy::COORDINATOR_STATS_CATEGORY, "write_errors", "number of write requests that failed", "mutation_data")
+, background_replica_writes_failed(storage_proxy::COORDINATOR_STATS_CATEGORY, "background_replica_writes_failed", "number of replica writes that timed out or failed after CL was reached", "mutation_data")
 , read_repair_write_attempts(storage_proxy::COORDINATOR_STATS_CATEGORY, "read_repair_write_attempts", "number of write operations in a read repair context", "mutation_data") { }
 
 storage_proxy_stats::write_stats::write_stats(const sstring& category, bool auto_register_stats)
         : writes_attempts(category, "total_write_attempts", "total number of write requests", "mutation_data", auto_register_stats)
         , writes_errors(category, "write_errors", "number of write requests that failed", "mutation_data", auto_register_stats)
+        , background_replica_writes_failed(category, "background_replica_writes_failed", "number of replica writes that timed out or failed after CL was reached", "mutation_data", auto_register_stats)
         , read_repair_write_attempts(category, "read_repair_write_attempts", "number of write operations in a read repair context", "mutation_data", auto_register_stats) { }
 
 void storage_proxy_stats::write_stats::register_metrics_local() {
     writes_attempts.register_metrics_local();
     writes_errors.register_metrics_local();
+    background_replica_writes_failed.register_metrics_local();
     read_repair_write_attempts.register_metrics_local();
 }
 
 void storage_proxy_stats::write_stats::register_metrics_for(gms::inet_address ep) {
     writes_attempts.register_metrics_for(ep);
     writes_errors.register_metrics_for(ep);
+    background_replica_writes_failed.register_metrics_for(ep);
     read_repair_write_attempts.register_metrics_for(ep);
 }
 
@@ -710,6 +723,9 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
 
         sm::make_total_operations("speculative_data_reads", [this] { return _stats.speculative_data_reads; },
                        sm::description("number of speculative data read requests that were sent")),
+
+        sm::make_total_operations("background_writes_failed", [this] { return _stats.background_writes_failed; },
+                       sm::description("number of write requests that failed after CL was reached")),
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {

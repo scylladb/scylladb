@@ -81,6 +81,7 @@ struct write_stats {
     // total write attempts
     split_stats writes_attempts;
     split_stats writes_errors;
+    split_stats background_replica_writes_failed;
 
     // write attempts due to Read Repair logic
     split_stats read_repair_write_attempts;
@@ -96,6 +97,7 @@ struct write_stats {
     uint64_t background_write_bytes = 0;
     uint64_t queued_write_bytes = 0;
     uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
+    uint64_t background_writes_failed = 0;
 public:
     write_stats();
     write_stats(const sstring& category, bool auto_register_stats);
