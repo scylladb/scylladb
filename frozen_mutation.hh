@@ -78,6 +78,11 @@ public:
 
 frozen_mutation freeze(const mutation& m);
 
+struct frozen_mutation_and_schema {
+    frozen_mutation fm;
+    schema_ptr s;
+};
+
 // Can receive streamed_mutation in reversed order.
 class streamed_mutation_freezer {
     const schema& _schema;

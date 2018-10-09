@@ -171,10 +171,13 @@ public:
 class shared_mutation : public mutation_holder {
     lw_shared_ptr<const frozen_mutation> _mutation;
 public:
-    shared_mutation(const mutation& m) : _mutation(make_lw_shared<const frozen_mutation>(freeze(m))) {
+    explicit shared_mutation(frozen_mutation_and_schema&& fm_a_s)
+            : _mutation(make_lw_shared<const frozen_mutation>(std::move(fm_a_s.fm))) {
         _size = _mutation->representation().size();
-        _schema = m.schema();
-    };
+        _schema = std::move(fm_a_s.s);
+    }
+    explicit shared_mutation(const mutation& m) : shared_mutation(frozen_mutation_and_schema{freeze(m), m.schema()}) {
+    }
     lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) override {
         return _mutation;
     }
@@ -1309,21 +1312,21 @@ storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level
 }
 
 template<typename Range, typename CreateWriteHandler>
-future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
+future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
     // apply is used to convert exceptions to exceptional future
-    return futurize<std::vector<storage_proxy::unique_response_handler>>::apply([this] (const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
+    return futurize<std::vector<storage_proxy::unique_response_handler>>::apply([this] (Range&& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
         std::vector<unique_response_handler> ids;
         ids.reserve(std::distance(std::begin(mutations), std::end(mutations)));
         for (auto& m : mutations) {
             ids.emplace_back(*this, create_handler(m, cl, type));
         }
         return make_ready_future<std::vector<unique_response_handler>>(std::move(ids));
-    }, mutations, cl, type, std::move(create_handler));
+    }, std::forward<Range>(mutations), cl, type, std::move(create_handler));
 }
 
 template<typename Range>
-future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state) {
-    return mutate_prepare<>(mutations, cl, type, [this, tr_state = std::move(tr_state)] (const typename Range::value_type& m, db::consistency_level cl, db::write_type type) mutable {
+future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state) {
+    return mutate_prepare<>(std::forward<Range>(mutations), cl, type, [this, tr_state = std::move(tr_state)] (const typename std::decay_t<Range>::value_type& m, db::consistency_level cl, db::write_type type) mutable {
         return create_write_response_handler(m, cl, type, tr_state);
     });
 }
@@ -1661,7 +1664,7 @@ bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) {
 }
 
 future<> storage_proxy::send_to_endpoint(
-        mutation m,
+        std::unique_ptr<mutation_holder> m,
         gms::inet_address target,
         std::vector<gms::inet_address> pending_endpoints,
         db::write_type type,
@@ -1671,9 +1674,9 @@ future<> storage_proxy::send_to_endpoint(
 
     // View updates use consistency level ANY in order to fall back to hinted handoff in case of a failed update
     db::consistency_level cl = (type == db::write_type::VIEW) ? db::consistency_level::ANY : db::consistency_level::ONE;
-    return mutate_prepare(std::array<mutation, 1>{std::move(m)}, cl, type,
+    return mutate_prepare(std::array{std::move(m)}, cl, type,
             [this, target = std::array{target}, pending_endpoints = std::move(pending_endpoints), &stats] (
-                const mutation& m,
+                std::unique_ptr<mutation_holder>& m,
                 db::consistency_level cl,
                 db::write_type type) mutable {
         std::unordered_set<gms::inet_address> targets;
@@ -1684,14 +1687,14 @@ future<> storage_proxy::send_to_endpoint(
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
                 [] (gms::inet_address ep) { return gms::get_local_failure_detector().is_alive(ep); });
-        auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
+        auto& ks = _db.local().find_keyspace(m->schema()->ks_name());
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, ks, targets, pending_endpoints);
         return create_write_response_handler(
             ks,
             cl,
             type,
-            std::make_unique<shared_mutation>(m),
+            std::move(m),
             std::move(targets),
             pending_endpoints,
             std::move(dead_endpoints),
@@ -1705,11 +1708,57 @@ future<> storage_proxy::send_to_endpoint(
 }
 
 future<> storage_proxy::send_to_endpoint(
+        frozen_mutation_and_schema fm_a_s,
+        gms::inet_address target,
+        std::vector<gms::inet_address> pending_endpoints,
+        db::write_type type) {
+    return send_to_endpoint(
+            std::make_unique<shared_mutation>(std::move(fm_a_s)),
+            std::move(target),
+            std::move(pending_endpoints),
+            type,
+            _stats);
+}
+
+future<> storage_proxy::send_to_endpoint(
+        frozen_mutation_and_schema fm_a_s,
+        gms::inet_address target,
+        std::vector<gms::inet_address> pending_endpoints,
+        db::write_type type,
+        write_stats& stats) {
+    return send_to_endpoint(
+            std::make_unique<shared_mutation>(std::move(fm_a_s)),
+            std::move(target),
+            std::move(pending_endpoints),
+            type,
+            stats);
+}
+
+future<> storage_proxy::send_to_endpoint(
+        mutation m,
+        gms::inet_address target,
+        std::vector<gms::inet_address> pending_endpoints,
+        db::write_type type,
+        write_stats& stats) {
+    return send_to_endpoint(
+            std::make_unique<shared_mutation>(m),
+            std::move(target),
+            std::move(pending_endpoints),
+            type,
+            stats);
+}
+
+future<> storage_proxy::send_to_endpoint(
         mutation m,
         gms::inet_address target,
         std::vector<gms::inet_address> pending_endpoints,
         db::write_type type) {
-    return send_to_endpoint(std::move(m), std::move(target), std::move(pending_endpoints), type, _stats);
+    return send_to_endpoint(
+            std::make_unique<shared_mutation>(m),
+            std::move(target),
+            std::move(pending_endpoints),
+            type,
+            _stats);
 }
 
 /**

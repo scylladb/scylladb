@@ -217,7 +217,7 @@ public:
             /// \param ctx_ptr pointer to the send context
             /// \param buf hints file entry
             /// \return The mutation object representing the original mutation stored in the hints file.
-            mutation get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, temporary_buffer<char>& buf);
+            frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, temporary_buffer<char>& buf);
 
             /// \brief Get a reference to the column_mapping object for a given frozen mutation.
             /// \param ctx_ptr pointer to the send context
@@ -234,13 +234,13 @@ public:
             /// \param m mutation to send
             /// \param natural_endpoints current replicas for the given mutation
             /// \return future that resolves when the operation is complete
-            future<> do_send_one_mutation(mutation m, const std::vector<gms::inet_address>& natural_endpoints) noexcept;
+            future<> do_send_one_mutation(frozen_mutation_and_schema m, const std::vector<gms::inet_address>& natural_endpoints) noexcept;
 
             /// \brief Send one mutation out.
             ///
             /// \param m mutation to send
             /// \return future that resolves when the mutation sending processing is complete.
-            future<> send_one_mutation(mutation m);
+            future<> send_one_mutation(frozen_mutation_and_schema m);
 
             /// \brief Get the last modification time stamp for a given file.
             /// \param fname File name
