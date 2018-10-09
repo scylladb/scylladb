@@ -131,7 +131,7 @@ inline api::timestamp_type parse_timestamp(const serialization_header& header,
 }
 
 inline gc_clock::duration parse_ttl(uint32_t value) {
-    if (value > std::numeric_limits<gc_clock::duration::rep>::max()) {
+    if (value > max_ttl.count() && ! is_expired_liveness_ttl(value)) {
         throw malformed_sstable_exception(format("Too big ttl: {}", value));
     }
     return gc_clock::duration(value);
