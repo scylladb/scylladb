@@ -22,6 +22,8 @@
 #include "tests/test-utils.hh"
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
+#include "transport/messages/result_message.hh"
+#include "service/pager/paging_state.hh"
 
 
 SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {
@@ -457,6 +459,72 @@ SEASTAR_TEST_CASE(test_index_on_pk_ck_with_paging) {
             assert_that(res).is_rows().with_rows({{
                 {int32_type->decompose(2)}, {int32_type->decompose(8)}, {utf8_type->decompose("hello8")}, {utf8_type->decompose("world8")},
                 {int32_type->decompose(1)}, {int32_type->decompose(8)}, {utf8_type->decompose("small_string")}
+            }});
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_simple_index_paging) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (p int, c int, v int, PRIMARY KEY (p, c))").get();
+        e.execute_cql("CREATE INDEX ON tab (v)").get();
+        e.execute_cql("CREATE INDEX ON tab (c)").get();
+
+        e.execute_cql("INSERT INTO tab (p, c, v) VALUES (1, 2, 1)").get();
+        e.execute_cql("INSERT INTO tab (p, c, v) VALUES (1, 1, 1)").get();
+        e.execute_cql("INSERT INTO tab (p, c, v) VALUES (3, 2, 1)").get();
+
+        auto extract_paging_state = [] (::shared_ptr<cql_transport::messages::result_message> res) {
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            auto paging_state = rows->rs().get_metadata().paging_state();
+            assert(paging_state);
+            return ::make_shared<service::pager::paging_state>(*paging_state);
+        };
+
+        eventually([&] {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+            auto paging_state = extract_paging_state(res);
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+            }});
+
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+            paging_state = extract_paging_state(res);
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)},
+            }});
+
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+            }});
+        });
+
+        eventually([&] {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
+            auto paging_state = extract_paging_state(res);
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+            }});
+
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
         });
     });
