@@ -3706,7 +3706,8 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
                                 format_types format, sstring component) {
     static std::unordered_map<version_types, const char*, enum_hash<version_types>> fmtmap = {
         { sstable::version_types::ka, "{0}-{1}-{2}-{3}-{5}" },
-        { sstable::version_types::la, "{2}-{3}-{4}-{5}" }
+        { sstable::version_types::la, "{2}-{3}-{4}-{5}" },
+        { sstable::version_types::mc, "{2}-{3}-{4}-{5}" }
     };
 
     return dir + "/" + seastar::format(fmtmap[version], ks, cf, _version_string.at(version), to_sstring(generation), _format_string.at(format), component);
