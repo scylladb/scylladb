@@ -1313,8 +1313,8 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
 }
 
 future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl,
-                                     write_stats& stats, stdx::optional<clock_type::time_point> timeout_opt) {
-    return parallel_for_each(ids, [this, cl, timeout_opt, &stats] (unique_response_handler& protected_response) {
+                                     stdx::optional<clock_type::time_point> timeout_opt) {
+    return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
@@ -1325,7 +1325,7 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         auto timeout = timeout_opt.value_or(clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
         // call before send_to_live_endpoints() for the same reason as above
         auto f = response_wait(response_id, timeout);
-        send_to_live_endpoints(protected_response.release(), timeout, stats); // response is now running and it will either complete or timeout
+        send_to_live_endpoints(protected_response.release(), timeout); // response is now running and it will either complete or timeout
         return std::move(f);
     });
 }
@@ -1504,7 +1504,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
     lc.start();
 
     return mutate_prepare(mutations, cl, type, tr_state).then([this, cl, timeout_opt] (std::vector<storage_proxy::unique_response_handler> ids) {
-        return mutate_begin(std::move(ids), cl, _stats, timeout_opt);
+        return mutate_begin(std::move(ids), cl, timeout_opt);
     }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<> f) mutable {
         return p->mutate_end(std::move(f), lc, _stats, std::move(tr_state));
     });
@@ -1591,7 +1591,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats);
             }).then([this, cl] (std::vector<unique_response_handler> ids) {
-                return _p.mutate_begin(std::move(ids), cl, _stats, _timeout);
+                return _p.mutate_begin(std::move(ids), cl, _timeout);
             });
         }
         future<> sync_write_to_batchlog() {
@@ -1617,7 +1617,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state).then([this] (std::vector<unique_response_handler> ids) {
                 return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
-                    return _p.mutate_begin(std::move(ids), _cl, _stats, _timeout);
+                    return _p.mutate_begin(std::move(ids), _cl, _timeout);
                 }).then(std::bind(&context::async_remove_from_batchlog, this));
             });
         }
@@ -1681,8 +1681,8 @@ future<> storage_proxy::send_to_endpoint(
             std::move(dead_endpoints),
             nullptr,
             stats);
-    }).then([this, &stats, cl] (std::vector<unique_response_handler> ids) {
-        return mutate_begin(std::move(ids), cl, stats);
+    }).then([this, cl] (std::vector<unique_response_handler> ids) {
+        return mutate_begin(std::move(ids), cl);
     }).then_wrapped([p = shared_from_this(), lc, &stats] (future<>&& f) {
         return p->mutate_end(std::move(f), lc, stats, nullptr);
     });
@@ -1711,7 +1711,7 @@ future<> storage_proxy::send_to_endpoint(
  * @throws OverloadedException if the hints cannot be written/enqueued
  */
  // returned future is ready when sent is complete, not when mutation is executed on all (or any) targets!
-void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id, clock_type::time_point timeout, write_stats& stats)
+void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id, clock_type::time_point timeout)
 {
     // extra-datacenter replicas, grouped by dc
     std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
@@ -1719,6 +1719,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     local.reserve(3);
 
     auto handler_ptr = get_write_response_handler(response_id);
+    auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
 
     for(auto dest: handler.get_targets()) {
