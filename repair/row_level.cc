@@ -22,6 +22,13 @@
 #include "repair/repair.hh"
 #include <vector>
 
+struct shard_config {
+    unsigned shard;
+    unsigned shard_count;
+    unsigned ignore_msb;
+    sstring partitioner_name;
+};
+
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
         row_level_diff_detect_algorithm::send_full_set,
