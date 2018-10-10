@@ -542,6 +542,7 @@ manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent
     , _resource_manager(_shard_manager._resource_manager)
     , _proxy(local_storage_proxy)
     , _db(local_db)
+    , _hints_cpu_sched_group(_db.get_streaming_scheduling_group())
     , _gossiper(local_gossiper)
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
@@ -554,6 +555,7 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
     , _resource_manager(_shard_manager._resource_manager)
     , _proxy(other._proxy)
     , _db(other._db)
+    , _hints_cpu_sched_group(other._hints_cpu_sched_group)
     , _gossiper(other._gossiper)
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
@@ -609,7 +611,10 @@ manager::end_point_hints_manager::sender::clock::duration manager::end_point_hin
 }
 
 void manager::end_point_hints_manager::sender::start() {
-    _stopped = seastar::async([this] {
+    seastar::thread_attributes attr;
+
+    attr.sched_group = _hints_cpu_sched_group;
+    _stopped = seastar::async(std::move(attr), [this] {
         manager_logger.trace("ep_manager({})::sender: started", end_point_key());
         while (!stopping()) {
             try {
