@@ -699,7 +699,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>();
 
     try {
-        auto s = commitlog::read_log_file(fname, service::get_local_commitlog_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (temporary_buffer<char> buf, db::replay_position rp) mutable {
+        auto s = commitlog::read_log_file(fname, service::get_local_streaming_read_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (temporary_buffer<char> buf, db::replay_position rp) mutable {
             // Check that we can still send the next hint. Don't try to send it if the destination host
             // is DOWN or if we have already failed to send some of the previous hints.
             if (!draining() && ctx_ptr->state.contains(send_state::segment_replay_failed)) {
