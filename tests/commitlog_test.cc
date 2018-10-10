@@ -40,6 +40,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/rp_set.hh"
 #include "log.hh"
+#include "service/priority_manager.hh"
 
 using namespace db;
 
@@ -290,7 +291,7 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
 SEASTAR_TEST_CASE(test_commitlog_reader){
     static auto count_mutations_in_segment = [] (sstring path) -> future<size_t> {
         auto count = make_lw_shared<size_t>(0);
-        return db::commitlog::read_log_file(path, [count](temporary_buffer<char> buf, db::replay_position rp) {
+        return db::commitlog::read_log_file(path, service::get_local_commitlog_priority(), [count](temporary_buffer<char> buf, db::replay_position rp) {
             sstring str(buf.get(), buf.size());
             BOOST_CHECK_EQUAL(str, "hej bubba cow");
             (*count)++;
@@ -392,7 +393,7 @@ SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
                         BOOST_REQUIRE(!segments.empty());
                         auto seg = segments[0];
                         return corrupt_segment(seg, rps->at(1).pos + 4, 0x451234ab).then([seg, rps, &log] {
-                            return db::commitlog::read_log_file(seg, [rps](temporary_buffer<char> buf, db::replay_position rp) {
+                            return db::commitlog::read_log_file(seg, service::get_local_commitlog_priority(), [rps](temporary_buffer<char> buf, db::replay_position rp) {
                                 BOOST_CHECK_EQUAL(rp, rps->at(0));
                                 return make_ready_future<>();
                             }).then([](auto s) {
@@ -435,7 +436,7 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                         BOOST_REQUIRE(!segments.empty());
                         auto seg = segments[0];
                         return corrupt_segment(seg, rps->at(0).pos - 4, 0x451234ab).then([seg, rps, &log] {
-                            return db::commitlog::read_log_file(seg, [rps](temporary_buffer<char> buf, db::replay_position rp) {
+                            return db::commitlog::read_log_file(seg, service::get_local_commitlog_priority(), [rps](temporary_buffer<char> buf, db::replay_position rp) {
                                 BOOST_FAIL("Should not reach");
                                 return make_ready_future<>();
                             }).then([](auto s) {
@@ -477,7 +478,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
                         auto segments = log.get_active_segment_names();
                         BOOST_REQUIRE(!segments.empty());
                         auto seg = segments[0];
-                        return db::commitlog::read_log_file(seg, [](temporary_buffer<char> buf, db::replay_position rp) {
+                        return db::commitlog::read_log_file(seg, service::get_local_commitlog_priority(), [](temporary_buffer<char> buf, db::replay_position rp) {
                             return make_exception_future(std::runtime_error("I am in a throwing mode"));
                         }).then([](auto s) {
                             return do_with(std::move(s), [](auto& s) {

@@ -1673,14 +1673,14 @@ const db::commitlog::config& db::commitlog::active_config() const {
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
 future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
-db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off, const db::extensions* exts) {
+db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
-        file_input_stream_options make_file_input_stream_options() {
+        file_input_stream_options make_file_input_stream_options(seastar::io_priority_class read_io_prio_class) {
             file_input_stream_options fo;
             fo.buffer_size = db::commitlog::segment::default_size;
             fo.read_ahead = 10;
-            fo.io_priority_class = service::get_local_commitlog_priority();
+            fo.io_priority_class = read_io_prio_class;
             return fo;
         }
     public:
@@ -1699,8 +1699,8 @@ db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func ne
         bool header = true;
         bool failed = false;
 
-        work(file f, position_type o = 0)
-                : f(f), fin(make_file_input_stream(f, 0, make_file_input_stream_options())), start_off(o) {
+        work(file f, seastar::io_priority_class read_io_prio_class, position_type o = 0)
+                : f(f), fin(make_file_input_stream(f, 0, make_file_input_stream_options(read_io_prio_class))), start_off(o) {
         }
         work(work&&) = default;
 
@@ -1918,9 +1918,9 @@ db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func ne
         return fut;
     });
 
-    return fut.then([off, next](file f) {
+    return fut.then([off, next, read_io_prio_class] (file f) {
         f = make_checked_file(commit_error_handler, std::move(f));
-        auto w = make_lw_shared<work>(std::move(f), off);
+        auto w = make_lw_shared<work>(std::move(f), read_io_prio_class, off);
         auto ret = w->s.listen(next);
 
         w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
