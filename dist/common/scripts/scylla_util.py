@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import yaml
 
 
 def curl(url, byte=False):
@@ -384,6 +385,35 @@ def get_mode_cpuset(nic, mode):
     except subprocess.CalledProcessError:
         return '-1'
 
+def get_scylla_dirs():
+    """
+    Returns a list of scylla directories configured in /etc/scylla/scylla.yaml.
+    Verifies that mandatory parameters are set.
+    """
+    scylla_yaml_name = '/etc/scylla/scylla.yaml'
+    y = yaml.load(open(scylla_yaml_name))
+
+    # Check that mandatory fields are set
+    if 'data_file_directories' not in y or \
+            not y['data_file_directories'] or \
+            not len(y['data_file_directories']) or \
+            not " ".join(y['data_file_directories']).strip():
+        raise Exception("{}: at least one directory has to be set in 'data_file_directory'".format(scylla_yaml_name))
+    if 'commitlog_directory' not in y or not y['commitlog_directory']:
+        raise Exception("{}: 'commitlog_directory' has to be set".format(scylla_yaml_name))
+
+    dirs = []
+    dirs.extend(y['data_file_directories'])
+    dirs.append(y['commitlog_directory'])
+
+    if 'hints_directory' in y and y['hints_directory']:
+        dirs.append(y['hints_directory'])
+
+    return [d for d in dirs if d is not None]
+
+def perftune_base_command():
+    disk_tune_param = "--tune disks " + " ".join("--dir {}".format(d) for d in get_scylla_dirs())
+    return '/usr/lib/scylla/perftune.py {}'.format(disk_tune_param)
 
 def get_cur_cpuset():
     cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')

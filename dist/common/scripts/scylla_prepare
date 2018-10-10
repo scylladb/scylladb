@@ -66,6 +66,5 @@ if __name__ == '__main__':
         ifname = cfg.get('IFNAME')
         if set_nic  == 'yes':
             create_perftune_conf(ifname)
-            run('/usr/lib/scylla/posix_net_conf.sh {IFNAME} --options-file /etc/scylla.d/perftune.yaml'.format(IFNAME=ifname))
+            run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()))
 
-    run('/usr/lib/scylla/scylla-blocktune')

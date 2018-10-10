@@ -59,7 +59,7 @@ if __name__ == '__main__':
     parser.add_argument('--confdir',
                         help='scylla config directory')
     parser.add_argument('--setup-nic', action='store_true', default=set_nic,
-                        help='setup NIC\'s interrupts, RPS, XPS')
+                        help='setup NIC\'s and disks\' interrupts, RPS, XPS, nomerges and I/O scheduler')
     parser.add_argument('--ami', action='store_true', default=ami,
                         help='AMI instance mode')
     args = parser.parse_args()
@@ -72,7 +72,7 @@ if __name__ == '__main__':
     network_mode = args.mode if args.mode else cfg.get('NETWORK_MODE')
 
     if args.setup_nic:
-        rps_cpus = out('/usr/lib/scylla/posix_net_conf.sh --cpu-mask {}'.format(ifname))
+        rps_cpus = out('{} --tune net --nic {} --get-cpu-mask'.format(perftune_base_command(), ifname))
         if len(rps_cpus) > 0:
             cpuset = hex2list(rps_cpus)
             run('/usr/lib/scylla/scylla_cpuset_setup --cpuset {}'.format(cpuset))
