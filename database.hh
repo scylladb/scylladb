@@ -633,7 +633,8 @@ public:
             const dht::partition_range_vector& ranges) const;
 
     // Single range overload.
-    flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range) const;
+    flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) const;
 
     sstables::shared_sstable make_streaming_sstable_for_write();
 

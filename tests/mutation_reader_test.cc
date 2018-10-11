@@ -1993,3 +1993,93 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         return make_ready_future<>();
     }).get();
 }
+
+// Test the multishard streaming reader in the context it was designed to work
+// in: as a mean to read data belonging to a shard according to a different
+// sharding configuration.
+// The reference data is provided by a filtering reader.
+SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
+    if (smp::count < 3) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 3" << std::endl;
+        return;
+    }
+
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        env.execute_cql("CREATE KEYSPACE multishard_streaming_reader_ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
+        env.execute_cql("CREATE TABLE multishard_streaming_reader_ks.test (pk int, v int, PRIMARY KEY(pk));").get();
+
+        const auto insert_id = env.prepare("INSERT INTO multishard_streaming_reader_ks.test (\"pk\", \"v\") VALUES (?, ?);").get0();
+
+        const auto partition_count = 10000;
+
+        for (int pk = 0; pk < partition_count; ++pk) {
+            env.execute_prepared(insert_id, {{
+                    cql3::raw_value::make_value(data_value(pk).serialize()),
+                    cql3::raw_value::make_value(data_value(0).serialize())}}).get();
+        }
+
+        auto schema = env.local_db().find_column_family("multishard_streaming_reader_ks", "test").schema();
+
+        auto token_range = dht::token_range::make_open_ended_both_sides();
+        auto partition_range = dht::to_partition_range(token_range);
+
+        auto& local_partitioner = dht::global_partitioner();
+        auto remote_partitioner_ptr = create_object<dht::i_partitioner, const unsigned&, const unsigned&>(local_partitioner.name(),
+                local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
+        auto& remote_partitioner = *remote_partitioner_ptr;
+
+        auto tested_reader = make_multishard_streaming_reader(env.db(), local_partitioner, schema,
+                [sharder = dht::selective_token_range_sharder(remote_partitioner, token_range, 0)] () mutable -> std::optional<dht::partition_range> {
+            if (auto next = sharder.next()) {
+                return dht::to_partition_range(*next);
+            }
+            return std::nullopt;
+        });
+
+        auto reader_factory = [db = &env.db()] (
+                unsigned shard,
+                schema_ptr schema,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) mutable {
+            return db->invoke_on(shard, [gs = global_schema_ptr(std::move(schema)), &range, &slice,
+                    gts = tracing::global_trace_state_ptr(std::move(trace_state)), fwd_sm, fwd_mr] (database& db) {
+                auto s = gs.get();
+                auto& table = db.find_column_family(s);
+                //TODO need a way to transport io_priority_calls across shards
+                auto& pc = service::get_local_sstable_query_read_priority();
+                auto reader = table.as_mutation_source().make_reader(std::move(s), range, slice, pc, gts.get(), fwd_sm, fwd_mr);
+                return make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)));
+            });
+        };
+        auto reference_reader = make_filtering_reader(
+                make_multishard_combining_reader(schema, partition_range, schema->full_slice(),
+                        service::get_local_sstable_query_read_priority(), local_partitioner, std::move(reader_factory)),
+                [&remote_partitioner] (const dht::decorated_key& pkey) {
+                    return remote_partitioner.shard_of(pkey.token()) == 0;
+                });
+
+        std::vector<mutation> reference_muts;
+        while (auto mut_opt = read_mutation_from_flat_mutation_reader(reference_reader, db::no_timeout).get0()) {
+            reference_muts.push_back(std::move(*mut_opt));
+        }
+
+        std::vector<mutation> tested_muts;
+        while (auto mut_opt = read_mutation_from_flat_mutation_reader(tested_reader, db::no_timeout).get0()) {
+            tested_muts.push_back(std::move(*mut_opt));
+        }
+
+        BOOST_CHECK_EQUAL(reference_muts.size(), tested_muts.size());
+
+        const auto min_size = std::min(reference_muts.size(), tested_muts.size());
+        for (size_t i = 0; i < min_size; ++i) {
+            BOOST_TEST_MESSAGE(sprint("Comparing mutation %i/%i", i, min_size - 1));
+            assert_that(tested_muts[i]).is_equal_to(reference_muts[i]);
+        }
+
+        return make_ready_future<>();
+    }).get();
+}
