@@ -176,7 +176,7 @@ public:
     static ::shared_ptr<selection> wildcard(schema_ptr schema);
     static ::shared_ptr<selection> for_columns(schema_ptr schema, std::vector<const column_definition*> columns);
 
-    virtual uint32_t add_column_for_ordering(const column_definition& c);
+    virtual uint32_t add_column_for_post_processing(const column_definition& c);
 
     virtual bool uses_function(const sstring &ks_name, const sstring& function_name) const {
         return false;

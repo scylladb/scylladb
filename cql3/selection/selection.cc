@@ -156,9 +156,9 @@ public:
         return _factories->uses_function(ks_name, function_name);
     }
 
-    virtual uint32_t add_column_for_ordering(const column_definition& c) override {
-        uint32_t index = selection::add_column_for_ordering(c);
-        _factories->add_selector_for_ordering(c, index);
+    virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
+        uint32_t index = selection::add_column_for_post_processing(c);
+        _factories->add_selector_for_post_processing(c, index);
         return index;
     }
 
@@ -227,7 +227,7 @@ protected:
     return simple_selection::make(schema, std::move(columns), false);
 }
 
-uint32_t selection::add_column_for_ordering(const column_definition& c) {
+uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     _columns.push_back(&c);
     _metadata->add_non_serialized_column(c.column_specification);
     return _columns.size() - 1;

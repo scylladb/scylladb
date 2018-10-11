@@ -672,7 +672,8 @@ indexed_table_select_statement::prepare(database& db,
                                         ordering_comparator_type ordering_comparator,
                                         ::shared_ptr<term> limit, cql_stats &stats)
 {
-    auto index_opt = find_idx(db, schema, restrictions);
+    auto& sim = db.find_column_family(schema).get_index_manager();
+    auto index_opt = restrictions->find_idx(sim);
     if (!index_opt) {
         throw std::runtime_error("No index found.");
     }
@@ -694,24 +695,6 @@ indexed_table_select_statement::prepare(database& db,
             *index_opt,
             view_schema);
 
-}
-
-
-stdx::optional<secondary_index::index> indexed_table_select_statement::find_idx(database& db,
-                                                                                schema_ptr schema,
-                                                                                ::shared_ptr<restrictions::statement_restrictions> restrictions)
-{
-    auto& sim = db.find_column_family(schema).get_index_manager();
-    for (::shared_ptr<cql3::restrictions::restrictions> restriction : restrictions->index_restrictions()) {
-        for (const auto& cdef : restriction->get_column_defs()) {
-            for (auto index : sim.list_indexes()) {
-                if (index.depends_on(*cdef)) {
-                    return stdx::make_optional<secondary_index::index>(std::move(index));
-                }
-            }
-        }
-    }
-    return stdx::nullopt;
 }
 
 indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms,
@@ -1116,6 +1099,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
     }
 
     check_needs_filtering(restrictions);
+    ensure_filtering_columns_retrieval(db, selection, restrictions);
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
     if (restrictions->uses_secondary_indexing()) {
@@ -1252,7 +1236,7 @@ select_statement::get_ordering_comparator(schema_ptr schema,
         }
         auto index = selection->index_of(*def);
         if (index < 0) {
-            index = selection->add_column_for_ordering(*def);
+            index = selection->add_column_for_post_processing(*def);
         }
 
         sorters.emplace_back(index, def->type);
@@ -1335,6 +1319,23 @@ void select_statement::check_needs_filtering(::shared_ptr<restrictions::statemen
                 "Cannot execute this query as it might involve data filtering and "
                     "thus may have unpredictable performance. If you want to execute "
                     "this query despite the performance unpredictability, use ALLOW FILTERING");
+        }
+    }
+}
+
+/**
+ * Adds columns that are needed for the purpose of filtering to the selection.
+ * The columns that are added to the selection are columns that
+ * are needed for filtering on the coordinator but are not part of the selection.
+ * The columns are added with a meta-data indicating they are not to be returned
+ * to the user.
+ */
+void select_statement::ensure_filtering_columns_retrieval(database& db,
+                                        ::shared_ptr<selection::selection> selection,
+                                        ::shared_ptr<restrictions::statement_restrictions> restrictions) {
+    for (auto&& cdef : restrictions->get_column_defs_for_filtering(db)) {
+        if (!selection->has_column(*cdef)) {
+            selection->add_column_for_post_processing(*cdef);
         }
     }
 }
