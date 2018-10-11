@@ -65,9 +65,13 @@ public:
         if (!is_set()) {
             return row_marker();
         }
-        return _ttl != gc_clock::duration::zero() || _local_deletion_time != gc_clock::time_point::max()
-            ? row_marker(_timestamp, _ttl, _local_deletion_time)
-            : row_marker(_timestamp);
+        if (is_expired_liveness_ttl(_ttl.count())) {
+            return row_marker{tombstone{_timestamp, _local_deletion_time}};
+        } else if (_ttl != gc_clock::duration::zero() || _local_deletion_time != gc_clock::time_point::max()) {
+            return row_marker{_timestamp, _ttl, _local_deletion_time};
+        }
+
+        return row_marker{_timestamp};
     }
 };
 
