@@ -529,6 +529,13 @@ struct hash<sstables::metadata_type> : enum_hash<sstables::metadata_type> {};
 
 namespace sstables {
 
+// Special value to represent expired (i.e., 'dead') liveness info
+constexpr static uint32_t expired_liveness_ttl = std::numeric_limits<uint32_t>::max();
+
+inline bool is_expired_liveness_ttl(uint32_t ttl) {
+    return ttl == expired_liveness_ttl;
+}
+
 struct statistics {
     disk_hash<uint32_t, metadata_type, uint32_t> hash;
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
