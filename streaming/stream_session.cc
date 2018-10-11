@@ -205,7 +205,7 @@ void stream_session::init_messaging_service_handler() {
                     };
                     distribute_reader_and_consume_on_shards(s, dht::global_partitioner(),
                         make_flat_mutation_reader<generating_reader>(s, std::move(get_next_mutation_fragment)),
-                        [cf_id, plan_id, s, estimated_partitions] (flat_mutation_reader reader) {
+                        [cf_id, plan_id, estimated_partitions] (flat_mutation_reader reader) {
                             auto& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
                             sstables::sstable_writer_config sst_cfg;
                             sst_cfg.large_partition_handler = cf.get_large_partition_handler();
