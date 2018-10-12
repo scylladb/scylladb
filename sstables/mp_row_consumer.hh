@@ -1218,7 +1218,7 @@ public:
             if (!_mf_filter || _mf_filter->out_of_range()) {
                 throw sstables::malformed_sstable_exception("Unclosed range tombstone.");
             }
-            auto range_end = _mf_filter->upper_bound();
+            auto range_end = _mf_filter->uppermost_bound();
             position_in_partition::less_compare less(*_schema);
             auto start_pos = position_in_partition_view(position_in_partition_view::range_tag_t{},
                                                         bound_view(_opened_range_tombstone->ck, _opened_range_tombstone->kind));

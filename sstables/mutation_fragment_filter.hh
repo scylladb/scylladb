@@ -154,8 +154,8 @@ public:
         return _walker.lower_bound();
     }
 
-    position_in_partition_view upper_bound() const {
-        return _walker.upper_bound();
+    position_in_partition_view uppermost_bound() const {
+        return _walker.uppermost_bound();
     }
 };
 
