@@ -410,7 +410,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
     return seastar::async([] {
         auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         storage_service_for_tests ssft;
-        for (auto version : {sstables::sstable::version_types::ka, sstables::sstable::version_types::la}) {
+        for (auto version : all_sstable_versions) {
             for (auto index_block_size : {1, 128, 64*1024}) {
                 sstable_writer_config cfg;
                 cfg.promoted_index_block_size = index_block_size;

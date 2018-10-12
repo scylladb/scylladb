@@ -200,8 +200,9 @@ public:
         return _current_start;
     }
 
-    position_in_partition_view upper_bound() const {
-        return _current_end;
+    // Returns the upper bound of the last range in provided ranges set
+    position_in_partition_view uppermost_bound() const {
+        return position_in_partition_view::for_range_end(_ranges.back());
     }
 
     // When lower_bound() changes, this also does
