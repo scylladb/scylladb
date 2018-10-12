@@ -1230,7 +1230,13 @@ public:
                                                         bound_view(_opened_range_tombstone->ck, _opened_range_tombstone->kind));
             if (!less(range_end, start_pos)) {
                 auto end_bound = range_end.as_end_bound_view();
-                consume_range_tombstone_end(end_bound.prefix(), end_bound.kind(), _opened_range_tombstone->tomb);
+                auto rt = range_tombstone {std::move(_opened_range_tombstone->ck),
+                                           _opened_range_tombstone->kind,
+                                           end_bound.prefix(),
+                                           end_bound.kind(),
+                                           _opened_range_tombstone->tomb};
+                _opened_range_tombstone.reset();
+                _reader->push_mutation_fragment(std::move(rt));
             }
         }
         consume_partition_end();
