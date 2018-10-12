@@ -807,16 +807,14 @@ static void test_clustering_slices(populate_fn populate) {
           .produces_row_with_key(ck2)
           .produces_end_of_stream();
     }
-
     {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(1)))
             .build();
         assert_that(ds.make_reader(s, pr, slice))
-            .produces(row1 + row2 + row3 + row4 + row5 + del_1)
+            .produces(row1 + row2 + row3 + row4 + row5 + del_1, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
-
     {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(2)))
@@ -831,7 +829,7 @@ static void test_clustering_slices(populate_fn populate) {
             .with_range(query::clustering_range::make_singular(make_ck(1, 2)))
             .build();
         assert_that(ds.make_reader(s, pr, slice))
-            .produces(row3 + row4 + del_1)
+            .produces(row3 + row4 + del_1, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
 
@@ -840,7 +838,7 @@ static void test_clustering_slices(populate_fn populate) {
             .with_range(query::clustering_range::make_singular(make_ck(3)))
             .build();
         assert_that(ds.make_reader(s, pr, slice))
-            .produces(row8 + del_3)
+            .produces(row8 + del_3, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
 
