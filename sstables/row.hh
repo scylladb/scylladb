@@ -193,6 +193,8 @@ public:
 
     virtual proceed consume_row_end() = 0;
 
+    virtual void on_end_of_stream() = 0;
+
     // Called when the reader is fast forwarded to given element.
     virtual void reset(sstables::indexable_element) = 0;
 
@@ -1294,7 +1296,7 @@ public:
         // filter and using a promoted index), we may be in FLAGS or FLAGS_2
         // state instead of PARTITION_START.
         if (_state == state::FLAGS || _state == state::FLAGS_2) {
-            _consumer.consume_partition_end();
+            _consumer.on_end_of_stream();
             return;
         }
         if (_state != state::PARTITION_START || _prestate != prestate::NONE) {
