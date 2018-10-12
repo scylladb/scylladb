@@ -77,6 +77,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include "tracing/trace_state.hh"
 #include "db/view/view.hh"
+#include "db/view/view_update_backlog.hh"
 #include "db/view/row_locking.hh"
 #include "lister.hh"
 #include "utils/phased_barrier.hh"
@@ -1448,6 +1449,10 @@ public:
 
     query::querier_cache& get_querier_cache() {
         return _querier_cache;
+    }
+
+    db::view::update_backlog get_view_update_backlog() const {
+        return {max_memory_pending_view_updates() - _view_update_concurrency_sem.current(), max_memory_pending_view_updates()};
     }
 
     friend class distributed_loader;
