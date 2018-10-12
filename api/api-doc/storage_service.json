@@ -2228,11 +2228,11 @@
                "description":"The column family"
             },
             "total":{
-               "type":"int",
+               "type":"long",
                "description":"The total snapshot size"
             },
             "live":{
-               "type":"int",
+               "type":"long",
                "description":"The live snapshot size"
             }
          }
