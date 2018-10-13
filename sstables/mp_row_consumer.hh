@@ -903,6 +903,7 @@ class mp_row_consumer_m : public consumer_m {
         _stored_row.reset();
         _stored_tombstone.reset();
         _mf_filter.reset();
+        _opened_range_tombstone.reset();
     }
 
 public:
