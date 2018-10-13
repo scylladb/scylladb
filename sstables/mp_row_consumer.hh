@@ -897,6 +897,14 @@ class mp_row_consumer_m : public consumer_m {
         return proceed(!_reader->is_buffer_full());
     }
 
+    inline void reset_for_new_partition() {
+        _is_mutation_end = true;
+        _in_progress_row.reset();
+        _stored_row.reset();
+        _stored_tombstone.reset();
+        _mf_filter.reset();
+    }
+
 public:
 
     /*
@@ -1238,22 +1246,14 @@ public:
 
     virtual proceed consume_partition_end() override {
         sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", this);
-        _is_mutation_end = true;
-        _in_progress_row.reset();
-        _stored_row.reset();
-        _stored_tombstone.reset();
-        _mf_filter.reset();
+        reset_for_new_partition();
         return proceed::no;
     }
 
     virtual void reset(sstables::indexable_element el) override {
         sstlog.trace("mp_row_consumer_m {}: reset({})", this, static_cast<int>(el));
         if (el == indexable_element::partition) {
-            _is_mutation_end = true;
-            _in_progress_row.reset();
-            _stored_row.reset();
-            _stored_tombstone.reset();
-            _mf_filter.reset();
+            reset_for_new_partition();
         } else {
             _is_mutation_end = false;
         }
