@@ -41,6 +41,7 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/stream_manager.hh"
+#include "streaming/stream_reason.hh"
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"
 #include "mutation.hh"
@@ -81,6 +82,7 @@ struct send_info {
     utils::UUID cf_id;
     netw::messaging_service::msg_addr id;
     uint32_t dst_cpu_id;
+    stream_reason reason;
     size_t mutations_nr{0};
     semaphore mutations_done{0};
     bool error_logged = false;
@@ -90,12 +92,13 @@ struct send_info {
     flat_mutation_reader reader;
     send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
               dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
-              uint32_t dst_cpu_id_)
+              uint32_t dst_cpu_id_, stream_reason reason_)
         : db(db_)
         , plan_id(plan_id_)
         , cf_id(cf_id_)
         , id(id_)
         , dst_cpu_id(dst_cpu_id_)
+        , reason(reason_)
         , cf(db.find_column_family(cf_id))
         , ranges(std::move(ranges_))
         , prs(to_partition_ranges(ranges))
@@ -116,7 +119,7 @@ future<stop_iteration> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mut
     return get_local_stream_manager().mutation_send_limiter().wait().then([si, fragmented, fm = std::move(fm)] () mutable {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
         auto fm_size = fm.representation().size();
-        netw::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id, fragmented).then([si, fm_size] {
+        netw::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id, fragmented, si->reason).then([si, fm_size] {
             sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", si->plan_id, si->id.addr);
             get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
             si->mutations_done.signal();
@@ -155,7 +158,7 @@ future<> send_mutations(lw_shared_ptr<send_info> si) {
 future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
     size_t estimated_partitions = si->estimate_partitions();
     sslog.info("[Stream #{}] Start sending ks={}, cf={}, estimated_partitions={}, with new rpc streaming", si->plan_id, si->cf.schema()->ks_name(), si->cf.schema()->cf_name(), estimated_partitions);
-    return netw::get_local_messaging_service().make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->id).then([si] (rpc::sink<frozen_mutation_fragment> sink, rpc::source<int32_t> source) mutable {
+    return netw::get_local_messaging_service().make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->id).then([si] (rpc::sink<frozen_mutation_fragment> sink, rpc::source<int32_t> source) mutable {
         auto got_error_from_peer = make_lw_shared<bool>(false);
 
         auto source_op = [source, got_error_from_peer, si] () mutable -> future<> {
@@ -203,8 +206,9 @@ future<> stream_transfer_task::execute() {
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
     sort_and_merge_ranges();
     bool streaming_with_rpc_stream = service::get_local_storage_service().cluster_supports_stream_with_rpc_stream();
-    return session->get_db().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, streaming_with_rpc_stream] (database& db) {
-        auto si = make_lw_shared<send_info>(db, plan_id, cf_id, std::move(ranges), id, dst_cpu_id);
+    auto reason = session->get_reason();
+    return session->get_db().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, streaming_with_rpc_stream, reason] (database& db) {
+        auto si = make_lw_shared<send_info>(db, plan_id, cf_id, std::move(ranges), id, dst_cpu_id, reason);
         if (streaming_with_rpc_stream) {
             return send_mutation_fragments(std::move(si));
         } else {

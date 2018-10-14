@@ -25,6 +25,7 @@
 #include "atomic_cell_hash.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
+#include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
 #include "db/config.hh"
 #include "service/storage_service.hh"
@@ -95,8 +96,8 @@ public:
     future<> do_streaming() {
         size_t ranges_in = 0;
         size_t ranges_out = 0;
-        _sp_in = make_lw_shared<streaming::stream_plan>(sprint("repair-in-id-%d-shard-%d-index-%d", id, shard, sp_index));
-        _sp_out = make_lw_shared<streaming::stream_plan>(sprint("repair-out-id-%d-shard-%d-index-%d", id, shard, sp_index));
+        _sp_in = make_lw_shared<streaming::stream_plan>(sprint("repair-in-id-%d-shard-%d-index-%d", id, shard, sp_index), streaming::stream_reason::repair);
+        _sp_out = make_lw_shared<streaming::stream_plan>(sprint("repair-out-id-%d-shard-%d-index-%d", id, shard, sp_index), streaming::stream_reason::repair);
 
         for (auto& x : ranges_need_repair_in) {
             auto& peer = x.first;

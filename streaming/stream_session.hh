@@ -50,6 +50,7 @@
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_detail.hh"
 #include "streaming/stream_manager.hh"
+#include "streaming/stream_reason.hh"
 #include "streaming/session_info.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
@@ -184,7 +185,15 @@ private:
     lowres_clock::time_point _last_stream_progress;
 
     session_info _session_info;
+
+    stream_reason _reason = stream_reason::unspecified;
 public:
+    stream_reason get_reason() const {
+        return _reason;
+    }
+    void set_reason(stream_reason reason) {
+        _reason = reason;
+    }
     void start_keep_alive_timer() {
         _keep_alive.rearm(lowres_clock::now() + _keep_alive_interval);
     }

@@ -130,15 +130,17 @@ static auto get_session(utils::UUID plan_id, gms::inet_address from, const char*
 }
 
 void stream_session::init_messaging_service_handler() {
-    ms().register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description) {
+    ms().register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = engine().cpu_id();
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id] () mutable {
+        auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] () mutable {
             auto sr = stream_result_future::init_receiving_side(plan_id, description, from);
             auto session = get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
             session->dst_cpu_id = src_cpu_id;
+            session->set_reason(reason);
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
@@ -150,10 +152,12 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
-    ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool> fragmented_opt) {
+    ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool> fragmented_opt, rpc::optional<stream_reason> reason_opt) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto src_cpu_id = from.cpu_id;
         auto fragmented = fragmented_opt && *fragmented_opt;
+        auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
+        sslog.trace("Got stream_mutation from {} reason {}", from, int(reason));
         return smp::submit_to(src_cpu_id % smp::count, [fm = std::move(fm), plan_id, from, fragmented] () mutable {
             return do_with(std::move(fm), [plan_id, from, fragmented] (const auto& fm) {
                 auto fm_size = fm.representation().size();
@@ -185,8 +189,10 @@ void stream_session::init_messaging_service_handler() {
             });
         });
     });
-    ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::source<frozen_mutation_fragment> source) {
+    ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment> source) {
         auto from = netw::messaging_service::get_source(cinfo);
+        auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
+        sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
         return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(), [from, estimated_partitions, plan_id, schema_id, cf_id, source] () mutable {
                 return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, cf_id, source] (schema_ptr s) mutable {
                     auto sink = ms().make_sink_for_stream_mutation_fragments(source);
@@ -323,7 +329,7 @@ future<> stream_session::on_initialization_complete() {
     }
     auto id = msg_addr{this->peer, 0};
     sslog.debug("[Stream #{}] SEND PREPARE_MESSAGE to {}", plan_id(), id);
-    return ms().send_prepare_message(id, std::move(prepare), plan_id(), description()).then_wrapped([this, id] (auto&& f) {
+    return ms().send_prepare_message(id, std::move(prepare), plan_id(), description(), get_reason()).then_wrapped([this, id] (auto&& f) {
         try {
             auto msg = f.get0();
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE Reply from {}", this->plan_id(), this->peer);
