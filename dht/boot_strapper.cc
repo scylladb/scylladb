@@ -49,7 +49,7 @@ namespace dht {
 future<> boot_strapper::bootstrap() {
     blogger.debug("Beginning bootstrap process: sorted_tokens={}", _token_metadata.sorted_tokens());
 
-    auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata, _tokens, _address, "Bootstrap");
+    auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata, _tokens, _address, "Bootstrap", streaming::stream_reason::bootstrap);
     streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
     for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
         auto& ks = _db.local().find_keyspace(keyspace_name);

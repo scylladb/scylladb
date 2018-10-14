@@ -294,7 +294,7 @@ future<> range_streamer::do_stream_async() {
                 size_t nr_ranges_per_stream_plan = nr_ranges_total / 10;
                 dht::token_range_vector ranges_to_stream;
                 auto do_streaming = [&] {
-                    auto sp = stream_plan(sprint("%s-%s-index-%d", description, keyspace, sp_index++));
+                    auto sp = stream_plan(sprint("%s-%s-index-%d", description, keyspace, sp_index++), _reason);
                     logger.info("{} with {} for keyspace={}, {} out of {} ranges: ranges = {}",
                             description, source, keyspace, nr_ranges_streamed, nr_ranges_total, ranges_to_stream.size());
                     if (_nr_rx_added) {

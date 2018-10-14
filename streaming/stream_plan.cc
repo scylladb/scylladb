@@ -52,6 +52,7 @@ stream_plan& stream_plan::request_ranges(inet_address from, sstring keyspace, dh
     _range_added = true;
     auto session = _coordinator->get_or_create_session(from);
     session->add_stream_request(keyspace, std::move(ranges), std::move(column_families));
+    session->set_reason(_reason);
     return *this;
 }
 
@@ -63,6 +64,7 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, dht
     _range_added = true;
     auto session = _coordinator->get_or_create_session(to);
     session->add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families));
+    session->set_reason(_reason);
     return *this;
 }
 

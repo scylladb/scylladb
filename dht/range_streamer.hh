@@ -42,6 +42,7 @@
 #include "locator/snitch_base.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
+#include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
 #include "gms/i_failure_detector.hh"
 #include "range.hh"
@@ -101,17 +102,18 @@ public:
         }
     };
 
-    range_streamer(distributed<database>& db, token_metadata& tm, std::unordered_set<token> tokens, inet_address address, sstring description)
+    range_streamer(distributed<database>& db, token_metadata& tm, std::unordered_set<token> tokens, inet_address address, sstring description, streaming::stream_reason reason)
         : _db(db)
         , _metadata(tm)
         , _tokens(std::move(tokens))
         , _address(address)
         , _description(std::move(description))
+        , _reason(reason)
         , _stream_plan(_description) {
     }
 
-    range_streamer(distributed<database>& db, token_metadata& tm, inet_address address, sstring description)
-        : range_streamer(db, tm, std::unordered_set<token>(), address, description) {
+    range_streamer(distributed<database>& db, token_metadata& tm, inet_address address, sstring description, streaming::stream_reason reason)
+        : range_streamer(db, tm, std::unordered_set<token>(), address, description, reason) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
@@ -166,6 +168,7 @@ private:
     std::unordered_set<token> _tokens;
     inet_address _address;
     sstring _description;
+    streaming::stream_reason _reason;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     stream_plan _stream_plan;
