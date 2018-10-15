@@ -614,10 +614,12 @@ public:
 
         return [this, owned_ranges = std::move(owned_ranges)] (const dht::decorated_key& dk) {
             if (dht::shard_of(dk.token()) != engine().cpu_id()) {
+                clogger.trace("Token {} does not belong to CPU {}, skipping", dk.token(), engine().cpu_id());
                 return false;
             }
 
             if (!belongs_to_current_node(dk.token(), owned_ranges)) {
+                clogger.trace("Token {} does not belong to this node, skipping", dk.token());
                 return false;
             }
             return true;
