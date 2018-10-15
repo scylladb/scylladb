@@ -95,6 +95,7 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
         return compute_hints_dir_device_id();
     }).then([this] {
         _strorage_service_anchor->register_subscriber(this);
+        set_started();
     });
 }
 
@@ -277,7 +278,7 @@ inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
 }
 
 bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
-    if (stopping() || !can_hint_for(ep)) {
+    if (stopping() || !started() || !can_hint_for(ep)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
         return false;

@@ -396,10 +396,12 @@ public:
     };
 
     enum class state {
+        started,                // hinting is currently allowed (start() call is complete)
         stopping                // hinting is not allowed - stopping is in progress (stop() method has been called)
     };
 
     using state_set = enum_set<super_enum<state,
+        state::started,
         state::stopping>>;
 
 private:
@@ -647,6 +649,14 @@ private:
 
     void set_stopping() noexcept {
         _state.set(state::stopping);
+    }
+
+    bool started() const noexcept {
+        return _state.contains(state::started);
+    }
+
+    void set_started() noexcept {
+        _state.set(state::started);
     }
 
 public:
