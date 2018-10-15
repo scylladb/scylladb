@@ -105,7 +105,7 @@ future<> manager::stop() {
         _strorage_service_anchor->unregister_subscriber(this);
     }
 
-    _stopping = true;
+    set_stopping();
 
     return _draining_eps_gate.close().finally([this] {
         return parallel_for_each(_ep_managers, [] (auto& pair) {
@@ -277,7 +277,7 @@ inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
 }
 
 bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
-    if (_stopping || !can_hint_for(ep)) {
+    if (stopping() || !can_hint_for(ep)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
         return false;
@@ -501,7 +501,7 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
 }
 
 void manager::drain_for(gms::inet_address endpoint) {
-    if (_stopping) {
+    if (stopping()) {
         return;
     }
 

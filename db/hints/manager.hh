@@ -395,6 +395,13 @@ public:
         }
     };
 
+    enum class state {
+        stopping                // hinting is not allowed - stopping is in progress (stop() method has been called)
+    };
+
+    using state_set = enum_set<super_enum<state,
+        state::stopping>>;
+
 private:
     using ep_key_type = typename end_point_hints_manager::key_type;
     using ep_managers_map_type = std::unordered_map<ep_key_type, end_point_hints_manager>;
@@ -405,6 +412,7 @@ public:
     static const std::chrono::seconds hint_file_write_timeout;
 
 private:
+    state_set _state;
     const boost::filesystem::path _hints_dir;
     dev_t _hints_dir_device_id = 0;
 
@@ -416,7 +424,7 @@ private:
     locator::snitch_ptr& _local_snitch_ptr;
     int64_t _max_hint_window_us = 0;
     database& _local_db;
-    bool _stopping = false;
+
     seastar::gate _draining_eps_gate; // gate used to control the progress of ep_managers stopping not in the context of manager::stop() call
 
     resource_manager& _resource_manager;
@@ -632,6 +640,14 @@ private:
     void drain_for(gms::inet_address endpoint);
 
     void update_backlog(size_t backlog, size_t max_backlog);
+
+    bool stopping() const noexcept {
+        return _state.contains(state::stopping);
+    }
+
+    void set_stopping() noexcept {
+        _state.set(state::stopping);
+    }
 
 public:
     ep_managers_map_type::iterator find_ep_manager(ep_key_type ep_key) noexcept {
