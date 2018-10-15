@@ -114,12 +114,14 @@ midpoint_unsigned_tokens(const token& t1, const token& t2) {
 }
 
 int tri_compare(token_view t1, token_view t2) {
-    if (t1._kind == t2._kind) {
+    if (t1._kind < t2._kind) {
+            return -1;
+    } else if (t1._kind > t2._kind) {
+            return 1;
+    } else if (t1._kind == token_kind::key) {
         return global_partitioner().tri_compare(t1, t2);
-    } else if (t1._kind < t2._kind) {
-        return -1;
     }
-    return 1;
+    return 0;
 }
 
 bool operator==(token_view t1, token_view t2) {
