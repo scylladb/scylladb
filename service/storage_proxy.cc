@@ -4095,7 +4095,7 @@ void storage_proxy::init_messaging_service() {
                     return get_schema_for_write(m.schema_version(), netw::messaging_service::msg_addr{reply_to, shard}).then([&m, &p, timeout] (schema_ptr s) {
                         return p->mutate_locally(std::move(s), m, timeout);
                     });
-                }).then([reply_to, shard, response_id, trace_state_ptr] () {
+                }).then([&p, reply_to, shard, response_id, trace_state_ptr] () {
                     auto& ms = netw::get_local_messaging_service();
                     // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                     // lots of unsent responses, which can OOM our shard.
@@ -4103,7 +4103,11 @@ void storage_proxy::init_messaging_service() {
                     // Usually we will return immediately, since this work only involves appending data to the connection
                     // send buffer.
                     tracing::trace(trace_state_ptr, "Sending mutation_done to /{}", reply_to);
-                    return ms.send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
+                    return ms.send_mutation_done(
+                            netw::messaging_service::msg_addr{reply_to, shard},
+                            shard,
+                            response_id,
+                            p->get_view_update_backlog()).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
                 }).handle_exception([reply_to, shard, &p, &errors] (std::exception_ptr eptr) {
@@ -4131,14 +4135,19 @@ void storage_proxy::init_messaging_service() {
                         f.ignore_ready_future();
                     });
                 })
-            ).then_wrapped([trace_state_ptr, reply_to, shard, response_id, &errors] (future<std::tuple<future<>, future<>>>&& f) {
+            ).then_wrapped([trace_state_ptr, reply_to, shard, response_id, &errors, &p] (future<std::tuple<future<>, future<>>>&& f) {
                 // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
                 auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
                 if (errors) {
                     if (get_local_storage_service().cluster_supports_write_failure_reply()) {
                         tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
                         auto& ms = netw::get_local_messaging_service();
-                        fut = ms.send_mutation_failed(netw::messaging_service::msg_addr{reply_to, shard}, shard, response_id, errors).then_wrapped([] (future<> f) {
+                        fut = ms.send_mutation_failed(
+                                netw::messaging_service::msg_addr{reply_to, shard},
+                                shard,
+                                response_id,
+                                errors,
+                                p->get_view_update_backlog()).then_wrapped([] (future<> f) {
                             f.ignore_ready_future();
                             return netw::messaging_service::no_wait();
                         });
@@ -4150,19 +4159,19 @@ void storage_proxy::init_messaging_service() {
             });
         });
     });
-    ms.register_mutation_done([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
+    ms.register_mutation_done([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-        return get_storage_proxy().invoke_on(shard, [from, response_id] (storage_proxy& sp) {
-            sp.got_response(response_id, from, stdx::nullopt);
+        return get_storage_proxy().invoke_on(shard, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
+            sp.got_response(response_id, from, std::move(backlog));
             return netw::messaging_service::no_wait();
         });
     });
-    ms.register_mutation_failed([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed) {
+    ms.register_mutation_failed([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-        return get_storage_proxy().invoke_on(shard, [from, response_id, num_failed] (storage_proxy& sp) {
-            sp.got_failure_response(response_id, from, num_failed, stdx::nullopt);
+        return get_storage_proxy().invoke_on(shard, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog));
             return netw::messaging_service::no_wait();
         });
     });
