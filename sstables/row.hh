@@ -271,6 +271,14 @@ public:
     // leave only the unprocessed part. The caller must handle calling
     // process() again, and/or refilling the buffer, as needed.
     data_consumer::processing_result process_state(temporary_buffer<char>& data) {
+        try {
+            return do_process_state(data);
+        } catch (malformed_sstable_exception& exp) {
+            throw malformed_sstable_exception(exp.what(), _sst->get_filename());
+        }
+    }
+private:
+    data_consumer::processing_result do_process_state(temporary_buffer<char>& data) {
 #if 0
         // Testing hack: call process() for tiny chunks separately, to verify
         // that primitive types crossing input buffer are handled correctly.
@@ -510,6 +518,7 @@ public:
 
         return row_consumer::proceed::yes;
     }
+public:
 
     data_consume_rows_context(const schema&,
                               const shared_sstable sst,
@@ -613,6 +622,7 @@ private:
     } _state = state::PARTITION_START;
 
     consumer_m& _consumer;
+    shared_sstable _sst;
     const serialization_header& _header;
     column_translation _column_translation;
 
@@ -756,6 +766,14 @@ public:
     }
 
     data_consumer::processing_result process_state(temporary_buffer<char>& data) {
+        try {
+            return do_process_state(data);
+        } catch (malformed_sstable_exception& exp) {
+            throw malformed_sstable_exception(exp.what(), _sst->get_filename());
+        }
+    }
+private:
+    data_consumer::processing_result do_process_state(temporary_buffer<char>& data) {
         switch (_state) {
         case state::PARTITION_START:
         partition_start_label:
@@ -1280,6 +1298,7 @@ public:
 
         return row_consumer::proceed::yes;
     }
+public:
 
     data_consume_rows_context_m(const schema& s,
                                 const shared_sstable& sst,
@@ -1289,6 +1308,7 @@ public:
                                 uint64_t maxlen)
         : continuous_data_consumer(std::move(input), start, maxlen)
         , _consumer(consumer)
+        , _sst(sst)
         , _header(sst->get_serialization_header())
         , _column_translation(sst->get_column_translation(s, _header))
         , _liveness(_header)
