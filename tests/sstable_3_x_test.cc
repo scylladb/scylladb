@@ -4549,3 +4549,44 @@ SEASTAR_THREAD_TEST_CASE(test_dead_row_marker) {
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_shadowable_deletion) {
+    /* The created SSTables content should match that of
+     * an MV filled with the following queries:
+     *
+     * CREATE TABLE cf (p int PRIMARY KEY, v int) WITH compression = {'sstable_compression': ''};
+     * CREATE MATERIALIZED VIEW mv AS SELECT * FROM cf WHERE p IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, p);
+     * INSERT INTO cf (p, v) VALUES (1, 0);
+     * UPDATE cf SET v = 1 WHERE p = 1;
+     */
+    auto abj = defer([] { await_background_jobs().get(); });
+    sstring table_name = "shadowable_deletion";
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck", int32_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
+    mutation mut1{s, partition_key::from_deeply_exploded(*s, {1})};
+    {
+        auto& clustered_row = mut1.partition().clustered_row(*s, ckey);
+        clustered_row.apply(row_marker{api::timestamp_type{1540230880370422}});
+        mt->apply(mut1);
+    }
+
+    mutation mut2{s, partition_key::from_deeply_exploded(*s, {0})};
+    {
+        auto& clustered_row = mut2.partition().clustered_row(*s, ckey);
+        api::timestamp_type ts {1540230874370065};
+        gc_clock::time_point tp {gc_clock::duration(1540230880)};
+        clustered_row.apply(row_marker{api::timestamp_type{ts}});
+        clustered_row.apply(shadowable_tombstone(ts, tp));
+        mt->apply(mut2);
+    }
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut1, mut2});
+}
+
