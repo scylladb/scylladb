@@ -24,8 +24,22 @@
 #include <vector>
 #include "gms/inet_address.hh"
 #include "db/system_distributed_keyspace.hh"
+#include <seastar/core/distributed.hh>
 
-future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator);
+class row_level_repair_gossip_helper;
+
+namespace gms {
+    class gossiper;
+}
+
+struct repair_service {
+    distributed<gms::gossiper>& _gossiper;
+    shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
+    repair_service(distributed<gms::gossiper>& gossiper);
+    ~repair_service();
+};
+
+future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator);
 
 class repair_info;
 

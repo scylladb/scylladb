@@ -43,6 +43,9 @@
 #include <optional>
 #include <boost/range/adaptors.hpp>
 #include "../db/view/view_update_generator.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
+#include "gms/gossiper.hh"
+#include "repair/row_level.hh"
 
 extern logging::logger rlogger;
 
@@ -624,6 +627,23 @@ public:
                 rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
             });
         }
+    }
+
+    static future<>
+    remove_repair_meta(gms::inet_address from) {
+        rlogger.debug("Remove all repair_meta for single node {}", from);
+        auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>();
+        for (auto it = repair_meta_map().begin(); it != repair_meta_map().end();) {
+            if (it->first.ip == from) {
+                repair_metas->push_back(it->second);
+                it = repair_meta_map().erase(it);
+            } else {
+                it++;
+            }
+        }
+        return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
+            return rm->stop();
+        });
     }
 
     static future<uint32_t> get_next_repair_meta_id() {
@@ -1221,7 +1241,7 @@ public:
     }
 };
 
-future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
+future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
     return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
@@ -1656,4 +1676,60 @@ future<> repair_cf_range_row_level(repair_info& ri,
     return do_with(row_level_repair(ri, std::move(cf_name), std::move(range), std::move(all_live_peer_nodes)), [] (row_level_repair& repair) {
         return repair.run();
     });
+}
+
+class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subscriber {
+    void remove_row_level_repair(gms::inet_address node) {
+        rlogger.debug("Started to remove row level repair on all shards for node {}", node);
+        smp::invoke_on_all([node] {
+            return repair_meta::remove_repair_meta(node);
+        }).then([node] {
+            rlogger.debug("Finished to remove row level repair on all shards for node {}", node);
+        }).handle_exception([node] (std::exception_ptr ep) {
+            rlogger.warn("Failed to remove row level repair for node {}: {}", node, ep);
+        }).get();
+    }
+    virtual void on_join(
+            gms::inet_address endpoint,
+            gms::endpoint_state ep_state) override {
+    }
+    virtual void before_change(
+            gms::inet_address endpoint,
+            gms::endpoint_state current_state,
+            gms::application_state new_state_key,
+            const gms::versioned_value& new_value) override {
+    }
+    virtual void on_change(
+            gms::inet_address endpoint,
+            gms::application_state state,
+            const gms::versioned_value& value) override {
+    }
+    virtual void on_alive(
+            gms::inet_address endpoint,
+            gms::endpoint_state state) override {
+    }
+    virtual void on_dead(
+            gms::inet_address endpoint,
+            gms::endpoint_state state) override {
+        remove_row_level_repair(endpoint);
+    }
+    virtual void on_remove(
+            gms::inet_address endpoint) override {
+        remove_row_level_repair(endpoint);
+    }
+    virtual void on_restart(
+            gms::inet_address endpoint,
+            gms::endpoint_state ep_state) override {
+        remove_row_level_repair(endpoint);
+    }
+};
+
+repair_service::repair_service(distributed<gms::gossiper>& gossiper)
+    : _gossiper(gossiper)
+    , _gossip_helper(make_shared<row_level_repair_gossip_helper>()) {
+    _gossiper.local().register_(_gossip_helper);
+}
+
+repair_service::~repair_service() {
+    _gossiper.local().unregister_(_gossip_helper);
 }
