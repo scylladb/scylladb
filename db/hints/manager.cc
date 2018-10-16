@@ -936,5 +936,15 @@ future<> manager::rebalance(sstring hints_directory) {
     });
 }
 
+void manager::update_backlog(size_t backlog, size_t max_backlog) {
+    _backlog_size = backlog;
+    _max_backlog_size = max_backlog;
+    if (backlog < max_backlog) {
+        allow_hints();
+    } else {
+        forbid_hints_for_eps_with_pending_hints();
+    }
+}
+
 }
 }
