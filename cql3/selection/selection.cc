@@ -361,35 +361,31 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
             // fallthrough
         case column_kind::regular_column: {
             auto& cell_iterator = (cdef->kind == column_kind::static_column) ? static_row_iterator : row_iterator;
+            std::optional<query::result_bytes_view> result_view_opt;
             if (cdef->type->is_multi_cell()) {
-                cell_iterator.next_collection_cell();
-                auto restr_it = non_pk_restrictions_map.find(cdef);
-                if (restr_it == non_pk_restrictions_map.end()) {
-                    continue;
-                }
-                throw exceptions::invalid_request_exception("Collection filtering is not supported yet");
+                result_view_opt = cell_iterator.next_collection_cell();
             } else {
                 auto cell = cell_iterator.next_atomic_cell();
-
-                auto restr_it = non_pk_restrictions_map.find(cdef);
-                if (restr_it == non_pk_restrictions_map.end()) {
-                    continue;
-                }
-                restrictions::single_column_restriction& restriction = *restr_it->second;
-
-                bool regular_restriction_matches;
                 if (cell) {
-                    regular_restriction_matches = cell->value().with_linearized([&restriction, this](bytes_view data) {
-                        return restriction.is_satisfied_by(data, _options);
-                    });
-                } else {
-                    regular_restriction_matches = restriction.is_satisfied_by(bytes(), _options);
+                    result_view_opt = cell->value();
                 }
-                if (!regular_restriction_matches) {
-                    _current_static_row_does_not_match = (cdef->kind == column_kind::static_column);
-                    return false;
-                }
-
+            }
+            auto restr_it = non_pk_restrictions_map.find(cdef);
+            if (restr_it == non_pk_restrictions_map.end()) {
+                continue;
+            }
+            restrictions::single_column_restriction& restriction = *restr_it->second;
+            bool regular_restriction_matches;
+            if (result_view_opt) {
+                regular_restriction_matches = result_view_opt->with_linearized([&restriction, this](bytes_view data) {
+                    return restriction.is_satisfied_by(data, _options);
+                });
+            } else {
+                regular_restriction_matches = restriction.is_satisfied_by(bytes(), _options);
+            }
+            if (!regular_restriction_matches) {
+                _current_static_row_does_not_match = (cdef->kind == column_kind::static_column);
+                return false;
             }
             }
             break;
