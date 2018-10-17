@@ -1757,7 +1757,9 @@ future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compa
                     , COMPACTION_HISTORY);
 
     return execute_cql(req, utils::UUID_gen::get_time_UUID(), ksname, cfname, compacted_at, bytes_in, bytes_out,
-                       make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result();
+                       make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result().handle_exception([] (auto ep) {
+        slogger.error("update compaction history failed: {}: ignored", ep);
+    });
 }
 
 future<std::vector<compaction_history_entry>> get_compaction_history() {
