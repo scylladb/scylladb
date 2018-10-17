@@ -451,22 +451,24 @@ inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task)
     return task->compaction_retry.retry();
 }
 
-inline bool compaction_manager::maybe_stop_on_error(future<> f) {
+inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration will_stop) {
     bool retry = false;
+    const char* retry_msg = will_stop ? "will stop" : "retrying";
+
     try {
         f.get();
     } catch (sstables::compaction_stop_exception& e) {
         // We want compaction stopped here to be retried because this may have
         // happened at user request (using nodetool stop), and to mimic C*
         // behavior, compaction is retried later on.
-        cmlog.info("compaction info: {}", e.what());
+        cmlog.info("compaction info: {}: {}", e.what(), retry_msg);
         retry = true;
     } catch (storage_io_error& e) {
-        cmlog.error("compaction failed due to storage io error: {}", e.what());
+        cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
         retry = false;
         stop();
     } catch (...) {
-        cmlog.error("compaction failed: {}", std::current_exception());
+        cmlog.error("compaction failed: {}: {}", std::current_exception(), retry_msg);
         retry = true;
     }
     return retry;
@@ -514,7 +516,7 @@ void compaction_manager::submit(column_family* cf) {
                 task->compaction_running = false;
 
                 if (!can_proceed(task)) {
-                    maybe_stop_on_error(std::move(f));
+                    maybe_stop_on_error(std::move(f), stop_iteration::yes);
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 if (maybe_stop_on_error(std::move(f))) {
@@ -579,7 +581,7 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
             task->compaction_running = false;
             _stats.active_tasks--;
             if (!can_proceed(task)) {
-                maybe_stop_on_error(std::move(f));
+                maybe_stop_on_error(std::move(f), stop_iteration::yes);
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
             if (maybe_stop_on_error(std::move(f))) {
