@@ -1767,33 +1767,6 @@ future<> storage_proxy::send_to_endpoint(
             stats);
 }
 
-future<> storage_proxy::send_to_endpoint(
-        mutation m,
-        gms::inet_address target,
-        std::vector<gms::inet_address> pending_endpoints,
-        db::write_type type,
-        write_stats& stats) {
-    return send_to_endpoint(
-            std::make_unique<shared_mutation>(m),
-            std::move(target),
-            std::move(pending_endpoints),
-            type,
-            stats);
-}
-
-future<> storage_proxy::send_to_endpoint(
-        mutation m,
-        gms::inet_address target,
-        std::vector<gms::inet_address> pending_endpoints,
-        db::write_type type) {
-    return send_to_endpoint(
-            std::make_unique<shared_mutation>(m),
-            std::move(target),
-            std::move(pending_endpoints),
-            type,
-            _stats);
-}
-
 /**
  * Send the mutations to the right targets, write it locally if it corresponds or writes a hint when the node
  * is not available.
