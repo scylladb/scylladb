@@ -822,6 +822,9 @@ public:
             }
         case state::EXTENDED_FLAGS:
             _extended_flags = unfiltered_extended_flags_m(_u8);
+            if (_extended_flags.has_cassandra_shadowable_deletion()) {
+                throw std::runtime_error("SSTables with Cassandra-style shadowable deletion cannot be read by Scylla");
+            }
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
                     setup_columns(_column_translation.static_columns(),
