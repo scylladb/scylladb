@@ -607,6 +607,8 @@ class unfiltered_extended_flags_m final {
     // Scylla's representation of shadowable tombstones is different.
     // We only check it on reading and error out if set but never set ourselves.
     static const uint8_t HAS_CASSANDRA_SHADOWABLE_DELETION = 0x02u;
+    // This flag is Scylla-specific and used for writing shadowable tombstones.
+    static const uint8_t HAS_SCYLLA_SHADOWABLE_DELETION = 0x80u;
     uint8_t _flags;
     bool check_flag(const uint8_t flag) const {
         return (_flags & flag) != 0u;
@@ -618,6 +620,9 @@ public:
     }
     bool has_cassandra_shadowable_deletion() const {
         return check_flag(HAS_CASSANDRA_SHADOWABLE_DELETION);
+    }
+    bool has_scylla_shadowable_deletion() const {
+        return check_flag(HAS_SCYLLA_SHADOWABLE_DELETION);
     }
 };
 
