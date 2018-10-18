@@ -33,6 +33,7 @@
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
 #include "service/load_broadcaster.hh"
+#include "service/view_update_backlog_broker.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -779,6 +780,15 @@ int main(int ac, char** av) {
             cf_cache_hitrate_calculator.start(std::ref(db), std::ref(cf_cache_hitrate_calculator)).get();
             engine().at_exit([&cf_cache_hitrate_calculator] { return cf_cache_hitrate_calculator.stop(); });
             cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
+
+            supervisor::notify("starting view update backlog broker");
+            static sharded<service::view_update_backlog_broker> view_backlog_broker;
+            view_backlog_broker.start(std::ref(proxy), std::ref(gms::get_gossiper())).get();
+            view_backlog_broker.invoke_on_all(&service::view_update_backlog_broker::start).get();
+            engine().at_exit([] {
+                return view_backlog_broker.stop();
+            });
+
             api::set_server_cache(ctx);
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
