@@ -625,7 +625,8 @@ int main(int ac, char** av) {
             service::storage_proxy::config spcfg;
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
             spcfg.available_memory = memory::stats().total_memory();
-            proxy.start(std::ref(db), spcfg).get();
+            static db::view::node_update_backlog node_backlog(smp::count, 10ms);
+            proxy.start(std::ref(db), spcfg, std::ref(node_backlog)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");

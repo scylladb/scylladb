@@ -41,6 +41,7 @@
 #include "db/query_context.hh"
 #include "test_services.hh"
 #include "db/view/view_builder.hh"
+#include "db/view/node_view_update_backlog.hh"
 
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
@@ -381,7 +382,8 @@ public:
 
             service::storage_proxy::config spcfg;
             spcfg.available_memory = memory::stats().total_memory();
-            proxy.start(std::ref(*db), spcfg).get();
+            db::view::node_update_backlog b(smp::count, 10ms);
+            proxy.start(std::ref(*db), spcfg, std::ref(b)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
             mm.start().get();

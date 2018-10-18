@@ -552,6 +552,12 @@ void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms
     }
 }
 
+db::view::update_backlog storage_proxy::get_view_update_backlog() const {
+    auto memory_backlog = get_db().local().get_view_update_backlog();
+    auto hints_backlog = db::view::update_backlog{_hints_for_views_manager.backlog_size(), _hints_for_views_manager.max_backlog_size()};
+    return _max_view_update_backlog.add_fetch(engine().cpu_id(), std::max(memory_backlog, hints_backlog));
+}
+
 future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
     auto& handler = _response_handlers.find(id)->second;
     handler->expire_at(timeout);
@@ -691,13 +697,14 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
 using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
-storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg)
+storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog)
     : _db(db)
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
     , _hints_resource_manager(cfg.available_memory / 10)
     , _hints_for_views_manager(_db.local().get_config().data_file_directories()[0] + "/view_pending_updates", {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
-    , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate} {
+    , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
+    , _max_view_update_backlog(max_view_update_backlog) {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"), [this]{ return _stats.estimated_read.get_histogram(16, 20);}),

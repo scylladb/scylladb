@@ -51,6 +51,8 @@
 #include "db/read_repair_decision.hh"
 #include "db/write_type.hh"
 #include "db/hints/manager.hh"
+#include "db/view/view_update_backlog.hh"
+#include "db/view/node_view_update_backlog.hh"
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
@@ -174,6 +176,8 @@ private:
             clock_type::time_point,
             tracing::trace_state_ptr,
             bool> _mutate_stage;
+    db::view::node_update_backlog& _max_view_update_backlog;
+
 private:
     void uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -272,8 +276,10 @@ private:
             std::vector<gms::inet_address> pending_endpoints,
             db::write_type type,
             write_stats& stats);
+
+    db::view::update_backlog get_view_update_backlog() const;
 public:
-    storage_proxy(distributed<database>& db, config cfg);
+    storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;
