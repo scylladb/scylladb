@@ -419,6 +419,7 @@ public:
     friend class abstract_read_executor;
     friend class abstract_write_response_handler;
     friend class speculating_read_executor;
+    friend class view_update_backlog_broker;
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;

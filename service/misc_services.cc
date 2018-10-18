@@ -43,6 +43,9 @@
 #include "db/system_keyspace.hh"
 #include "gms/application_state.hh"
 #include "service/storage_service.hh"
+#include "service/view_update_backlog_broker.hh"
+
+#include <cstdlib>
 
 namespace service {
 
@@ -181,6 +184,73 @@ future<> cache_hitrate_calculator::stop() {
     _timer.cancel();
     _stopped = true;
     return make_ready_future<>();
+}
+
+
+view_update_backlog_broker::view_update_backlog_broker(
+        seastar::sharded<service::storage_proxy>& sp,
+        gms::gossiper& gossiper)
+        : _sp(sp)
+        , _gossiper(gossiper) {
+}
+
+future<> view_update_backlog_broker::start() {
+    _gossiper.register_(shared_from_this());
+    if (engine().cpu_id() == 0) {
+        // Gossiper runs only on shard 0, and there's no API to add multiple, per-shard application states.
+        // Also, right now we aggregate all backlogs, since the coordinator doesn't keep per-replica shard backlogs.
+        _started = seastar::async([this] {
+            while (!_as.abort_requested()) {
+                auto backlog = _sp.local().get_view_update_backlog();
+                auto now = api::timestamp_type(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count());
+                _gossiper.add_local_application_state(
+                        gms::application_state::VIEW_BACKLOG,
+                        gms::versioned_value(seastar::format("{}:{}:{}", backlog.current, backlog.max, now)));
+                sleep_abortable(gms::gossiper::INTERVAL, _as).get();
+            }
+        }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
+    }
+    return make_ready_future<>();
+}
+
+future<> view_update_backlog_broker::stop() {
+    _gossiper.unregister_(shared_from_this());
+    _as.request_abort();
+    return std::move(_started);
+}
+
+void view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+    if (state == gms::application_state::VIEW_BACKLOG) {
+        size_t current;
+        size_t max;
+        api::timestamp_type ticks;
+        const char* start_bound = value.value.data();
+        char* end_bound;
+        for (auto* ptr : {&current, &max}) {
+            *ptr = std::strtoull(start_bound, &end_bound, 10);
+            if (*ptr == ULLONG_MAX) {
+                return;
+            }
+            start_bound = end_bound + 1;
+        }
+        if (max == 0) {
+            return;
+        }
+        ticks = std::strtoll(start_bound, &end_bound, 10);
+        if (ticks == 0 || ticks == LLONG_MAX || end_bound != value.value.data() + value.value.size()) {
+            return;
+        }
+        auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
+        auto[it, inserted] = _sp.local()._view_update_backlogs.try_emplace(endpoint, std::move(backlog));
+        if (!inserted && it->second.ts < backlog.ts) {
+            it->second = std::move(backlog);
+        }
+    }
+}
+
+void view_update_backlog_broker::on_remove(gms::inet_address endpoint) {
+    _sp.local()._view_update_backlogs.erase(endpoint);
 }
 
 }
