@@ -53,6 +53,7 @@
 #include "flat_mutation_reader_assertions.hh"
 #include "tests/make_random_string.hh"
 #include "tests/normalizing_reader.hh"
+#include "sstable_run_based_compaction_strategy_for_tests.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -4768,6 +4769,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         auto tracker = make_lw_shared<cache_tracker>();
         auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(), *cm, cl_stats, *tracker);
         cf->mark_ready_for_writes();
+        cf->start();
+        cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
             return sstables::compact_sstables(sstables::compaction_descriptor(std::move(all), 1, 0), *cf, sst_gen, replacer).get0().new_sstables;
         };
@@ -4780,10 +4783,9 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         };
 
         auto tokens = token_generation_for_current_shard(16);
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::null, s->compaction_strategy_options());
-        sstables::sstable_set set = cs.make_sstable_set(s);
         std::unordered_set<shared_sstable> sstables;
         std::optional<utils::observer<sstable&>> observer;
+        sstables::sstable_run_based_compaction_strategy_for_tests cs;
 
         auto do_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst, auto& closed_sstables_tracker) {
             // that's because each sstable will contain only 1 mutation.
@@ -4799,10 +4801,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             BOOST_REQUIRE(!sstables.count(new_sstables.front()));
             sstables.erase(old_sstables.front());
             sstables.insert(new_sstables.front());
-            set = cs.make_sstable_set(s);
-            for (auto& sst : sstables) {
-                set.insert(sst);
-            }
+            column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables);
+            cf->get_compaction_manager().propagate_replacement(&*cf, old_sstables, new_sstables);
             observer = old_sstables.front()->add_on_closed_handler([&] (sstable& sst) {
                 BOOST_TEST_MESSAGE(sprint("Closing sstable of generation %d", sst.generation()));
                 closed_sstables_tracker++;
@@ -4811,41 +4811,9 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             BOOST_TEST_MESSAGE(sprint("Removing sstable of generation %d, refcnt: %d", old_sstables.front()->generation(), old_sstables.front().use_count()));
         };
 
-        auto get_similar_sized_runs = [&] (std::vector<shared_sstable> uncompacting_sstables) -> sstables::compaction_descriptor {
-            std::vector<sstable_run> runs = set.select(uncompacting_sstables);
-            std::map<uint64_t, std::vector<sstable_run>> similar_sized_runs;
-
-            for (auto& run : runs) {
-                bool found = false;
-                for (auto& e : similar_sized_runs) {
-                    if (run.data_size() >= e.first*0.5 && run.data_size() <= e.first*1.5) {
-                        e.second.push_back(run);
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    similar_sized_runs[run.data_size()].push_back(run);
-                }
-            }
-            for (auto& entry : similar_sized_runs) {
-                auto& runs = entry.second;
-                if (runs.size() < size_t(s->min_compaction_threshold())) {
-                    continue;
-                }
-
-                auto all = boost::accumulate(runs, std::vector<shared_sstable>(), [&] (std::vector<shared_sstable>& v, const sstable_run& run) {
-                   v.insert(v.end(), run.all().begin(), run.all().end());
-                   return std::move(v);
-                });
-                return sstables::compaction_descriptor(std::move(all));
-            }
-            return sstables::compaction_descriptor();
-        };
-
         auto do_compaction = [&] (size_t expected_input, size_t expected_output) -> std::vector<shared_sstable> {
             auto input_ssts = std::vector<shared_sstable>(sstables.begin(), sstables.end());
-            auto desc = get_similar_sized_runs(std::move(input_ssts));
+            auto desc = cs.get_sstables_for_compaction(*cf, std::move(input_ssts));
 
             // nothing to compact, move on.
             if (desc.sstables.empty()) {
@@ -4875,10 +4843,10 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             auto sst = make_sstable_containing(sst_gen, { make_insert(tokens[i]) });
             sst->set_sstable_level(1);
             BOOST_REQUIRE(sst->get_sstable_level() == 1);
-            set.insert(sst);
+            column_family_test(cf).add_sstable(sst);
             sstables.insert(std::move(sst));
             do_compaction(4, 4);
-        };
+        }
         BOOST_REQUIRE(sstables.size() == 16);
 
         // Generate 1 sstable run from 4 sstables runs of similar size
