@@ -623,7 +623,7 @@ future<> compaction_manager::remove(column_family* cf) {
     // FIXME: better way to iterate through compaction info for a given column family,
     // although this path isn't performance sensitive.
     for (auto& info : _compactions) {
-        if (cf->schema()->ks_name() == info->ks && cf->schema()->cf_name() == info->cf) {
+        if (info->cf == cf) {
             info->stop("column family removal");
         }
     }
@@ -649,7 +649,7 @@ future<> compaction_manager::remove(column_family* cf) {
 
 void compaction_manager::stop_tracking_ongoing_compactions(column_family* cf) {
     for (auto& info : _compactions) {
-        if (cf->schema()->ks_name() == info->ks && cf->schema()->cf_name() == info->cf) {
+        if (info->cf == cf) {
             info->stop_tracking();
         }
     }

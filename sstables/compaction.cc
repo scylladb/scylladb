@@ -328,6 +328,7 @@ protected:
         , _max_sstable_size(max_sstable_size)
         , _sstable_level(sstable_level)
     {
+        _info->cf = &cf;
         _cf.get_compaction_manager().register_compaction(_info);
     }
 
@@ -407,8 +408,8 @@ private:
         }
         formatted_msg += "]";
         _info->sstables = _sstables.size();
-        _info->ks = schema->ks_name();
-        _info->cf = schema->cf_name();
+        _info->ks_name = schema->ks_name();
+        _info->cf_name = schema->cf_name();
         report_start(formatted_msg);
 
         _compacting = std::move(ssts);
@@ -485,7 +486,7 @@ public:
 void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
     if (_c._info->is_stop_requested()) {
         // Compaction manager will catch this exception and re-schedule the compaction.
-        throw compaction_stop_exception(_c._info->ks, _c._info->cf, _c._info->stop_requested);
+        throw compaction_stop_exception(_c._info->ks_name, _c._info->cf_name, _c._info->stop_requested);
     }
     _writer = _c.select_sstable_writer(dk);
     _writer->consume_new_partition(dk);
@@ -838,7 +839,7 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c) {
             auto r = std::move(reader);
             r.consume_in_thread(std::move(cfc), c->filter_func(), db::no_timeout);
         } catch (...) {
-            delete_sstables_for_interrupted_compaction(c->_info->new_sstables, c->_info->ks, c->_info->cf);
+            delete_sstables_for_interrupted_compaction(c->_info->new_sstables, c->_info->ks_name, c->_info->cf_name);
             c = nullptr; // make sure writers are stopped while running in thread context
             throw;
         }

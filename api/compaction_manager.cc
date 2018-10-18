@@ -47,8 +47,8 @@ void set_compaction_manager(http_context& ctx, routes& r) {
 
             for (const auto& c : cm.get_compactions()) {
                 cm::summary s;
-                s.ks = c->ks;
-                s.cf = c->cf;
+                s.ks = c->ks_name;
+                s.cf = c->cf_name;
                 s.unit = "keys";
                 s.task_type = sstables::compaction_name(c->type);
                 s.completed = c->total_keys_written;
