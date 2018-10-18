@@ -700,6 +700,46 @@ static void test_date_tiered_clustering_slicing(populate_fn populate) {
     }
 }
 
+static void test_dropped_column_handling(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    schema_ptr write_schema = schema_builder("ks", "cf")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("val1", int32_type)
+        .with_column("val2", int32_type)
+        .build();
+    schema_ptr read_schema = schema_builder("ks", "cf")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("val2", int32_type)
+        .build();
+    auto val2_cdef = read_schema->get_column_definition(to_bytes("val2"));
+    auto to_ck = [write_schema] (int ck) {
+        return clustering_key::from_single_value(*write_schema, int32_type->decompose(ck));
+    };
+    auto bytes = int32_type->decompose(int32_t(0));
+    auto pk = partition_key::from_single_value(*write_schema, bytes);
+    auto dk = dht::global_partitioner().decorate_key(*write_schema, pk);
+    mutation partition(write_schema, pk);
+    auto add_row = [&partition, &to_ck, write_schema] (int ck, int v1, int v2) {
+        static constexpr api::timestamp_type write_timestamp = 1525385507816568;
+        clustering_key ckey = to_ck(ck);
+        partition.partition().apply_insert(*write_schema, ckey, write_timestamp);
+        partition.set_cell(ckey, "val1", data_value{v1}, write_timestamp);
+        partition.set_cell(ckey, "val2", data_value{v2}, write_timestamp);
+    };
+    add_row(1, 101, 201);
+    add_row(2, 102, 202);
+    add_row(3, 103, 203);
+    assert_that(populate(write_schema, {partition}).make_reader(read_schema))
+        .produces_partition_start(dk)
+        .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})
+        .produces_row(to_ck(2), {{val2_cdef, int32_type->decompose(int32_t(202))}})
+        .produces_row(to_ck(3), {{val2_cdef, int32_type->decompose(int32_t(203))}})
+        .produces_partition_end()
+        .produces_end_of_stream();
+}
+
 static void test_clustering_slices(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
     auto s = schema_builder("ks", "cf")
@@ -1062,6 +1102,7 @@ void run_mutation_reader_tests(populate_fn populate) {
     test_range_queries(populate);
     test_query_only_static_row(populate);
     test_query_no_clustering_ranges_no_static_columns(populate);
+    test_dropped_column_handling(populate);
 }
 
 void test_next_partition(populate_fn populate) {
