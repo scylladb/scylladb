@@ -760,7 +760,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     int replayed_segments_count = 0;
 
     try {
-        while (have_segments()) {
+        while (replay_allowed() && have_segments()) {
             if (!send_one_file(*_segments_to_replay.begin())) {
                 break;
             }

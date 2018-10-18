@@ -160,6 +160,7 @@ public:
     }
 
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
+    void allow_replaying() noexcept;
     future<> stop() noexcept;
     void register_manager(manager& m);
     future<> prepare_per_device_limits();

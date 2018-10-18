@@ -703,6 +703,17 @@ int main(int ac, char** av) {
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db).get();
             api::set_server_stream_manager(ctx).get();
+
+            supervisor::notify("starting hinted handoff manager");
+            if (hinted_handoff_enabled) {
+                db::hints::manager::rebalance(cfg->hints_directory()).get();
+            }
+            db::hints::manager::rebalance(cfg->data_file_directories()[0] + "/view_pending_updates").get();
+
+            proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
+                local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), service::get_local_storage_service().shared_from_this());
+            }).get();
+
             supervisor::notify("starting messaging service");
             // Start handling REPAIR_CHECKSUM_RANGE messages
             netw::get_messaging_service().invoke_on_all([&db] (auto& ms) {
@@ -739,14 +750,9 @@ int main(int ac, char** av) {
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
 
-            supervisor::notify("starting hinted handoff manager");
-            if (hinted_handoff_enabled) {
-                db::hints::manager::rebalance(cfg->hints_directory()).get();
-            }
-            db::hints::manager::rebalance(cfg->data_file_directories()[0] + "/view_pending_updates").get();
-
+            supervisor::notify("allow replaying hints");
             proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
-                local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), service::get_local_storage_service().shared_from_this());
+                local_proxy.allow_replaying_hints();
             }).get();
 
             static sharded<db::view::view_builder> view_builder;

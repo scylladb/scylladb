@@ -4293,6 +4293,10 @@ future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_p
     return _hints_resource_manager.start(shared_from_this(), gossiper_ptr, ss_ptr);
 }
 
+void storage_proxy::allow_replaying_hints() noexcept {
+    return _hints_resource_manager.allow_replaying();
+}
+
 future<> storage_proxy::stop_hints_manager() {
     return _hints_resource_manager.stop();
 }
