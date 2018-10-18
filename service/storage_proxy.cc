@@ -3149,8 +3149,9 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
         return _db.invoke_on(shard, [max_size, gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
-            tracing::trace(gt, "Start querying the token range that starts with {}", seastar::value_of([&prv] { return prv.begin()->start()->value().token(); }));
-            return db.query(gs, *cmd, opts, prv, gt, max_size, timeout).then([trace_state = gt.get()](auto&& f, cache_temperature ht) {
+            auto trace_state = gt.get();
+            tracing::trace(trace_state, "Start querying the token range that starts with {}", seastar::value_of([&prv] { return prv.begin()->start()->value().token(); }));
+            return db.query(gs, *cmd, opts, prv, trace_state, max_size, timeout).then([trace_state](auto&& f, cache_temperature ht) {
                 tracing::trace(trace_state, "Querying is done");
                 return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(make_foreign(std::move(f)), ht);
             });
