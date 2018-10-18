@@ -1432,6 +1432,7 @@ int main(int argc, char** argv) {
         ("output-format", bpo::value<sstring>()->default_value("text"), "Output file for results. 'text' (default) or 'json'")
         ("test-case-duration", bpo::value<double>()->default_value(1), "Duration in seconds of a single test case (0 for a single run).")
         ("data-directory", bpo::value<sstring>()->default_value("./perf_large_partition_data"), "Data directory")
+        ("sstable-format", bpo::value<std::string>()->default_value("mc"), "Sstable format version to use during population")
         ;
 
     return app.run(argc, argv, [] {
@@ -1455,6 +1456,15 @@ int main(int argc, char** argv) {
         db_cfg.enable_cache(app.configuration().count("enable-cache"));
         db_cfg.enable_commitlog(false);
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
+
+        auto sstable_format_name = app.configuration()["sstable-format"].as<std::string>();
+        if (sstable_format_name == "mc") {
+            db_cfg.enable_sstables_mc_format(true);
+        } else if (sstable_format_name == "la") {
+            db_cfg.enable_sstables_mc_format(false);
+        } else {
+            throw std::runtime_error(format("Unsupported sstable format: {}", sstable_format_name));
+        }
 
         test_case_duration = app.configuration()["test-case-duration"].as<double>();
 
