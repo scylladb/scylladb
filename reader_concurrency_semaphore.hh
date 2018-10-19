@@ -109,13 +109,6 @@ public:
         }
     };
 
-private:
-    static std::exception_ptr default_make_queue_overloaded_exception() {
-        return std::make_exception_ptr(std::runtime_error("restricted mutation reader queue overload"));
-    }
-
-    resources _resources;
-
     struct entry {
         promise<lw_shared_ptr<reader_permit>> pr;
         resources res;
@@ -126,11 +119,20 @@ private:
             e.pr.set_exception(semaphore_timed_out());
         }
     };
+
+private:
+    resources _resources;
+
     expiring_fifo<entry, expiry_handler, db::timeout_clock> _wait_list;
 
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
-    std::function<std::exception_ptr()> _make_queue_overloaded_exception = default_make_queue_overloaded_exception;
+    std::function<std::exception_ptr()> _make_queue_overloaded_exception;
     std::function<bool()> _evict_an_inactive_reader;
+
+private:
+    static std::exception_ptr default_make_queue_overloaded_exception() {
+        return std::make_exception_ptr(std::runtime_error("restricted mutation reader queue overload"));
+    }
 
     bool has_available_units(const resources& r) const {
         return bool(_resources) && _resources >= r;
