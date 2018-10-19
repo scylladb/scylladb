@@ -119,9 +119,17 @@ insert_token_range_to_sorted_container_while_unwrapping(
         const dht::token& tok,
         dht::token_range_vector& ret) {
     if (prev_tok < tok) {
-        ret.emplace_back(
-                dht::token_range::bound(prev_tok, false),
-                dht::token_range::bound(tok, true));
+        auto pos = ret.end();
+        if (!ret.empty() && !std::prev(pos)->end()) {
+            // We inserted a wrapped range (a, b] previously as
+            // (-inf, b], (a, +inf). So now we insert in the next-to-last
+            // position to keep the last range (a, +inf) at the end.
+            pos = std::prev(pos);
+        }
+        ret.insert(pos,
+                dht::token_range{
+                        dht::token_range::bound(prev_tok, false),
+                        dht::token_range::bound(tok, true)});
     } else {
         ret.emplace_back(
                 dht::token_range::bound(prev_tok, false),
