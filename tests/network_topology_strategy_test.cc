@@ -30,6 +30,7 @@
 #include <map>
 #include <iostream>
 #include <sstream>
+#include <boost/range/algorithm/adjacent_find.hpp>
 
 static logging::logger nlogger("NetworkTopologyStrategyLogger");
 
@@ -50,6 +51,26 @@ void print_natural_endpoints(double point, const std::vector<inet_address> v) {
     }
 
     nlogger.debug("{}", strm.str());
+}
+
+#ifndef SEASTAR_DEBUG
+static void verify_sorted(const dht::token_range_vector& trv) {
+    auto not_strictly_before = [] (const dht::token_range a, const dht::token_range b) {
+        return !b.start()
+                || !a.end()
+                || a.end()->value() > b.start()->value()
+                || (a.end()->value() == b.start()->value() && a.end()->is_inclusive() && b.start()->is_inclusive());
+    };
+    BOOST_CHECK(boost::adjacent_find(trv, not_strictly_before) == trv.end());
+}
+#endif
+
+static void check_ranges_are_sorted(abstract_replication_strategy* ars, gms::inet_address ep) {
+    // Too slow in debug mode
+#ifndef SEASTAR_DEBUG
+    verify_sorted(ars->get_ranges(ep));
+    verify_sorted(ars->get_primary_ranges(ep));
+#endif
 }
 
 void strategy_sanity_check(
@@ -150,6 +171,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         auto endpoints2 = ars_ptr->get_natural_endpoints(t2);
 
         endpoints_check(ars_ptr, endpoints2);
+        check_ranges_are_sorted(ars_ptr, rp.host);
         BOOST_CHECK(cache_hit_count + 1 == ars_ptr->get_cache_hits_count());
         BOOST_CHECK(endpoints1 == endpoints2);
     }
