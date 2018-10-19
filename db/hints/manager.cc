@@ -95,6 +95,7 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
         return compute_hints_dir_device_id();
     }).then([this] {
         _strorage_service_anchor->register_subscriber(this);
+        set_started();
     });
 }
 
@@ -105,7 +106,7 @@ future<> manager::stop() {
         _strorage_service_anchor->unregister_subscriber(this);
     }
 
-    _stopping = true;
+    set_stopping();
 
     return _draining_eps_gate.close().finally([this] {
         return parallel_for_each(_ep_managers, [] (auto& pair) {
@@ -277,7 +278,7 @@ inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
 }
 
 bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
-    if (_stopping || !can_hint_for(ep)) {
+    if (stopping() || !started() || !can_hint_for(ep)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
         return false;
@@ -502,7 +503,7 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
 }
 
 void manager::drain_for(gms::inet_address endpoint) {
-    if (_stopping) {
+    if (stopping()) {
         return;
     }
 
@@ -759,7 +760,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     int replayed_segments_count = 0;
 
     try {
-        while (have_segments()) {
+        while (replay_allowed() && have_segments()) {
             if (!send_one_file(*_segments_to_replay.begin())) {
                 break;
             }

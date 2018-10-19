@@ -172,6 +172,10 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
     });
 }
 
+void resource_manager::allow_replaying() noexcept {
+    boost::for_each(_shard_managers, [] (manager& m) { m.allow_replaying(); });
+}
+
 future<> resource_manager::stop() noexcept {
     return parallel_for_each(_shard_managers, [](manager& m) {
         return m.stop();
