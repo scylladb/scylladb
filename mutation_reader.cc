@@ -716,6 +716,8 @@ class foreign_reader : public flat_mutation_reader::impl {
     template <typename T>
     using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
+    using fragment_buffer = circular_buffer<mutation_fragment>;
+
     foreign_unique_ptr<flat_mutation_reader> _reader;
     foreign_unique_ptr<future<>> _read_ahead_future;
     // Set this flag when next_partition() is called.
@@ -758,6 +760,8 @@ class foreign_reader : public flat_mutation_reader::impl {
             return make_ready_future<decltype(results)...>(std::move(results)...);
         });
     }
+
+    void update_buffer_with(foreign_unique_ptr<fragment_buffer> buffer, bool end_of_steam);
 public:
     foreign_reader(schema_ptr schema,
             foreign_unique_ptr<flat_mutation_reader> reader,
@@ -778,8 +782,19 @@ public:
 
     const mutation_fragment& peek_buffer() const { return buffer().front(); }
 
+    future<foreign_unique_ptr<flat_mutation_reader>> pause();
+    void resume(foreign_unique_ptr<flat_mutation_reader> reader);
+
     future<reader_lifecycle_policy::paused_or_stopped_reader> stop();
 };
+
+void foreign_reader::update_buffer_with(foreign_unique_ptr<fragment_buffer> buffer, bool end_of_steam) {
+    _end_of_stream = end_of_steam;
+    for (const auto& mf : *buffer) {
+        // Need a copy since the mf is on the remote shard.
+        push_mutation_fragment(mutation_fragment(*_schema, mf));
+    }
+}
 
 foreign_reader::foreign_reader(schema_ptr schema,
         foreign_unique_ptr<flat_mutation_reader> reader,
@@ -806,8 +821,6 @@ future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
         return make_ready_future();
     }
 
-    using fragment_buffer = circular_buffer<mutation_fragment>;
-
     return forward_operation(timeout, [reader = _reader.get(), timeout] () {
         auto f = reader->is_buffer_empty() ? reader->fill_buffer(timeout) : make_ready_future<>();
         return f.then([=] {
@@ -815,12 +828,8 @@ future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
                     std::make_unique<fragment_buffer>(reader->detach_buffer()),
                     reader->is_end_of_stream());
         });
-    }).then([this] (foreign_unique_ptr<fragment_buffer> buffer, bool end_of_steam) mutable {
-        _end_of_stream = end_of_steam;
-        for (const auto& mf : *buffer) {
-            // Need a copy since the mf is on the remote shard.
-            push_mutation_fragment(mutation_fragment(*_schema, mf));
-        }
+    }).then([this] (foreign_unique_ptr<fragment_buffer> buffer, bool end_of_stream) mutable {
+        update_buffer_with(std::move(buffer), end_of_stream);
     });
 }
 
@@ -855,7 +864,7 @@ future<> foreign_reader::fast_forward_to(position_range pr, db::timeout_clock::t
 }
 
 future<reader_lifecycle_policy::paused_or_stopped_reader> foreign_reader::stop() {
-    if (_read_ahead_future || _pending_next_partition) {
+    if (_reader && (_read_ahead_future || _pending_next_partition)) {
         const auto owner_shard = _reader.get_owner_shard();
         return smp::submit_to(owner_shard, [reader = _reader.get(),
                 read_ahead_future = std::exchange(_read_ahead_future, nullptr),
@@ -871,8 +880,42 @@ future<reader_lifecycle_policy::paused_or_stopped_reader> foreign_reader::stop()
         });
     } else {
         return make_ready_future<reader_lifecycle_policy::paused_or_stopped_reader>(
-                reader_lifecycle_policy::paused_or_stopped_reader{std::move(_reader), detach_buffer(), false});
+                reader_lifecycle_policy::paused_or_stopped_reader{std::move(_reader), detach_buffer(), _pending_next_partition});
     }
+}
+
+future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> foreign_reader::pause() {
+    return smp::submit_to(_reader.get_owner_shard(), [reader = _reader.get(),
+            read_ahead_future = std::exchange(_read_ahead_future, nullptr),
+            pending_next_partition = std::exchange(_pending_next_partition, false)] () mutable {
+        auto fut = read_ahead_future ? std::move(*read_ahead_future) : make_ready_future<>();
+        return fut.then([=] () mutable {
+            if (pending_next_partition) {
+                reader->next_partition();
+            }
+            return make_ready_future<foreign_unique_ptr<fragment_buffer>, bool>(
+                    std::make_unique<fragment_buffer>(reader->detach_buffer()),
+                    reader->is_end_of_stream());
+        });
+    }).then([this] (foreign_unique_ptr<fragment_buffer>&& buffer, bool end_of_stream) mutable {
+        update_buffer_with(std::move(buffer), end_of_stream);
+
+        // An ongoing pause() might overlap with a next_partition() call.
+        // So if there is a pending next partition, try to execute it again
+        // after the remote buffer was transferred. This is required for
+        // correctness, otherwise some fragments belonging to the to-be-skipped
+        // partition can escape the next_partition() call, both on the local and
+        // the remote shard.
+        if (_pending_next_partition) {
+            _pending_next_partition = false;
+            next_partition();
+        }
+        return std::move(_reader);
+    });
+}
+
+void foreign_reader::resume(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) {
+    _reader = std::move(reader);
 }
 
 flat_mutation_reader make_foreign_reader(schema_ptr schema,
