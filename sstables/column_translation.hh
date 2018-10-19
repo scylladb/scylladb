@@ -84,18 +84,25 @@ class column_translation {
                 lens.reserve(src.size());
                 for (auto&& desc : src) {
                     const column_definition* def = s.get_column_definition(desc.name.value);
+                    const bytes& type_name = desc.type_name.value;
+                    data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
+                    lens.push_back(type->value_length_if_fixed());
+                    is_collection.push_back(type->is_multi_cell());
+                    is_counter.push_back(type->is_counter());
                     if (def) {
+                        if (def->is_multi_cell() != type->is_multi_cell() || def->is_counter() != type->is_counter()) {
+                            throw malformed_sstable_exception(sprint(
+                                    "{} definition in serialization header does not match schema. "
+                                    "Schema collection = {}, counter = {}. Header collection = {}, counter = {}",
+                                    def->name(),
+                                    def->is_multi_cell(),
+                                    def->is_counter(),
+                                    type->is_multi_cell(),
+                                    type->is_counter()));
+                        }
                         ids.push_back(def->id);
-                        bytes& type_name = desc.type_name.value;
-                        data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
-                        lens.push_back(type->value_length_if_fixed());
-                        is_collection.push_back(def->is_multi_cell());
-                        is_counter.push_back(def->is_counter());
                     } else {
                         ids.push_back(std::nullopt);
-                        lens.push_back(std::nullopt);
-                        is_collection.push_back(false);
-                        is_counter.push_back(false);
                     }
                 }
             }
