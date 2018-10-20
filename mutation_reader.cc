@@ -744,9 +744,7 @@ public:
         return with_reader([this, timeout] (flat_mutation_reader& reader) {
             return reader.fill_buffer(timeout).then([this, &reader] {
                 _end_of_stream = reader.is_end_of_stream();
-                while (!reader.is_buffer_empty()) {
-                    push_mutation_fragment(reader.pop_mutation_fragment());
-                }
+                reader.move_buffer_content_to(*this);
             });
         }, timeout);
     }

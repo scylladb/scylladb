@@ -1160,6 +1160,33 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
     });
 }
 
+SEASTAR_TEST_CASE(test_restricted_reader_as_mutation_source) {
+    return seastar::async([] {
+        reader_concurrency_semaphore semaphore(100, 10 * new_reader_base_cost);
+
+        auto make_restricted_populator = [&semaphore](schema_ptr s, const std::vector<mutation> &muts) {
+            auto mt = make_lw_shared<memtable>(s);
+            for (auto &&mut : muts) {
+                mt->apply(mut);
+            }
+
+            auto ms = mt->as_data_source();
+            return mutation_source([&semaphore, ms = std::move(ms)](schema_ptr schema,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr tr,
+                    streamed_mutation::forwarding fwd,
+                    mutation_reader::forwarding fwd_mr,
+                    reader_resource_tracker res_tracker) {
+                return make_restricted_flat_reader(semaphore, std::move(ms), std::move(schema), range, slice, pc, tr,
+                        fwd, fwd_mr);
+            });
+        };
+        run_mutation_source_tests(make_restricted_populator);
+    });
+}
+
 static mutation compacted(const mutation& m) {
     auto result = m;
     result.partition().compact_for_compaction(*result.schema(), always_gc, gc_clock::now());
