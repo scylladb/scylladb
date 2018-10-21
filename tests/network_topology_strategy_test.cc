@@ -53,7 +53,7 @@ void print_natural_endpoints(double point, const std::vector<inet_address> v) {
     nlogger.debug("{}", strm.str());
 }
 
-#ifndef SEASTAR_DEBUG
+#ifndef DEBUG
 static void verify_sorted(const dht::token_range_vector& trv) {
     auto not_strictly_before = [] (const dht::token_range a, const dht::token_range b) {
         return !b.start()
@@ -67,7 +67,7 @@ static void verify_sorted(const dht::token_range_vector& trv) {
 
 static void check_ranges_are_sorted(abstract_replication_strategy* ars, gms::inet_address ep) {
     // Too slow in debug mode
-#ifndef SEASTAR_DEBUG
+#ifndef DEBUG
     verify_sorted(ars->get_ranges(ep));
     verify_sorted(ars->get_primary_ranges(ep));
 #endif
