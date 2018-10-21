@@ -141,6 +141,10 @@ private:
     /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
     void check_needs_filtering(::shared_ptr<restrictions::statement_restrictions> restrictions);
 
+    void ensure_filtering_columns_retrieval(database& db,
+                                            ::shared_ptr<selection::selection> selection,
+                                            ::shared_ptr<restrictions::statement_restrictions> restrictions);
+
     bool contains_alias(::shared_ptr<column_identifier> name);
 
     ::shared_ptr<column_specification> limit_receiver();

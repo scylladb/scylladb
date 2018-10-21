@@ -40,6 +40,7 @@ public:
     rows_assertions with_rows(std::initializer_list<std::initializer_list<bytes_opt>> rows);
     // Verifies that the result has the following rows and only those rows.
     rows_assertions with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows);
+    rows_assertions with_serialized_columns_count(size_t columns_count);
 };
 
 class result_msg_assertions {
