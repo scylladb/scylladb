@@ -488,6 +488,12 @@ private:
     template <component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
 
+    void write_crc(const checksum& c);
+    void write_digest(uint32_t full_checksum);
+
+    future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags, file_open_options options = {});
+    future<file> new_sstable_component_file_non_checked(sstring name, open_flags flags, file_open_options options = {});
+
     void generate_toc(compressor_ptr c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);
     future<> seal_sstable();
