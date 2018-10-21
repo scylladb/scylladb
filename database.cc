@@ -2967,6 +2967,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.large_partition_handler = lp_handler;
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
+    cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
 
     return cfg;
 }
@@ -3764,6 +3765,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.enable_metrics_reporting = _cfg->enable_keyspace_column_family_metrics();
 
     cfg.view_update_concurrency_semaphore = &_view_update_concurrency_sem;
+    cfg.view_update_concurrency_semaphore_limit = max_memory_pending_view_updates();
     return cfg;
 }
 
@@ -4621,7 +4623,16 @@ future<> table::populate_views(
             std::move(views),
             std::move(reader),
             { }).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
-        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, db::timeout_semaphore_units());
+        size_t update_size = memory_usage_of(updates);
+        size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
+        return seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for).then(
+                [base_token = std::move(base_token),
+                 updates = std::move(updates),
+                 units_to_consume = update_size - units_to_wait_for,
+                 this] (db::timeout_semaphore_units&& units) mutable {
+            units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, units_to_consume));
+            return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units));
+        });
     });
 }
 

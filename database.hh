@@ -315,6 +315,7 @@ public:
         bool enable_metrics_reporting = false;
         db::large_partition_handler* large_partition_handler;
         db::timeout_semaphore* view_update_concurrency_semaphore;
+        size_t view_update_concurrency_semaphore_limit;
     };
     struct no_commitlog {};
     struct stats {
@@ -1073,6 +1074,7 @@ public:
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         db::timeout_semaphore* view_update_concurrency_semaphore = nullptr;
+        size_t view_update_concurrency_semaphore_limit;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
