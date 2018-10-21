@@ -115,15 +115,14 @@ static future<file> open_sstable_component_file_non_checked(sstring name, open_f
     return open_file_dma(name, flags, options);
 }
 
-future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
-        file_open_options options = {}) {
+future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags, file_open_options options) {
     return open_sstable_component_file(error_handler, name, flags, options).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
     });
 }
 
-future<file> new_sstable_component_file_non_checked(sstring name, open_flags flags, file_open_options options = {}) {
+future<file> sstable::new_sstable_component_file_non_checked(sstring name, open_flags flags, file_open_options options) {
     return open_sstable_component_file_non_checked(name, flags, options).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
@@ -1135,32 +1134,34 @@ future<> sstable::seal_sstable() {
     });
 }
 
-void write_crc(sstable_version_types v, io_error_handler& error_handler, const sstring file_path, const checksum& c) {
+void sstable::write_crc(const checksum& c) {
+    auto file_path = filename(component_type::CRC);
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = new_sstable_component_file(error_handler, file_path, oflags).get0();
+    file f = new_sstable_component_file(_write_error_handler, file_path, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
     auto w = file_writer(std::move(f), std::move(options));
-    write(v, w, c);
+    write(get_version(), w, c);
     w.close();
 }
 
 // Digest file stores the full checksum of data file converted into a string.
-void write_digest(sstable_version_types v, io_error_handler& error_handler, const sstring file_path, uint32_t full_checksum) {
+void sstable::write_digest(uint32_t full_checksum) {
+    auto file_path = filename(component_type::Digest);
     sstlog.debug("Writing Digest file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = new_sstable_component_file(error_handler, file_path, oflags).get0();
+    auto f = new_sstable_component_file(_write_error_handler, file_path, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
     auto w = file_writer(std::move(f), std::move(options));
 
     auto digest = to_sstring<bytes>(full_checksum);
-    write(v, w, digest);
+    write(get_version(), w, digest);
     w.close();
 }
 
@@ -2549,10 +2550,10 @@ void sstable_writer_k_l::finish_file_writer()
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<adler32_checksummed_file_writer*>(writer.get());
-        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
-        write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
+        _sst.write_digest(chksum_wr->full_checksum());
+        _sst.write_crc(chksum_wr->finalize_checksum());
     } else {
-        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.get_full_checksum());
+        _sst.write_digest(_sst._components->compression.get_full_checksum());
     }
 }
 
@@ -3023,14 +3024,10 @@ void sstable_writer_m::close_data_writer() {
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
-        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
-        write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
+        _sst.write_digest(chksum_wr->full_checksum());
+        _sst.write_crc(chksum_wr->finalize_checksum());
     } else {
-        write_digest(
-            _sst.get_version(),
-            _sst._write_error_handler,
-            _sst.filename(component_type::Digest),
-            _sst._components->compression.get_full_checksum());
+        _sst.write_digest(_sst._components->compression.get_full_checksum());
     }
 }
 
