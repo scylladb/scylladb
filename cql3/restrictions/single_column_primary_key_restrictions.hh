@@ -166,19 +166,7 @@ public:
     }
 
     virtual size_t prefix_size() const override {
-        size_t count = 0;
-        if (_schema->clustering_key_columns().empty()) {
-            return count;
-        }
-        column_id expected_column_id = _schema->clustering_key_columns().begin()->id;
-        for (const auto& restriction_entry : _restrictions->restrictions()) {
-            if (_schema->position(*restriction_entry.first) != expected_column_id) {
-                return count;
-            }
-            expected_column_id++;
-            count++;
-        }
-        return count;
+        return primary_key_restrictions<ValueType>::prefix_size(_schema);
     }
 
     ::shared_ptr<single_column_primary_key_restrictions<clustering_key>> get_longest_prefix_restrictions() {
