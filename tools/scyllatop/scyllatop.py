@@ -31,7 +31,11 @@ def fancyUserInterface(metricPatterns, interval, metric_source):
     loop = urwid.MainLoop(aggregateView.widget(), unhandled_input=userInput)
     userInput.setLoop(loop)
     userInput.setMap(M=aggregateView, S=simpleView)
-    liveData = livedata.LiveData(metricPatterns, interval, metric_source)
+    try:
+        liveData = livedata.LiveData(metricPatterns, interval, metric_source)
+    except Exception as inst:
+        print("scyllatop failed connecting to Scylla With an error: {error}".format(error=inst))
+        sys.exit(1)
     liveData.addView(simpleView)
     liveData.addView(aggregateView)
     liveDataThread = threading.Thread(target=lambda: liveData.go(loop))
@@ -78,8 +82,11 @@ if __name__ == '__main__':
     stream_log = logging.StreamHandler()
     stream_log.setLevel(logging.ERROR)
     stream_log.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-
-    file_log = logging.FileHandler(filename=arguments.logfile)
+    try:
+        file_log = logging.FileHandler(filename=arguments.logfile)
+    except Exception as inst:
+        print("scyllatop failed opening log file: '{file}' With an error: {error}".format(file=arguments.logfile, error=inst))
+        sys.exit(1)
     file_log.setLevel(getattr(logging, arguments.verbosity))
     file_log.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
 
