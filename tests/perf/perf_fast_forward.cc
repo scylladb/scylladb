@@ -945,6 +945,8 @@ void run_test_case(std::function<test_result()> fn) {
 }
 
 void test_large_partition_single_key_slice(column_family& cf) {
+    auto n_rows = cfg.n_rows;
+
     output_mgr->set_test_param_names({{"", "{:<2}"}, {"range", "{:<14}"}}, test_result::stats_names());
     struct first {
     };
@@ -964,19 +966,19 @@ void test_large_partition_single_key_slice(column_family& cf) {
 
     run_test_case([&] {
         return test_result_vector {
-            test(int_range::make({0}, {cfg.n_rows / 2})),
-            check_no_disk_reads(test(int_range::make({0}, {cfg.n_rows / 2}))),
+            test(int_range::make({0}, {n_rows / 2})),
+            check_no_disk_reads(test(int_range::make({0}, {n_rows / 2}))),
         };
     });
 
     run_test_case([&] {
       return test_result_vector {
-        test(int_range::make({0}, {cfg.n_rows})),
-        check_no_disk_reads(test(int_range::make({0}, {cfg.n_rows}))),
+        test(int_range::make({0}, {n_rows})),
+        check_no_disk_reads(test(int_range::make({0}, {n_rows}))),
       };
     });
 
-    assert(cfg.n_rows > 200); // assumed below
+    assert(n_rows > 200); // assumed below
 
     run_test_case([&] { // adjacent, no overlap
         return test_result_vector {
@@ -1040,8 +1042,8 @@ void test_large_partition_single_key_slice(column_family& cf) {
         return test_result_vector {
             test(int_range::make_starting_with({100})),
             check_no_disk_reads(test(int_range::make({150}, {159}))),
-            check_no_disk_reads(test(int_range::make_singular({cfg.n_rows - 1}))),
-            check_no_disk_reads(test(int_range::make_singular({cfg.n_rows + 1}))),
+            check_no_disk_reads(test(int_range::make_singular({n_rows - 1}))),
+            check_no_disk_reads(test(int_range::make_singular({n_rows + 1}))),
         };
     });
 
@@ -1067,11 +1069,13 @@ void test_large_partition_single_key_slice(column_family& cf) {
 }
 
 void test_large_partition_skips(column_family& cf) {
+    auto n_rows = cfg.n_rows;
+
     output_mgr->set_test_param_names({{"read", "{:<7}"}, {"skip", "{:<7}"}}, test_result::stats_names());
     auto do_test = [&] (int n_read, int n_skip) {
-        auto r = scan_rows_with_stride(cf, cfg.n_rows, n_read, n_skip);
+        auto r = scan_rows_with_stride(cf, n_rows, n_read, n_skip);
         r.set_params(to_sstrings(n_read, n_skip));
-        check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
+        check_fragment_count(r, count_for_skip_pattern(n_rows, n_read, n_skip));
         return r;
     };
     auto test = [&] (int n_read, int n_skip) {
@@ -1116,12 +1120,14 @@ void test_large_partition_skips(column_family& cf) {
 }
 
 void test_large_partition_slicing(column_family& cf) {
+    auto n_rows = cfg.n_rows;
+
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
       run_test_case([&] {
         auto r = slice_rows(cf, offset, read);
         r.set_params(to_sstrings(offset, read));
-        check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+        check_fragment_count(r, std::min(n_rows - offset, read));
         return r;
       });
     };
@@ -1131,19 +1137,21 @@ void test_large_partition_slicing(column_family& cf) {
     test(0, 256);
     test(0, 4096);
 
-    test(cfg.n_rows / 2, 1);
-    test(cfg.n_rows / 2, 32);
-    test(cfg.n_rows / 2, 256);
-    test(cfg.n_rows / 2, 4096);
+    test(n_rows / 2, 1);
+    test(n_rows / 2, 32);
+    test(n_rows / 2, 256);
+    test(n_rows / 2, 4096);
 }
 
 void test_large_partition_slicing_clustering_keys(column_family& cf) {
+    auto n_rows = cfg.n_rows;
+
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
       run_test_case([&] {
         auto r = slice_rows_by_ck(cf, offset, read);
         r.set_params(to_sstrings(offset, read));
-        check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+        check_fragment_count(r, std::min(n_rows - offset, read));
         return r;
       });
     };
@@ -1153,19 +1161,21 @@ void test_large_partition_slicing_clustering_keys(column_family& cf) {
     test(0, 256);
     test(0, 4096);
 
-    test(cfg.n_rows / 2, 1);
-    test(cfg.n_rows / 2, 32);
-    test(cfg.n_rows / 2, 256);
-    test(cfg.n_rows / 2, 4096);
+    test(n_rows / 2, 1);
+    test(n_rows / 2, 32);
+    test(n_rows / 2, 256);
+    test(n_rows / 2, 4096);
 }
 
 void test_large_partition_slicing_single_partition_reader(column_family& cf) {
+    auto n_rows = cfg.n_rows;
+
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&](int offset, int read) {
       run_test_case([&] {
         auto r = slice_rows_single_key(cf, offset, read);
         r.set_params(to_sstrings(offset, read));
-        check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+        check_fragment_count(r, std::min(n_rows - offset, read));
         return r;
       });
     };
@@ -1175,13 +1185,15 @@ void test_large_partition_slicing_single_partition_reader(column_family& cf) {
     test(0, 256);
     test(0, 4096);
 
-    test(cfg.n_rows / 2, 1);
-    test(cfg.n_rows / 2, 32);
-    test(cfg.n_rows / 2, 256);
-    test(cfg.n_rows / 2, 4096);
+    test(n_rows / 2, 1);
+    test(n_rows / 2, 32);
+    test(n_rows / 2, 256);
+    test(n_rows / 2, 4096);
 }
 
 void test_large_partition_select_few_rows(column_family& cf) {
+    auto n_rows = cfg.n_rows;
+
     output_mgr->set_test_param_names({{"stride", "{:<7}"}, {"rows", "{:<7}"}}, test_result::stats_names());
     auto test = [&](int stride, int read) {
       run_test_case([&] {
@@ -1192,12 +1204,12 @@ void test_large_partition_select_few_rows(column_family& cf) {
       });
     };
 
-    test(cfg.n_rows / 1, 1);
-    test(cfg.n_rows / 2, 2);
-    test(cfg.n_rows / 4, 4);
-    test(cfg.n_rows / 8, 8);
-    test(cfg.n_rows / 16, 16);
-    test(2, cfg.n_rows / 2);
+    test(n_rows / 1, 1);
+    test(n_rows / 2, 2);
+    test(n_rows / 4, 4);
+    test(n_rows / 8, 8);
+    test(n_rows / 16, 16);
+    test(2, n_rows / 2);
 }
 
 void test_large_partition_forwarding(column_family& cf) {
@@ -1219,12 +1231,14 @@ void test_large_partition_forwarding(column_family& cf) {
 }
 
 void test_small_partition_skips(column_family& cf2) {
+    auto n_parts = cfg.n_rows;
+
     output_mgr->set_test_param_names({{"", "{:<2}"}, {"read", "{:<7}"}, {"skip", "{:<7}"}}, test_result::stats_names());
     auto do_test = [&] (int n_read, int n_skip) {
-        auto r = scan_with_stride_partitions(cf2, cfg.n_rows, n_read, n_skip);
+        auto r = scan_with_stride_partitions(cf2, n_parts, n_read, n_skip);
         r.set_params(to_sstrings(new_test_case ? "->" : "", n_read, n_skip));
         new_test_case = false;
-        check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
+        check_fragment_count(r, count_for_skip_pattern(n_parts, n_read, n_skip));
         return r;
     };
     auto test = [&] (int n_read, int n_skip) {
@@ -1273,12 +1287,14 @@ void test_small_partition_skips(column_family& cf2) {
 }
 
 void test_small_partition_slicing(column_family& cf2) {
+    auto n_parts = cfg.n_rows;
+
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
       run_test_case([&] {
-        auto r = slice_partitions(cf2, cfg.n_rows, offset, read);
+        auto r = slice_partitions(cf2, n_parts, offset, read);
         r.set_params(to_sstrings(offset, read));
-        check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+        check_fragment_count(r, std::min(n_parts - offset, read));
         return r;
       });
     };
@@ -1288,10 +1304,10 @@ void test_small_partition_slicing(column_family& cf2) {
     test(0, 256);
     test(0, 4096);
 
-    test(cfg.n_rows / 2, 1);
-    test(cfg.n_rows / 2, 32);
-    test(cfg.n_rows / 2, 256);
-    test(cfg.n_rows / 2, 4096);
+    test(n_parts / 2, 1);
+    test(n_parts / 2, 32);
+    test(n_parts / 2, 256);
+    test(n_parts / 2, 4096);
 }
 
 static
