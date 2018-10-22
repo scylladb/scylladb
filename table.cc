@@ -121,6 +121,10 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
     return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source());
 }
 
+future<row_locker::lock_holder> table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, sstables::shared_sstable excluded_sstable) const {
+    return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source_excluding(std::move(excluded_sstable)));
+}
+
 mutation_source
 table::as_mutation_source_excluding(sstables::shared_sstable sst) const {
     return mutation_source([this, sst = std::move(sst)] (schema_ptr s,
