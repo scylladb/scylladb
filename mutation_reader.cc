@@ -893,7 +893,6 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
     remote_reader_factory _reader_factory;
     foreign_reader_dismantler _reader_dismantler;
     tracing::trace_state_ptr _trace_state;
-    const streamed_mutation::forwarding _fwd_sm;
     const mutation_reader::forwarding _fwd_mr;
 
     // Thin wrapper around a flat_mutation_reader (foreign_reader) that
@@ -957,7 +956,6 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
         // These methods don't assume the reader is already created.
         void next_partition();
         future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout);
-        future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout);
         future<> create_reader();
         explicit operator bool() const {
             return bool(_state->reader);
@@ -989,7 +987,6 @@ public:
         const dht::i_partitioner& partitioner,
         remote_reader_factory reader_factory,
         tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr,
         foreign_reader_dismantler reader_dismantler);
 
@@ -1031,15 +1028,6 @@ future<> multishard_combining_reader::shard_reader::fast_forward_to(const dht::p
     return make_ready_future<>();
 }
 
-future<> multishard_combining_reader::shard_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
-    if (_state->reader) {
-        return _state->reader->fast_forward_to(pr, timeout);
-    }
-    return create_reader().then([this, pr = std::move(pr), timeout] {
-        return _state->reader->fast_forward_to(pr, timeout);
-    });
-}
-
 future<> multishard_combining_reader::shard_reader::create_reader() {
     if (_state->reader) {
         return make_ready_future<>();
@@ -1048,9 +1036,9 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
         return _state->reader_promise.get_future();
     }
     return _parent._reader_factory(_shard, _parent._schema, *_parent._pr, _parent._ps, _parent._pc, _parent._trace_state,
-            _parent._fwd_sm, _parent._fwd_mr).then(
-            [schema = _parent._schema, state = _state, fwd_sm = _parent._fwd_sm] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
-        state->reader = std::make_unique<foreign_reader>(std::move(schema), std::move(r), fwd_sm);
+            _parent._fwd_mr).then(
+            [schema = _parent._schema, state = _state] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
+        state->reader = std::make_unique<foreign_reader>(std::move(schema), std::move(r));
         for (;state->pending_next_partition; --state->pending_next_partition) {
             state->reader->next_partition();
         }
@@ -1107,7 +1095,7 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
     auto& reader = _shard_readers[_current_shard];
 
     if (reader.is_end_of_stream()) {
-        if (_fwd_sm || std::all_of(_shard_readers.begin(), _shard_readers.end(), std::mem_fn(&shard_reader::done))) {
+        if (std::all_of(_shard_readers.begin(), _shard_readers.end(), std::mem_fn(&shard_reader::done))) {
             _end_of_stream = true;
         } else {
             move_to_next_shard();
@@ -1140,7 +1128,6 @@ multishard_combining_reader::multishard_combining_reader(schema_ptr s,
         const dht::i_partitioner& partitioner,
         remote_reader_factory reader_factory,
         tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr,
         foreign_reader_dismantler reader_dismantler)
     : impl(s)
@@ -1151,7 +1138,6 @@ multishard_combining_reader::multishard_combining_reader(schema_ptr s,
     , _reader_factory(std::move(reader_factory))
     , _reader_dismantler(std::move(reader_dismantler))
     , _trace_state(std::move(trace_state))
-    , _fwd_sm(fwd_sm)
     , _fwd_mr(fwd_mr)
     , _current_shard(pr.start() ? _partitioner.shard_of(pr.start()->value().token()) : _partitioner.shard_of_minimum_token())
     , _next_token(_partitioner.token_for_next_shard(pr.start() ? pr.start()->value().token() : dht::minimum_token(),
@@ -1205,15 +1191,9 @@ future<> multishard_combining_reader::fill_buffer(db::timeout_clock::time_point 
 }
 
 void multishard_combining_reader::next_partition() {
-    if (_fwd_sm == streamed_mutation::forwarding::yes) {
-        clear_buffer();
-        _end_of_stream = false;
+    clear_buffer_to_next_partition();
+    if (is_buffer_empty()) {
         _shard_readers[_current_shard].next_partition();
-    } else {
-        clear_buffer_to_next_partition();
-        if (is_buffer_empty()) {
-            _shard_readers[_current_shard].next_partition();
-        }
     }
 }
 
@@ -1235,12 +1215,7 @@ future<> multishard_combining_reader::fast_forward_to(const dht::partition_range
 }
 
 future<> multishard_combining_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
-    forward_buffer_to(pr.start());
-    _end_of_stream = false;
-    if (is_buffer_empty()) {
-        return _shard_readers[_current_shard].fast_forward_to(std::move(pr), timeout);
-    }
-    return make_ready_future<>();
+    return make_exception_future<>(std::bad_function_call());
 }
 
 flat_mutation_reader make_multishard_combining_reader(schema_ptr schema,
@@ -1250,9 +1225,8 @@ flat_mutation_reader make_multishard_combining_reader(schema_ptr schema,
         const dht::i_partitioner& partitioner,
         remote_reader_factory reader_factory,
         tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr,
         foreign_reader_dismantler reader_dismantler) {
     return make_flat_mutation_reader<multishard_combining_reader>(std::move(schema), pr, ps, pc, partitioner, std::move(reader_factory),
-            std::move(trace_state), fwd_sm, fwd_mr, std::move(reader_dismantler));
+            std::move(trace_state), fwd_mr, std::move(reader_dismantler));
 }

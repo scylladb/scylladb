@@ -200,7 +200,6 @@ class read_context {
             const query::partition_slice& ps,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
-            streamed_mutation::forwarding fwd_sm,
             mutation_reader::forwarding fwd_mr);
 
     void dismantle_reader(shard_id shard, future<stopped_foreign_reader>&& stopped_reader_fut);
@@ -237,9 +236,8 @@ public:
                 const query::partition_slice& ps,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
-                streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
-            return make_remote_reader(shard, std::move(schema), pr, ps, pc, std::move(trace_state), fwd_sm, fwd_mr);
+            return make_remote_reader(shard, std::move(schema), pr, ps, pc, std::move(trace_state), fwd_mr);
         };
     }
 
@@ -289,7 +287,6 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
         const query::partition_slice& ps,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding,
         mutation_reader::forwarding) {
     auto& rs = _readers[shard];
 
@@ -649,10 +646,10 @@ static future<reconcilable_result> do_query_mutations(
                     const query::partition_slice& ps,
                     const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
-                    streamed_mutation::forwarding fwd_sm,
+                    streamed_mutation::forwarding,
                     mutation_reader::forwarding fwd_mr) {
                 return make_multishard_combining_reader(std::move(s), pr, ps, pc, dht::global_partitioner(), ctx->factory(), std::move(trace_state),
-                        fwd_sm, fwd_mr, ctx->dismantler());
+                        fwd_mr, ctx->dismantler());
             });
             auto reader = make_flat_multi_range_reader(s, std::move(ms), ranges, cmd.slice, service::get_local_sstable_query_read_priority(),
                     trace_state, mutation_reader::forwarding::no);

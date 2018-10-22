@@ -1563,25 +1563,24 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                         const query::partition_slice& slice,
                         const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state,
-                        streamed_mutation::forwarding fwd_sm,
                         mutation_reader::forwarding fwd_mr) {
                     return smp::submit_to(shard, [mt = &*remote_memtables->at(shard), s = global_schema_ptr(s), &range, &slice, &pc,
-                            trace_state = tracing::global_trace_state_ptr(trace_state), fwd_sm, fwd_mr] () mutable {
+                            trace_state = tracing::global_trace_state_ptr(trace_state), fwd_mr] () mutable {
                         return make_foreign(std::make_unique<flat_mutation_reader>(mt->make_flat_reader(s.get(),
                                 range,
                                 slice,
                                 pc,
                                 trace_state.get(),
-                                fwd_sm,
+                                streamed_mutation::forwarding::no,
                                 fwd_mr)));
                     });
                 };
 
-                return make_multishard_combining_reader(s, range, slice, pc, *partitioner, factory, trace_state, fwd_sm, fwd_mr);
+                return make_multishard_combining_reader(s, range, slice, pc, *partitioner, factory, trace_state, fwd_mr);
             });
         };
 
-        run_mutation_source_tests(populate);
+        run_mutation_source_tests(populate, streamed_mutation::forwarding::no);
         return make_ready_future<>();
     }).get();
 }
@@ -1602,7 +1601,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
-                streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[shard] = true;
             return smp::submit_to(shard, [gs = global_schema_ptr(s)] () mutable {
@@ -1722,7 +1720,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
-                streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
             return smp::submit_to(shard, [shard_of_interest, gs = global_simple_schema(s), remote_control] () mutable {
                 if (engine().cpu_id() == shard_of_interest) {
@@ -1984,7 +1981,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
-                streamed_mutation::forwarding,
                 mutation_reader::forwarding) {
             return smp::submit_to(shard, [shard, gs = global_simple_schema(s), remote_control = remote_controls.at(shard).get(),
                     pkeys = shard_pkeys.at(shard)] () mutable {
@@ -2070,15 +2066,15 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
-                streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
             return db->invoke_on(shard, [gs = global_schema_ptr(std::move(schema)), &range, &slice,
-                    gts = tracing::global_trace_state_ptr(std::move(trace_state)), fwd_sm, fwd_mr] (database& db) {
+                    gts = tracing::global_trace_state_ptr(std::move(trace_state)), fwd_mr] (database& db) {
                 auto s = gs.get();
                 auto& table = db.find_column_family(s);
                 //TODO need a way to transport io_priority_calls across shards
                 auto& pc = service::get_local_sstable_query_read_priority();
-                auto reader = table.as_mutation_source().make_reader(std::move(s), range, slice, pc, gts.get(), fwd_sm, fwd_mr);
+                auto reader = table.as_mutation_source().make_reader(std::move(s), range, slice, pc, gts.get(), streamed_mutation::forwarding::no,
+                        fwd_mr);
                 return make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)));
             });
         };
