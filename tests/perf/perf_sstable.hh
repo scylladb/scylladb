@@ -109,8 +109,9 @@ public:
 
     future<> fill_memtable() {
         auto idx = boost::irange(0, int(_cfg.partitions / _cfg.sstables));
-        return do_for_each(idx.begin(), idx.end(), [this] (auto iteration) {
-            auto key = partition_key::from_deeply_exploded(*s, { this->random_key() });
+        auto local_keys = make_local_keys(int(_cfg.partitions / _cfg.sstables), s, _cfg.key_size);
+        return do_for_each(idx.begin(), idx.end(), [this, local_keys = std::move(local_keys)] (auto iteration) {
+            auto key = partition_key::from_deeply_exploded(*s, { local_keys.at(iteration) });
             auto mut = mutation(this->s, key);
             for (auto& cdef: this->s->regular_columns()) {
                 mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(*utf8_type, 0, utf8_type->decompose(this->random_column())));
