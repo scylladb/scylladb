@@ -1520,6 +1520,8 @@ int main(int argc, char** argv) {
                 cql_env = &env;
                 sstring name = app.configuration()["name"].as<std::string>();
 
+                output_mgr = std::make_unique<output_manager>(app.configuration()["output-format"].as<sstring>());
+
                 if (app.configuration().count("populate")) {
                     int n_rows = app.configuration()["rows"].as<int>();
                     int value_size = app.configuration()["value-size"].as<int>();
@@ -1538,8 +1540,6 @@ int main(int argc, char** argv) {
                     new_test_case = false;
 
                     std::cout << "Config: rows: " << cfg.n_rows << ", value size: " << cfg.value_size << "\n";
-
-                    output_mgr = std::make_unique<output_manager>(app.configuration()["output-format"].as<sstring>());
 
                     sleep(1s).get(); // wait for system table flushes to quiesce
 
