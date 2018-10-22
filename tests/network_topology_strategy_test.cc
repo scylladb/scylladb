@@ -31,6 +31,7 @@
 #include <iostream>
 #include <sstream>
 #include <boost/range/algorithm/adjacent_find.hpp>
+#include <boost/algorithm/cxx11/iota.hpp>
 
 static logging::logger nlogger("NetworkTopologyStrategyLogger");
 
@@ -276,14 +277,18 @@ future<> heavy_origin_test() {
         }
 
         int total_rf = 0;
-        double token_point = 1.0;
+        std::default_random_engine random_engine{};
+        std::vector<double> token_points(total_eps, 0.0);
+        boost::algorithm::iota(token_points, 1.0);
+        std::shuffle(token_points.begin(), token_points.end(), random_engine);
+        auto token_point_iterator = token_points.begin();
         for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
             total_rf += dc_replication[dc];
             config_options.emplace(to_sstring(dc),
                                    to_sstring(dc_replication[dc]));
             for (int rack = 0; rack < dc_racks[dc]; ++rack) {
                 for (int ep = 1; ep <= dc_endpoints[dc]/dc_racks[dc]; ++ep) {
-
+                    double token_point = *token_point_iterator++;
                     // 10.dc.rack.ep
                     int32_t ip = 0x0a000000 + ((int8_t)dc << 16) +
                                  ((int8_t)rack << 8) + (int8_t)ep;
