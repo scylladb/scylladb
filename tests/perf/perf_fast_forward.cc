@@ -450,6 +450,8 @@ public:
 
     uint64_t aio_reads() const { return after.io.aio_reads - before.io.aio_reads; }
     uint64_t aio_read_bytes() const { return after.io.aio_read_bytes - before.io.aio_read_bytes; }
+    uint64_t aio_writes() const { return after.io.aio_writes - before.io.aio_writes; }
+    uint64_t aio_written_bytes() const { return after.io.aio_write_bytes - before.io.aio_write_bytes; }
     uint64_t read_aheads_discarded() const { return after.io.fstream_read_aheads_discarded - before.io.fstream_read_aheads_discarded; }
     uint64_t reads_blocked() const { return after.io.fstream_reads_blocked - before.io.fstream_reads_blocked; }
 
@@ -503,8 +505,8 @@ public:
             fragment_rate_mad(),
             fragment_rate_max(),
             fragment_rate_min(),
-            aio_reads(),
-            aio_read_bytes() / 1024,
+            aio_reads() + aio_writes(),
+            (aio_read_bytes() + aio_written_bytes()) / 1024,
             reads_blocked(),
             read_aheads_discarded(),
             index_hits(),
