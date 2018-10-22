@@ -35,11 +35,13 @@
 #include "db/config.hh"
 #include "partition_slice_builder.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/core/units.hh>
 #include "sstables/compaction_manager.hh"
 #include "transport/messages/result_message.hh"
 #include "sstables/shared_index_lists.hh"
 
 using namespace std::chrono_literals;
+using namespace seastar;
 namespace fs=boost::filesystem;
 using int_range = nonwrapping_range<int>;
 
@@ -199,6 +201,8 @@ using stats_values = std::tuple<
 struct output_writer {
     virtual void write_test_group(const test_group& group, const dataset& ds, bool running) = 0;
 
+    virtual void write_dataset_population(const dataset& ds) = 0;
+
     virtual void write_test_names(const output_items& param_names, const output_items& stats_names) = 0;
 
     virtual void write_test_static_param(sstring name, sstring description) = 0;
@@ -249,6 +253,11 @@ public:
         if (running) {
             std::cout << group.message << ":" << std::endl;
         }
+    }
+
+    void write_dataset_population(const dataset& ds) override {
+        std::cout << std::endl << "Populating " << ds.name() << std::endl;
+        std::cout << ds.description() << ":" << std::endl;
     }
 
     void write_test_names(const output_items& param_names, const output_items& stats_names) override {
@@ -365,6 +374,10 @@ public:
         _tg_properties["needs_cache"] = (group.needs_cache == test_group::requires_cache::yes);
     }
 
+    void write_dataset_population(const dataset& ds) override {
+        write_common_test_group(format("population-{}", ds.name()), ds.description(), ds);
+    }
+
     void write_test_names(const output_items& param_names, const output_items& stats_names) override {
     }
 
@@ -472,6 +485,10 @@ public:
 
     void add_test_group(const test_group& group, const dataset& ds, bool running) {
         _writer->write_test_group(group, ds, running);
+    }
+
+    void add_dataset_population(const dataset& ds) {
+        _writer->write_dataset_population(ds);
     }
 
     void set_test_param_names(output_items param_names, output_items stats_names) {
@@ -1026,6 +1043,9 @@ void print(const test_result& tr) {
 class result_collector {
     std::vector<std::vector<test_result>> results;
 public:
+    size_t result_count() const {
+        return results.size();
+    }
     void add(test_result rs) {
         add(test_result_vector{std::move(rs)});
     }
@@ -1485,7 +1505,7 @@ table& find_table(database& db, dataset& ds) {
 }
 
 static
-void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const table_config& cfg) {
+void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const table_config& cfg, size_t flush_threshold) {
     drop_keyspace_if_exists(env, "ks");
 
     env.execute_cql("CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
@@ -1498,19 +1518,39 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
 
     for (dataset* ds_ptr : datasets) {
         dataset& ds = *ds_ptr;
+        output_mgr->add_dataset_population(ds);
 
         env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '' }};",
             ds.create_table_statement())).get();
 
         column_family& cf = find_table(db, ds);
         auto s = cf.schema();
+        size_t fragments = 0;
+        result_collector rc;
+
+        output_mgr->set_test_param_names({{"flush@ (MiB)", "{:<12}"}}, test_result::stats_names());
 
         cf.run_with_compaction_disabled([&] {
             return seastar::async([&] {
                 auto gen = ds.make_generator(s, cfg);
                 while (auto mopt = gen()) {
+                    ++fragments;
                     cf.active_memtable().apply(*mopt);
+                    if (cf.active_memtable().region().occupancy().used_space() > flush_threshold) {
+                        metrics_snapshot before;
+                        cf.flush().get();
+                        auto r = test_result(std::move(before), std::exchange(fragments, 0));
+                        r.set_params({format("{:d}", flush_threshold / MB)});
+                        rc.add(std::move(r));
+                    }
                 }
+
+                if (!rc.result_count()) {
+                    print_error("Not enough data to cross the flush threshold. \n"
+                                "Lower the flush threshold or increase the amount of data\n");
+                }
+
+                rc.done();
 
                 std::cout << "flushing...\n";
                 cf.flush().get();
@@ -1618,6 +1658,7 @@ int main(int argc, char** argv) {
         ("list-tests", "Show available test groups")
         ("list-datasets", "Show available datasets")
         ("populate", "populate the table")
+        ("flush-threshold", bpo::value<size_t>()->default_value(300 * MB), "Memtable size threshold for sstable flush. Used during population.")
         ("verbose", "Enables more logging")
         ("trace", "Enables trace-level logging")
         ("enable-cache", "Enables cache")
@@ -1662,6 +1703,7 @@ int main(int argc, char** argv) {
         db_cfg.enable_cache(app.configuration().count("enable-cache"));
         db_cfg.enable_commitlog(false);
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
+        db_cfg.virtual_dirty_soft_limit(1.0); // prevent background memtable flushes.
 
         auto sstable_format_name = app.configuration()["sstable-format"].as<std::string>();
         if (sstable_format_name == "mc") {
@@ -1702,8 +1744,9 @@ int main(int argc, char** argv) {
                 if (app.configuration().count("populate")) {
                     int n_rows = app.configuration()["rows"].as<int>();
                     int value_size = app.configuration()["value-size"].as<int>();
+                    auto flush_threshold = app.configuration()["flush-threshold"].as<size_t>();
                     table_config cfg{name, n_rows, value_size};
-                    populate(enabled_datasets, env, cfg);
+                    populate(enabled_datasets, env, cfg, flush_threshold);
                 } else {
                     if (smp::count != 1) {
                         throw std::runtime_error("The test must be run with one shard");
