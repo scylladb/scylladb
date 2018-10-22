@@ -360,7 +360,9 @@ public:
 
         const std::string test_run_count_name = "test_run_count";
         params_value[test_run_count_name.c_str()] = test_run_count;
-        params_value[all_params_names + "," + test_run_count_name] = all_params_values + std::string(format(",{:d}", test_run_count));
+        if (!all_params_names.empty()) {
+            params_value[all_params_names + "," + test_run_count_name] = all_params_values + std::string(format(",{:d}", test_run_count));
+        }
 
         Json::Value stats_value{Json::objectValue};
         for (size_t i = 0; i < stats_names.size(); ++i) {
