@@ -87,6 +87,12 @@ sstring_vec to_sstrings(Args... args)
     return { to_sstring(args)... };
 }
 
+struct table_config {
+    sstring name;
+    int n_rows;
+    int value_size;
+};
+
 struct test_group {
     using requires_cache = seastar::bool_class<class requires_cache_tag>;
     enum type {
@@ -739,12 +745,6 @@ bytes make_blob(size_t blob_size) {
     return big_blob;
 }
 
-struct table_config {
-    sstring name;
-    int n_rows;
-    int value_size;
-};
-
 static test_result test_forwarding_with_restriction(column_family& cf, table_config& cfg, bool single_partition) {
     auto first_key = cfg.n_rows / 2;
     auto slice = partition_slice_builder(*cf.schema())
@@ -804,71 +804,6 @@ table_config read_config(cql_test_env& env, const sstring& name) {
     auto n_rows = value_cast<int>(int32_type->deserialize(*config_row[0]));
     auto value_size = value_cast<int>(int32_type->deserialize(*config_row[1]));
     return {name, n_rows, value_size};
-}
-
-static
-void populate(cql_test_env& env, table_config cfg) {
-    drop_keyspace_if_exists(env, "ks");
-
-    env.execute_cql("CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
-
-    std::cout << "Saving test config...\n";
-    env.execute_cql("create table config (name text primary key, n_rows int, value_size int)").get();
-    env.execute_cql(format("insert into ks.config (name, n_rows, value_size) values ('{}', {:d}, {:d})", cfg.name, cfg.n_rows, cfg.value_size)).get();
-
-    std::cout << "Creating test tables...\n";
-
-    // Large partition with lots of rows
-    env.execute_cql("create table test (pk int, ck int, value blob, primary key (pk, ck))"
-        " WITH compression = { 'sstable_compression' : '' };").get();
-
-    database& db = env.local_db();
-
-    {
-        std::cout << "Populating ks.test with " << cfg.n_rows << " rows...";
-
-        auto insert_id = env.prepare("update test set \"value\" = ? where \"pk\" = 0 and \"ck\" = ?;").get0();
-
-        for (int ck = 0; ck < cfg.n_rows; ++ck) {
-            env.execute_prepared(insert_id, {{
-                                                 cql3::raw_value::make_value(data_value(make_blob(cfg.value_size)).serialize()),
-                                                 cql3::raw_value::make_value(data_value(ck).serialize())
-                                             }}).get();
-        }
-
-        column_family& cf = db.find_column_family("ks", "test");
-
-        std::cout << "flushing...\n";
-        cf.flush().get();
-
-        std::cout << "compacting...\n";
-        cf.compact_all_sstables().get();
-    }
-
-    // Small partitions, but lots
-    env.execute_cql("create table small_part (pk int, value blob, primary key (pk))"
-        " WITH compression = { 'sstable_compression' : '' };").get();
-
-    {
-        std::cout << "Populating small_part with " << cfg.n_rows << " partitions...";
-
-        auto insert_id = env.prepare("update small_part set \"value\" = ? where \"pk\" = ?;").get0();
-
-        for (int pk = 0; pk < cfg.n_rows; ++pk) {
-            env.execute_prepared(insert_id, {{
-                                                 cql3::raw_value::make_value(data_value(make_blob(cfg.value_size)).serialize()),
-                                                 cql3::raw_value::make_value(data_value(pk).serialize())
-                                             }}).get();
-        }
-
-        column_family& cf = db.find_column_family("ks", "small_part");
-
-        std::cout << "flushing...\n";
-        cf.flush().get();
-
-        std::cout << "compacting...\n";
-        cf.compact_all_sstables().get();
-    }
 }
 
 static unsigned cardinality(int_range r) {
@@ -1341,6 +1276,71 @@ void test_small_partition_slicing(column_family& cf2) {
     test(cfg.n_rows / 2, 32);
     test(cfg.n_rows / 2, 256);
     test(cfg.n_rows / 2, 4096);
+}
+
+static
+void populate(cql_test_env& env, table_config cfg) {
+    drop_keyspace_if_exists(env, "ks");
+
+    env.execute_cql("CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
+
+    std::cout << "Saving test config...\n";
+    env.execute_cql("create table config (name text primary key, n_rows int, value_size int)").get();
+    env.execute_cql(format("insert into ks.config (name, n_rows, value_size) values ('{}', {:d}, {:d})", cfg.name, cfg.n_rows, cfg.value_size)).get();
+
+    std::cout << "Creating test tables...\n";
+
+    // Large partition with lots of rows
+    env.execute_cql("create table test (pk int, ck int, value blob, primary key (pk, ck))"
+                    " WITH compression = { 'sstable_compression' : '' };").get();
+
+    database& db = env.local_db();
+
+    {
+        std::cout << "Populating ks.test with " << cfg.n_rows << " rows...";
+
+        auto insert_id = env.prepare("update test set \"value\" = ? where \"pk\" = 0 and \"ck\" = ?;").get0();
+
+        for (int ck = 0; ck < cfg.n_rows; ++ck) {
+            env.execute_prepared(insert_id, {{
+                                                 cql3::raw_value::make_value(data_value(make_blob(cfg.value_size)).serialize()),
+                                                 cql3::raw_value::make_value(data_value(ck).serialize())
+                                             }}).get();
+        }
+
+        column_family& cf = db.find_column_family("ks", "test");
+
+        std::cout << "flushing...\n";
+        cf.flush().get();
+
+        std::cout << "compacting...\n";
+        cf.compact_all_sstables().get();
+    }
+
+    // Small partitions, but lots
+    env.execute_cql("create table small_part (pk int, value blob, primary key (pk))"
+                    " WITH compression = { 'sstable_compression' : '' };").get();
+
+    {
+        std::cout << "Populating small_part with " << cfg.n_rows << " partitions...";
+
+        auto insert_id = env.prepare("update small_part set \"value\" = ? where \"pk\" = ?;").get0();
+
+        for (int pk = 0; pk < cfg.n_rows; ++pk) {
+            env.execute_prepared(insert_id, {{
+                                                 cql3::raw_value::make_value(data_value(make_blob(cfg.value_size)).serialize()),
+                                                 cql3::raw_value::make_value(data_value(pk).serialize())
+                                             }}).get();
+        }
+
+        column_family& cf = db.find_column_family("ks", "small_part");
+
+        std::cout << "flushing...\n";
+        cf.flush().get();
+
+        std::cout << "compacting...\n";
+        cf.compact_all_sstables().get();
+    }
 }
 
 static std::initializer_list<test_group> test_groups = {
