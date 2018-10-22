@@ -279,15 +279,19 @@ public:
         _metadata.run_date_time = get_run_date_time();
     }
 
-    void write_test_group(const test_group& group, bool running) override {
+    void write_common_test_group(const std::string& name, const std::string& message) {
         _static_param = stdx::nullopt;
         _test_count.clear();
         _root = Json::Value{Json::objectValue};
         _tg_properties = Json::Value{Json::objectValue};
-        _current_dir = output_dir + group.name + "/";
+        _current_dir = output_dir + name + "/";
         fs::create_directory(_current_dir);
-        _tg_properties["name"] = group.name;
-        _tg_properties["message"] = group.message;
+        _tg_properties["name"] = name;
+        _tg_properties["message"] = message;
+    }
+
+    void write_test_group(const test_group& group, bool running) override {
+        write_common_test_group(group.name, group.message);
         _tg_properties["partition_type"] = group.partition_type == test_group::large_partition ? "large" : "small";
         _tg_properties["needs_cache"] = (group.needs_cache == test_group::requires_cache::yes);
     }
