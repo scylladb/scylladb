@@ -931,7 +931,7 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
     auto fs = std::make_unique<std::vector<future<>>>();
     for (auto& mut : mutations) {
         auto view_token = mut.token();
-        auto keyspace_name = mut.schema()->ks_name();
+        auto& keyspace_name = mut.schema()->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
         if (paired_endpoint) {
