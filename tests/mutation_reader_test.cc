@@ -1514,6 +1514,55 @@ dht::token dummy_partitioner::token_for_next_shard(const dht::token& t, shard_id
     return *it;
 }
 
+class test_reader_lifecycle_policy
+        : public reader_lifecycle_policy
+        , public enable_shared_from_this<test_reader_lifecycle_policy> {
+    using factory_function = std::function<future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>(
+            shard_id,
+            schema_ptr,
+            const dht::partition_range&,
+            const query::partition_slice&,
+            const io_priority_class&,
+            tracing::trace_state_ptr,
+            mutation_reader::forwarding)>;
+
+    struct reader_params {
+        const dht::partition_range range;
+        const query::partition_slice slice;
+    };
+    struct reader_context {
+        std::unique_ptr<reader_params> params;
+    };
+
+    factory_function _factory_function;
+    std::vector<reader_context> _contexts;
+
+public:
+    explicit test_reader_lifecycle_policy(factory_function f)
+        : _factory_function(std::move(f))
+        , _contexts(smp::count) {
+    }
+    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> create_reader(
+            shard_id shard,
+            schema_ptr schema,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            mutation_reader::forwarding fwd_mr) override {
+        _contexts[shard].params = std::make_unique<reader_params>(reader_params{range, slice});
+        return _factory_function(shard, std::move(schema), _contexts[shard].params->range, _contexts[shard].params->slice, pc,
+                std::move(trace_state), fwd_mr).finally([zis = shared_from_this()] {});
+    }
+    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
+        reader.then([shard, this] (stopped_reader&& reader) {
+            return smp::submit_to(shard, [reader = std::move(reader.remote_reader), ctx = std::move(_contexts[shard])] () mutable {
+                reader.release();
+            });
+        }).finally([zis = shared_from_this()] {});
+    }
+};
+
 // Best run with SMP >= 2
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     if (smp::count < 2) {
@@ -1576,7 +1625,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     });
                 };
 
-                return make_multishard_combining_reader(s, range, slice, pc, *partitioner, factory, trace_state, fwd_mr);
+                return make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)), *partitioner, s,
+                        range, slice, pc, trace_state, fwd_mr);
             });
         };
 
@@ -1608,8 +1658,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
             });
         };
 
-        assert_that(make_multishard_combining_reader(s.schema(), query::full_partition_range, s.schema()->full_slice(),
-                    service::get_local_sstable_query_read_priority(), dht::global_partitioner(), std::move(factory)))
+        assert_that(make_multishard_combining_reader(
+                    seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
+                    dht::global_partitioner(),
+                    s.schema(),
+                    query::full_partition_range,
+                    s.schema()->full_slice(),
+                    service::get_local_sstable_query_read_priority()))
                 .produces_end_of_stream();
 
         for (unsigned i = 0; i < smp::count; ++i) {
@@ -1738,8 +1793,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         {
             const auto mutations_by_token = std::map<dht::token, std::vector<mutation>>();
             auto partitioner = dummy_partitioner(dht::global_partitioner(), mutations_by_token);
-            auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, s.schema()->full_slice(),
-                    service::get_local_sstable_query_read_priority(), partitioner, std::move(factory));
+            auto reader = make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)), partitioner,
+                    s.schema(), query::full_partition_range, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
 
             reader.fill_buffer(db::no_timeout).get();
 
@@ -1991,8 +2046,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         };
 
         {
-            auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, s.schema()->full_slice(),
-                    service::get_local_sstable_query_read_priority(), partitioner, std::move(factory));
+            auto reader = make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)), partitioner,
+                    s.schema(), query::full_partition_range, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
             reader.fill_buffer(db::no_timeout).get();
             BOOST_REQUIRE(reader.is_buffer_full());
         }
@@ -2079,8 +2134,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
             });
         };
         auto reference_reader = make_filtering_reader(
-                make_multishard_combining_reader(schema, partition_range, schema->full_slice(),
-                        service::get_local_sstable_query_read_priority(), local_partitioner, std::move(reader_factory)),
+                make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)), local_partitioner,
+                    schema, partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority()),
                 [&remote_partitioner] (const dht::decorated_key& pkey) {
                     return remote_partitioner.shard_of(pkey.token()) == 0;
                 });
