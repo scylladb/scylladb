@@ -871,22 +871,58 @@ void print(const test_result& tr) {
     }
 }
 
+class result_collector {
+    std::vector<std::vector<test_result>> results;
+public:
+    void add(test_result rs) {
+        add(test_result_vector{std::move(rs)});
+    }
+    void add(test_result_vector rs) {
+        if (results.empty()) {
+            results.emplace_back(std::move(rs));
+        } else {
+            assert(rs.size() == results.size());
+            for (auto j = 0u; j < rs.size(); j++) {
+                results[j].emplace_back(rs[j]);
+            }
+        }
+    }
+    void done() {
+        for (auto&& result : results) {
+            boost::sort(result, [] (const test_result& a, const test_result& b) {
+                return a.fragment_rate() < b.fragment_rate();
+            });
+            auto median = result[result.size() / 2];
+            auto fragment_rate_min = result[0].fragment_rate();
+            auto fragment_rate_max = result[result.size() - 1].fragment_rate();
+
+            std::vector<double> deviation;
+            for (auto& r : result) {
+                deviation.emplace_back(fabs(median.fragment_rate() - r.fragment_rate()));
+            }
+            std::sort(deviation.begin(), deviation.end());
+            auto fragment_rate_mad = deviation[deviation.size() / 2];
+            median.set_fragment_rate_stats(fragment_rate_mad, fragment_rate_max, fragment_rate_min);
+            print(median);
+        }
+    }
+};
 
 void run_test_case(std::function<std::vector<test_result>()> fn) {
+    result_collector rc;
+
     auto do_run = [&] {
         on_test_case();
         return fn();
     };
 
     auto t1 = std::chrono::steady_clock::now();
-    auto rs = do_run();
+    rc.add(do_run());
     auto t2 = std::chrono::steady_clock::now();
     auto iteration_duration = (t2 - t1) / std::chrono::duration<double>(1s);
 
     if (test_case_duration == 0.) {
-        for (auto& r : rs) {
-            print(r);
-        }
+        rc.done();
         return;
     }
 
@@ -895,33 +931,11 @@ void run_test_case(std::function<std::vector<test_result>()> fn) {
     }
     auto iteration_count = std::max<size_t>(test_case_duration / iteration_duration, 3);
 
-    std::vector<std::vector<test_result>> results(rs.size());
-    results.reserve(iteration_count);
     for (auto i = 0u; i < iteration_count; i++) {
-        auto rs = do_run();
-        assert(rs.size() == results.size());
-        for (auto j = 0u; j < rs.size(); j++) {
-            results[j].emplace_back(rs[j]);
-        }
+        rc.add(do_run());
     }
 
-    for (auto&& result : results) {
-        boost::sort(result, [] (const test_result& a, const test_result& b) {
-            return a.fragment_rate() < b.fragment_rate();
-        });
-        auto median = result[result.size() / 2];
-        auto fragment_rate_min = result[0].fragment_rate();
-        auto fragment_rate_max = result[result.size() - 1].fragment_rate();
-
-        std::vector<double> deviation;
-        for (auto& r : result) {
-            deviation.emplace_back(fabs(median.fragment_rate() - r.fragment_rate()));
-        }
-        std::sort(deviation.begin(), deviation.end());
-        auto fragment_rate_mad = deviation[deviation.size() / 2];
-        median.set_fragment_rate_stats(fragment_rate_mad, fragment_rate_max, fragment_rate_min);
-        print(median);
-    }
+    rc.done();
 }
 
 void run_test_case(std::function<test_result()> fn) {
