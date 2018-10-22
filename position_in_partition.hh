@@ -270,6 +270,7 @@ public:
     static position_in_partition for_range_start(const query::clustering_range&);
     static position_in_partition for_range_end(const query::clustering_range&);
 
+    partition_region region() const { return _type; }
     bool is_partition_start() const { return _type == partition_region::partition_start; }
     bool is_partition_end() const { return _type == partition_region::partition_end; }
     bool is_static_row() const { return _type == partition_region::static_row; }
