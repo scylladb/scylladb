@@ -388,6 +388,59 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
         foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
+/// Reader lifecycle policy for the mulitshard combining reader.
+///
+/// This policy is expected to make sure any additional resource the readers
+/// might need is kept alive for the lifetime of the readers, not that
+/// of the multishard reader. This is a very important distinction. As
+/// destructors cannot return futures, the multishard reader will be
+/// destroyed before all it's shard readers could stop properly. Hence it
+/// is the duty of this policy to make sure all objects the shard readers
+/// depend on stay alive until they are properly destroyed on their home
+/// shards. Note that this also includes the passed in `range` and `slice`
+/// parameters because although client code is required to keep them alive as
+/// long as the top level reader lives, the shard readers might outlive the
+/// multishard reader itself.
+class reader_lifecycle_policy {
+public:
+    struct stopped_reader {
+        foreign_ptr<std::unique_ptr<flat_mutation_reader>> remote_reader;
+        circular_buffer<mutation_fragment> unconsumed_fragments;
+    };
+
+public:
+    /// Create an appropriate reader on the specified shard.
+    ///
+    /// Will be called when the multishard reader visits a shard for the
+    /// first time. This method should also enter gates, take locks or
+    /// whatever is appropriate to make sure resources it is using on the
+    /// remote shard stay alive, during the lifetime of the created reader.
+    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> create_reader(
+            shard_id shard,
+            schema_ptr schema,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            mutation_reader::forwarding fwd_mr) = 0;
+
+    /// Wait on the shard reader to stop then destroy it.
+    ///
+    /// Will be called when the multishard reader is being destroyed. It will be
+    /// called for each of the shard readers. The future resolves when the
+    /// reader is stopped, that is it, finishes all background and/or pending
+    /// work.
+    /// This method is expected to do a proper cleanup, that is, leave any gates,
+    /// release any locks or whatever is appropriate for the shard reader.
+    ///
+    /// The multishard reader couldn't wait on any future returned from this
+    /// method (as it will be called from the destructor) so waiting on
+    /// all the readers being cleaned up is up to the implementation.
+    ///
+    /// This method will be called from a destructor so it cannot throw.
+    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
+};
+
 using remote_reader_factory = noncopyable_function<future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>(unsigned,
         schema_ptr,
         const dht::partition_range&,
