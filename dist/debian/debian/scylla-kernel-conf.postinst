@@ -9,6 +9,7 @@ if [[ $KVER =~ 3\.13\.0\-([0-9]+)-generic ]]; then
 else
     # expect failures in virtualized environments
     sysctl -p/etc/sysctl.d/99-scylla-sched.conf || :
+    sysctl -p/etc/sysctl.d/99-scylla-aio.conf || :
 fi
 
 #DEBHELPER#
