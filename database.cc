@@ -1993,6 +1993,12 @@ future<sstables::entry_descriptor> distributed_loader::probe_file(distributed<da
     }
     auto cf_sstable_open = [sstdir, comps, fname] (column_family& cf, sstables::foreign_sstable_open_info info) {
         cf.update_sstables_known_generation(comps.generation);
+        if (shared_sstable sst = cf.get_staging_sstable(comps.generation)) {
+            dblog.warn("SSTable {} is already present in staging/ directory. Moving from staging will be retried.", sst->get_filename());
+            return seastar::async([sst = std::move(sst), comps = std::move(comps)] () {
+                sst->move_to_new_dir_in_thread(comps.sstdir, comps.generation);
+            });
+        }
         {
             auto i = boost::range::find_if(*cf._sstables->all(), [gen = comps.generation] (sstables::shared_sstable sst) { return sst->generation() == gen; });
             if (i != cf._sstables->all()->end()) {
