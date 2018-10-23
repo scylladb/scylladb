@@ -4709,9 +4709,19 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
     class streaming_reader_lifecycle_policy
             : public reader_lifecycle_policy
             , public enable_shared_from_this<streaming_reader_lifecycle_policy> {
+        struct inactive_read : public reader_concurrency_semaphore::inactive_read {
+            foreign_unique_ptr<flat_mutation_reader> reader;
+            explicit inactive_read(foreign_unique_ptr<flat_mutation_reader> reader)
+                : reader(std::move(reader)) {
+            }
+            virtual void evict() override {
+                reader.reset();
+            }
+        };
         struct reader_context {
             std::unique_ptr<const dht::partition_range> range;
             foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
+            std::optional<reader_concurrency_semaphore::inactive_read_handle> pause_handle_opt;
         };
         distributed<database>& _db;
         std::vector<reader_context> _contexts;
@@ -4744,6 +4754,22 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
                 return smp::submit_to(shard, [ctx = std::move(_contexts[shard]), reader = std::move(reader.remote_reader)] () mutable {
                     reader.release();
                 });
+            });
+        }
+        virtual future<> pause(foreign_unique_ptr<flat_mutation_reader> reader) override {
+            const auto shard = reader.get_owner_shard();
+            return _db.invoke_on(shard, [reader = std::move(reader)] (database& db) mutable {
+                return db.streaming_read_concurrency_sem().register_inactive_read(std::make_unique<inactive_read>(std::move(reader)));
+            }).then([this, zis = shared_from_this(), shard] (reader_concurrency_semaphore::inactive_read_handle handle) {
+                _contexts[shard].pause_handle_opt = handle;
+            });
+        }
+        virtual future<foreign_unique_ptr<flat_mutation_reader>> try_resume(shard_id shard) override {
+            return _db.invoke_on(shard, [handle = *_contexts[shard].pause_handle_opt] (database& db) mutable {
+                if (auto ir_ptr = db.streaming_read_concurrency_sem().unregister_inactive_read(handle)) {
+                    return std::move(static_cast<inactive_read&>(*ir_ptr).reader);
+                }
+                return foreign_unique_ptr<flat_mutation_reader>{};
             });
         }
     };
