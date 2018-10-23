@@ -1554,8 +1554,8 @@ public:
         return _factory_function(shard, std::move(schema), _contexts[shard].params->range, _contexts[shard].params->slice, pc,
                 std::move(trace_state), fwd_mr).finally([zis = shared_from_this()] {});
     }
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
-        reader.then([shard, this] (stopped_reader&& reader) {
+    virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader) noexcept override {
+        reader.then([shard, this] (paused_or_stopped_reader&& reader) {
             return smp::submit_to(shard, [reader = std::move(reader.remote_reader), ctx = std::move(_contexts[shard])] () mutable {
                 reader.release();
             });

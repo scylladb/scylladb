@@ -778,7 +778,7 @@ public:
 
     const mutation_fragment& peek_buffer() const { return buffer().front(); }
 
-    future<reader_lifecycle_policy::stopped_reader> stop();
+    future<reader_lifecycle_policy::paused_or_stopped_reader> stop();
 };
 
 foreign_reader::foreign_reader(schema_ptr schema,
@@ -854,7 +854,7 @@ future<> foreign_reader::fast_forward_to(position_range pr, db::timeout_clock::t
     });
 }
 
-future<reader_lifecycle_policy::stopped_reader> foreign_reader::stop() {
+future<reader_lifecycle_policy::paused_or_stopped_reader> foreign_reader::stop() {
     if (_read_ahead_future || _pending_next_partition) {
         const auto owner_shard = _reader.get_owner_shard();
         return smp::submit_to(owner_shard, [reader = _reader.get(),
@@ -867,11 +867,11 @@ future<reader_lifecycle_policy::stopped_reader> foreign_reader::stop() {
                 }
             });
         }).then([this] {
-            return reader_lifecycle_policy::stopped_reader{std::move(_reader), detach_buffer()};
+            return reader_lifecycle_policy::paused_or_stopped_reader{std::move(_reader), detach_buffer(), false};
         });
     } else {
-        return make_ready_future<reader_lifecycle_policy::stopped_reader>(
-                reader_lifecycle_policy::stopped_reader{std::move(_reader), detach_buffer()});
+        return make_ready_future<reader_lifecycle_policy::paused_or_stopped_reader>(
+                reader_lifecycle_policy::paused_or_stopped_reader{std::move(_reader), detach_buffer(), false});
     }
 }
 

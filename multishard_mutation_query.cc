@@ -189,7 +189,7 @@ class read_context : public reader_lifecycle_policy {
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr);
 
-    void dismantle_reader(shard_id shard, future<stopped_reader>&& stopped_reader_fut);
+    void dismantle_reader(shard_id shard, future<paused_or_stopped_reader>&& reader_fut);
 
     dismantle_buffer_stats dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
@@ -224,8 +224,8 @@ public:
         return make_remote_reader(shard, std::move(schema), pr, ps, pc, std::move(trace_state), fwd_mr);
     }
 
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> stopped_reader_fut) noexcept override {
-        dismantle_reader(shard, std::move(stopped_reader_fut));
+    virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader_fut) noexcept override {
+        dismantle_reader(shard, std::move(reader_fut));
     }
 
     future<> lookup_readers();
@@ -291,9 +291,9 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
     });
 }
 
-void read_context::dismantle_reader(shard_id shard, future<stopped_reader>&& reader_fut) {
+void read_context::dismantle_reader(shard_id shard, future<paused_or_stopped_reader>&& reader_fut) {
     with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
-        return reader_fut.then_wrapped([this, shard] (future<stopped_reader>&& reader_fut) {
+        return reader_fut.then_wrapped([this, shard] (future<paused_or_stopped_reader>&& reader_fut) {
             if (reader_fut.failed()) {
                 mmq_log.debug("Failed to stop reader on shard {}: {}", shard, reader_fut.get_exception());
                 ++_db.local().get_stats().multishard_query_failed_reader_stops;

@@ -403,9 +403,12 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
 /// multishard reader itself.
 class reader_lifecycle_policy {
 public:
-    struct stopped_reader {
+    struct paused_or_stopped_reader {
+        // Null when the reader is paused.
         foreign_ptr<std::unique_ptr<flat_mutation_reader>> remote_reader;
         circular_buffer<mutation_fragment> unconsumed_fragments;
+        // Only set for paused readers.
+        bool has_pending_next_partition;
     };
 
 public:
@@ -438,7 +441,25 @@ public:
     /// all the readers being cleaned up is up to the implementation.
     ///
     /// This method will be called from a destructor so it cannot throw.
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
+    virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader) noexcept = 0;
+
+    /// Pause the reader.
+    ///
+    /// The purpose of pausing a reader is making it evictable while it is
+    /// otherwise inactive. This allows freeing up resources that are in-demand
+    /// by evicting these paused readers. Most notably, this allows freeing up
+    /// reader permits when the node is overloaded with reads.
+    virtual future<> pause(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) {
+        return make_ready_future<>();
+    }
+
+    /// Try to resume the reader.
+    ///
+    /// The pointer returned will be null when resuming fails. This can happen
+    /// if the reader was evicted while paused.
+    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume(shard_id shard) {
+        return make_ready_future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>();
+    }
 };
 
 /// Make a multishard_combining_reader.

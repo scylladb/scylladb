@@ -4739,8 +4739,8 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
                 return std::move(reader);
             });
         }
-        virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
-            reader_fut.then([this, zis = shared_from_this(), shard] (stopped_reader&& reader) mutable {
+        virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader_fut) noexcept override {
+            reader_fut.then([this, zis = shared_from_this(), shard] (paused_or_stopped_reader&& reader) mutable {
                 return smp::submit_to(shard, [ctx = std::move(_contexts[shard]), reader = std::move(reader.remote_reader)] () mutable {
                     reader.release();
                 });
