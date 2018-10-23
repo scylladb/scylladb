@@ -1532,6 +1532,7 @@ class test_reader_lifecycle_policy
     };
     struct reader_context {
         std::unique_ptr<reader_params> params;
+        foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader;
     };
 
     factory_function _factory_function;
@@ -1560,6 +1561,13 @@ public:
                 reader.release();
             });
         }).finally([zis = shared_from_this()] {});
+    }
+    virtual future<> pause(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) override {
+        _contexts[reader.get_owner_shard()].reader = std::move(reader);
+        return make_ready_future<>();
+    }
+    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume(shard_id shard) override {
+        return make_ready_future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>(std::move(_contexts[shard].reader));
     }
 };
 
