@@ -453,7 +453,7 @@ public:
             "The maximum number of tombstones a query can scan before aborting."  \
     )   \
     /* Network timeout settings */  \
-    val(range_request_timeout_in_ms, uint32_t, 10000, Unused,     \
+    val(range_request_timeout_in_ms, uint32_t, 10000, Used,     \
             "The time in milliseconds that the coordinator waits for sequential or index scans to complete."  \
     )   \
     val(read_request_timeout_in_ms, uint32_t, 5000, Used,     \
@@ -472,7 +472,7 @@ public:
             "The time in milliseconds that the coordinator waits for write operations to complete.\n"  \
             "Related information: About hinted handoff writes"  \
     )   \
-    val(request_timeout_in_ms, uint32_t, 10000, Unused,     \
+    val(request_timeout_in_ms, uint32_t, 10000, Used,     \
             "The default timeout for other, miscellaneous operations.\n"  \
             "Related information: About hinted handoff writes"  \
     )   \
