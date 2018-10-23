@@ -449,17 +449,13 @@ public:
     /// otherwise inactive. This allows freeing up resources that are in-demand
     /// by evicting these paused readers. Most notably, this allows freeing up
     /// reader permits when the node is overloaded with reads.
-    virtual future<> pause(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) {
-        return make_ready_future<>();
-    }
+    virtual future<> pause(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) = 0;
 
     /// Try to resume the reader.
     ///
     /// The pointer returned will be null when resuming fails. This can happen
     /// if the reader was evicted while paused.
-    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume(shard_id shard) {
-        return make_ready_future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>();
-    }
+    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume(shard_id shard) = 0;
 };
 
 /// Make a multishard_combining_reader.
