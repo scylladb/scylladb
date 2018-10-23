@@ -95,6 +95,8 @@ install -m644 dist/common/systemd/*.timer -Dt "$rprefix"/lib/systemd/system
 install -m755 dist/common/scripts/* -Dt "$rprefix"/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh "$rprefix"/lib/scylla/
 install -m755 seastar/scripts/perftune.py -Dt "$rprefix"/lib/scylla/
+install -m755 seastar/scripts/seastar-addr2line -Dt "$rprefix"/lib/scylla/
+install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/lib/scylla/
 install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/lib/scylla/
 install -m755 build/release/scylla -Dt "$rprefix/bin"
 install -m755 build/release/iotune -Dt "$rprefix/bin"
