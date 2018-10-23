@@ -614,6 +614,10 @@ public:
         return _schema->is_compound() || !has_scylla_component() || _components->scylla_metadata->has_feature(sstable_feature::NonCompoundRangeTombstones);
     }
 
+    bool has_shadowable_tombstones() const {
+        return has_scylla_component() && _components->scylla_metadata->has_feature(sstable_feature::ShadowableTombstones);
+    }
+
     bool has_correct_max_deletion_time() const {
         return has_scylla_component();
     }
