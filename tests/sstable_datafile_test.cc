@@ -61,6 +61,7 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/is_sorted.hpp>
 #include "test_services.hh"
+#include "cql_test_env.hh"
 
 #include "sstable_utils.hh"
 
@@ -4587,6 +4588,47 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
         BOOST_REQUIRE(s1.entries == s2.entries);
         BOOST_REQUIRE(s1.first_key.value == s2.first_key.value);
         BOOST_REQUIRE(s1.last_key.value == s2.last_key.value);
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
+    return do_with_cql_env([] (auto& e) {
+        return seastar::async([&db = e.local_db()] () mutable {
+            cell_locker_stats cl_stats;
+
+            auto s = schema_builder("ks" /* single_node_cql_env::ks_name */, "correcness_test")
+                    .with_column("id", utf8_type, column_kind::partition_key)
+                    .with_column("value", int32_type).build();
+
+            auto tmp = make_lw_shared<tmpdir>();
+            auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+                return make_sstable(s, tmp->path, (*gen)++, la, big);
+            };
+
+            auto make_insert = [&] (partition_key key) {
+                mutation m(s, key);
+                m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::timestamp_type(0));
+                return m;
+            };
+
+            auto total_partitions = 10000U;
+            auto local_keys = make_local_keys(total_partitions, s);
+            std::vector<mutation> mutations;
+            for (auto i = 0U; i < total_partitions; i++) {
+                mutations.push_back(make_insert(partition_key::from_deeply_exploded(*s, { local_keys.at(i) })));
+            }
+            auto sst = make_sstable_containing(sst_gen, mutations);
+
+            auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(),
+                db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+            cf->mark_ready_for_writes();
+            cf->start();
+
+            auto cleanup_compaction = true;
+            auto ret = sstables::compact_sstables(sstables::compaction_descriptor({std::move(sst)}), *cf, sst_gen, cleanup_compaction).get0();
+
+            BOOST_REQUIRE(ret.total_keys_written == total_partitions);
+        });
     });
 }
 
