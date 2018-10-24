@@ -621,7 +621,7 @@ public:
     val(thrift_framed_transport_size_in_mb, uint32_t, 15, Unused,     \
             "Frame size (maximum field length) for Thrift. The frame is the row or part of the row the application is inserting."  \
     )   \
-    val(thrift_max_message_length_in_mb, uint32_t, 16, Unused,     \
+    val(thrift_max_message_length_in_mb, uint32_t, 16, Used,     \
             "The maximum length of a Thrift message in megabytes, including all fields and internal Thrift overhead (1 byte of overhead for each frame). Message length is usually used in conjunction with batches. A frame length greater than or equal to 24 accommodates a batch with four inserts, each of which is 24 bytes. The required message length is greater than or equal to 24+24+24+24+4 (number of frames)."  \
     )   \
     /* Security properties */   \

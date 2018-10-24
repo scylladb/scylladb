@@ -170,6 +170,12 @@ thrift_server::connection::read() {
         } data;
         std::copy_n(size_buf.get(), 4, data.b);
         auto n = ntohl(data.n);
+        if (n > _server._config.max_request_size) {
+            // Close connection silently, we can't return a response because we did not
+            // read a complete frame.
+            tlogger.info("message size {} exceeds configured maximum {}, closing connection", n, _server._config.max_request_size);
+            return make_ready_future<>();
+        }
         return _read_buf.read_exactly(n).then([this, n] (temporary_buffer<char> buf) {
             if (buf.size() != n) {
                 // FIXME: exception perhaps?

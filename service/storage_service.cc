@@ -2047,6 +2047,7 @@ future<> storage_service::start_rpc_server() {
         auto keepalive = cfg.rpc_keepalive();
         thrift_server_config tsc;
         tsc.timeout_config = make_timeout_config(cfg);
+        tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
         return seastar::net::dns::resolve_name(addr).then([&ss, tserver, addr, port, keepalive, tsc] (seastar::net::inet_address ip) {
             return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), tsc).then([tserver, port, addr, ip, keepalive] {
                 // #293 - do not stop anything
