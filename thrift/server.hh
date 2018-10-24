@@ -69,6 +69,7 @@ class service;
 
 struct thrift_server_config {
     ::timeout_config timeout_config;
+    uint64_t max_request_size;
 };
 
 class thrift_server {
