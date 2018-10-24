@@ -654,6 +654,7 @@ public:
     }
 
     mutation_source as_mutation_source() const;
+    mutation_source as_mutation_source_excluding(sstables::shared_sstable sst) const;
 
     void set_virtual_reader(mutation_source virtual_reader) {
         _virtual_reader = std::move(virtual_reader);

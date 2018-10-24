@@ -119,3 +119,16 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
       });
     });
 }
+
+mutation_source
+table::as_mutation_source_excluding(sstables::shared_sstable sst) const {
+    return mutation_source([this, sst = std::move(sst)] (schema_ptr s,
+                                   const dht::partition_range& range,
+                                   const query::partition_slice& slice,
+                                   const io_priority_class& pc,
+                                   tracing::trace_state_ptr trace_state,
+                                   streamed_mutation::forwarding fwd,
+                                   mutation_reader::forwarding fwd_mr) {
+        return this->make_reader_excluding_sstable(std::move(s), std::move(sst), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    });
+}
