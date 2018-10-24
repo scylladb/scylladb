@@ -622,13 +622,13 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         big_region->alloc();
 
         // We should not be permitted to go forward with a new allocation now...
-        BOOST_TEST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
+        BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
         fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); });
         BOOST_REQUIRE_EQUAL(fut.available(), false);
         BOOST_REQUIRE_GT(simple.memory_used(), logalloc::segment_size);
 
-        BOOST_TEST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
-        BOOST_TEST_MESSAGE(sprint("used = %d", simple.memory_used()));
+        BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
+        BOOST_TEST_MESSAGE(format("used = {}", simple.memory_used()));
 
         BOOST_TEST_MESSAGE("Resetting");
 
@@ -637,17 +637,17 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         // that's up to the internal policies. So to make sure we need to remove the whole region.
         big_region.reset();
 
-        BOOST_TEST_MESSAGE(sprint("used = %d", simple.memory_used()));
-        BOOST_TEST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
+        BOOST_TEST_MESSAGE(format("used = {}", simple.memory_used()));
+        BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
         try {
             quiesce(std::move(fut));
         } catch (...) {
-            BOOST_TEST_MESSAGE(sprint("Aborting: %s", std::current_exception()));
-            BOOST_TEST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
-            BOOST_TEST_MESSAGE(sprint("used = %d", simple.memory_used()));
+            BOOST_TEST_MESSAGE(format("Aborting: {}", std::current_exception()));
+            BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
+            BOOST_TEST_MESSAGE(format("used = %d", simple.memory_used()));
             abort();
         }
-        BOOST_TEST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
+        BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
     });
 }
 

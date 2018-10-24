@@ -3134,7 +3134,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_check) {
 
         for (int i = 0; i < 3; ++i) {
             for (int j = 0; j <3; ++j) {
-                e.execute_cql(sprint("INSERT INTO t(p, c, v) VALUES (%s, %s, %s)", i, j, j)).get();
+                e.execute_cql(format("INSERT INTO t(p, c, v) VALUES ({}, {}, {})", i, j, j)).get();
             }
         }
 
@@ -3163,7 +3163,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_check) {
         e.require_table_exists("ks", "t2").get();
         e.execute_cql("CREATE INDEX ON t2(a)").get();
         for (int i = 0; i < 5; ++i) {
-            e.execute_cql(sprint("INSERT INTO t2 (p, a, b) VALUES (%s, %s, %s)", i, i * 10, i * 100)).get();
+            e.execute_cql(format("INSERT INTO t2 (p, a, b) VALUES ({}, {}, {})", i, i * 10, i * 100)).get();
         }
 
         queries = {
@@ -3566,10 +3566,10 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
         e.execute_cql("CREATE INDEX ON t2(v)").get();
         for (int i = 1; i <= 5; ++i) {
             for (int j = 1; j <= 2; ++j) {
-                e.execute_cql(sprint("INSERT INTO t2 (pk1, pk2, c1, c2, v) VALUES (%s, %s, %s, %s, %s)", j, 1, 1, 1, i)).get();
-                e.execute_cql(sprint("INSERT INTO t2 (pk1, pk2, c1, c2, v) VALUES (%s, %s, %s, %s, %s)", j, 1, 1, i, i)).get();
-                e.execute_cql(sprint("INSERT INTO t2 (pk1, pk2, c1, c2, v) VALUES (%s, %s, %s, %s, %s)", j, 1, i, i, i)).get();
-                e.execute_cql(sprint("INSERT INTO t2 (pk1, pk2, c1, c2, v) VALUES (%s, %s, %s, %s, %s)", j, i, i, i, i)).get();
+                e.execute_cql(format("INSERT INTO t2 (pk1, pk2, c1, c2, v) VALUES ({}, {}, {}, {}, {})", j, 1, 1, 1, i)).get();
+                e.execute_cql(format("INSERT INTO t2 (pk1, pk2, c1, c2, v) VALUES ({}, {}, {}, {}, {})", j, 1, 1, i, i)).get();
+                e.execute_cql(format("INSERT INTO t2 (pk1, pk2, c1, c2, v) VALUES ({}, {}, {}, {}, {})", j, 1, i, i, i)).get();
+                e.execute_cql(format("INSERT INTO t2 (pk1, pk2, c1, c2, v) VALUES ({}, {}, {}, {}, {})", j, i, i, i, i)).get();
             }
         }
 
@@ -3994,7 +3994,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
         // this will create a table satisfying the slice_testcase assumption.
         for(int i=0; i < slice_test_type::total_num_of_values; i++) {
             auto tuple = slice_test_type::bound_val_to_tuple(i);
-            e.execute_cql(sprint("INSERT INTO foo (a, b, c, d, e, f) VALUES (0, %s, %s, %s, %s, %s);",
+            e.execute_cql(format("INSERT INTO foo (a, b, c, d, e, f) VALUES (0, {}, {}, {}, {}, {});",
                     tuple[0],tuple[1],tuple[2],tuple[3],i)).get();
         }
 

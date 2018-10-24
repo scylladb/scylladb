@@ -398,7 +398,7 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
         sstring big_string(4096, 'j');
         // There should be enough rows to use multiple pages
         for (int i = 0; i < 64 * 1024; ++i) {
-            e.execute_cql(sprint("INSERT INTO tab (pk, ck, v, v2, v3) VALUES (%s, 'hello%s', 1, %s, '%s')", i % 3, i, i, big_string)).get();
+            e.execute_cql(format("INSERT INTO tab (pk, ck, v, v2, v3) VALUES ({}, 'hello{}', 1, {}, '{}')", i % 3, i, i, big_string)).get();
         }
 
         eventually([&] {
@@ -424,10 +424,10 @@ SEASTAR_TEST_CASE(test_index_on_pk_ck_with_paging) {
 
         sstring big_string(1024 * 1024 + 7, 'j');
         for (int i = 0; i < 4; ++i) {
-            e.execute_cql(sprint("INSERT INTO tab (pk, pk2, ck, ck2, v, v2, v3) VALUES (%s, %s, 'hello%s', 'world%s', 1, %s, '%s')", i % 3, i, i, i, i, big_string)).get();
+            e.execute_cql(format("INSERT INTO tab (pk, pk2, ck, ck2, v, v2, v3) VALUES ({}, {}, 'hello{}', 'world{}', 1, {}, '{}')", i % 3, i, i, i, i, big_string)).get();
         }
         for (int i = 4; i < 2052; ++i) {
-            e.execute_cql(sprint("INSERT INTO tab (pk, pk2, ck, ck2, v, v2, v3) VALUES (%s, %s, 'hello%s', 'world%s', 1, %s, '%s')", i % 3, i, i, i, i, "small_string")).get();
+            e.execute_cql(format("INSERT INTO tab (pk, pk2, ck, ck2, v, v2, v3) VALUES ({}, {}, 'hello{}', 'world{}', 1, {}, '{}')", i % 3, i, i, i, i, "small_string")).get();
         }
 
         eventually([&] {

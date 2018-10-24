@@ -205,7 +205,7 @@ public:
         try {
             count = parse_count(m, group_index);
         } catch (const std::out_of_range&) {
-            throw cql_duration_error(sprint("Invalid duration. The count for the %s is out of range", unit.long_name()));
+            throw cql_duration_error(format("Invalid duration. The count for the {} is out of range", unit.long_name()));
         }
 
         return add(count, unit);
@@ -229,7 +229,7 @@ private:
 
         if (count > available) {
             throw cql_duration_error(
-                    sprint("Invalid duration. The number of %s must be less than or equal to %s",
+                    format("Invalid duration. The number of {} must be less than or equal to {}",
                            unit.long_name(),
                            available));
         }
@@ -248,10 +248,10 @@ private:
 
         if (_current_unit != nullptr) {
             if (index == _current_unit->index()) {
-                throw cql_duration_error(sprint("Invalid duration. The %s are specified multiple times", unit.long_name()));
+                throw cql_duration_error(format("Invalid duration. The {} are specified multiple times", unit.long_name()));
             } else if (index > _current_unit->index()) {
                 throw cql_duration_error(
-                        sprint("Invalid duration. The %s should be after %s",
+                        format("Invalid duration. The {} should be after {}",
                                _current_unit->long_name(),
                                unit.long_name()));
             }
@@ -414,7 +414,7 @@ cql_duration::cql_duration(stdx::string_view s) {
 
     const auto d = parse_duration(ps);
     if (!d) {
-        throw cql_duration_error(sprint("Unable to convert '%s' to a duration", s));
+        throw cql_duration_error(format("Unable to convert '{}' to a duration", s));
     }
 
     *this = *d;

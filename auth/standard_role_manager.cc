@@ -385,8 +385,8 @@ standard_role_manager::modify_membership(
 
 
     const auto modify_roles = [this, role_name, grantee_name, ch] {
-        const auto query = sprint(
-                "UPDATE %s SET member_of = member_of %s ? WHERE %s = ?",
+        const auto query = format(
+                "UPDATE {} SET member_of = member_of {} ? WHERE {} = ?",
                 meta::roles_table::qualified_name(),
                 (ch == membership_change::add ? '+' : '-'),
                 meta::roles_table::role_col_name);

@@ -205,7 +205,7 @@ future<> save_system_schema(const sstring & ksname) {
     // delete old, possibly obsolete entries in schema tables
     return parallel_for_each(ALL, [ksm] (sstring cf) {
         auto deletion_timestamp = schema_creation_timestamp() - 1;
-        return db::execute_cql(sprint("DELETE FROM %s.%s USING TIMESTAMP %s WHERE keyspace_name = ?", NAME, cf,
+        return db::execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
             deletion_timestamp), ksm->name()).discard_result();
     }).then([ksm] {
         auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
