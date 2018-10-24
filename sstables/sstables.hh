@@ -364,6 +364,8 @@ public:
     }
     sstring toc_filename() const;
 
+    bool is_staging() const;
+
     metadata_collector& get_metadata_collector() {
         return _collector;
     }

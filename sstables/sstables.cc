@@ -69,6 +69,7 @@
 #include "vint-serialization.hh"
 #include "db/large_partition_handler.hh"
 #include "sstables/random_access_reader.hh"
+#include <boost/algorithm/string/predicate.hpp>
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -3739,6 +3740,10 @@ std::vector<sstring> sstable::component_filenames() const {
 
 sstring sstable::toc_filename() const {
     return filename(component_type::TOC);
+}
+
+bool sstable::is_staging() const {
+    return boost::algorithm::ends_with(_dir, "staging");
 }
 
 const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
