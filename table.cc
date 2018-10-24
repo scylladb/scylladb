@@ -21,6 +21,7 @@
 
 #include "database.hh"
 #include "sstables/sstables.hh"
+#include "service/priority_manager.hh"
 
 static logging::logger tlogger("table");
 
@@ -68,7 +69,7 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
     return push_view_replica_updates(s, std::move(m), timeout);
 }
 
-future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout) const {
+future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source) const {
     auto& base = schema();
     m.upgrade(base);
     auto views = affected_views(base, m);
@@ -99,17 +100,13 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
-    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout] (row_locker::lock_holder lock) {
+    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout, source = std::move(source)] (row_locker::lock_holder lock) {
       return do_with(
         dht::partition_range::make_singular(m.decorated_key()),
         std::move(slice),
         std::move(m),
-        [base, views = std::move(views), lock = std::move(lock), this, timeout] (auto& pk, auto& slice, auto& m) mutable {
-            auto reader = this->make_reader(
-                base,
-                pk,
-                slice,
-                service::get_local_sstable_query_read_priority());
+        [base, views = std::move(views), lock = std::move(lock), this, timeout, source = std::move(source)] (auto& pk, auto& slice, auto& m) mutable {
+            auto reader = source.make_reader(base, pk, slice, service::get_local_sstable_query_read_priority());
             return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), timeout).then([lock = std::move(lock)] () mutable {
                 // return the local partition/row lock we have taken so it
                 // remains locked until the caller is done modifying this
@@ -118,6 +115,10 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
             });
       });
     });
+}
+
+future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout) const {
+    return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source());
 }
 
 mutation_source
