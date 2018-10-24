@@ -372,3 +372,5 @@ if __name__ == '__main__':
         print(' SELinux.')
 
 
+    if dist_name() == 'Ubuntu':
+        run('apt-get install -y hugepages')

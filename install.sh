@@ -30,6 +30,7 @@ Options:
   --root /path/to/root     alternative install root (default /)
   --prefix /prefix         directory prefix (default /usr)
   --housekeeping           enable housekeeping service
+  --target centos          specify target distribution
   --help                   this helpful message
 EOF
     exit 1
@@ -38,6 +39,7 @@ EOF
 root=/
 prefix=/usr
 housekeeping=false
+target=centos
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -53,6 +55,10 @@ while [ $# -gt 0 ]; do
             housekeeping=true
             shift 1
             ;;
+        "--target")
+            target="$2"
+            shift 2
+            ;;
         "--help")
             shift 1
 	    print_usage
@@ -67,9 +73,8 @@ rprefix="$root/$prefix"
 retc="$root/etc"
 rdoc="$rprefix/share/doc"
 
-. /etc/os-release
-
-MUSTACHE_DIST="\"redhat\": true"
+MUSTACHE_DIST="\"redhat\": true, \"$target\": true, \"target\": \"$target\""
+mkdir -p build
 pystache dist/common/systemd/scylla-server.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-server.service
 pystache dist/common/systemd/scylla-housekeeping-daily.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-daily.service
 pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-restart.service
@@ -86,7 +91,7 @@ SYSCONFDIR="/etc/sysconfig"
 REPOFILES="'/etc/yum.repos.d/scylla*.repo'"
 
 
-install -d -m755 "$retc"/scylla "$rprefix/lib/systemd/system" "$rprefix/lib/scylla" "$rprefix/bin"
+install -d -m755 "$retc"/scylla "$rprefix/lib/systemd/system" "$rprefix/lib/scylla" "$rprefix/bin" "$root/opt/scylladb/bin" "$root/opt/scylladb/libexec" "$root/opt/scylladb/lib"
 install -m644 conf/scylla.yaml -Dt "$retc"/scylla
 install -m644 conf/cassandra-rackdc.properties -Dt "$retc"/scylla
 install -m644 build/*.service -Dt "$rprefix"/lib/systemd/system
@@ -98,8 +103,19 @@ install -m755 seastar/scripts/perftune.py -Dt "$rprefix"/lib/scylla/
 install -m755 seastar/scripts/seastar-addr2line -Dt "$rprefix"/lib/scylla/
 install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/lib/scylla/
 install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/lib/scylla/
-install -m755 build/release/scylla -Dt "$rprefix/bin"
-install -m755 build/release/iotune -Dt "$rprefix/bin"
+install -m755 bin/* -Dt "$root/opt/scylladb/bin"
+# some files in libexec are symlinks, which "install" dereferences
+# use cp -P for the symlinks instead.
+install -m755 libexec/*.bin -Dt "$root/opt/scylladb/libexec"
+for f in libexec/*; do
+    if [[ "$f" != *.bin ]]; then
+        cp -P "$f" "$root/opt/scylladb/libexec"
+    fi
+done
+install -m755 lib/* -Dt "$root/opt/scylladb/lib"
+# use relative paths instead?
+ln -sf /opt/scylladb/bin/scylla "$rprefix/bin/scylla"
+ln -sf /opt/scylladb/bin/iotune "$rprefix/bin/iotune"
 install -m755 dist/common/bin/scyllatop -Dt "$rprefix/bin"
 install -m644 dist/common/scripts/scylla_blocktune.py -Dt "$rprefix"/lib/scylla/
 install -m755 dist/common/scripts/scylla-blocktune -Dt "$rprefix"/lib/scylla/
@@ -128,9 +144,6 @@ cp -r tools/scyllatop "$rprefix"/lib/scylla/scyllatop
 cp -r scylla-housekeeping "$rprefix"/lib/scylla/scylla-housekeeping
 install -d "$rprefix"/sbin
 cp -P dist/common/sbin/* "$rprefix"/sbin
-
-if [[ "$ID" = fedora && "$VERSION_ID" -ge 27 ]]; then
-    install -m755 scylla-gdb.py -Dt "$rprefix"/lib/scylla/
-fi
+install -m755 scylla-gdb.py -Dt "$rprefix"/lib/scylla/
 
 

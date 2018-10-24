@@ -26,6 +26,7 @@ import io
 import os
 import subprocess
 import tarfile
+import pathlib
 
 
 def ldd(executable):
@@ -69,7 +70,9 @@ for exe in executables:
 
 ld_so = libs['ld.so']
 
-ar = tarfile.open(output, mode='w')
+ar = tarfile.open(output, mode='w|gz')
+pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
+ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
 
 # This thunk is a shell script that arranges for the executable to be invoked,
 # under the following conditions:
@@ -124,3 +127,18 @@ for lib, libfile in libs.items():
     ar.add(libfile, arcname='lib/' + lib)
 ar.add('conf')
 ar.add('dist')
+ar.add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
+ar.add('build/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
+ar.add('seastar/scripts')
+ar.add('seastar/dpdk/usertools')
+ar.add('install.sh')
+ar.add('README.md')
+ar.add('README-DPDK.md')
+ar.add('NOTICE.txt')
+ar.add('ORIGIN')
+ar.add('licenses')
+ar.add('swagger-ui')
+ar.add('api')
+ar.add('tools')
+ar.add('scylla-housekeeping')
+ar.add('scylla-gdb.py')

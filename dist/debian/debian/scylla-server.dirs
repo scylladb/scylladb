@@ -6,3 +6,6 @@ var/lib/scylla/commitlog
 var/lib/scylla/hints
 var/lib/scylla/coredump
 var/lib/scylla-housekeeping
+opt/scylla/bin
+opt/scylla/libexec
+opt/scylla/lib

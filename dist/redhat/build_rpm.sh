@@ -4,21 +4,22 @@ PRODUCT=scylla
 
 . /etc/os-release
 print_usage() {
-    echo "build_rpm.sh --rebuild-dep --jobs 2 --target epel-7-$(uname -m)"
+    echo "build_rpm.sh --rebuild-dep --jobs 2 --target centos7 --reloc-pkg build/release/scylla-package.tar.gz"
     echo "  --jobs  specify number of jobs"
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
-    echo "  --rebuild-dep  ignored (for compatibility with previous versions)"
     echo "  --xtrace print command traces before executing command"
+    echo "  --reloc-pkg specify relocatable package path"
     exit 1
 }
-JOBS=0
+RPM_JOBS_OPTS=
 DIST=false
 TARGET=
+RELOC_PKG=
 while [ $# -gt 0 ]; do
     case "$1" in
         "--jobs")
-            JOBS=$2
+            RPM_JOBS_OPTS=(--define="_smp_mflags -j$2")
             shift 2
             ;;
         "--dist")
@@ -29,12 +30,13 @@ while [ $# -gt 0 ]; do
             TARGET=$2
             shift 2
             ;;
-        "--rebuild-dep")
-            shift 1
-            ;;
         "--xtrace")
             set -o xtrace
             shift 1
+            ;;
+        "--reloc-pkg")
+            RELOC_PKG=$2
+            shift 2
             ;;
         *)
             print_usage
@@ -55,24 +57,42 @@ pkg_install() {
 }
 
 
-if [ ! -e dist/redhat/build_rpm.sh ]; then
-    echo "run build_rpm.sh in top of scylla dir"
+if [ ! -e SCYLLA-RELOCATABLE-FILE ]; then
+    echo "do not directly execute build_rpm.sh, use reloc/build_rpm.sh instead."
     exit 1
 fi
 
-if [ -z "$TARGET" ]; then
-    if [ "$ID" = "centos" -o "$ID" = "rhel" ] && [ "$VERSION_ID" = "7" ]; then
-        TARGET=epel-7-$(uname -m)
-    elif [ "$ID" = "fedora" ]; then
-        TARGET=$ID-$VERSION_ID-$(uname -m)
-    else
-        echo "Please specify target"
-        exit 1
-    fi
+if [ -z "$TARGET" ] || [ "$TARGET" = "centos" ]; then
+    TARGET=centos7
 fi
 
-if [ ! -f /usr/bin/mock ]; then
-    pkg_install mock
+if [ "$TARGET" = "fedora" ]; then
+    TARGET=fedora28
+fi
+
+if [[ ! $TARGET =~ fedora.*|centos.* ]]; then
+    echo "unknown distribution specified."
+    echo "can be used following target:"
+    echo "  centos"
+    echo "  centos7"
+    echo "  fedora"
+    echo "  fedora28"
+    echo
+    echo "when --target parameter not specified, centos7 will use as default value."
+    exit 1
+fi
+
+if [ -z "$RELOC_PKG" ]; then
+    print_usage
+    exit 1
+fi
+if [ ! -f "$RELOC_PKG" ]; then
+    echo "$RELOC_PKG is not found."
+    exit 1
+fi
+
+if [ ! -f /usr/bin/rpmbuild ]; then
+    pkg_install rpm-build
 fi
 if [ ! -f /usr/bin/git ]; then
     pkg_install git
@@ -91,28 +111,18 @@ if [ ! -f /usr/bin/pystache ]; then
     fi
 fi
 
-VERSION=$(./SCYLLA-VERSION-GEN)
-SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
-SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
-echo $VERSION >version
-./scripts/git-archive-all --extra version --force-submodules --prefix $PRODUCT-$SCYLLA_VERSION build/$PRODUCT-$VERSION.tar
-rm -f version
+RELOC_PKG_BASENAME=$(basename $RELOC_PKG)
+SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat SCYLLA-RELEASE-FILE)
+MUSTACHE_DIST="\"$TARGET\": true, \"target\": \"$TARGET\""
 
-pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST, \"product\": \"$PRODUCT\", \"$PRODUCT\": true }" > build/scylla.spec
+RPMBUILD=$(readlink -f ../)
+mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
-# mock generates files owned by root, fix this up
-fix_ownership() {
-    sudo chown "$(id -u):$(id -g)" -R "$@"
-}
-
-if [ $JOBS -gt 0 ]; then
-    RPM_JOBS_OPTS=(--define="_smp_mflags -j$JOBS")
+ln -fv $RELOC_PKG $RPMBUILD/SOURCES/
+pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST, \"product\": \"$PRODUCT\", \"$PRODUCT\": true, \"reloc_pkg\": \"$RELOC_PKG_BASENAME\", $MUSTACHE_DIST }" > $RPMBUILD/SPECS/scylla.spec
+if [ "$TARGET" = "centos7" ]; then
+    rpmbuild -ba --define "_topdir $RPMBUILD" --define "dist .el7" $RPM_JOBS_OPTS $RPMBUILD/SPECS/scylla.spec
+else
+    rpmbuild -ba --define "_topdir $RPMBUILD" $RPM_JOBS_OPTS $RPMBUILD/SPECS/scylla.spec
 fi
-sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/$PRODUCT-$VERSION.tar $SRPM_OPTS "${RPM_JOBS_OPTS[@]}"
-fix_ownership build/srpms
-if [[ "$TARGET" =~ ^epel-7- ]]; then
-    TARGET=scylla-$TARGET
-    RPM_OPTS="$RPM_OPTS --configdir=dist/redhat/mock"
-fi
-sudo mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS "${RPM_JOBS_OPTS[@]}" build/srpms/$PRODUCT-$VERSION*.src.rpm
-fix_ownership build/rpms

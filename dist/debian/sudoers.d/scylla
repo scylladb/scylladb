@@ -1,1 +1,0 @@
-scylla ALL=(ALL) NOPASSWD: /usr/lib/scylla/scylla_prepare,/usr/lib/scylla/scylla_stop,/usr/lib/scylla/scylla_io_setup,/usr/lib/scylla/scylla-ami/scylla_ami_setup
