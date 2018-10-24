@@ -701,8 +701,10 @@ int main(int ac, char** av) {
             proxy.invoke_on_all([] (service::storage_proxy& p) {
                 p.init_messaging_service();
             }).get();
+
+            static sharded<db::view::view_update_from_staging_generator> view_update_from_staging_generator;
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db).get();
+            streaming::stream_session::init_streaming_service(db, view_update_from_staging_generator).get();
             api::set_server_stream_manager(ctx).get();
 
             supervisor::notify("starting hinted handoff manager");
@@ -756,7 +758,6 @@ int main(int ac, char** av) {
                 local_proxy.allow_replaying_hints();
             }).get();
 
-            static sharded<db::view::view_update_from_staging_generator> view_update_from_staging_generator;
             if (cfg->view_building()) {
                 supervisor::notify("Launching generate_mv_updates for non system tables");
                 view_update_from_staging_generator.start(std::ref(db), std::ref(proxy)).get();

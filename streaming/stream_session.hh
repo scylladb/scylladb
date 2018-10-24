@@ -54,6 +54,7 @@
 #include "streaming/session_info.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
+#include "db/view/view_update_from_staging_generator.hh"
 #include <map>
 #include <vector>
 #include <memory>
@@ -137,13 +138,14 @@ private:
     using ring_position = dht::ring_position;
     static void init_messaging_service_handler();
     static distributed<database>* _db;
+    static distributed<db::view::view_update_from_staging_generator>* _view_update_generator;
 public:
     static netw::messaging_service& ms() {
         return netw::get_local_messaging_service();
     }
     static database& get_local_db() { return _db->local(); }
     static distributed<database>& get_db() { return *_db; };
-    static future<> init_streaming_service(distributed<database>& db);
+    static future<> init_streaming_service(distributed<database>& db, distributed<db::view::view_update_from_staging_generator>& view_update_generator);
 public:
     /**
      * Streaming endpoint.
