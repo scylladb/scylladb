@@ -1046,7 +1046,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
 
         rd.consume_pausable([&] (mutation_fragment&& mf) {
             if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
-                BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mf, range));
+                BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mutation_fragment::printer(*s, mf), range));
             }
             result.partition().apply(*s, std::move(mf));
             return stop_iteration::no;
@@ -1075,7 +1075,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
         auto consume_clustered = [&] (mutation_fragment&& mf) {
             position_in_partition::less_compare less(*s);
             if (less(mf.position(), last_pos)) {
-                BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mf, last_pos));
+                BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mutation_fragment::printer(*s, mf), last_pos));
             }
             last_pos = position_in_partition(mf.position());
             result.partition().apply(*s, std::move(mf));

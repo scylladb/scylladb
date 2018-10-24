@@ -128,7 +128,17 @@ public:
                && _cells.equal(column_kind::regular_column, s, other._cells, s);
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const clustering_row& row);
+    class printer {
+        const schema& _schema;
+        const clustering_row& _clustering_row;
+    public:
+        printer(const schema& s, const clustering_row& r) : _schema(s), _clustering_row(r) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
+
+        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    };
+    friend std::ostream& operator<<(std::ostream& os, const printer& p);
 };
 
 class static_row {
@@ -174,7 +184,17 @@ public:
         return _cells.equal(column_kind::static_column, s, other._cells, s);
     }
 
-    friend std::ostream& operator<<(std::ostream& is, const static_row& row);
+    class printer {
+        const schema& _schema;
+        const static_row& _static_row;
+    public:
+        printer(const schema& s, const static_row& r) : _schema(s), _static_row(r) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
+
+        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    };
+    friend std::ostream& operator<<(std::ostream& os, const printer& p);
 };
 
 class partition_start final {
@@ -316,7 +336,7 @@ private:
     friend class position_in_partition;
 public:
     struct clustering_row_tag_t { };
-    
+
     template<typename... Args>
     mutation_fragment(clustering_row_tag_t, Args&&... args)
         : _kind(kind::clustering_row)
@@ -501,7 +521,17 @@ public:
         return _kind == mf._kind && _kind != kind::range_tombstone;
     }
 
-    friend std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
+    class printer {
+        const schema& _schema;
+        const mutation_fragment& _mutation_fragment;
+    public:
+        printer(const schema& s, const mutation_fragment& mf) : _schema(s), _mutation_fragment(mf) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
+
+        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    };
+    friend std::ostream& operator<<(std::ostream& os, const printer& p);
 };
 
 inline position_in_partition_view static_row::position() const
@@ -525,8 +555,6 @@ inline position_in_partition_view partition_end::position() const
 }
 
 std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
-
-std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
 
 using mutation_fragment_opt = optimized_optional<mutation_fragment>;
 

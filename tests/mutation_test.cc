@@ -1540,7 +1540,7 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
     return seastar::async([] {
         auto check_partitions_match = [] (const mutation_partition& mp1, const mutation_partition& mp2, const schema& s) {
             if (!mp1.equal(s, mp2)) {
-                BOOST_FAIL(sprint("Partitions don't match, got: %s\n...and: %s", mp1, mp2));
+                BOOST_FAIL(sprint("Partitions don't match, got: %s\n...and: %s", mutation_partition::printer(s, mp1), mutation_partition::printer(s, mp2)));
             }
         };
         for_each_mutation_pair([&] (auto&& m1, auto&& m2, are_equal eq) {

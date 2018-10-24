@@ -1237,7 +1237,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
             rd.consume_pausable([&](mutation_fragment&& mf) {
                 position_in_partition::less_compare less(*s);
                 if (!less(mf.position(), position_in_partition_view::before_all_clustered_rows())) {
-                    BOOST_FAIL(sprint("Received clustering fragment: %s", mf));
+                    BOOST_FAIL(sprint("Received clustering fragment: %s", mutation_fragment::printer(*s, mf)));
                 }
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
@@ -1248,11 +1248,11 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                 rd.fast_forward_to(prange, db::no_timeout).get();
                 rd.consume_pausable([&](mutation_fragment&& mf) {
                     if (!mf.relevant_for_range(*s, prange.start())) {
-                        BOOST_FAIL(sprint("Received fragment which is not relevant for range: %s, range: %s", mf, prange));
+                        BOOST_FAIL(sprint("Received fragment which is not relevant for range: %s, range: %s", mutation_fragment::printer(*s, mf), prange));
                     }
                     position_in_partition::less_compare less(*s);
                     if (!less(mf.position(), prange.end())) {
-                        BOOST_FAIL(sprint("Received fragment is out of range: %s, range: %s", mf, prange));
+                        BOOST_FAIL(sprint("Received fragment is out of range: %s, range: %s", mutation_fragment::printer(*s, mf), prange));
                     }
                     result.partition().apply(*s, std::move(mf));
                     return stop_iteration::no;
@@ -1304,7 +1304,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
 
             rd.consume_pausable([&] (mutation_fragment&& mf) {
                 if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
-                    BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mf, range));
+                    BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mutation_fragment::printer(*s, mf), range));
                 }
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
@@ -1339,7 +1339,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
             auto consume_clustered = [&] (mutation_fragment&& mf) {
                 position_in_partition::less_compare less(*s);
                 if (less(mf.position(), last_pos)) {
-                    BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mf, last_pos));
+                    BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mutation_fragment::printer(*s, mf), last_pos));
                 }
                 last_pos = position_in_partition(mf.position());
                 result.partition().apply(*s, std::move(mf));

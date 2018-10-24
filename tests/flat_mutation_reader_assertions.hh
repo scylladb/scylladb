@@ -48,13 +48,13 @@ public:
             BOOST_FAIL(sprint("Expected: partition start with key %s, got end of stream", dk));
         }
         if (!mfopt->is_partition_start()) {
-            BOOST_FAIL(sprint("Expected: partition start with key %s, got: %s", dk, *mfopt));
+            BOOST_FAIL(sprint("Expected: partition start with key %s, got: %s", dk, mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         if (!mfopt->as_partition_start().key().equal(*_reader.schema(), dk)) {
-            BOOST_FAIL(sprint("Expected: partition start with key %s, got: %s", dk, *mfopt));
+            BOOST_FAIL(sprint("Expected: partition start with key %s, got: %s", dk, mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         if (tomb && mfopt->as_partition_start().partition_tombstone() != *tomb) {
-            BOOST_FAIL(sprint("Expected: partition start with tombstone %s, got: %s", *tomb, *mfopt));
+            BOOST_FAIL(sprint("Expected: partition start with tombstone %s, got: %s", *tomb, mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         return *this;
     }
@@ -66,7 +66,7 @@ public:
             BOOST_FAIL("Expected static row, got end of stream");
         }
         if (!mfopt->is_static_row()) {
-            BOOST_FAIL(sprint("Expected static row, got: %s", *mfopt));
+            BOOST_FAIL(sprint("Expected static row, got: %s", mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         return *this;
     }
@@ -78,7 +78,7 @@ public:
             BOOST_FAIL(sprint("Expected row with key %s, but got end of stream", ck));
         }
         if (!mfopt->is_clustering_row()) {
-            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, *mfopt));
+            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         auto& actual = mfopt->as_clustering_row().key();
         if (!actual.equal(*_reader.schema(), ck)) {
@@ -105,7 +105,7 @@ public:
             BOOST_FAIL("Expected static row, got end of stream");
         }
         if (!mfopt->is_static_row()) {
-            BOOST_FAIL(sprint("Expected static row, got: %s", *mfopt));
+            BOOST_FAIL(sprint("Expected static row, got: %s", mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         auto& cells = mfopt->as_static_row().cells();
         if (cells.size() != columns.size()) {
@@ -135,7 +135,7 @@ public:
             BOOST_FAIL(sprint("Expected row with key %s, but got end of stream", ck));
         }
         if (!mfopt->is_clustering_row()) {
-            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, *mfopt));
+            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         auto& actual = mfopt->as_clustering_row().key();
         if (!actual.equal(*_reader.schema(), ck)) {
@@ -174,7 +174,7 @@ public:
             BOOST_FAIL(sprint("Expected row with key %s, but got end of stream", ck));
         }
         if (!mfopt->is_clustering_row()) {
-            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, *mfopt));
+            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         auto& actual = mfopt->as_clustering_row().key();
         if (!actual.equal(*_reader.schema(), ck)) {
@@ -203,7 +203,7 @@ public:
             BOOST_FAIL(sprint("Expected range tombstone %s, but got end of stream", rt));
         }
         if (!mfo->is_range_tombstone()) {
-            BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, *mfo));
+            BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, mutation_fragment::printer(*_reader.schema(), *mfo)));
         }
         const schema& s = *_reader.schema();
         range_tombstone_list actual_list(s);
@@ -234,7 +234,7 @@ public:
             BOOST_FAIL(sprint("Expected partition end but got end of stream"));
         }
         if (!mfopt->is_end_of_partition()) {
-            BOOST_FAIL(sprint("Expected partition end but got %s", *mfopt));
+            BOOST_FAIL(sprint("Expected partition end but got %s", mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         return *this;
     }
@@ -242,10 +242,10 @@ public:
     flat_reader_assertions& produces(const schema& s, const mutation_fragment& mf) {
         auto mfopt = read_next();
         if (!mfopt) {
-            BOOST_FAIL(sprint("Expected %s, but got end of stream", mf));
+            BOOST_FAIL(sprint("Expected %s, but got end of stream", mutation_fragment::printer(*_reader.schema(), mf)));
         }
         if (!mfopt->equal(s, mf)) {
-            BOOST_FAIL(sprint("Expected %s, but got %s", mf, *mfopt));
+            BOOST_FAIL(sprint("Expected %s, but got %s", mutation_fragment::printer(*_reader.schema(), mf), mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         return *this;
     }
@@ -254,7 +254,7 @@ public:
         BOOST_TEST_MESSAGE("Expecting end of stream");
         auto mfopt = read_next();
         if (bool(mfopt)) {
-            BOOST_FAIL(sprint("Expected end of stream, got %s", *mfopt));
+            BOOST_FAIL(sprint("Expected end of stream, got %s", mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
         return *this;
     }
@@ -336,7 +336,8 @@ public:
                 BOOST_REQUIRE(!inside_partition);
                 auto& dk = mfo->as_partition_start().key();
                 if (previous_partition && !previous_partition->as_partition_start().key().less_compare(*_reader.schema(), dk)) {
-                    BOOST_FAIL(sprint("previous partition had greater key: prev=%s, current=%s", *previous_partition, *mfo));
+                    BOOST_FAIL(sprint("previous partition had greater key: prev=%s, current=%s",
+                                      mutation_fragment::printer(*_reader.schema(), *previous_partition), mutation_fragment::printer(*_reader.schema(), *mfo)));
                 }
                 previous_partition = std::move(mfo);
                 previous_fragment = stdx::nullopt;
@@ -348,7 +349,8 @@ public:
                 BOOST_REQUIRE(inside_partition);
                 if (previous_fragment) {
                     if (!less(previous_fragment->position(), mfo->position())) {
-                        BOOST_FAIL(sprint("previous fragment has greater position: prev=%s, current=%s", *previous_fragment, *mfo));
+                        BOOST_FAIL(sprint("previous fragment has greater position: prev=%s, current=%s",
+                                          mutation_fragment::printer(*_reader.schema(), *previous_fragment), mutation_fragment::printer(*_reader.schema(), *mfo)));
                     }
                 }
                 previous_fragment = std::move(mfo);

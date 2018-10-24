@@ -899,7 +899,7 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
 }
 
 std::ostream&
-operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c) {
+operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection::printer&>& c) {
     return fprint(os, "{column: %s %s}", c.first, c.second);
 }
 
@@ -911,14 +911,21 @@ static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
 }
 
 std::ostream&
-operator<<(std::ostream& os, const row& r) {
+operator<<(std::ostream& os, const row::printer& p) {
+    auto add_printer = [&] (const auto& c) {
+        return std::pair<column_id, atomic_cell_or_collection::printer>(std::piecewise_construct,
+            std::forward_as_tuple(c.first),
+            std::forward_as_tuple(p._schema.column_at(p._kind, c.first), c.second)
+        );
+    };
+
     sstring cells;
-    switch (r._type) {
+    switch (p._row._type) {
     case row::storage_type::set:
-        cells = ::join(",", prefixed("\n      ", r.get_range_set()));
+        cells = ::join(",", prefixed("\n      ", p._row.get_range_set() | boost::adaptors::transformed(add_printer)));
         break;
     case row::storage_type::vector:
-        cells = ::join(",", prefixed("\n      ", r.get_range_vector()));
+        cells = ::join(",", prefixed("\n      ", p._row.get_range_vector() | boost::adaptors::transformed(add_printer)));
         break;
     }
     return fprint(os, "{row: %s}", cells);
@@ -937,7 +944,8 @@ operator<<(std::ostream& os, const row_marker& rm) {
 }
 
 std::ostream&
-operator<<(std::ostream& os, const deletable_row& dr) {
+operator<<(std::ostream& os, const deletable_row::printer& p) {
+    auto& dr = p._deletable_row;
     os << "{deletable_row: ";
     if (!dr._marker.is_missing()) {
         os << dr._marker << " ";
@@ -945,16 +953,19 @@ operator<<(std::ostream& os, const deletable_row& dr) {
     if (dr._deleted_at) {
         os << dr._deleted_at << " ";
     }
-    return os << dr._cells << "}";
+    return os << row::printer(p._schema, column_kind::regular_column, dr._cells) << "}";
 }
 
 std::ostream&
-operator<<(std::ostream& os, const rows_entry& re) {
-    return fprint(os, "{rows_entry: cont=%d dummy=%d %s %s}", re.continuous(), re.dummy(), re.position(), re._row);
+operator<<(std::ostream& os, const rows_entry::printer& p) {
+    auto& re = p._rows_entry;
+    return fprint(os, "{rows_entry: cont=%d dummy=%d %s %s}", re.continuous(), re.dummy(), re.position(),
+                  deletable_row::printer(p._schema, re._row));
 }
 
 std::ostream&
-operator<<(std::ostream& os, const mutation_partition& mp) {
+operator<<(std::ostream& os, const mutation_partition::printer& p) {
+    auto& mp = p._mutation_partition;
     os << "{mutation_partition: ";
     if (mp._tombstone) {
         os << mp._tombstone << ",";
@@ -962,8 +973,11 @@ operator<<(std::ostream& os, const mutation_partition& mp) {
     if (!mp._row_tombstones.empty()) {
         os << "\n range_tombstones: {" << ::join(",", prefixed("\n    ", mp._row_tombstones)) << "},";
     }
-    os << "\n static: cont=" << int(mp._static_row_continuous) << " " << mp._static_row << ",";
-    os << "\n clustered: {" << ::join(",", prefixed("\n    ", mp._rows)) << "}}";
+    os << "\n static: cont=" << int(mp._static_row_continuous) << " " << row::printer(p._schema, column_kind::static_column, mp._static_row) << ",";
+    auto add_printer = [&] (const auto& re) {
+        return rows_entry::printer(p._schema, re);
+    };
+    os << "\n clustered: {" << ::join(",", prefixed("\n    ", mp._rows | boost::adaptors::transformed(add_printer))) << "}}";
     return os;
 }
 

@@ -243,16 +243,18 @@ size_t atomic_cell_or_collection::external_memory_usage(const abstract_type& t) 
         + imr_object_type::size_overhead + external_value_size;
 }
 
-std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection& c) {
-    if (!c._data.get()) {
+std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection::printer& p) {
+    if (!p._cell._data.get()) {
         return os << "{ null atomic_cell_or_collection }";
     }
     using dc = data::cell;
     os << "{ ";
-    if (dc::structure::get_member<dc::tags::flags>(c._data.get()).get<dc::tags::collection>()) {
-        os << "collection";
+    if (dc::structure::get_member<dc::tags::flags>(p._cell._data.get()).get<dc::tags::collection>()) {
+        os << "collection ";
+        auto cmv = p._cell.as_collection_mutation();
+        os << to_hex(cmv.data.linearize());
     } else {
-        os << "atomic cell";
+        os << p._cell.as_atomic_cell(p._cdef);
     }
-    return os << " @" << static_cast<const void*>(c._data.get()) << " }";
+    return os << " }";
 }

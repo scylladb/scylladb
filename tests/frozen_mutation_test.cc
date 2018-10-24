@@ -114,7 +114,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
         for (auto&& mf : mfs) {
             auto refrozen_mf = freeze(s, mf).unfreeze(s);
             if (!mf.equal(s, refrozen_mf)) {
-                BOOST_FAIL("Expected " << mf << " got " << refrozen_mf);
+                BOOST_FAIL("Expected " << mutation_fragment::printer(s, mf) << " got " << mutation_fragment::printer(s, refrozen_mf));
             }
         }
     });

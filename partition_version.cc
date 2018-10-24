@@ -661,7 +661,8 @@ partition_snapshot::range_tombstones()
         position_in_partition_view::after_all_clustered_rows());
 }
 
-std::ostream& operator<<(std::ostream& out, const partition_entry& e) {
+std::ostream& operator<<(std::ostream& out, const partition_entry::printer& p) {
+    auto& e = p._partition_entry;
     out << "{";
     bool first = true;
     if (e._version) {
@@ -673,7 +674,7 @@ std::ostream& operator<<(std::ostream& out, const partition_entry& e) {
             if (v->is_referenced()) {
                 out << "(*) ";
             }
-            out << v->partition();
+            out << mutation_partition::printer(p._schema, v->partition());
             v = v->next();
             first = false;
         }

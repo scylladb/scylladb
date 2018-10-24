@@ -1304,6 +1304,6 @@ std::ostream& operator<<(std::ostream& out, cache_entry& e) {
     return out << "{cache_entry: " << e.position()
                << ", cont=" << e.continuous()
                << ", dummy=" << e.is_dummy_entry()
-               << ", " << e.partition()
+               << ", " << partition_entry::printer(*e.schema(), e.partition())
                << "}";
 }

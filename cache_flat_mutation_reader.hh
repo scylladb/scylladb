@@ -425,7 +425,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         _read_context->cache().on_mispopulate();
         return;
     }
-    clogger.trace("csm {}: populate({})", this, cr);
+    clogger.trace("csm {}: populate({})", this, clustering_row::printer(*_schema, cr));
     _lsa_manager.run_in_update_section_with_allocator([this, &cr] {
         mutation_partition& mp = _snp->version()->partition();
         rows_entry::compare less(*_schema);
@@ -577,7 +577,7 @@ void cache_flat_mutation_reader::move_to_next_entry() {
 
 inline
 void cache_flat_mutation_reader::add_to_buffer(mutation_fragment&& mf) {
-    clogger.trace("csm {}: add_to_buffer({})", this, mf);
+    clogger.trace("csm {}: add_to_buffer({})", this, mutation_fragment::printer(*_schema, mf));
     if (mf.is_clustering_row()) {
         add_clustering_row_to_buffer(std::move(mf));
     } else {
@@ -599,7 +599,7 @@ void cache_flat_mutation_reader::add_to_buffer(const partition_snapshot_row_curs
 //   (2) If _lower_bound > mf.position(), mf was emitted
 inline
 void cache_flat_mutation_reader::add_clustering_row_to_buffer(mutation_fragment&& mf) {
-    clogger.trace("csm {}: add_clustering_row_to_buffer({})", this, mf);
+    clogger.trace("csm {}: add_clustering_row_to_buffer({})", this, mutation_fragment::printer(*_schema, mf));
     auto& row = mf.as_clustering_row();
     auto new_lower_bound = position_in_partition::after_key(row.key());
     push_mutation_fragment(std::move(mf));
@@ -640,7 +640,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const range_tombstone& rt) {
 inline
 void cache_flat_mutation_reader::maybe_add_to_cache(const static_row& sr) {
     if (can_populate()) {
-        clogger.trace("csm {}: populate({})", this, sr);
+        clogger.trace("csm {}: populate({})", this, static_row::printer(*_schema, sr));
         _read_context->cache().on_static_row_insert();
         _lsa_manager.run_in_update_section_with_allocator([&] {
             if (_read_context->digest_requested()) {

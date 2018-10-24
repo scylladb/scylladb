@@ -191,7 +191,7 @@ public:
         sstring value;
         api::timestamp_type t;
         std::tie(value, t) = _t.s.get_value(row);
-        test_log.trace("reader {}: {} @{}, {}", _id, value, t, row);
+        test_log.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_t.s.schema(), row));
         if (_value && value != _value) {
             throw std::runtime_error(sprint("Saw values from two different writes in partition %d: %s and %s", _key, _value, value));
         }

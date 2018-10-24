@@ -354,10 +354,19 @@ public:
 
     bool is_live(const schema&, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
 
-    friend std::ostream& operator<<(std::ostream& os, const row& r);
-};
+    class printer {
+        const schema& _schema;
+        column_kind _kind;
+        const row& _row;
+    public:
+        printer(const schema& s, column_kind k, const row& r) : _schema(s), _kind(k), _row(r) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
 
-std::ostream& operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c);
+        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    };
+    friend std::ostream& operator<<(std::ostream& os, const printer& p);
+};
 
 class row_marker;
 int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) noexcept;
@@ -700,11 +709,22 @@ public:
     const row_marker& marker() const { return _marker; }
     const row& cells() const { return _cells; }
     row& cells() { return _cells; }
-    friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
     bool equal(column_kind, const schema& s, const deletable_row& other, const schema& other_schema) const;
     bool is_live(const schema& s, tombstone base_tombstone = tombstone(), gc_clock::time_point query_time = gc_clock::time_point::min()) const;
     bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
+
+    class printer {
+        const schema& _schema;
+        const deletable_row& _deletable_row;
+    public:
+        printer(const schema& s, const deletable_row& r) : _schema(s), _deletable_row(r) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
+
+        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    };
+    friend std::ostream& operator<<(std::ostream& os, const printer& p);
 };
 
 class cache_tracker;
@@ -848,12 +868,23 @@ public:
             return _c(p1, p2) < 0;
         }
     };
-    friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
     bool equal(const schema& s, const rows_entry& other) const;
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
     size_t memory_usage(const schema&) const;
     void on_evicted(cache_tracker&) noexcept;
+
+    class printer {
+        const schema& _schema;
+        const rows_entry& _rows_entry;
+    public:
+        printer(const schema& s, const rows_entry& r) : _schema(s), _rows_entry(r) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
+
+        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    };
+    friend std::ostream& operator<<(std::ostream& os, const printer& p);
 };
 
 // Represents a set of writes made to a single partition.
@@ -941,7 +972,18 @@ public:
         hashing_partition_visitor<Hasher> v(h, s);
         accept(s, v);
     }
-    friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
+
+    class printer {
+        const schema& _schema;
+        const mutation_partition& _mutation_partition;
+    public:
+        printer(const schema& s, const mutation_partition& mp) : _schema(s), _mutation_partition(mp) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
+
+        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    };
+    friend std::ostream& operator<<(std::ostream& os, const printer& p);
 public:
     // Makes sure there is a dummy entry after all clustered rows. Doesn't affect continuity.
     // Doesn't invalidate iterators.

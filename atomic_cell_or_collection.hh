@@ -67,7 +67,19 @@ public:
     bytes_view serialize() const;
     bool equals(const abstract_type& type, const atomic_cell_or_collection& other) const;
     size_t external_memory_usage(const abstract_type&) const;
-    friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);
+
+    class printer {
+        const column_definition& _cdef;
+        const atomic_cell_or_collection& _cell;
+    public:
+        printer(const column_definition& cdef, const atomic_cell_or_collection& cell)
+            : _cdef(cdef), _cell(cell) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
+
+        friend std::ostream& operator<<(std::ostream&, const printer&);
+    };
+    friend std::ostream& operator<<(std::ostream&, const printer&);
 };
 
 namespace std {
