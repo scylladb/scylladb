@@ -442,7 +442,8 @@ struct sharding_metadata {
 enum sstable_feature : uint8_t {
     NonCompoundPIEntries = 0,       // See #2993
     NonCompoundRangeTombstones = 1, // See #2986
-    End = 2
+    ShadowableTombstones = 2, // See #3885
+    End = 4,
 };
 
 // Scylla-specific features enabled for a particular sstable.
@@ -602,6 +603,12 @@ public:
 
 class unfiltered_extended_flags_m final {
     static const uint8_t IS_STATIC = 0x01u;
+    // This flag is used by Cassandra but not supported by Scylla because
+    // Scylla's representation of shadowable tombstones is different.
+    // We only check it on reading and error out if set but never set ourselves.
+    static const uint8_t HAS_CASSANDRA_SHADOWABLE_DELETION = 0x02u;
+    // This flag is Scylla-specific and used for writing shadowable tombstones.
+    static const uint8_t HAS_SCYLLA_SHADOWABLE_DELETION = 0x80u;
     uint8_t _flags;
     bool check_flag(const uint8_t flag) const {
         return (_flags & flag) != 0u;
@@ -610,6 +617,12 @@ public:
     explicit unfiltered_extended_flags_m(uint8_t flags) : _flags(flags) { }
     bool is_static() const {
         return check_flag(IS_STATIC);
+    }
+    bool has_cassandra_shadowable_deletion() const {
+        return check_flag(HAS_CASSANDRA_SHADOWABLE_DELETION);
+    }
+    bool has_scylla_shadowable_deletion() const {
+        return check_flag(HAS_SCYLLA_SHADOWABLE_DELETION);
     }
 };
 

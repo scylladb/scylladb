@@ -1045,11 +1045,15 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_row_marker_and_tombstone(const liveness_info& info, tombstone t) override {
-        sstlog.trace("mp_row_consumer_m {}: consume_row_marker_and_tombstone({}, {}), key={}",
-            this, info.to_row_marker(), t, _in_progress_row->position());
-        _in_progress_row->apply(t);
+    virtual proceed consume_row_marker_and_tombstone(
+            const liveness_info& info, tombstone tomb, tombstone shadowable_tomb) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_row_marker_and_tombstone({}, {}, {}), key={}",
+            this, info.to_row_marker(), tomb, shadowable_tomb, _in_progress_row->position());
         _in_progress_row->apply(info.to_row_marker());
+        _in_progress_row->apply(tomb);
+        if (shadowable_tomb) {
+            _in_progress_row->apply(shadowable_tombstone{shadowable_tomb});
+        }
         return proceed::yes;
     }
 

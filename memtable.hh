@@ -214,7 +214,9 @@ private:
 
         void update(const schema& s, const deletable_row& dr) {
             update(dr.marker());
-            update(dr.deleted_at().tomb());
+            row_tombstone row_tomb = dr.deleted_at();
+            update(row_tomb.regular());
+            update(row_tomb.tomb());
             update(s, dr.cells(), column_kind::regular_column);
         }
 

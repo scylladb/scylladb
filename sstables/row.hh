@@ -162,7 +162,8 @@ public:
 
     virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
 
-    virtual proceed consume_row_marker_and_tombstone(const sstables::liveness_info& info, tombstone t) = 0;
+    virtual proceed consume_row_marker_and_tombstone(
+            const sstables::liveness_info& info, tombstone tomb, tombstone shadowable_tomb) = 0;
 
     virtual proceed consume_static_row_start() = 0;
 
@@ -584,6 +585,9 @@ private:
         ROW_BODY_DELETION,
         ROW_BODY_DELETION_2,
         ROW_BODY_DELETION_3,
+        ROW_BODY_SHADOWABLE_DELETION,
+        ROW_BODY_SHADOWABLE_DELETION_2,
+        ROW_BODY_SHADOWABLE_DELETION_3,
         ROW_BODY_MARKER,
         ROW_BODY_MISSING_COLUMNS,
         ROW_BODY_MISSING_COLUMNS_2,
@@ -624,6 +628,7 @@ private:
     shared_sstable _sst;
     const serialization_header& _header;
     column_translation _column_translation;
+    const bool _has_shadowable_tombstones;
 
     temporary_buffer<char> _pk;
 
@@ -644,6 +649,7 @@ private:
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
 
     tombstone _row_tombstone;
+    tombstone _row_shadowable_tombstone;
 
     column_flags_m _column_flags{0};
     api::timestamp_type _column_timestamp;
@@ -808,6 +814,7 @@ private:
         flags_label:
             _liveness.reset();
             _row_tombstone = {};
+            _row_shadowable_tombstone = {};
             if (read_8(data) != read_status::ready) {
                 _state = state::FLAGS_2;
                 break;
@@ -839,6 +846,9 @@ private:
             }
         case state::EXTENDED_FLAGS:
             _extended_flags = unfiltered_extended_flags_m(_u8);
+            if (_extended_flags.has_cassandra_shadowable_deletion()) {
+                throw std::runtime_error("SSTables with Cassandra-style shadowable deletion cannot be read by Scylla");
+            }
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
                     setup_columns(_column_translation.static_columns(),
@@ -965,8 +975,8 @@ private:
         case state::ROW_BODY_DELETION:
         row_body_deletion_label:
             if (!_flags.has_deletion()) {
-                _state = state::ROW_BODY_MARKER;
-                goto row_body_marker_label;
+                _state = state::ROW_BODY_SHADOWABLE_DELETION;
+                goto row_body_shadowable_deletion_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_DELETION_2;
@@ -980,9 +990,32 @@ private:
             }
         case state::ROW_BODY_DELETION_3:
             _row_tombstone.deletion_time = parse_expiry(_header, _u64);
+        case state::ROW_BODY_SHADOWABLE_DELETION:
+        row_body_shadowable_deletion_label:
+            if (_extended_flags.has_scylla_shadowable_deletion()) {
+                if (!_has_shadowable_tombstones) {
+                    throw malformed_sstable_exception("Scylla shadowable tombstone flag is set but not supported on this SSTables");
+                }
+            } else {
+                _state = state::ROW_BODY_MARKER;
+                goto row_body_marker_label;
+            }
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::ROW_BODY_SHADOWABLE_DELETION_2;
+                break;
+            }
+        case state::ROW_BODY_SHADOWABLE_DELETION_2:
+            _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::ROW_BODY_SHADOWABLE_DELETION_3;
+                break;
+            }
+        case state::ROW_BODY_SHADOWABLE_DELETION_3:
+            _row_shadowable_tombstone.deletion_time = parse_expiry(_header, _u64);
         case state::ROW_BODY_MARKER:
         row_body_marker_label:
-            if (_consumer.consume_row_marker_and_tombstone(_liveness, std::move(_row_tombstone)) == consumer_m::proceed::no) {
+            if (_consumer.consume_row_marker_and_tombstone(
+                    _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone)) == consumer_m::proceed::no) {
                 _state = state::ROW_BODY_MISSING_COLUMNS;
                 break;
             }
@@ -1310,6 +1343,7 @@ public:
         , _sst(sst)
         , _header(sst->get_serialization_header())
         , _column_translation(sst->get_column_translation(s, _header))
+        , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
         , _liveness(_header)
     { }
 
