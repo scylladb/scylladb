@@ -481,39 +481,39 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
         return make_ready_future<>();
     }
 
-  return _dismantling_gate.close().then([this, unconsumed_buffer = std::move(unconsumed_buffer), compaction_state = std::move(compaction_state),
+    return _dismantling_gate.close().then([this, unconsumed_buffer = std::move(unconsumed_buffer), compaction_state = std::move(compaction_state),
           last_ckey = std::move(last_ckey)] () mutable {
-    auto last_pkey = compaction_state.partition_start.key();
+        auto last_pkey = compaction_state.partition_start.key();
 
-    const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
-    tracing::trace(_trace_state, "Dismantled combined buffer: {} partitions/{} fragments/{} bytes", cb_stats.partitions, cb_stats.fragments,
-            cb_stats.bytes);
+        const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
+        tracing::trace(_trace_state, "Dismantled combined buffer: {} partitions/{} fragments/{} bytes", cb_stats.partitions, cb_stats.fragments,
+                cb_stats.bytes);
 
-    const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
-    tracing::trace(_trace_state, "Dismantled compaction state: {} partitions/{} fragments/{} bytes", cs_stats.partitions, cs_stats.fragments,
-            cs_stats.bytes);
+        const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
+        tracing::trace(_trace_state, "Dismantled compaction state: {} partitions/{} fragments/{} bytes", cs_stats.partitions, cs_stats.fragments,
+                cs_stats.bytes);
 
-    return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
+        return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
                 const std::optional<clustering_key_prefix>& last_ckey) {
-        return parallel_for_each(_readers, [this, &last_pkey, &last_ckey] (reader_state& rs) {
-            if (auto* maybe_successful_lookup_state = std::get_if<successful_lookup_state>(&rs)) {
-                auto& current_state = *maybe_successful_lookup_state;
-                rs = ready_to_save_state{std::move(current_state.params), std::move(current_state.read_operation),
-                        std::move(current_state.reader), circular_buffer<mutation_fragment>{}};
-                return save_reader(std::get<ready_to_save_state>(rs), last_pkey, last_ckey);
-            }
+            return parallel_for_each(_readers, [this, &last_pkey, &last_ckey] (reader_state& rs) {
+                if (auto* maybe_successful_lookup_state = std::get_if<successful_lookup_state>(&rs)) {
+                    auto& current_state = *maybe_successful_lookup_state;
+                    rs = ready_to_save_state{std::move(current_state.params), std::move(current_state.read_operation),
+                            std::move(current_state.reader), circular_buffer<mutation_fragment>{}};
+                    return save_reader(std::get<ready_to_save_state>(rs), last_pkey, last_ckey);
+                }
 
-            if (auto* maybe_dismantling_state = std::get_if<dismantling_state>(&rs)) {
-                auto& current_state = *maybe_dismantling_state;
-                rs = ready_to_save_state{std::move(current_state.params), std::move(current_state.read_operation),
-                        std::move(current_state.reader), std::move(current_state.buffer)};
-                return save_reader(std::get<ready_to_save_state>(rs), last_pkey, last_ckey);
-            }
+                if (auto* maybe_dismantling_state = std::get_if<dismantling_state>(&rs)) {
+                    auto& current_state = *maybe_dismantling_state;
+                    rs = ready_to_save_state{std::move(current_state.params), std::move(current_state.read_operation),
+                            std::move(current_state.reader), std::move(current_state.buffer)};
+                    return save_reader(std::get<ready_to_save_state>(rs), last_pkey, last_ckey);
+                }
 
-            return make_ready_future<>();
+                return make_ready_future<>();
+            });
         });
     });
-  });
 }
 
 static future<reconcilable_result> do_query_mutations(
