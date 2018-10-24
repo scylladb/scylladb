@@ -122,8 +122,8 @@ if __name__ == '__main__':
                         help='specify NTP domain')
     parser.add_argument('--ami', action='store_true', default=False,
                         help='setup AMI instance')
-    parser.add_argument('--setup-nic', action='store_true', default=False,
-                        help='optimize NIC queue')
+    parser.add_argument('--setup-nic-and-disks', action='store_true', default=False,
+                        help='optimize NIC and disks')
     parser.add_argument('--developer-mode', action='store_true', default=False,
                         help='enable developer mode')
     parser.add_argument('--no-ec2-check', action='store_true', default=False,
@@ -173,7 +173,7 @@ if __name__ == '__main__':
 
     disks = args.disks
     nic = args.nic
-    set_nic = args.setup_nic
+    set_nic_and_disks = args.setup_nic_and_disks
     ec2_check = not args.no_ec2_check
     kernel_check = not args.no_kernel_check
     verify_package = not args.no_verify_package
@@ -338,9 +338,9 @@ if __name__ == '__main__':
     if sysconfig_setup:
         nic = interactive_choose_nic()
         if interactive:
-            set_nic = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', 'yes')
+            set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', 'yes')
     if sysconfig_setup:
-        setup_args = '--setup-nic' if set_nic else ''
+        setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
         run_setup_script('NIC queue', '/usr/lib/scylla/scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
     if interactive:
