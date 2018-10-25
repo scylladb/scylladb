@@ -1290,6 +1290,67 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
     });
 }
 
+SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
+    return seastar::async([] {
+        auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+        for (const auto version : all_sstable_versions) {
+            storage_service_for_tests ssft;
+            simple_schema ss(simple_schema::with_static::yes);
+            auto s = ss.schema();
+
+            auto pks = make_local_keys(2, s);
+
+            mutation m1 = ss.new_mutation(pks[0]);
+            ss.add_row(m1, ss.make_ckey(1), "v");
+            ss.add_row(m1, ss.make_ckey(2), "v");
+            ss.add_row(m1, ss.make_ckey(5), "v");
+            ss.add_row(m1, ss.make_ckey(6), "v");
+
+            mutation m2 = ss.new_mutation(pks[1]);
+            ss.add_static_row(m2, "svalue");
+            ss.add_row(m2, ss.make_ckey(2), "v");
+            ss.add_row(m2, ss.make_ckey(5), "v");
+            ss.add_row(m2, ss.make_ckey(6), "v");
+
+            sstable_writer_config cfg;
+            cfg.large_partition_handler = &nop_lp_handler;
+
+            tmpdir dir;
+            auto ms = make_sstable_mutation_source(s, dir.path, {m1, m2}, cfg, version);
+
+            auto index_accesses = [] {
+                auto&& stats = sstables::shared_index_lists::shard_stats();
+                return stats.hits + stats.misses + stats.blocks;
+            };
+
+            auto before = index_accesses();
+
+            {
+                auto slice = partition_slice_builder(*s).with_ranges({
+                    ss.make_ckey_range(0, 3),
+                    ss.make_ckey_range(5, 8)
+                }).build();
+
+                assert_that(ms.make_reader(s, query::full_partition_range, slice))
+                    .produces(m1)
+                    .produces(m2)
+                    .produces_end_of_stream();
+
+                BOOST_REQUIRE_EQUAL(index_accesses(), before);
+            }
+
+            {
+                assert_that(ms.make_reader(s))
+                    .produces(m1)
+                    .produces(m2)
+                    .produces_end_of_stream();
+
+                BOOST_REQUIRE_EQUAL(index_accesses(), before);
+            }
+      }
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
 
