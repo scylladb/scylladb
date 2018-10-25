@@ -379,29 +379,34 @@ SEASTAR_THREAD_TEST_CASE(read_partial_range_2) {
     }).get();
 }
 
+static
+mutation_source make_sstable_mutation_source(schema_ptr s, sstring dir, std::vector<mutation> mutations,
+        sstable_writer_config cfg, sstables::sstable::version_types version) {
+    auto sst = sstables::make_sstable(s,
+        dir,
+        1 /* generation */,
+        version,
+        sstables::sstable::format_types::big);
+
+    auto mt = make_lw_shared<memtable>(s);
+
+    for (auto&& m : mutations) {
+        mt->apply(m);
+    }
+
+    sst->write_components(mt->make_flat_reader(s), mutations.size(), s, cfg).get();
+    sst->load().get();
+
+    return as_mutation_source(sst);
+}
+
 // Must be run in a seastar thread
 static
 void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_types version) {
     std::vector<tmpdir> dirs;
     run_mutation_source_tests([&dirs, &cfg, version] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
-        tmpdir sstable_dir;
-        auto sst = sstables::make_sstable(s,
-            sstable_dir.path,
-            1 /* generation */,
-            version,
-            sstables::sstable::format_types::big);
-        dirs.emplace_back(std::move(sstable_dir));
-
-        auto mt = make_lw_shared<memtable>(s);
-
-        for (auto&& m : partitions) {
-            mt->apply(m);
-        }
-
-        sst->write_components(mt->make_flat_reader(s), partitions.size(), s, cfg).get();
-        sst->load().get();
-
-        return as_mutation_source(sst);
+        dirs.emplace_back();
+        return make_sstable_mutation_source(s, dirs.back().path, partitions, cfg, version);
     });
 }
 
