@@ -704,7 +704,7 @@ int main(int ac, char** av) {
 
             static sharded<db::view::view_update_from_staging_generator> view_update_from_staging_generator;
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db, view_update_from_staging_generator).get();
+            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_from_staging_generator).get();
             api::set_server_stream_manager(ctx).get();
 
             supervisor::notify("starting hinted handoff manager");
