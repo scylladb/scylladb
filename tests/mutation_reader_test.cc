@@ -2161,6 +2161,87 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        env.execute_cql("CREATE KEYSPACE multishard_combining_reader_next_partition_ks"
+                " WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
+        env.execute_cql("CREATE TABLE multishard_combining_reader_next_partition_ks.test (pk int, v int, PRIMARY KEY(pk));").get();
+
+        const auto insert_id = env.prepare("INSERT INTO multishard_combining_reader_next_partition_ks.test (\"pk\", \"v\") VALUES (?, ?);").get0();
+
+        const auto partition_count = 1000;
+
+        for (int pk = 0; pk < partition_count; ++pk) {
+            env.execute_prepared(insert_id, {{
+                    cql3::raw_value::make_value(data_value(pk).serialize()),
+                    cql3::raw_value::make_value(data_value(0).serialize())}}).get();
+        }
+
+        auto schema = env.local_db().find_column_family("multishard_combining_reader_next_partition_ks", "test").schema();
+        auto& partitioner = dht::global_partitioner();
+
+        auto pkeys = boost::copy_range<std::vector<dht::decorated_key>>(
+                boost::irange(0, partition_count) |
+                boost::adaptors::transformed([schema, &partitioner] (int i) {
+                    return partitioner.decorate_key(*schema, partition_key::from_singular(*schema, i));
+                }));
+
+        // We want to test corner cases around next_partition() called when it
+        // cannot be resolved with just the buffer and it has to be forwarded
+        // to the correct shard reader, so set a buffer size so that only a
+        // single fragment can fit into it at a time.
+        const auto max_buffer_size = size_t{1};
+
+        auto factory = [db = &env.db(), max_buffer_size] (
+                unsigned shard,
+                schema_ptr s,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                mutation_reader::forwarding fwd_mr) {
+            return db->invoke_on(shard, [gs = global_schema_ptr(s), &range, &slice, &pc, trace_state = tracing::global_trace_state_ptr(trace_state),
+                    fwd_mr, max_buffer_size] (database& db) mutable {
+                auto schema = gs.get();
+                auto& table = db.find_column_family(schema);
+                auto reader = table.as_mutation_source().make_reader(
+                        schema,
+                        range,
+                        slice,
+                        service::get_local_sstable_query_read_priority(),
+                        trace_state.get(),
+                        streamed_mutation::forwarding::no,
+                        fwd_mr);
+                reader.set_max_buffer_size(max_buffer_size);
+                return make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)));
+            });
+        };
+        auto reader = make_multishard_combining_reader(
+                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
+                partitioner,
+                schema,
+                query::full_partition_range,
+                schema->full_slice(),
+                service::get_local_sstable_query_read_priority());
+
+        reader.set_max_buffer_size(max_buffer_size);
+
+        boost::sort(pkeys, [schema] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return dht::ring_position_tri_compare(*schema, a, b) < 0;
+        });
+
+        BOOST_TEST_MESSAGE("Start test");
+
+        auto assertions = assert_that(std::move(reader));
+        for (int i = 0; i < partition_count; ++i) {
+            assertions.produces(pkeys[i]);
+        }
+        assertions.produces_end_of_stream();
+
+        return make_ready_future<>();
+    }).get();
+}
+
 // Test the multishard streaming reader in the context it was designed to work
 // in: as a mean to read data belonging to a shard according to a different
 // sharding configuration.
