@@ -224,6 +224,7 @@ public:
                 e = i->shared_from_this();
                 // take a short cut if the value is ready
                 if (e->ready()) {
+                    Stats::inc_hits();
                     return make_ready_future<entry_ptr>(entry_ptr(std::move(e)));
                 }
                 f = e->loaded().get_shared_future();
