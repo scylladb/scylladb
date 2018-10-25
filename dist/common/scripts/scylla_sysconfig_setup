@@ -40,7 +40,7 @@ if __name__ == '__main__':
         cfg = sysconfig_parser('/etc/sysconfig/scylla-server')
     else:
         cfg = sysconfig_parser('/etc/default/scylla-server')
-    set_nic_and_disks = str2bool(cfg.get('SET_NIC'))
+    set_nic_and_disks = str2bool(get_set_nic_and_disks_config_value(cfg))
     ami = str2bool(cfg.get('AMI'))
 
     parser = argparse.ArgumentParser(description='Setting parameters on Scylla sysconfig file.')
@@ -105,8 +105,11 @@ if __name__ == '__main__':
     if args.confdir:
         cfg.set('SCYLLA_CONF', args.confdir)
 
-    if str2bool(cfg.get('SET_NIC')) != args.setup_nic_and_disks:
-        cfg.set('SET_NIC', bool2str(args.setup_nic_and_disks))
+    if str2bool(get_set_nic_and_disks_config_value(cfg)) != args.setup_nic_and_disks:
+        if cfg.has_option('SET_NIC'):
+            cfg.set('SET_NIC', bool2str(args.setup_nic_and_disks))
+        else:
+            cfg.set('SET_NIC_AND_DISKS', bool2str(args.setup_nic_and_disks))
 
     if str2bool(cfg.get('AMI')) != args.ami:
         cfg.set('AMI', bool2str(args.ami))

@@ -449,6 +449,25 @@ def create_perftune_conf(nic='eth0'):
 def is_valid_nic(nic):
     return os.path.exists('/sys/class/net/{}'.format(nic))
 
+# Remove this when we do not support SET_NIC configuration value anymore
+def get_set_nic_and_disks_config_value(cfg):
+    """
+    Get the SET_NIC_AND_DISKS configuration value.
+    Return the SET_NIC configuration value if SET_NIC_AND_DISKS is not found (old releases case).
+    :param cfg: sysconfig_parser object
+    :return configuration value
+    :except If the configuration value is not found
+    """
+
+    # Sanity check
+    if cfg.has_option('SET_NIC_AND_DISKS') and cfg.has_option('SET_NIC'):
+        raise Exception("Only one of 'SET_NIC_AND_DISKS' and 'SET_NIC' is allowed to be present")
+
+    try:
+        return cfg.get('SET_NIC_AND_DISKS')
+    except:
+        # For backwards compatibility
+        return cfg.get('SET_NIC')
 
 class SystemdException(Exception):
     pass
