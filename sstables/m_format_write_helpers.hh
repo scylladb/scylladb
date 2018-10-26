@@ -37,6 +37,16 @@ namespace sstables {
 
 class file_writer;
 
+// This structure is used to store references to column_definitions
+// along with their respective column_ids.
+// This allows us to do shallow re-ordering without changing the original order in schema.
+struct column_definition_indexed_ref {
+    column_id id;
+    std::reference_wrapper<const column_definition> cdef;
+};
+
+using indexed_columns = std::vector<column_definition_indexed_ref>;
+
 // Utilities for writing integral values in variable-length format
 // See vint-serialization.hh for more details
 void write_unsigned_vint(file_writer& out, uint64_t value);
@@ -75,7 +85,7 @@ void write_clustering_prefix(file_writer& out, const schema& s,
         const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full);
 
 // Writes encoded information about missing columns in the given row
-void write_missing_columns(file_writer& out, const schema& s, column_kind kind, const row& row);
+void write_missing_columns(file_writer& out, const indexed_columns& columns, const row& row);
 
 // Helper functions for writing delta-encoded time-related values
 void write_delta_timestamp(file_writer& out, api::timestamp_type timestamp, const encoding_stats& enc_stats);
