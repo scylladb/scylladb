@@ -75,7 +75,7 @@ void write_clustering_prefix(file_writer& out, const schema& s,
         const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full);
 
 // Writes encoded information about missing columns in the given row
-void write_missing_columns(file_writer& out, const schema& s, const row& row);
+void write_missing_columns(file_writer& out, const schema& s, column_kind kind, const row& row);
 
 // Helper functions for writing delta-encoded time-related values
 void write_delta_timestamp(file_writer& out, api::timestamp_type timestamp, const encoding_stats& enc_stats);
