@@ -204,6 +204,7 @@ class missing_columns_input_range
         : public input_range_base<missing_columns_input_range, uint64_t> {
 private:
     const schema& _schema;
+    const column_kind _kind;
     const row& _row;
     mutable uint64_t _current_value = 0;
     mutable column_id _current_id = 0;
@@ -216,12 +217,15 @@ private:
     } _mode;
 
 public:
-    missing_columns_input_range(const schema& s, const row& row)
+    missing_columns_input_range(const schema& s, column_kind kind, const row& row)
             : _schema(s)
+            , _kind(kind)
             , _row(row) {
 
+        assert(kind == column_kind::static_column || kind == column_kind::regular_column);
+
         auto row_size = _row.size();
-        auto total_size = _schema.regular_columns_count();
+        auto total_size = _schema.columns_count(_kind);
 
         _current_id = row_size < total_size ? 0 : total_size;
         _mode = (total_size < 64)           ? encoding_mode::small :
@@ -230,7 +234,7 @@ public:
     }
 
     bool next() const {
-        auto total_size = _schema.regular_columns_count();
+        auto total_size = _schema.columns_count(_kind);
         if (_current_id == total_size) {
             // No more values to encode
             return false;
@@ -285,12 +289,12 @@ public:
 
     explicit operator bool() const
     {
-        return (_current_id < _schema.regular_columns_count());
+        return (_current_id < _schema.columns_count(_kind));
     }
 };
 
-void write_missing_columns(file_writer& out, const schema& s, const row& row) {
-    for (const auto value: missing_columns_input_range{s, row}) {
+void write_missing_columns(file_writer& out, const schema& s, column_kind kind, const row& row) {
+    for (const auto value: missing_columns_input_range{s, kind, row}) {
         write_vint(out, value);
     }
 }

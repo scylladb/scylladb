@@ -4639,3 +4639,31 @@ SEASTAR_THREAD_TEST_CASE(test_regular_and_shadowable_deletion) {
     validate_read(s, tmp.path, {mut1, mut2});
 }
 
+SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    sstring table_name = "static_row_with_missing_columns";
+    // CREATE TABLE static_row (pk int, ck int, st1 int static, st2 int static, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck", int32_type, column_kind::clustering_key);
+    builder.with_column("st1", int32_type, column_kind::static_column);
+    builder.with_column("st2", int32_type, column_kind::static_column);
+    builder.with_column("rc", int32_type);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    // INSERT INTO static_row (pk, ck, st1, rc) VALUES (0, 1, 2, 3);
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut{s, key};
+    clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
+    mut.partition().apply_insert(*s, ckey, write_timestamp);
+    mut.set_static_cell("st1", data_value{2}, write_timestamp);
+    mut.set_cell(ckey, "rc", data_value{3}, write_timestamp);
+    mt->apply(mut);
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
+}
+
