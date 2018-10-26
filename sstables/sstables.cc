@@ -3209,7 +3209,7 @@ void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const 
     // This differs from Origin where all updated columns are tracked and the set of filled columns of a row
     // is compared with the set of all columns filled in the memtable. So our encoding may be less optimal in some cases
     // but still valid.
-    write_missing_columns(writer, _schema, row_body);
+    write_missing_columns(writer, _schema, kind, row_body);
     row_body.for_each_cell([this, &writer, kind, &properties, has_complex_deletion] (column_id id, const atomic_cell_or_collection& c) {
         auto&& column_definition = _schema.column_at(kind, id);
         if (!column_definition.is_atomic()) {
