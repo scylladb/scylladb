@@ -1122,6 +1122,21 @@ schema::has_static_columns() const {
 }
 
 column_count_type
+schema::columns_count(column_kind kind) const {
+    switch (kind) {
+    case column_kind::partition_key:
+        return partition_key_size();
+    case column_kind::clustering_key:
+        return clustering_key_size();
+    case column_kind::static_column:
+        return static_columns_count();
+    case column_kind::regular_column:
+        return regular_columns_count();
+    default:
+        std::abort();
+    }
+}
+column_count_type
 schema::partition_key_size() const {
     return column_offset(column_kind::clustering_key);
 }

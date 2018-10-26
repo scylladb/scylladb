@@ -701,6 +701,7 @@ public:
     bool is_last_partition_key(const column_definition& def) const;
     bool has_multi_cell_collections() const;
     bool has_static_columns() const;
+    column_count_type columns_count(column_kind kind) const;
     column_count_type partition_key_size() const;
     column_count_type clustering_key_size() const;
     column_count_type static_columns_count() const;
