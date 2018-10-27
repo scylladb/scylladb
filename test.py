@@ -118,6 +118,7 @@ boost_tests = [
     'fragmented_temporary_buffer_test',
     'auth_passwords_test',
     'multishard_mutation_query_test',
+    'top_k_test',
 ]
 
 other_tests = [

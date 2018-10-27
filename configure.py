@@ -352,6 +352,7 @@ scylla_tests = [
     'tests/json_test',
     'tests/auth_passwords_test',
     'tests/multishard_mutation_query_test',
+    'tests/top_k_test',
 ]
 
 perf_tests = [
@@ -794,6 +795,7 @@ pure_boost_tests = set([
     'tests/observable_test',
     'tests/json_test',
     'tests/auth_passwords_test',
+    'tests/top_k_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
