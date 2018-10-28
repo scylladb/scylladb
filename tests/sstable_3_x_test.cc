@@ -4667,3 +4667,43 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
     validate_read(s, tmp.path, {mut});
 }
 
+SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    sstring table_name = "interleaved_atomic_and_collection_columns";
+    //
+    auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck", int32_type, column_kind::clustering_key);
+    builder.with_column("rc1", int32_type);
+    builder.with_column("rc2", set_of_ints_type);
+    builder.with_column("rc3", int32_type);
+    builder.with_column("rc4", set_of_ints_type);
+    builder.with_column("rc5", int32_type);
+    builder.with_column("rc6", set_of_ints_type);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    // INSERT INTO interleaved_atomic_and_collection_columns (pk, ck, rc1, rc4, rc5)
+    //    VALUES (0, 0, 'hello', ['beautiful','world'], 'here') USING TIMESTAMP 1525385507816568;
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut{s, key};
+    clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
+    mut.partition().apply_insert(*s, ckey, write_timestamp);
+    mut.set_cell(ckey, "rc1", data_value{2}, write_timestamp);
+
+    set_type_impl::mutation set_values;
+    set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
+    set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+    set_values.cells.emplace_back(int32_type->decompose(4), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+    mut.set_clustered_cell(ckey, *s->get_column_definition("rc4"), set_of_ints_type->serialize_mutation_form(set_values));
+
+    mut.set_cell(ckey, "rc5", data_value{5}, write_timestamp);
+    mt->apply(mut);
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
+}
+
