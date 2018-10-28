@@ -1235,6 +1235,20 @@ future<> view_builder::calculate_shard_build_step(
         }
     }
 
+    // All shards need to arrive at the same decisions on whether or not to
+    // restart a view build at some common token (reshard), and which token
+    // to restart at. So we need to wait until all shards have read the view
+    // build statuses before they can all proceed to make the (same) decision.
+    // If we don't synchronoize here, a fast shard may make a decision, start
+    // building and finish a build step - before the slowest shard even read
+    // the view build information.
+    container().invoke_on(0, [] (view_builder& builder) {
+        if (++builder._shards_finished_read == smp::count) {
+            builder._shards_finished_read_promise.set_value();
+        }
+        return builder._shards_finished_read_promise.get_shared_future();
+    }).get();
+
     std::unordered_set<utils::UUID> loaded_views;
     if (view_build_status_per_shard.size() != smp::count) {
         reshard(std::move(view_build_status_per_shard), loaded_views);
