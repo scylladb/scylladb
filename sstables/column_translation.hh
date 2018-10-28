@@ -53,42 +53,47 @@ inline column_values_fixed_lengths get_clustering_values_fixed_lengths(const ser
  * This way we don't need to looku them up by column name every time.
  */
 class column_translation {
+public:
+    struct column_info {
+        // Disengaged 'id' means the column is missing from the current schema
+        std::optional<column_id> id;
+        std::optional<uint32_t> value_length;
+        bool is_collection;
+        bool is_counter;
+    };
+
+private:
 
     struct state {
 
-        static std::tuple<std::vector<std::optional<column_id>>,
-                          std::vector<std::optional<uint32_t>>,
-                          std::vector<bool>,
-                          std::vector<bool>> build(
+        static std::vector<column_info> build(
                 const schema& s,
                 const utils::chunked_vector<serialization_header::column_desc>& src,
                 bool is_static) {
-            std::vector<std::optional<column_id>> ids;
-            std::vector<std::optional<column_id>> lens;
-            std::vector<bool> is_collection;
-            std::vector<bool> is_counter;
+            std::vector<column_info> cols;
             if (s.is_dense()) {
                 if (is_static) {
-                    ids.push_back(s.static_begin()->id);
-                    lens.push_back(s.static_begin()->type->value_length_if_fixed());
-                    is_collection.push_back(s.static_begin()->is_multi_cell());
-                    is_counter.push_back(s.static_begin()->is_counter());
+                    cols.push_back(column_info{
+                        s.static_begin()->id,
+                        s.static_begin()->type->value_length_if_fixed(),
+                        s.static_begin()->is_multi_cell(),
+                        s.static_begin()->is_counter()
+                    });
                 } else {
-                    ids.push_back(s.regular_begin()->id);
-                    lens.push_back(s.regular_begin()->type->value_length_if_fixed());
-                    is_collection.push_back(s.regular_begin()->is_multi_cell());
-                    is_counter.push_back(s.regular_begin()->is_counter());
+                    cols.push_back(column_info{
+                        s.regular_begin()->id,
+                        s.regular_begin()->type->value_length_if_fixed(),
+                        s.regular_begin()->is_multi_cell(),
+                        s.regular_begin()->is_counter()
+                    });
                 }
             } else {
-                ids.reserve(src.size());
-                lens.reserve(src.size());
+                cols.reserve(src.size());
                 for (auto&& desc : src) {
-                    const column_definition* def = s.get_column_definition(desc.name.value);
                     const bytes& type_name = desc.type_name.value;
                     data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
-                    lens.push_back(type->value_length_if_fixed());
-                    is_collection.push_back(type->is_multi_cell());
-                    is_counter.push_back(type->is_counter());
+                    const column_definition* def = s.get_column_definition(desc.name.value);
+                    std::optional<column_id> id;
                     if (def) {
                         if (def->is_multi_cell() != type->is_multi_cell() || def->is_counter() != type->is_counter()) {
                             throw malformed_sstable_exception(sprint(
@@ -100,25 +105,26 @@ class column_translation {
                                     type->is_multi_cell(),
                                     type->is_counter()));
                         }
-                        ids.push_back(def->id);
-                    } else {
-                        ids.push_back(std::nullopt);
+                        id = def->id;
                     }
+                    cols.push_back(column_info{
+                        id,
+                        type->value_length_if_fixed(),
+                        type->is_multi_cell(),
+                        type->is_counter()
+                    });
+                }
+                if (!is_static) {
+                    boost::range::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
                 }
             }
-            return std::make_tuple(std::move(ids), std::move(lens), std::move(is_collection), std::move(is_counter));
+            return cols;
         }
 
         utils::UUID schema_uuid;
-        std::vector<std::optional<column_id>> regular_schema_column_id_from_sstable;
-        std::vector<std::optional<column_id>> static_schema_column_id_from_sstable;
-        column_values_fixed_lengths regular_column_value_fix_lengths;
-        column_values_fixed_lengths static_column_value_fix_lengths;
+        std::vector<column_info> regular_schema_columns_from_sstable;
+        std::vector<column_info> static_schema_columns_from_sstable;
         column_values_fixed_lengths clustering_column_value_fix_lengths;
-        std::vector<bool> static_column_is_collection;
-        std::vector<bool> regular_column_is_collection;
-        std::vector<bool> static_column_is_counter;
-        std::vector<bool> regular_column_is_counter;
 
         state() = default;
         state(const state&) = delete;
@@ -127,19 +133,11 @@ class column_translation {
         state& operator=(state&&) = default;
 
         state(const schema& s, const serialization_header& header)
-                : schema_uuid(s.version()) {
-            std::tie(regular_schema_column_id_from_sstable,
-                     regular_column_value_fix_lengths,
-                     regular_column_is_collection,
-                     regular_column_is_counter) =
-                    build(s, header.regular_columns.elements, false);
-            std::tie(static_schema_column_id_from_sstable,
-                     static_column_value_fix_lengths,
-                     static_column_is_collection,
-                     static_column_is_counter) =
-                    build(s, header.static_columns.elements, true);
-            clustering_column_value_fix_lengths = get_clustering_values_fixed_lengths(header);
-        }
+            : schema_uuid(s.version())
+            , regular_schema_columns_from_sstable(build(s, header.regular_columns.elements, false))
+            , static_schema_columns_from_sstable(build(s, header.static_columns.elements, true))
+            , clustering_column_value_fix_lengths (get_clustering_values_fixed_lengths(header))
+        {}
     };
 
     lw_shared_ptr<const state> _state = make_lw_shared<const state>();
@@ -152,32 +150,14 @@ public:
         return *this;
     }
 
-    const std::vector<std::optional<column_id>>& regular_columns() const {
-        return _state->regular_schema_column_id_from_sstable;
+    const std::vector<column_info>& regular_columns() const {
+        return _state->regular_schema_columns_from_sstable;
     }
-    const std::vector<std::optional<column_id>>& static_columns() const {
-        return _state->static_schema_column_id_from_sstable;
-    }
-    const std::vector<std::optional<uint32_t>>& regular_column_value_fix_legths() const {
-        return _state->regular_column_value_fix_lengths;
-    }
-    const std::vector<std::optional<uint32_t>>& static_column_value_fix_legths() const {
-        return _state->static_column_value_fix_lengths;
+    const std::vector<column_info>& static_columns() const {
+        return _state->static_schema_columns_from_sstable;
     }
     const std::vector<std::optional<uint32_t>>& clustering_column_value_fix_legths() const {
         return _state->clustering_column_value_fix_lengths;
-    }
-    const std::vector<bool>& static_column_is_collection() const {
-        return _state->static_column_is_collection;
-    }
-    const std::vector<bool>& regular_column_is_collection() const {
-        return _state->regular_column_is_collection;
-    }
-    const std::vector<bool>& static_column_is_counter() const {
-        return _state->static_column_is_counter;
-    }
-    const std::vector<bool>& regular_column_is_counter() const {
-        return _state->regular_column_is_counter;
     }
 };
 
