@@ -227,6 +227,7 @@ public:
 private:
     struct scheduling_info_for_connection_index {
         scheduling_group scheduling_config::*sched_group_ptr;
+        sstring isolation_cookie;
     };
 private:
     gms::inet_address _listen_address;
@@ -529,6 +530,7 @@ public:
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
     static msg_addr get_source(const rpc::client_info& client);
     scheduling_group scheduling_group_for_verb(messaging_verb verb) const;
+    scheduling_group scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const;
 };
 
 extern distributed<messaging_service> _the_messaging_service;
