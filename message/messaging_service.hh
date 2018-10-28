@@ -225,6 +225,10 @@ public:
     };
 
 private:
+    struct scheduling_info_for_connection_index {
+        scheduling_group scheduling_config::*sched_group_ptr;
+    };
+private:
     gms::inet_address _listen_address;
     uint16_t _port;
     uint16_t _ssl_port;
@@ -245,6 +249,7 @@ private:
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
     memory_config _mcfg;
     scheduling_config _scheduling_config;
+    static const scheduling_info_for_connection_index _scheduling_info_for_connection_index[4];
 public:
     using clock_type = lowres_clock;
 public:

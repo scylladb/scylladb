@@ -522,15 +522,16 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
     return s_rpc_client_idx_table[static_cast<size_t>(verb)];
 }
 
+const messaging_service::scheduling_info_for_connection_index messaging_service::_scheduling_info_for_connection_index[4] = {
+    { &scheduling_config::statement },
+    { &scheduling_config::gossip },
+    { &scheduling_config::streaming },
+    { &scheduling_config::statement },
+};
+
 scheduling_group
 messaging_service::scheduling_group_for_verb(messaging_verb verb) const {
-    static const scheduling_group scheduling_config::*idx_to_group[] = {
-        &scheduling_config::statement,
-        &scheduling_config::gossip,
-        &scheduling_config::streaming,
-        &scheduling_config::statement,
-    };
-    return _scheduling_config.*(idx_to_group[get_rpc_client_idx(verb)]);
+    return _scheduling_config.*(_scheduling_info_for_connection_index[get_rpc_client_idx(verb)].sched_group_ptr);
 }
 
 /**
