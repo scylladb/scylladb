@@ -226,7 +226,7 @@ public:
 
 private:
     struct scheduling_info_for_connection_index {
-        scheduling_group scheduling_config::*sched_group_ptr;
+        scheduling_group sched_group;
         sstring isolation_cookie;
     };
 private:
@@ -250,7 +250,7 @@ private:
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
     memory_config _mcfg;
     scheduling_config _scheduling_config;
-    static const scheduling_info_for_connection_index _scheduling_info_for_connection_index[4];
+    std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
 public:
     using clock_type = lowres_clock;
 public:
@@ -531,6 +531,7 @@ public:
     static msg_addr get_source(const rpc::client_info& client);
     scheduling_group scheduling_group_for_verb(messaging_verb verb) const;
     scheduling_group scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const;
+    std::vector<messaging_service::scheduling_info_for_connection_index> initial_scheduling_info() const;
 };
 
 extern distributed<messaging_service> _the_messaging_service;
