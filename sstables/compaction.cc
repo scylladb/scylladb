@@ -779,7 +779,7 @@ static std::unique_ptr<compaction> make_compaction(bool cleanup, Params&&... par
 future<compaction_info>
 compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, bool cleanup) {
     if (descriptor.sstables.empty()) {
-        throw std::runtime_error(sprint("Called compaction with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
+        throw std::runtime_error(format("Called compaction with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
     auto c = make_compaction(cleanup, cf, std::move(descriptor), std::move(creator));
     return compaction::run(std::move(c));
@@ -789,7 +789,7 @@ future<std::vector<shared_sstable>>
 reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable(shard_id)> creator,
         uint64_t max_sstable_size, uint32_t sstable_level) {
     if (sstables.empty()) {
-        throw std::runtime_error(sprint("Called resharding with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
+        throw std::runtime_error(format("Called resharding with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
     auto c = std::make_unique<resharding_compaction>(std::move(sstables), cf, std::move(creator), max_sstable_size, sstable_level);
     return compaction::run(std::move(c)).then([] (auto ret) {
