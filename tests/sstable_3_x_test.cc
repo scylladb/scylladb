@@ -4670,7 +4670,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
 SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     auto abj = defer([] { await_background_jobs().get(); });
     sstring table_name = "interleaved_atomic_and_collection_columns";
-    //
+    // CREATE TABLE interleaved_atomic_and_collection_columns ( pk int, ck int, rc1 int, rc2 set<int>, rc3 int, rc4 set<int>,
+    //     rc5 int, rc6 set<int>, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
@@ -4687,7 +4688,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     // INSERT INTO interleaved_atomic_and_collection_columns (pk, ck, rc1, rc4, rc5)
-    //    VALUES (0, 0, 'hello', ['beautiful','world'], 'here') USING TIMESTAMP 1525385507816568;
+    //     VALUES (0, 1, 2, {3, 4}, 5) USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
