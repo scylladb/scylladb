@@ -282,11 +282,11 @@ private:
     { }
 public:
     already_exists_exception(sstring ks_name_, sstring cf_name_)
-        : already_exists_exception{ks_name_, cf_name_, sprint("Cannot add already existing table \"%s\" to keyspace \"%s\"", cf_name_, ks_name_)}
+        : already_exists_exception{ks_name_, cf_name_, format("Cannot add already existing table \"{}\" to keyspace \"{}\"", cf_name_, ks_name_)}
     { }
 
     already_exists_exception(sstring ks_name_)
-        : already_exists_exception{ks_name_, "", sprint("Cannot add existing keyspace \"%s\"", ks_name_)}
+        : already_exists_exception{ks_name_, "", format("Cannot add existing keyspace \"{}\"", ks_name_)}
     { }
 };
 

@@ -69,7 +69,7 @@ public:
      * @param relation the entity relation
      */
     unrecognized_entity_exception(::shared_ptr<cql3::column_identifier> entity, cql3::relation_ptr relation)
-        : invalid_request_exception(sprint("Undefined name %s in where clause ('%s')", *entity, relation->to_string()))
+        : invalid_request_exception(format("Undefined name {} in where clause ('{}')", *entity, relation->to_string()))
         , entity(entity)
         , relation(relation)
     { }
