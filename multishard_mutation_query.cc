@@ -295,7 +295,7 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
 
     if (!std::holds_alternative<successful_lookup_state>(rs) && !std::holds_alternative<inexistent_state>(rs)) {
         mmq_log.warn("Unexpected request to create reader for shard {}. A reader for this shard was already created.", shard);
-        throw std::logic_error(sprint("Unexpected request to create reader for shard {}."
+        throw std::logic_error(format("Unexpected request to create reader for shard {}."
                     " A reader for this shard was already created in the context of this read.", shard));
     }
 
