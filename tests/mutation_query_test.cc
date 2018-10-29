@@ -414,7 +414,7 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
 
         auto new_key = [s] {
             static int ctr = 0;
-            return partition_key::from_singular(*s, data_value(to_bytes(sprint("key%d", ctr++))));
+            return partition_key::from_singular(*s, data_value(to_bytes(format("key{:d}", ctr++))));
         };
 
         auto make_ring = [&] (int n) {

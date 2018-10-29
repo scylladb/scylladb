@@ -35,21 +35,21 @@ public:
         auto cpy = _list;
         cpy.apply(_s, other);
         if (!cpy.equal(_s, _list)) {
-            BOOST_FAIL(sprint("Expected to include at least what's in %s, but does not: %s", other, _list));
+            BOOST_FAIL(format("Expected to include at least what's in {}, but does not: {}", other, _list));
         }
         return *this;
     }
 
     range_tombstone_list_assertions& is_equal_to(const range_tombstone_list& other) {
         if (!_list.equal(_s, other)) {
-            BOOST_FAIL(sprint("Lists differ, expected: %s\n ...but got: %s", other, _list));
+            BOOST_FAIL(format("Lists differ, expected: {}\n ...but got: {}", other, _list));
         }
         return *this;
     }
 
     range_tombstone_list_assertions& is_equal_to_either(const range_tombstone_list& list1, const range_tombstone_list& list2) {
         if (!_list.equal(_s, list1) && !_list.equal(_s, list2)) {
-            BOOST_FAIL(sprint("Expected to be either %s\n ...or %s\n ...but got: %s", list1, list2, _list));
+            BOOST_FAIL(format("Expected to be either {}\n ...or {}\n ...but got: {}", list1, list2, _list));
         }
         return *this;
     }

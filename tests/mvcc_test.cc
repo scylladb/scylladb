@@ -55,13 +55,13 @@ void check_tombstone_slice(const schema& s, std::vector<range_tombstone> list,
 
     for (auto&& rt : list) {
         if (!less(rt.position(), position_in_partition::for_range_end(range))) {
-            BOOST_FAIL(sprint("Range tombstone out of range: %s, range: %s", rt, range));
+            BOOST_FAIL(format("Range tombstone out of range: {}, range: {}", rt, range));
         }
         if (!less(position_in_partition::for_range_start(range), rt.end_position())) {
-            BOOST_FAIL(sprint("Range tombstone out of range: %s, range: %s", rt, range));
+            BOOST_FAIL(format("Range tombstone out of range: {}, range: {}", rt, range));
         }
         if (!less(prev_pos, rt.position())) {
-            BOOST_FAIL(sprint("Range tombstone breaks position monotonicity: %s, list: %s", rt, list));
+            BOOST_FAIL(format("Range tombstone breaks position monotonicity: {}, list: {}", rt, list));
         }
         prev_pos = position_in_partition(rt.position());
         actual.apply(s, rt);

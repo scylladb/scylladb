@@ -48,7 +48,7 @@ static clustering_key_prefix key(std::vector<int32_t> components) {
 
 static void assert_rt(const range_tombstone& expected, const range_tombstone& actual) {
     if (!expected.equal(*s, actual)) {
-        BOOST_FAIL(sprint("Expected %s but got %s", expected, actual));
+        BOOST_FAIL(format("Expected {} but got {}", expected, actual));
     }
 }
 

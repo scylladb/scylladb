@@ -71,11 +71,11 @@ struct table {
                 return i;
             }
         }
-        throw std::runtime_error(sprint("key not found: %s", dk));
+        throw std::runtime_error(format("key not found: {}", dk));
     }
 
     sstring value_tag(int key, uint64_t phase) {
-        return sprint("k_0x%x_p_0x%x", key, phase);
+        return format("k_0x{:x}_p_0x{:x}", key, phase);
     }
 
     mutation get_mutation(int key, api::timestamp_type t, const sstring& tag) {
@@ -193,11 +193,11 @@ public:
         std::tie(value, t) = _t.s.get_value(row);
         test_log.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_t.s.schema(), row));
         if (_value && value != _value) {
-            throw std::runtime_error(sprint("Saw values from two different writes in partition %d: %s and %s", _key, _value, value));
+            throw std::runtime_error(format("Saw values from two different writes in partition {:d}: {} and {}", _key, _value, value));
         }
         auto lowest_timestamp = _writetimes[_key];
         if (t < lowest_timestamp) {
-            throw std::runtime_error(sprint("Expected to see the write @%d, but saw @%d (%s), c_key=%s", lowest_timestamp, t, value, row.key()));
+            throw std::runtime_error(format("Expected to see the write @{:d}, but saw @{:d} ({}), c_key={}", lowest_timestamp, t, value, row.key()));
         }
         _value = std::move(value);
         return stop_iteration::no;
@@ -307,7 +307,7 @@ int main(int argc, char** argv) {
                     auto rd = t.make_single_key_reader(pk, ck_range);
                     auto row_count = rd->rd.consume(validating_consumer(t, id), db::no_timeout).get0();
                     if (row_count != len) {
-                        throw std::runtime_error(sprint("Expected %d fragments, got %d", len, row_count));
+                        throw std::runtime_error(format("Expected {:d} fragments, got {:d}", len, row_count));
                     }
                 }
             };
@@ -319,7 +319,7 @@ int main(int argc, char** argv) {
                     auto rd = t.make_scanning_reader();
                     auto row_count = rd->rd.consume(validating_consumer(t, id), db::no_timeout).get0();
                     if (row_count != expected_row_count) {
-                        throw std::runtime_error(sprint("Expected %d fragments, got %d", expected_row_count, row_count));
+                        throw std::runtime_error(format("Expected {:d} fragments, got {:d}", expected_row_count, row_count));
                     }
                 }
             };
@@ -328,20 +328,20 @@ int main(int argc, char** argv) {
             t.mutate_next_phase();
 
             auto readers = parallel_for_each(boost::irange(0u, concurrency), [&] (auto i) {
-                reader_id id{sprint("single-%d", i)};
+                reader_id id{format("single-{:d}", i)};
                 return seastar::async([&, i, id] {
                     single_partition_reader(i, id);
                 }).handle_exception([&, id] (auto e) {
-                    fail(sprint("%s failed: %s", id, e));
+                    fail(format("{} failed: {}", id, e));
                 });
             });
 
             auto scanning_readers = parallel_for_each(boost::irange(0u, scan_concurrency), [&] (auto i) {
-                reader_id id{sprint("scan-%d", i)};
+                reader_id id{format("scan-{:d}", i)};
                 return seastar::async([&, id] {
                     scanning_reader(id);
                 }).handle_exception([&, id] (auto e) {
-                    fail(sprint("%s failed: %s", id, e));
+                    fail(format("{} failed: {}", id, e));
                 });
             });
 

@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
             monotonic_counter<uint64_t> miss_ctr([&] { return tracker.get_stats().reads_with_misses; });
             stats_printer.set_callback([&] {
                 auto MB = 1024 * 1024;
-                std::cout << sprint("rd/s: %d, wr/s: %d, ev/s: %d, pmerge/s: %d, miss/s: %d, cache: %d/%d [MB], LSA: %d/%d [MB], std free: %d [MB]",
+                std::cout << format("rd/s: {:d}, wr/s: {:d}, ev/s: {:d}, pmerge/s: {:d}, miss/s: {:d}, cache: {:d}/{:d} [MB], LSA: {:d}/{:d} [MB], std free: {:d} [MB]",
                     reads_ctr.change(),
                     mutations_ctr.change(),
                     eviction_ctr.change(),
@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
                     seastar::memory::stats().free_memory() / MB) << "\n\n";
 
                 auto print_percentiles = [] (const utils::estimated_histogram& hist) {
-                    return sprint("min: %-6d, 50%%: %-6d, 90%%: %-6d, 99%%: %-6d, 99.9%%: %-6d, max: %-6d [us]",
+                    return format("min: {:-6d}, 50%: {:-6d}, 90%: {:-6d}, 99%: {:-6d}, 99.9%: {:-6d}, max: {:-6d} [us]",
                         hist.percentile(0),
                         hist.percentile(0.5),
                         hist.percentile(0.9),

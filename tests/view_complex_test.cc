@@ -936,11 +936,11 @@ void test_expired_marker_with_limit(cql_test_env& e, std::function<void()>&& may
                   "primary key (a, p)").get();
 
     for (int i = 1; i <= 100; i++) {
-        e.execute_cql(sprint("insert into cf (p, a, b) values (%d, %d, %d)", i, i, i)).get();
+        e.execute_cql(format("insert into cf (p, a, b) values ({:d}, {:d}, {:d})", i, i, i)).get();
     }
     for (int i = 1; i <= 100; i++) {
         if (i % 50 != 0) {
-            e.execute_cql(sprint("delete a from cf where p = %d", i)).get();
+            e.execute_cql(format("delete a from cf where p = {:d}", i)).get();
         }
     }
 
@@ -948,11 +948,11 @@ void test_expired_marker_with_limit(cql_test_env& e, std::function<void()>&& may
 
     for (auto view : {"vcf1", "vcf2"}) {
         eventually([&] {
-            auto msg = e.execute_cql(sprint("select * from %s limit 1", view)).get0();
+            auto msg = e.execute_cql(format("select * from {} limit 1", view)).get0();
             assert_that(msg).is_rows().with_size(1);
-            msg = e.execute_cql(sprint("select * from %s limit 2", view)).get0();
+            msg = e.execute_cql(format("select * from {} limit 2", view)).get0();
             assert_that(msg).is_rows().with_size(2);
-            msg = e.execute_cql(sprint("select * from %s", view)).get0();
+            msg = e.execute_cql(format("select * from {}", view)).get0();
             assert_that(msg).is_rows().with_rows({
                 {{int32_type->decompose(50)}, {int32_type->decompose(50)}, {int32_type->decompose(50)}},
                 {{int32_type->decompose(100)}, {int32_type->decompose(100)}, {int32_type->decompose(100)}},
@@ -1376,16 +1376,16 @@ void do_test_3362_no_ttls_with_collections(cql_test_env& e, collection_kind t) {
         suf = " : 17}";
         break;
     }
-    e.execute_cql(sprint("create table cf (p int, c int, a %s, primary key (p, c))", type)).get();
+    e.execute_cql(format("create table cf (p int, c int, a {}, primary key (p, c))", type)).get();
     e.execute_cql("create materialized view vcf as select p, c from cf "
             "where p is not null and c is not null "
             "primary key (p, c)").get();
-    e.execute_cql(sprint("update cf using timestamp 10 set a = a + %s2%s where p = 1 and c = 1", pref, suf)).get();
+    e.execute_cql(format("update cf using timestamp 10 set a = a + {}2{} where p = 1 and c = 1", pref, suf)).get();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
     });
-    e.execute_cql(sprint("update cf using timestamp 20 set a = a + %s1%s where p = 1 and c = 1", pref, suf)).get();
+    e.execute_cql(format("update cf using timestamp 20 set a = a + {}1{} where p = 1 and c = 1", pref, suf)).get();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
@@ -1393,7 +1393,7 @@ void do_test_3362_no_ttls_with_collections(cql_test_env& e, collection_kind t) {
     if (t == collection_kind::map) {
         e.execute_cql("delete a[1] from cf using timestamp 21 where p = 1 and c = 1").get();
     } else {
-        e.execute_cql(sprint("update cf using timestamp 21 set a = a - %s1%s where p = 1 and c = 1", pref, suf)).get();
+        e.execute_cql(format("update cf using timestamp 21 set a = a - {}1{} where p = 1 and c = 1", pref, suf)).get();
     }
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
@@ -1402,13 +1402,13 @@ void do_test_3362_no_ttls_with_collections(cql_test_env& e, collection_kind t) {
     if (t == collection_kind::map) {
         e.execute_cql("delete a[2] from cf using timestamp 11 where p = 1 and c = 1").get();
     } else {
-        e.execute_cql(sprint("update cf using timestamp 11 set a = a - %s2%s where p = 1 and c = 1", pref, suf)).get();
+        e.execute_cql(format("update cf using timestamp 11 set a = a - {}2{} where p = 1 and c = 1", pref, suf)).get();
     }
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
         assert_that(msg).is_rows().is_empty();
     });
-    e.execute_cql(sprint("update cf using timestamp 12 set a = a + %s2%s where p = 1 and c = 1", pref, suf)).get();
+    e.execute_cql(format("update cf using timestamp 12 set a = a + {}2{} where p = 1 and c = 1", pref, suf)).get();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
@@ -1449,16 +1449,16 @@ void do_test_3362_with_ttls_with_collections(cql_test_env& e, collection_kind t)
         suf = " : 17}";
         break;
     }
-    e.execute_cql(sprint("create table cf (p int, c int, a %s, primary key (p, c))", type)).get();
+    e.execute_cql(format("create table cf (p int, c int, a {}, primary key (p, c))", type)).get();
     e.execute_cql("create materialized view vcf as select p, c from cf "
             "where p is not null and c is not null "
             "primary key (p, c)").get();
-    e.execute_cql(sprint("update cf using timestamp 2 and ttl 5 set a = a + %s1%s where p = 1 and c = 1", pref, suf)).get();
+    e.execute_cql(format("update cf using timestamp 2 and ttl 5 set a = a + {}1{} where p = 1 and c = 1", pref, suf)).get();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
     });
-    e.execute_cql(sprint("update cf using timestamp 1 set a = a + %s2%s where p = 1 and c = 1", pref, suf)).get();
+    e.execute_cql(format("update cf using timestamp 1 set a = a + {}2{} where p = 1 and c = 1", pref, suf)).get();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});

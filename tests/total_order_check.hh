@@ -41,11 +41,11 @@ private:
             for (const element& right_e : right) {
                 seastar::visit(left_e, [&] (auto&& a) {
                     seastar::visit(right_e, [&] (auto&& b) {
-                        BOOST_TEST_MESSAGE(sprint("cmp(%s, %s) == %d", a, b, order));
+                        BOOST_TEST_MESSAGE(format("cmp({}, {}) == {:d}", a, b, order));
                         auto r = _cmp(a, b);
                         auto actual = this->sgn(r);
                         if (actual != order) {
-                            BOOST_FAIL(sprint("Expected cmp(%s, %s) == %d, but got %d", a, b, order, actual));
+                            BOOST_FAIL(format("Expected cmp({}, {}) == {:d}, but got {:d}", a, b, order, actual));
                         }
                     });
                 });

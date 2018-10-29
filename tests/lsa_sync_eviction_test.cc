@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
 
                 auto print_region_stats = [&r] {
                     std::cout << "Region occupancy: " << r.occupancy()
-                        << sprint(", %.2f%% of all memory", (float)r.occupancy().total_space() * 100 / memory::stats().total_memory()) << std::endl;
+                        << format(", {:.2f}% of all memory", (float)r.occupancy().total_space() * 100 / memory::stats().total_memory()) << std::endl;
                 };
 
                 std::cout << "Allocated " << refs.size() << " evictable objects" << std::endl;
@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
                 auto duration = clk::now() - start;
 
                 std::cout << "Allocated " << obj_count << " (" << obj_count * std_obj_size << " B) standard objects in "
-                    << sprint("%.4f [s]", std::chrono::duration_cast<std::chrono::duration<float>>(duration).count()) << "\n";
+                    << format("{:.4f} [s]", std::chrono::duration_cast<std::chrono::duration<float>>(duration).count()) << "\n";
                 print_region_stats();
             });
             return 0;

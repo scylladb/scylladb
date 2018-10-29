@@ -54,7 +54,7 @@ SEASTAR_TEST_CASE(test_case_sensitivity) {
 
         for (auto view : {"mv_test", "mv_test2"}) {
             eventually([&] {
-            auto msg = e.execute_cql(sprint("select \"theKey\", \"theClustering\", \"theValue\" from %s ", view)).get0();
+            auto msg = e.execute_cql(format("select \"theKey\", \"theClustering\", \"theValue\" from {} ", view)).get0();
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -69,7 +69,7 @@ SEASTAR_TEST_CASE(test_case_sensitivity) {
 
         for (auto view : {"mv_test", "mv_test2"}) {
             eventually([&] {
-            auto msg = e.execute_cql(sprint("select \"theKey\", \"Col\", \"theValue\" from %s ", view)).get0();
+            auto msg = e.execute_cql(format("select \"theKey\", \"Col\", \"theValue\" from {} ", view)).get0();
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -848,7 +848,7 @@ SEASTAR_TEST_CASE(test_static_table) {
                       "primary key (v, p, c)").get();
 
         for (auto i = 0; i < 100; ++i) {
-            e.execute_cql(sprint("insert into cf (p, c, sv, v) values (0, %d, %d, %d)", i % 2, i * 100, i)).get();
+            e.execute_cql(format("insert into cf (p, c, sv, v) values (0, {:d}, {:d}, {:d})", i % 2, i * 100, i)).get();
         }
 
         eventually([&] {
@@ -905,7 +905,7 @@ SEASTAR_TEST_CASE(test_old_timestamps) {
                       "primary key (v, p, c)").get();
 
         for (auto i = 0; i < 100; ++i) {
-            e.execute_cql(sprint("insert into cf (p, c, v) values (0, %d, 1)", i % 2)).get();
+            e.execute_cql(format("insert into cf (p, c, v) values (0, {:d}, 1)", i % 2)).get();
         }
 
         eventually([&] {
@@ -1105,7 +1105,7 @@ SEASTAR_TEST_CASE(test_range_tombstone) {
                       "primary key ((v, p), c1, c2)").get();
 
         for (auto i = 0; i < 100; ++i) {
-            e.execute_cql(sprint("insert into cf (p, c1, c2, v) values (0, %d, %d, 1)", i % 2, i)).get();
+            e.execute_cql(format("insert into cf (p, c1, c2, v) values (0, {:d}, {:d}, 1)", i % 2, i)).get();
         }
 
         eventually([&] {
@@ -1373,7 +1373,7 @@ SEASTAR_TEST_CASE(test_conflicting_timestamp) {
                       "where p is not null and c is not null and v is not null primary key (v, c, p)").get();
 
         for (auto i = 0; i < 50; ++i) {
-            e.execute_cql(sprint("insert into cf (p, c, v) values (1, 1, %d)", i)).get();
+            e.execute_cql(format("insert into cf (p, c, v) values (1, 1, {:d})", i)).get();
         }
         eventually([&] {
         auto msg = e.execute_cql("select * from mv").get0();
@@ -3062,7 +3062,7 @@ SEASTAR_TEST_CASE(test_old_timestamps_with_restrictions) {
                       "primary key (val, k ,c)").get();
 
         for (auto i = 0; i < 100; ++i) {
-            e.execute_cql(sprint("insert into cf (k, c, val) values (0, %d, 'baz') using timestamp 300", i % 2)).get();
+            e.execute_cql(format("insert into cf (k, c, val) values (0, {:d}, 'baz') using timestamp 300", i % 2)).get();
         }
 
         eventually([&] {
@@ -3505,7 +3505,7 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         e.execute_cql("insert into cf (p1, p2, c, v) values (1, '', '', '')").get();
 
         size_t id = 0;
-        auto make_view_name = [&id] { return sprint("vcf_%d", id++); };
+        auto make_view_name = [&id] { return format("vcf_{:d}", id++); };
 
         auto views_matching = {
             "create materialized view %s as select * from cf "
@@ -3533,7 +3533,7 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
             auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
             e.execute_cql(sprint(view, name)).get();
             f.get();
-            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows()
                     .with_size(1)
                     .with_row({
@@ -3558,7 +3558,7 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
             auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
             e.execute_cql(sprint(view, name)).get();
             f.get();
-            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows().is_empty();
         }
         auto name = make_view_name();
@@ -3567,13 +3567,13 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
                              "where p1 is not null and p2 is not null and c is not null and v is not null "
                              "primary key (v, p1, p2, c)", name)).get();
         f.get();
-        auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+        auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
         assert_that(msg).is_rows().is_empty();
 
         e.local_db().flush_all_memtables().get();
         e.execute_cql("update cf set v = 'a' where p1 = 1 and p2 = '' and c = ''").get();
         eventually([&] {
-            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows()
                     .with_size(1)
                     .with_row({
@@ -3585,12 +3585,12 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         });
         e.execute_cql("update cf set v = '' where p1 = 1 and p2 = '' and c = ''").get();
         eventually([&] {
-            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows().is_empty();
         });
         e.execute_cql("delete v from cf where p1 = 1 and p2 = '' and c = ''").get();
         eventually([&] {
-            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows().is_empty();
         });
     });

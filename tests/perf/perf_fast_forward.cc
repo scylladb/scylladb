@@ -350,7 +350,7 @@ public:
 
         const std::string test_run_count_name = "test_run_count";
         params_value[test_run_count_name.c_str()] = test_run_count;
-        params_value[all_params_names + "," + test_run_count_name] = all_params_values + std::string(sprint(",%d", test_run_count));
+        params_value[all_params_names + "," + test_run_count_name] = all_params_values + std::string(format(",{:d}", test_run_count));
 
         Json::Value stats_value{Json::objectValue};
         for (size_t i = 0; i < stats_names.size(); ++i) {
@@ -385,7 +385,7 @@ public:
         } else if (oformat == "json") {
             _writer = std::make_unique<json_output_writer>();
         } else {
-            throw std::runtime_error(sprint("Unsupported output format: %s", oformat));
+            throw std::runtime_error(format("Unsupported output format: {}", oformat));
         }
     }
 
@@ -534,7 +534,7 @@ static void check_and_report_no_index_reads(test_result& r) {
 
 static void check_fragment_count(test_result& r, uint64_t expected) {
     if (r.fragments_read != expected) {
-        r.set_error(sprint("Expected to read %d fragments", expected));
+        r.set_error(format("Expected to read {:d} fragments", expected));
     }
 }
 
@@ -791,7 +791,7 @@ static void drop_keyspace_if_exists(cql_test_env& env, sstring name) {
 
 static
 table_config read_config(cql_test_env& env, const sstring& name) {
-    auto msg = env.execute_cql(sprint("select n_rows, value_size from ks.config where name = '%s'", name)).get0();
+    auto msg = env.execute_cql(format("select n_rows, value_size from ks.config where name = '{}'", name)).get0();
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
     auto rs = rows->rs().result_set();
     if (rs.size() < 1) {
@@ -814,7 +814,7 @@ void populate(cql_test_env& env, table_config cfg) {
 
     std::cout << "Saving test config...\n";
     env.execute_cql("create table config (name text primary key, n_rows int, value_size int)").get();
-    env.execute_cql(sprint("insert into ks.config (name, n_rows, value_size) values ('%s', %d, %d)", cfg.name, cfg.n_rows, cfg.value_size)).get();
+    env.execute_cql(format("insert into ks.config (name, n_rows, value_size) values ('{}', {:d}, {:d})", cfg.name, cfg.n_rows, cfg.value_size)).get();
 
     std::cout << "Creating test tables...\n";
 

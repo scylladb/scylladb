@@ -145,7 +145,7 @@ SEASTAR_TEST_CASE(test_cannot_drop_secondary_index_backing_mv) {
         e.execute_cql("create index on cf (a)").get();
         auto s = e.local_db().find_schema(sstring("ks"), sstring("cf"));
         auto index_name = s->index_names().front();
-        assert_that_failed(e.execute_cql(sprint("drop materialized view %s_index", index_name)));
+        assert_that_failed(e.execute_cql(format("drop materialized view {}_index", index_name)));
     });
 }
 

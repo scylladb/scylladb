@@ -141,7 +141,7 @@ BOOST_AUTO_TEST_CASE(test_ring_position_ordering) {
     keys[2]._token = keys[3]._token = keys[4]._token;
     std::sort(keys.begin() + 2, keys.begin() + 5, dht::ring_position_less_comparator(*table.schema()));
 
-    BOOST_TEST_MESSAGE(sprint("Keys: %s", keys));
+    BOOST_TEST_MESSAGE(format("Keys: {}", keys));
 
     auto positions = boost::copy_range<std::vector<dht::ring_position>>(keys);
     auto views = boost::copy_range<std::vector<dht::ring_position_view>>(positions);

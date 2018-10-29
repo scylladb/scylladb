@@ -83,13 +83,13 @@ public:
 
     // Make a clustering_key which is n-th in some arbitrary sequence of keys
     clustering_key make_ckey(uint32_t n) {
-        return make_ckey(sprint("ck%010d", n));
+        return make_ckey(format("ck{:010d}", n));
     }
 
     // Make a partition key which is n-th in some arbitrary sequence of keys.
     // There is no particular order for the keys, they're not in ring order.
     dht::decorated_key make_pkey(uint32_t n) {
-        return make_pkey(sprint("pk%010d", n));
+        return make_pkey(format("pk{:010d}", n));
     }
 
     dht::decorated_key make_pkey(sstring pk) {

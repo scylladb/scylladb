@@ -62,7 +62,7 @@ static
 mutation make_new_mutation(schema_ptr s, partition_key key) {
     mutation m(s, key);
     static thread_local int next_value = 1;
-    m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(to_bytes(sprint("v%d", next_value++))), next_timestamp++);
+    m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(to_bytes(format("v{:d}", next_value++))), next_timestamp++);
     return m;
 }
 
@@ -85,7 +85,7 @@ mutation make_new_large_mutation(schema_ptr s, partition_key key) {
 static
 partition_key new_key(schema_ptr s) {
     static thread_local int next = 0;
-    return partition_key::from_single_value(*s, to_bytes(sprint("key%d", next++)));
+    return partition_key::from_single_value(*s, to_bytes(format("key{:d}", next++)));
 }
 
 static
@@ -95,12 +95,12 @@ mutation make_new_mutation(schema_ptr s) {
 
 static inline
 mutation make_new_large_mutation(schema_ptr s, int key) {
-    return make_new_large_mutation(s, partition_key::from_single_value(*s, to_bytes(sprint("key%d", key))));
+    return make_new_large_mutation(s, partition_key::from_single_value(*s, to_bytes(format("key{:d}", key))));
 }
 
 static inline
 mutation make_new_mutation(schema_ptr s, int key) {
-    return make_new_mutation(s, partition_key::from_single_value(*s, to_bytes(sprint("key%d", key))));
+    return make_new_mutation(s, partition_key::from_single_value(*s, to_bytes(format("key{:d}", key))));
 }
 
 snapshot_source make_decorated_snapshot_source(snapshot_source src, std::function<mutation_source(mutation_source)> decorator) {
@@ -350,7 +350,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         std::vector<mutation> partitions;
         for (int i = 0; i < partition_count; ++i) {
             partitions.emplace_back(
-                make_partition_mutation(to_bytes(sprint("key_%d", i))));
+                make_partition_mutation(to_bytes(format("key_{:d}", i))));
         }
 
         std::sort(partitions.begin(), partitions.end(), mutation_decorated_key_less_comparator());
@@ -834,7 +834,7 @@ void test_sliced_read_row_presence(flat_mutation_reader reader, schema_ptr s, st
             expected.pop_front();
             auto& cr = mfopt->as_clustering_row();
             if (!ck_eq(cr.key(), ck)) {
-                BOOST_FAIL(sprint("Expected %s, but got %s", ck, cr.key()));
+                BOOST_FAIL(format("Expected {}, but got {}", ck, cr.key()));
             }
         }
     }
@@ -2525,7 +2525,7 @@ static void check_continuous(row_cache& cache, const dht::partition_range& pr, c
     auto s1 = cache.get_cache_tracker().get_stats();
     if (s0.reads_with_misses != s1.reads_with_misses) {
         std::cerr << cache << "\n";
-        BOOST_FAIL(sprint("Got cache miss while reading range %s", r));
+        BOOST_FAIL(format("Got cache miss while reading range {}", r));
     }
 }
 
@@ -2622,7 +2622,7 @@ SEASTAR_TEST_CASE(test_no_misses_when_read_is_repeated) {
 
         for (auto n_ranges : {1, 2, 4}) {
             auto ranges = gen.make_random_ranges(n_ranges);
-            BOOST_TEST_MESSAGE(sprint("Reading {}", ranges));
+            BOOST_TEST_MESSAGE(format("Reading {{}}", ranges));
 
             populate_range(cache, pr, ranges);
             check_continuous(cache, pr, ranges);
@@ -2631,7 +2631,7 @@ SEASTAR_TEST_CASE(test_no_misses_when_read_is_repeated) {
             auto s2 = tracker.get_stats();
 
             if (s1.reads_with_misses != s2.reads_with_misses) {
-                BOOST_FAIL(sprint("Got cache miss when repeating read of %s on %s", ranges, m1));
+                BOOST_FAIL(format("Got cache miss when repeating read of {} on {}", ranges, m1));
             }
         }
     });
@@ -3053,7 +3053,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                         }
                         return m2 == actual;
                     })) {
-                        BOOST_FAIL(sprint("Mutation read doesn't match any expected version, slice: %s, read: %s\nexpected: [%s]",
+                        BOOST_FAIL(format("Mutation read doesn't match any expected version, slice: {}, read: {}\nexpected: [{}]",
                             slice, actual, ::join(",\n", possible_versions)));
                     }
                 }

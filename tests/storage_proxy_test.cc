@@ -36,7 +36,7 @@
 static std::vector<dht::ring_position> make_ring(schema_ptr s, int n_keys) {
     std::vector<dht::ring_position> ring;
     for (int i = 0; i < 10; ++i) {
-        auto pk = partition_key::from_single_value(*s, to_bytes(sprint("key%d", i)));
+        auto pk = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
         ring.emplace_back(dht::global_partitioner().decorate_key(*s, pk));
     }
     std::sort(ring.begin(), ring.end(), dht::ring_position_less_comparator(*s));
@@ -59,7 +59,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
                 if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
                     return r1.equal(r2, dht::ring_position_comparator(*s));
                 })) {
-                    BOOST_FAIL(sprint("Ranges differ, expected %s but got %s", expected, actual));
+                    BOOST_FAIL(format("Ranges differ, expected {} but got {}", expected, actual));
                 }
             };
 

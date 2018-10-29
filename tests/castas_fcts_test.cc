@@ -66,7 +66,7 @@ constexpr char cql_type_name<double>::value[];
 template<typename RetType, typename Type>
 auto test_explicit_type_casting_in_avg_function() {
     return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql(sprint("CREATE TABLE air_quality_data (sensor_id text, time timestamp, co_ppm %s, PRIMARY KEY (sensor_id, time));", cql_type_name<Type>::value)).get();
+        e.execute_cql(format("CREATE TABLE air_quality_data (sensor_id text, time timestamp, co_ppm {}, PRIMARY KEY (sensor_id, time));", cql_type_name<Type>::value)).get();
         e.execute_cql(
             "begin unlogged batch \n"
             "  INSERT INTO air_quality_data(sensor_id, time, co_ppm) VALUES ('my_home', '2016-08-30 07:01:00', 17); \n"
@@ -77,7 +77,7 @@ auto test_explicit_type_casting_in_avg_function() {
             "  INSERT INTO air_quality_data(sensor_id, time, co_ppm) VALUES ('my_home', '2016-08-30 07:01:05', 31); \n"
             "  INSERT INTO air_quality_data(sensor_id, time, co_ppm) VALUES ('my_home', '2016-08-30 07:01:10', 20); \n"
             "apply batch;").get();
-            auto msg = e.execute_cql(sprint("select avg(CAST(co_ppm AS %s)) from air_quality_data;", cql_type_name<RetType>::value)).get0();
+            auto msg = e.execute_cql(format("select avg(CAST(co_ppm AS {})) from air_quality_data;", cql_type_name<RetType>::value)).get0();
             assert_that(msg).is_rows().with_size(1).with_row({{data_type_for<RetType>()->decompose( RetType(17 + 18 + 19 + 20 + 30 + 31 + 20) / RetType(7) )}});
     });
 }

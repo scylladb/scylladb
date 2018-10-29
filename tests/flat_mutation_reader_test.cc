@@ -288,12 +288,12 @@ SEASTAR_TEST_CASE(test_partition_checksum) {
             auto h2 = get_hash(m2);
             if (eq) {
                 if (h1 != h2) {
-                    BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
+                    BOOST_FAIL(format("Hash should be equal for {} and {}", m1, m2));
                 }
             } else {
                 // We're using a strong hasher, collision should be unlikely
                 if (h1 == h2) {
-                    BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
+                    BOOST_FAIL(format("Hash should be different for {} and {}", m1, m2));
                 }
             }
         });
@@ -594,12 +594,12 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
         }
     };
 
-    BOOST_TEST_MESSAGE(sprint("Consume all%s", reversed_msg));
+    BOOST_TEST_MESSAGE(format("Consume all{}", reversed_msg));
     auto fmr = flat_mutation_reader_from_mutations(muts);
     auto muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed));
     BOOST_REQUIRE_EQUAL(muts, muts2);
 
-    BOOST_TEST_MESSAGE(sprint("Consume first fragment from partition%s", reversed_msg));
+    BOOST_TEST_MESSAGE(format("Consume first fragment from partition{}", reversed_msg));
     fmr = flat_mutation_reader_from_mutations(muts);
     muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::yes));
     BOOST_REQUIRE_EQUAL(muts.size(), muts2.size());
@@ -612,7 +612,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
         BOOST_REQUIRE_EQUAL(m, muts[j]);
     }
 
-    BOOST_TEST_MESSAGE(sprint("Consume first partition%s", reversed_msg));
+    BOOST_TEST_MESSAGE(format("Consume first partition{}", reversed_msg));
     fmr = flat_mutation_reader_from_mutations(muts);
     muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::no,
                                              skip_after_first_partition::yes));

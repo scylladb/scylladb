@@ -37,7 +37,7 @@ void test_parsing_fails(const shared_ptr<const abstract_type>& type, sstring str
 {
     try {
         type->from_string(str);
-        BOOST_FAIL(sprint("Parsing of '%s' should have failed", str));
+        BOOST_FAIL(format("Parsing of '{}' should have failed", str));
     } catch (const marshal_exception& e) {
         // expected
     }
@@ -741,7 +741,7 @@ BOOST_AUTO_TEST_CASE(test_parsing_of_user_type) {
 }
 
 static auto msg = [] (const char* m, data_type x, data_type y) -> std::string {
-    return sprint("%s(%s, %s)", m, x->name(), y->name());
+    return format("{}({}, {})", m, x->name(), y->name());
 };
 
 // Sort order does not change
