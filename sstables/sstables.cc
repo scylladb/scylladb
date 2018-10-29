@@ -2696,25 +2696,16 @@ GCC6_CONCEPT(
     };
 )
 
-static indexed_columns get_indexed_regular_columns_partitioned_by_atomicity(const schema& s) {
-    indexed_columns columns;
-    columns.reserve(s.regular_columns_count());
-    for (const auto& element: s.regular_columns() | boost::adaptors::indexed()) {
-        columns.push_back({static_cast<column_id>(element.index()), element.value()});
+static indexed_columns get_indexed_columns_partitioned_by_atomicity(schema::const_iterator_range_type columns) {
+    indexed_columns result;
+    result.reserve(columns.size());
+    for (const auto& element: columns | boost::adaptors::indexed()) {
+        result.push_back({static_cast<column_id>(element.index()), element.value()});
     }
     boost::range::stable_partition(
-            columns,
+            result,
             [](const column_definition_indexed_ref& column) { return column.cdef.get().is_atomic();});
-    return columns;
-}
-
-static indexed_columns get_indexed_static_columns(const schema& s) {
-    indexed_columns columns;
-    columns.reserve(s.static_columns_count());
-    for (const auto& element: s.static_columns() | boost::adaptors::indexed()) {
-        columns.push_back({static_cast<column_id>(element.index()), element.value()});
-    }
-    return columns;
+    return result;
 }
 
 // Used for writing SSTables in 'mc' format.
@@ -2736,13 +2727,11 @@ private:
     stdx::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
-    // For regular columns, we write all simple columns first followed by collections
-    // This container has regular columns paritioned by atomicity
-    const indexed_columns _regular_columns;
-    // TODO: unlike regular columns, static ones don't need re-ordering because
-    // they are always all atomic. Perhaps we should do a helper writing missing columns
-    // that would accept just the schema when writing a static row
+
+    // For static and regular columns, we write all simple columns first followed by collections
+    // These containers have columns partitioned by atomicity
     const indexed_columns _static_columns;
+    const indexed_columns _regular_columns;
 
     struct cdef_and_collection {
         const column_definition* cdef;
@@ -2873,8 +2862,8 @@ public:
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _range_tombstones(_schema)
-        , _regular_columns(get_indexed_regular_columns_partitioned_by_atomicity(s))
-        , _static_columns(get_indexed_static_columns(s))
+        , _static_columns(get_indexed_columns_partitioned_by_atomicity(s.static_columns()))
+        , _regular_columns(get_indexed_columns_partitioned_by_atomicity(s.regular_columns()))
     {
         _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
         _sst.write_toc(_pc);
