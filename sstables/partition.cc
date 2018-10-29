@@ -301,7 +301,7 @@ private:
                 }
                 on_next_partition(dht::global_partitioner().decorate_key(*_schema, std::move(mut->key)), mut->tomb);
             } catch (...) {
-                throw std::runtime_error(sprint("SSTable reader found an exception when reading sstable %s : %s",
+                throw std::runtime_error(format("SSTable reader found an exception when reading sstable {} : {}",
                         _sst->get_filename(), std::current_exception()));
             }
             return make_ready_future<>();

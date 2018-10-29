@@ -78,7 +78,7 @@ struct duration_conversor {
         } else if (target_duration == "SECONDS") {
             return convert<std::chrono::seconds>(d);
         } else {
-            throw std::runtime_error(sprint("target duration %s is not available", target_duration));
+            throw std::runtime_error(format("target duration {} is not available", target_duration));
         }
     }
 };

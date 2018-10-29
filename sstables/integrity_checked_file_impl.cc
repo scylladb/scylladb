@@ -48,7 +48,7 @@ static sstring report_zeroed_4k_aligned_blocks(const temporary_buffer<int8_t>& b
         auto begin = buf.get() + off;
         auto end = begin + len;
         if (boost::algorithm::all_of_equal(begin, end, 0)) {
-            report += sprint("%ld, ", off);
+            report += format("{:d}, ", off);
         }
     }
     return report;

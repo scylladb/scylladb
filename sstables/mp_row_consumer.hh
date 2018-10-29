@@ -154,7 +154,7 @@ public:
             } else if (clustering.size() == (expected_normal + 1)) {
                 return true;
             }
-            throw malformed_sstable_exception(sprint("Found %d clustering elements in column name. Was not expecting that!", clustering.size()));
+            throw malformed_sstable_exception(format("Found {:d} clustering elements in column name. Was not expecting that!", clustering.size()));
         }
 
         static bool check_static(const schema& schema, bytes_view col) {
@@ -616,7 +616,7 @@ public:
             case composite::eoc::end:
                 return bound_kind::excl_start;
             default:
-                throw malformed_sstable_exception(sprint("Unexpected start composite marker %d\n", uint16_t(uint8_t(found))));
+                throw malformed_sstable_exception(format("Unexpected start composite marker {:d}\n", uint16_t(uint8_t(found))));
         }
     }
 
@@ -632,7 +632,7 @@ public:
             case composite::eoc::end:
                 return bound_kind::incl_end;
             default:
-                throw malformed_sstable_exception(sprint("Unexpected start composite marker %d\n", uint16_t(uint8_t(found))));
+                throw malformed_sstable_exception(format("Unexpected start composite marker {:d}\n", uint16_t(uint8_t(found))));
         }
     }
 

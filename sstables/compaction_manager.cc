@@ -550,7 +550,7 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
 
 future<> compaction_manager::perform_cleanup(column_family* cf) {
     if (check_for_cleanup(cf)) {
-        throw std::runtime_error(sprint("cleanup request failed: there is an ongoing cleanup on %s.%s",
+        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
             cf->schema()->ks_name(), cf->schema()->cf_name()));
     }
     auto task = make_lw_shared<compaction_manager::task>();
@@ -647,7 +647,7 @@ void compaction_manager::stop_compaction(sstring type) {
     } else if (type == "CLEANUP") {
         target_type = sstables::compaction_type::Cleanup;
     } else {
-        throw std::runtime_error(sprint("Compaction of type %s cannot be stopped by compaction manager", type.c_str()));
+        throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager", type.c_str()));
     }
     for (auto& info : _compactions) {
         if (target_type == info->type) {

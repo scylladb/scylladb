@@ -371,7 +371,7 @@ private:
             _ancestors.push_back(sst->generation());
             _info->start_size += sst->bytes_on_disk();
             _info->total_partitions += sst->get_estimated_key_count();
-            formatted_msg += sprint("%s:level=%d, ", sst->get_filename(), sst->get_sstable_level());
+            formatted_msg += format("{}:level={:d}, ", sst->get_filename(), sst->get_sstable_level());
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
@@ -412,7 +412,7 @@ private:
         sstring new_sstables_msg;
 
         for (auto& newtab : _info->new_sstables) {
-            new_sstables_msg += sprint("%s:level=%d, ", newtab->get_filename(), newtab->get_sstable_level());
+            new_sstables_msg += format("{}:level={:d}, ", newtab->get_filename(), newtab->get_sstable_level());
         }
 
         // FIXME: there is some missing information in the log message below.
