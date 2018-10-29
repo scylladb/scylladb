@@ -103,7 +103,7 @@ public:
         // uphold the guarantee to enforce ordered "post" execution
         // and signalling of all larger elements.
         if (!_map.empty() && !_map.count(rp) && rp < _map.rbegin()->first) {
-            throw std::invalid_argument(sprint("Attempting to insert key out of order: %s", rp));
+            throw std::invalid_argument(format("Attempting to insert key out of order: {}", rp));
         }
 
         _gate.enter();

@@ -1114,13 +1114,13 @@ class region_impl final : public basic_region_impl {
 
         friend std::ostream& operator<<(std::ostream& out, const object_descriptor& desc) {
             if (!desc.is_live()) {
-                return out << sprint("{free %d}", desc.dead_size());
+                return out << format("{{free {:d}}}", desc.dead_size());
             } else {
                 auto m = desc.migrator();
                 auto x = reinterpret_cast<uintptr_t>(&desc) + sizeof(desc);
                 x = align_up(x, m->align());
                 auto obj = reinterpret_cast<const void*>(x);
-                return out << sprint("{migrator=%p, alignment=%d, size=%d}",
+                return out << format("{{migrator={:p}, alignment={:d}, size={:d}}}",
                                       (void*)m, m->align(), m->size(obj));
             }
         }
@@ -1759,7 +1759,7 @@ const eviction_fn& region::evictor() const {
 }
 
 std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
-    return out << sprint("%.2f%%, %d / %d [B]",
+    return out << format("{:.2f}%, {:d} / {:d} [B]",
         stats.used_fraction() * 100, stats.used_space(), stats.total_space());
 }
 
@@ -1867,7 +1867,7 @@ struct reclaim_timer {
             auto bytes_per_second = static_cast<float>(released) / std::chrono::duration_cast<std::chrono::duration<float>>(duration).count();
             timing_logger.debug("Reclamation cycle took {} us. Reclamation rate = {} MiB/s",
                                 std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(duration).count(),
-                                sprint("%.3f", bytes_per_second / (1024*1024)));
+                                format("{:.3f}", bytes_per_second / (1024*1024)));
         }
     }
 };

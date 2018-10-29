@@ -421,13 +421,13 @@ public:
                 s += "-Inf";
             }
         } else {
-            s += sprint("%d", bucket_offsets[index - 1] + 1);
+            s += format("{:d}", bucket_offsets[index - 1] + 1);
         }
         s += "..";
         if (index == bucket_offsets.size()) {
             s += "Inf";
         } else {
-            s += sprint("%d", bucket_offsets[index]);
+            s += format("{:d}", bucket_offsets[index]);
         }
         s += "]";
         return s;
