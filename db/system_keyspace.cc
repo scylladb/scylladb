@@ -1432,8 +1432,7 @@ future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value
     }
 
     return update_cached_values(ep, column_name, value).then([ep, column_name, value] {
-        sstring clause = sprint("(peer, %s) VALUES (?, ?)", column_name);
-        sstring req = sprint("INSERT INTO system.%s " + clause, PEERS);
+        sstring req = sprint("INSERT INTO system.%s (peer, %s) VALUES (?, ?)", PEERS, column_name);
         return execute_cql(req, ep.addr(), value).discard_result();
     });
 }
