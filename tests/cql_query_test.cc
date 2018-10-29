@@ -3086,7 +3086,8 @@ SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
         msg = e.execute_prepared(prepared_id, raw_values).get0();
         assert_that(msg).is_rows().with_size(0);
 
-
+        // TODO(sarna): Remove once multi-column restrictions are supported (#3574)
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE (b) = (3)").get(), exceptions::invalid_request_exception);
     });
 }
 
