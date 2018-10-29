@@ -484,13 +484,6 @@ bool statement_restrictions::need_filtering() const {
             number_of_filtering_restrictions += _clustering_columns_restrictions->size() - _clustering_columns_restrictions->prefix_size();
         }
     }
-
-    if (_partition_key_restrictions->is_multi_column() || _clustering_columns_restrictions->is_multi_column()) {
-        // TODO(sarna): Implement ALLOW FILTERING support for multi-column restrictions - return false for now
-        // in order to ensure backwards compatibility
-        return false;
-    }
-
     return number_of_restricted_columns_for_indexing > 1
             || (number_of_restricted_columns_for_indexing == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
             || (number_of_restricted_columns_for_indexing != 0 && _nonprimary_key_restrictions->has_multiple_contains())
