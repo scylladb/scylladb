@@ -111,7 +111,7 @@ inline int64_t long_token(token_view t) {
     }
 
     if (t._data.size() != sizeof(int64_t)) {
-        throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(int64_t), t._data.size()));
+        throw runtime_exception(format("Invalid token. Should have size {:d}, has size {:d}\n", sizeof(int64_t), t._data.size()));
     }
 
     auto ptr = t._data.begin();
@@ -144,7 +144,7 @@ dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
 
 dht::token murmur3_partitioner::from_bytes(bytes_view bytes) const {
     if (bytes.size() != sizeof(int64_t)) {
-        throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(int64_t), bytes.size()));
+        throw runtime_exception(format("Invalid token. Should have size {:d}, has size {:d}\n", sizeof(int64_t), bytes.size()));
     }
 
     int64_t v;

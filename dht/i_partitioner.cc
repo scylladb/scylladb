@@ -187,7 +187,7 @@ void set_global_partitioner(const sstring& class_name, unsigned ignore_msb)
     } catch (std::exception& e) {
         auto supported_partitioners = ::join(", ", class_registry<i_partitioner>::classes() |
                 boost::adaptors::map_keys);
-        throw std::runtime_error(sprint("Partitioner %s is not supported, supported partitioners = { %s } : %s",
+        throw std::runtime_error(format("Partitioner {} is not supported, supported partitioners = {{ {} }} : {}",
                 class_name, supported_partitioners, e.what()));
     }
 }

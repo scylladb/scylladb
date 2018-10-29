@@ -90,7 +90,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
         }
 
         if (!found_source) {
-            throw std::runtime_error(sprint("unable to find sufficient sources for streaming range %s in keyspace %s", range_, keyspace));
+            throw std::runtime_error(format("unable to find sufficient sources for streaming range {} in keyspace {}", range_, keyspace));
         }
     }
 
@@ -129,7 +129,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
         }
 
         if (!found) {
-            throw std::runtime_error(sprint("No sources found for %s", desired_range));
+            throw std::runtime_error(format("No sources found for {}", desired_range));
         }
     }
 
@@ -178,7 +178,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
                         [&new_endpoints] (inet_address ep) { return new_endpoints.count(ep); });
                     old_endpoints.erase(it, old_endpoints.end());
                     if (old_endpoints.size() != 1) {
-                        throw std::runtime_error(sprint("Expected 1 endpoint but found %d", old_endpoints.size()));
+                        throw std::runtime_error(format("Expected 1 endpoint but found {:d}", old_endpoints.size()));
                     }
                 }
                 range_sources[desired_range].push_back(old_endpoints.front());
@@ -188,18 +188,18 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
         //Validate
         auto it = range_sources.find(desired_range);
         if (it == range_sources.end()) {
-            throw std::runtime_error(sprint("No sources found for %s", desired_range));
+            throw std::runtime_error(format("No sources found for {}", desired_range));
         }
 
         if (it->second.size() != 1) {
-            throw std::runtime_error(sprint("Multiple endpoints found for %s", desired_range));
+            throw std::runtime_error(format("Multiple endpoints found for {}", desired_range));
         }
 
         inet_address source_ip = it->second.front();
 
         auto& gossiper = gms::get_local_gossiper();
         if (gossiper.is_enabled() && !gossiper.is_alive(source_ip)) {
-            throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
+            throw std::runtime_error(format("A node required to move the data consistently is down ({}).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
         }
     }
 
@@ -302,7 +302,7 @@ future<> range_streamer::do_stream_async() {
                 size_t nr_ranges_per_stream_plan = nr_ranges_total / 10;
                 dht::token_range_vector ranges_to_stream;
                 auto do_streaming = [&] {
-                    auto sp = stream_plan(sprint("%s-%s-index-%d", description, keyspace, sp_index++), _reason);
+                    auto sp = stream_plan(format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
                     logger.info("{} with {} for keyspace={}, {} out of {} ranges: ranges = {}",
                             description, source, keyspace, nr_ranges_streamed, nr_ranges_total, ranges_to_stream.size());
                     if (_nr_rx_added) {
