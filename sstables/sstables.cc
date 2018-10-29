@@ -2699,12 +2699,12 @@ GCC6_CONCEPT(
 static indexed_columns get_indexed_columns_partitioned_by_atomicity(schema::const_iterator_range_type columns) {
     indexed_columns result;
     result.reserve(columns.size());
-    for (const auto& element: columns | boost::adaptors::indexed()) {
-        result.push_back({static_cast<column_id>(element.index()), element.value()});
+    for (const auto& col: columns) {
+        result.emplace_back(col);
     }
     boost::range::stable_partition(
             result,
-            [](const column_definition_indexed_ref& column) { return column.cdef.get().is_atomic();});
+            [](const std::reference_wrapper<const column_definition>& column) { return column.get().is_atomic();});
     return result;
 }
 
