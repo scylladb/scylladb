@@ -863,7 +863,7 @@ static future<> repair_cf_range(repair_info& ri,
                             boost::partition(nodes_with_same_checksum, node_is_remote);
                             nodes_with_same_checksum.resize(nr_nodes - nr_nodes_to_keep);
                         } else {
-                            throw std::runtime_error(sprint("nr_nodes_to_keep = {}, but it can only be 1 or 0", nr_nodes_to_keep));
+                            throw std::runtime_error(format("nr_nodes_to_keep = {}, but it can only be 1 or 0", nr_nodes_to_keep));
                         }
 
                         // Now, nodes_with_same_checksum contains nodes we want to remove, remove it from live_neighbors_in_or_out
