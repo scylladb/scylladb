@@ -81,8 +81,7 @@ static db::consistency_level consistency_for_role(stdx::string_view role_name) n
 }
 
 static future<stdx::optional<record>> find_record(cql3::query_processor& qp, stdx::string_view role_name) {
-    static const sstring query = sprint(
-            "SELECT * FROM %s WHERE %s = ?",
+    static const sstring query = format("SELECT * FROM {} WHERE {} = ?",
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
@@ -166,8 +165,7 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
 future<> standard_role_manager::create_default_role_if_missing() const {
     return default_role_row_satisfies(_qp, &has_can_login).then([this](bool exists) {
         if (!exists) {
-            static const sstring query = sprint(
-                    "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
+            static const sstring query = format("INSERT INTO {} ({}, is_superuser, can_login) VALUES (?, true, true)",
                     meta::roles_table::qualified_name(),
                     meta::roles_table::role_col_name);
 
@@ -196,7 +194,7 @@ bool standard_role_manager::legacy_metadata_exists() const {
 
 future<> standard_role_manager::migrate_legacy_metadata() const {
     log.info("Starting migration of legacy user metadata.");
-    static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
+    static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, legacy_table_name);
 
     return _qp.process(
             query,
@@ -255,8 +253,7 @@ future<> standard_role_manager::stop() {
 }
 
 future<> standard_role_manager::create_or_replace(stdx::string_view role_name, const role_config& c) const {
-    static const sstring query = sprint(
-            "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, ?, ?)",
+    static const sstring query = format("INSERT INTO {} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
@@ -301,8 +298,7 @@ standard_role_manager::alter(stdx::string_view role_name, const role_config_upda
         }
 
         return _qp.process(
-                sprint(
-                        "UPDATE %s SET %s WHERE %s = ?",
+                format("UPDATE {} SET {} WHERE {} = ?",
                         meta::roles_table::qualified_name(),
                         build_column_assignments(u),
                         meta::roles_table::role_col_name),
@@ -320,8 +316,7 @@ future<> standard_role_manager::drop(stdx::string_view role_name) const {
 
         // First, revoke this role from all roles that are members of it.
         const auto revoke_from_members = [this, role_name] {
-            static const sstring query = sprint(
-                    "SELECT member FROM %s WHERE role = ?",
+            static const sstring query = format("SELECT member FROM {} WHERE role = ?",
                     meta::role_members_table::qualified_name());
 
             return _qp.process(
@@ -359,8 +354,7 @@ future<> standard_role_manager::drop(stdx::string_view role_name) const {
 
         // Finally, delete the role itself.
         auto delete_role = [this, role_name] {
-            static const sstring query = sprint(
-                    "DELETE FROM %s WHERE %s = ?",
+            static const sstring query = format("DELETE FROM {} WHERE {} = ?",
                     meta::roles_table::qualified_name(),
                     meta::roles_table::role_col_name);
 
@@ -402,8 +396,7 @@ standard_role_manager::modify_membership(
         switch (ch) {
             case membership_change::add:
                 return _qp.process(
-                        sprint(
-                                "INSERT INTO %s (role, member) VALUES (?, ?)",
+                        format("INSERT INTO {} (role, member) VALUES (?, ?)",
                                 meta::role_members_table::qualified_name()),
                         consistency_for_role(role_name),
                         internal_distributed_timeout_config(),
@@ -411,8 +404,7 @@ standard_role_manager::modify_membership(
 
             case membership_change::remove:
                 return _qp.process(
-                        sprint(
-                                "DELETE FROM %s WHERE role = ? AND member = ?",
+                        format("DELETE FROM {} WHERE role = ? AND member = ?",
                                 meta::role_members_table::qualified_name()),
                         consistency_for_role(role_name),
                         internal_distributed_timeout_config(),
@@ -508,8 +500,7 @@ future<role_set> standard_role_manager::query_granted(stdx::string_view grantee_
 }
 
 future<role_set> standard_role_manager::query_all() const {
-    static const sstring query = sprint(
-            "SELECT %s FROM %s",
+    static const sstring query = format("SELECT {} FROM {}",
             meta::roles_table::role_col_name,
             meta::roles_table::qualified_name());
 

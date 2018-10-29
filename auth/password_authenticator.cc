@@ -93,8 +93,7 @@ static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
     return !row.get_or<sstring>(SALTED_HASH, "").empty();
 }
 
-static const sstring update_row_query = sprint(
-        "UPDATE %s SET %s = ? WHERE %s = ?",
+static const sstring update_row_query = format("UPDATE {} SET {} = ? WHERE {} = ?",
         meta::roles_table::qualified_name(),
         SALTED_HASH,
         meta::roles_table::role_col_name);
@@ -107,7 +106,7 @@ bool password_authenticator::legacy_metadata_exists() const {
 
 future<> password_authenticator::migrate_legacy_metadata() const {
     plogger.info("Starting migration of legacy authentication metadata.");
-    static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
+    static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, legacy_table_name);
 
     return _qp.process(
             query,
@@ -211,10 +210,10 @@ authentication_option_set password_authenticator::alterable_options() const {
 future<authenticated_user> password_authenticator::authenticate(
                 const credentials_map& credentials) const {
     if (!credentials.count(USERNAME_KEY)) {
-        throw exceptions::authentication_exception(sprint("Required key '%s' is missing", USERNAME_KEY));
+        throw exceptions::authentication_exception(format("Required key '{}' is missing", USERNAME_KEY));
     }
     if (!credentials.count(PASSWORD_KEY)) {
-        throw exceptions::authentication_exception(sprint("Required key '%s' is missing", PASSWORD_KEY));
+        throw exceptions::authentication_exception(format("Required key '{}' is missing", PASSWORD_KEY));
     }
 
     auto& username = credentials.at(USERNAME_KEY);
@@ -226,8 +225,7 @@ future<authenticated_user> password_authenticator::authenticate(
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
     return futurize_apply([this, username, password] {
-        static const sstring query = sprint(
-                "SELECT %s FROM %s WHERE %s = ?",
+        static const sstring query = format("SELECT {} FROM {} WHERE {} = ?",
                 SALTED_HASH,
                 meta::roles_table::qualified_name(),
                 meta::roles_table::role_col_name);
@@ -272,8 +270,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
         return make_ready_future<>();
     }
 
-    static const sstring query = sprint(
-            "UPDATE %s SET %s = ? WHERE %s = ?",
+    static const sstring query = format("UPDATE {} SET {} = ? WHERE {} = ?",
             meta::roles_table::qualified_name(),
             SALTED_HASH,
             meta::roles_table::role_col_name);
@@ -286,8 +283,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
 }
 
 future<> password_authenticator::drop(stdx::string_view name) const {
-    static const sstring query = sprint(
-            "DELETE %s FROM %s WHERE %s = ?",
+    static const sstring query = format("DELETE {} FROM {} WHERE {} = ?",
             SALTED_HASH,
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);

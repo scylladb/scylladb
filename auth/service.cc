@@ -139,8 +139,7 @@ service::service(
     if ((_authenticator->qualified_java_name() == password_authenticator_name())
             && (_role_manager->qualified_java_name() != standard_role_manager_name())) {
         throw incompatible_module_combination(
-                sprint(
-                        "The %s authenticator must be loaded alongside the %s role-manager.",
+                format("The {} authenticator must be loaded alongside the {} role-manager.",
                         password_authenticator_name(),
                         standard_role_manager_name()));
     }
@@ -206,14 +205,12 @@ future<bool> service::has_existing_legacy_users() const {
         return make_ready_future<bool>(false);
     }
 
-    static const sstring default_user_query = sprint(
-            "SELECT * FROM %s.%s WHERE %s = ?",
+    static const sstring default_user_query = format("SELECT * FROM {}.{} WHERE {} = ?",
             meta::AUTH_KS,
             meta::USERS_CF,
             meta::user_name_col_name);
 
-    static const sstring all_users_query = sprint(
-            "SELECT * FROM %s.%s LIMIT 1",
+    static const sstring all_users_query = format("SELECT * FROM {}.{} LIMIT 1",
             meta::AUTH_KS,
             meta::USERS_CF);
 
