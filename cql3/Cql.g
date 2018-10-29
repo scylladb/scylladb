@@ -253,8 +253,7 @@ struct uninitialized {
     {
         for (auto&& p : operations) {
             if (*p.first == *key && !p.second->is_compatible_with(update)) {
-                // \%s is escaped for antlr
-                add_recognition_error(sprint("Multiple incompatible setting of column \%s", *key));
+                add_recognition_error(format("Multiple incompatible setting of column {}", *key));
             }
         }
         operations.emplace_back(std::move(key), std::move(update));
