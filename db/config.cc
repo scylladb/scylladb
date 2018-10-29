@@ -152,7 +152,7 @@ boost::filesystem::path db::config::get_conf_dir() {
 
 void db::config::check_experimental(const sstring& what) const {
     if (!experimental()) {
-        throw std::runtime_error(sprint("%s is currently disabled. Start Scylla with --experimental=on to enable.", what));
+        throw std::runtime_error(format("{} is currently disabled. Start Scylla with --experimental=on to enable.", what));
     }
 }
 

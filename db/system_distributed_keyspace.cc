@@ -106,7 +106,7 @@ static const timeout_config internal_distributed_timeout_config = [] {
 
 future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::view_status(sstring ks_name, sstring view_name) const {
     return _qp.process(
-            sprint("SELECT host_id, status FROM %s.%s WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
+            format("SELECT host_id, status FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
             internal_distributed_timeout_config,
             { std::move(ks_name), std::move(view_name) },
@@ -123,7 +123,7 @@ future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::vi
 future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring view_name) const {
     return db::system_keyspace::get_local_host_id().then([this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (utils::UUID host_id) {
         return _qp.process(
-                sprint("INSERT INTO %s.%s (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
+                format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
                 internal_distributed_timeout_config,
                 { std::move(ks_name), std::move(view_name), std::move(host_id), "STARTED" },
@@ -134,7 +134,7 @@ future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring 
 future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring view_name) const {
     return db::system_keyspace::get_local_host_id().then([this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (utils::UUID host_id) {
         return _qp.process(
-                sprint("UPDATE %s.%s SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
+                format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
                 internal_distributed_timeout_config,
                 { "SUCCESS", std::move(ks_name), std::move(view_name), std::move(host_id) },
@@ -144,7 +144,7 @@ future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring
 
 future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_name) const {
     return _qp.process(
-            sprint("DELETE FROM %s.%s WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
+            format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
             internal_distributed_timeout_config,
             { std::move(ks_name), std::move(view_name) },

@@ -175,7 +175,7 @@ public:
         }
 
         if (types->get_all_types().size() != _definitions.size()) {
-            throw exceptions::configuration_exception(sprint("Cannot resolve UDTs for keyspace %s: some types are missing", _ks_name));
+            throw exceptions::configuration_exception(format("Cannot resolve UDTs for keyspace {}: some types are missing", _ks_name));
         }
 
         return boost::copy_range<std::vector<user_type>>(types->get_all_types() | boost::adaptors::map_values);

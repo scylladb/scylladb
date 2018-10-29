@@ -53,7 +53,7 @@ future<> large_partition_handler::maybe_delete_large_partitions_entry(const ssta
 logging::logger cql_table_large_partition_handler::large_partition_logger("large_partition");
 
 future<> cql_table_large_partition_handler::update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& key, uint64_t partition_size) const {
-    static const sstring req = sprint("INSERT INTO system.%s (keyspace_name, table_name, sstable_name, partition_size, partition_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?) USING TTL 2592000",
+    static const sstring req = format("INSERT INTO system.{} (keyspace_name, table_name, sstable_name, partition_size, partition_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?) USING TTL 2592000",
             db::system_keyspace::LARGE_PARTITIONS);
     // avoid self-reporting
     if (s.ks_name() == "system" && s.cf_name() == db::system_keyspace::LARGE_PARTITIONS) {
@@ -77,7 +77,7 @@ future<> cql_table_large_partition_handler::update_large_partitions(const schema
 }
 
 future<> cql_table_large_partition_handler::delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const {
-    static const sstring req = sprint("DELETE FROM system.%s WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?", db::system_keyspace::LARGE_PARTITIONS);
+    static const sstring req = format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?", db::system_keyspace::LARGE_PARTITIONS);
     return db::execute_cql(req, s.ks_name(), s.cf_name(), sstable_name).discard_result().handle_exception([](std::exception_ptr ep) {
             large_partition_logger.warn("Failed to drop entries from {}: {}", db::system_keyspace::LARGE_PARTITIONS, ep);
         });
