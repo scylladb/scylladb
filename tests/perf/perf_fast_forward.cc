@@ -379,13 +379,13 @@ private:
     output_items _stats_names;
 public:
 
-    output_manager(sstring format) {
-        if (format == "text") {
+    output_manager(sstring oformat) {
+        if (oformat == "text") {
             _writer = std::make_unique<text_output_writer>();
-        } else if (format == "json") {
+        } else if (oformat == "json") {
             _writer = std::make_unique<json_output_writer>();
         } else {
-            throw std::runtime_error(sprint("Unsupported output format: %s", format));
+            throw std::runtime_error(sprint("Unsupported output format: %s", oformat));
         }
     }
 
