@@ -96,8 +96,8 @@ public:
     future<> do_streaming() {
         size_t ranges_in = 0;
         size_t ranges_out = 0;
-        _sp_in = make_lw_shared<streaming::stream_plan>(sprint("repair-in-id-%d-shard-%d-index-%d", id, shard, sp_index), streaming::stream_reason::repair);
-        _sp_out = make_lw_shared<streaming::stream_plan>(sprint("repair-out-id-%d-shard-%d-index-%d", id, shard, sp_index), streaming::stream_reason::repair);
+        _sp_in = make_lw_shared<streaming::stream_plan>(format("repair-in-id-{:d}-shard-{:d}-index-{:d}", id, shard, sp_index), streaming::stream_reason::repair);
+        _sp_out = make_lw_shared<streaming::stream_plan>(format("repair-out-id-{:d}-shard-{:d}-index-{:d}", id, shard, sp_index), streaming::stream_reason::repair);
 
         for (auto& x : ranges_need_repair_in) {
             auto& peer = x.first;
@@ -141,7 +141,7 @@ public:
     void check_failed_ranges() {
         if (nr_failed_ranges) {
             rlogger.info("repair {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
-            throw std::runtime_error(sprint("repair %d on shard %d failed to do checksum for %d sub ranges", id, shard, nr_failed_ranges));
+            throw std::runtime_error(format("repair {:d} on shard {:d} failed to do checksum for {:d} sub ranges", id, shard, nr_failed_ranges));
         } else {
             rlogger.info("repair {} on shard {} completed successfully", id, shard);
         }
@@ -177,7 +177,7 @@ public:
     }
     void check_in_abort() {
         if (aborted) {
-            throw std::runtime_error(sprint("repair id %d is aborted on shard %d", id, shard));
+            throw std::runtime_error(format("repair id {:d} is aborted on shard {:d}", id, shard));
         }
     }
 };
@@ -270,7 +270,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
             try {
                 endpoint = gms::inet_address(host);
             } catch(...) {
-                throw std::runtime_error(sprint("Unknown host specified: %s", host));
+                throw std::runtime_error(format("Unknown host specified: {}", host));
             }
             if (endpoint == utils::fb_utilities::get_broadcast_address()) {
                 found_me = true;
@@ -372,7 +372,7 @@ public:
     }
     repair_status get(int id) {
         if (id >= _next_repair_command) {
-            throw std::runtime_error(sprint("unknown repair id %d", id));
+            throw std::runtime_error(format("unknown repair id {:d}", id));
         }
         auto it = _status.find(id);
         if (it == _status.end()) {
@@ -390,7 +390,7 @@ public:
     }
     void check_in_shutdown() {
         if (_shutdown.load(std::memory_order_relaxed)) {
-            throw std::runtime_error(sprint("Repair service is being shutdown"));
+            throw std::runtime_error(format("Repair service is being shutdown"));
         }
     }
     void init_repair_info() {
@@ -625,7 +625,7 @@ future<partition_checksum> partition_checksum::compute(flat_mutation_reader m, r
     switch (hash_version) {
     case repair_checksum::legacy: return compute_legacy(std::move(m));
     case repair_checksum::streamed: return compute_streamed(std::move(m));
-    default: throw std::runtime_error(sprint("Unknown hash version: %d", static_cast<int>(hash_version)));
+    default: throw std::runtime_error(format("Unknown hash version: {:d}", static_cast<int>(hash_version)));
     }
 }
 
@@ -1071,8 +1071,7 @@ struct repair_options {
         int parallelism = PARALLEL;
         int_opt(parallelism, options, PARALLELISM_KEY);
         if (parallelism != PARALLEL && parallelism != SEQUENTIAL) {
-            throw std::runtime_error(sprint(
-                    "unsupported repair parallelism: %d", parallelism));
+            throw std::runtime_error(format("unsupported repair parallelism: {:d}", parallelism));
         }
         string_opt(start_token, options, START_TOKEN);
         string_opt(end_token, options, END_TOKEN);
@@ -1089,7 +1088,7 @@ struct repair_options {
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
         if (!options.empty()) {
-            throw std::runtime_error(sprint("unsupported repair options: %s",
+            throw std::runtime_error(format("unsupported repair options: {}",
                     options));
         }
     }
@@ -1136,7 +1135,7 @@ private:
             errno = 0;
             var = strtol(it->second.c_str(), nullptr, 10);
             if (errno) {
-                throw(std::runtime_error(sprint("cannot parse integer: '%s'", it->second)));
+                throw(std::runtime_error(format("cannot parse integer: '{}'", it->second)));
             }
             options.erase(it);
         }
@@ -1319,8 +1318,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
             try {
                 db.local().find_column_family(keyspace, cf);
             } catch(...) {
-                throw std::runtime_error(sprint(
-                    "No column family '%s' in keyspace '%s'", cf, keyspace));
+                throw std::runtime_error(format("No column family '{}' in keyspace '{}'", cf, keyspace));
             }
         }
     } else {
