@@ -26,46 +26,46 @@
 namespace cql_transport::messages {
 
 std::ostream& operator<<(std::ostream& os, const result_message::void_message& msg) {
-    return fprint(os, "{result_message::void}");
+    return fmt_print(os, "{{result_message::void}}");
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& msg) {
-    return fprint(os, "{result_message::set_keyspace %s}", msg.get_keyspace());
+    return fmt_print(os, "{{result_message::set_keyspace {}}}", msg.get_keyspace());
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::prepared::thrift& msg) {
-    return fprint(os, "{result_message::prepared::thrift %d}", msg.get_id());
+    return fmt_print(os, "{{result_message::prepared::thrift {:d}}}", msg.get_id());
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::prepared::cql& msg) {
-    return fprint(os, "{result_message::prepared::cql %s}", to_hex(msg.get_id()));
+    return fmt_print(os, "{{result_message::prepared::cql {}}}", to_hex(msg.get_id()));
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::schema_change& msg) {
     // FIXME: format contents
-    return fprint(os, "{result_message::prepared::schema_change %p}", (void*)msg.get_change().get());
+    return fmt_print(os, "{{result_message::prepared::schema_change {:p}}}", (void*)msg.get_change().get());
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::rows& msg) {
-    fprint(os, "{result_message::rows ");
+    fmt_print(os, "{{result_message::rows ");
     struct visitor {
         std::ostream& _os;
-        void start_row() { fprint(_os, "{row: "); }
+        void start_row() { fmt_print(_os, "{{row: "); }
         void accept_value(std::optional<query::result_bytes_view> value) {
             if (!value) {
-                fprint(_os, " null");
+                fmt_print(_os, " null");
                 return;
             }
-            fprint(_os, " ");
+            fmt_print(_os, " ");
             using boost::range::for_each;
             for_each(*value, [this] (bytes_view fragment) {
-                fprint(_os, "%s", fragment);
+                fmt_print(_os, "{}", fragment);
             });
         }
-        void end_row() { fprint(_os, "}"); }
+        void end_row() { fmt_print(_os, "}}"); }
     };
     msg.rs().visit(visitor { os });
-    fprint(os, "}");
+    fmt_print(os, "}}");
     return os;
 }
 

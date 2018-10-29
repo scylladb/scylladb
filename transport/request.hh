@@ -36,7 +36,7 @@ private:
     struct exception_thrower {
         [[noreturn]] [[gnu::cold]]
         static void throw_out_of_range(size_t attempted_read, size_t actual_left) {
-            throw exceptions::protocol_exception(sprint("truncated frame: expected %lu bytes, length is %lu", attempted_read, actual_left));
+            throw exceptions::protocol_exception(format("truncated frame: expected {:d} bytes, length is {:d}", attempted_read, actual_left));
         };
     };
     static void validate_utf8(sstring_view s) {
@@ -60,7 +60,7 @@ private:
         case 0x0008: return db::consistency_level::SERIAL;
         case 0x0009: return db::consistency_level::LOCAL_SERIAL;
         case 0x000A: return db::consistency_level::LOCAL_ONE;
-        default:     throw exceptions::protocol_exception(sprint("Unknown code %d for a consistency level", v));
+        default:     throw exceptions::protocol_exception(format("Unknown code {:d} for a consistency level", v));
         }
     }
 public:
@@ -145,7 +145,7 @@ public:
             } else if (len == -2) {
                 return cql3::raw_value_view::make_unset_value();
             } else {
-                throw exceptions::protocol_exception(sprint("invalid value length: %d", len));
+                throw exceptions::protocol_exception(format("invalid value length: {:d}", len));
             }
         }
         return cql3::raw_value_view::make_value(_in.read_view(len, exception_thrower()));
@@ -257,7 +257,7 @@ public:
             if (flags.contains<options_flag::TIMESTAMP>()) {
                 ts = read_long();
                 if (ts < api::min_timestamp || ts > api::max_timestamp) {
-                    throw exceptions::protocol_exception(sprint("Out of bound timestamp, must be in [%d, %d] (got %d)",
+                    throw exceptions::protocol_exception(format("Out of bound timestamp, must be in [{:d}, {:d}] (got {:d})",
                         api::min_timestamp, api::max_timestamp, ts));
                 }
             }
