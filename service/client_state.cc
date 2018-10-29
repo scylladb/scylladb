@@ -69,7 +69,7 @@ future<> service::client_state::check_user_exists() {
     return _auth_service->underlying_role_manager().exists(*_user->name).then([user = _user](bool exists) mutable {
         if (!exists) {
             throw exceptions::authentication_exception(
-                            sprint("User %s doesn't exist - create it with CREATE USER query first",
+                            format("User {} doesn't exist - create it with CREATE USER query first",
                                             *user->name));
         }
         return make_ready_future();
@@ -172,7 +172,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
                 && (p == auth::permission::DROP);
 
         if (dropping_anything_in_tracing || dropping_auth_keyspace) {
-            throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
+            throw exceptions::unauthorized_exception(format("Cannot {} {}", auth::permissions::to_string(p), resource));
         }
     }
 
@@ -192,7 +192,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
     }
     if (alteration_permissions.contains(p)) {
         if (auth::is_protected(*_auth_service, resource)) {
-            throw exceptions::unauthorized_exception(sprint("%s is protected", resource));
+            throw exceptions::unauthorized_exception(format("{} is protected", resource));
         }
     }
 
@@ -221,8 +221,7 @@ future<> service::client_state::ensure_has_permission(auth::permission p, const 
     return check_has_permission(p, r).then([this, p, &r](bool ok) {
         if (!ok) {
             throw exceptions::unauthorized_exception(
-                sprint(
-                        "User %s has no %s permission on %s or any of its parents",
+                format("User {} has no {} permission on {} or any of its parents",
                         *_user,
                         auth::permissions::to_string(p),
                         r));
@@ -268,7 +267,7 @@ service::client_state::client_state(service::client_state::request_copy_tag, con
 future<> service::client_state::ensure_exists(const auth::resource& r) const {
     return _auth_service->exists(r).then([&r](bool exists) {
         if (!exists) {
-            throw exceptions::invalid_request_exception(sprint("%s doesn't exist.", r));
+            throw exceptions::invalid_request_exception(format("{} doesn't exist.", r));
         }
 
         return make_ready_future<>();
