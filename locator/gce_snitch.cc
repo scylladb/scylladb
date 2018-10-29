@@ -66,7 +66,7 @@ future<> gce_snitch::load_config() {
 
         return gce_api_call(std::move(meta_server_url), ZONE_NAME_QUERY_REQ).then([this, meta_server_url] (sstring az) {
             if (az.empty()) {
-                return make_exception_future(std::runtime_error(sprint("Got an empty zone name from the GCE meta server %s", meta_server_url)));
+                return make_exception_future(std::runtime_error(format("Got an empty zone name from the GCE meta server {}", meta_server_url)));
             }
 
             std::vector<std::string> splits;
@@ -74,7 +74,7 @@ future<> gce_snitch::load_config() {
             // Split "us-central1-a" or "asia-east1-a" into "us-central1"/"a" and "asia-east1"/"a".
             split(splits, az, is_any_of("-"));
             if (splits.size() <= 1) {
-                return make_exception_future(std::runtime_error(sprint("Bad GCE zone format: %s", az)));
+                return make_exception_future(std::runtime_error(format("Bad GCE zone format: {}", az)));
             }
 
             _my_rack = splits[splits.size() - 1];
