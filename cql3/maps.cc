@@ -53,14 +53,14 @@ namespace cql3 {
 shared_ptr<column_specification>
 maps::key_spec_of(column_specification& column) {
     return ::make_shared<column_specification>(column.ks_name, column.cf_name,
-                ::make_shared<column_identifier>(sprint("key(%s)", *column.name), true),
+                ::make_shared<column_identifier>(format("key({})", *column.name), true),
                  dynamic_pointer_cast<const map_type_impl>(column.type)->get_keys_type());
 }
 
 shared_ptr<column_specification>
 maps::value_spec_of(column_specification& column) {
     return ::make_shared<column_specification>(column.ks_name, column.cf_name,
-                ::make_shared<column_identifier>(sprint("value(%s)", *column.name), true),
+                ::make_shared<column_identifier>(format("value({})", *column.name), true),
                  dynamic_pointer_cast<const map_type_impl>(column.type)->get_values_type());
 }
 
@@ -78,7 +78,7 @@ maps::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<colum
         auto v = entry.second->prepare(db, keyspace, value_spec);
 
         if (k->contains_bind_marker() || v->contains_bind_marker()) {
-            throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: bind variables are not supported inside collection literals", *receiver->name));
+            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: bind variables are not supported inside collection literals", *receiver->name));
         }
 
         if (dynamic_pointer_cast<non_terminal>(k) || dynamic_pointer_cast<non_terminal>(v)) {
@@ -98,16 +98,16 @@ maps::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<colum
 void
 maps::literal::validate_assignable_to(database& db, const sstring& keyspace, column_specification& receiver) {
     if (!dynamic_pointer_cast<const map_type_impl>(receiver.type)) {
-        throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s of type %s", *receiver.name, *receiver.type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Invalid map literal for {} of type {}", *receiver.name, *receiver.type->as_cql3_type()));
     }
     auto&& key_spec = maps::key_spec_of(receiver);
     auto&& value_spec = maps::value_spec_of(receiver);
     for (auto&& entry : entries) {
         if (!is_assignable(entry.first->test_assignment(db, keyspace, key_spec))) {
-            throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: key %s is not of type %s", *receiver.name, *entry.first, *key_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: key {} is not of type {}", *receiver.name, *entry.first, *key_spec->type->as_cql3_type()));
         }
         if (!is_assignable(entry.second->test_assignment(db, keyspace, value_spec))) {
-            throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: value %s is not of type %s", *receiver.name, *entry.second, *value_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: value {} is not of type {}", *receiver.name, *entry.second, *value_spec->type->as_cql3_type()));
         }
     }
 }
@@ -236,7 +236,7 @@ maps::delayed_value::bind(const query_options& options) {
             throw exceptions::invalid_request_exception("unset value is not supported inside collections");
         }
         if (key_bytes->size_bytes() > std::numeric_limits<uint16_t>::max()) {
-            throw exceptions::invalid_request_exception(sprint("Map key is too long. Map keys are limited to %d bytes but %d bytes keys provided",
+            throw exceptions::invalid_request_exception(format("Map key is too long. Map keys are limited to {:d} bytes but {:d} bytes keys provided",
                                                    std::numeric_limits<uint16_t>::max(),
                                                    key_bytes->size_bytes()));
         }

@@ -192,7 +192,7 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
 
             const auto check = [&alterable_options](auth::authentication_option ao) {
                 if (alterable_options.count(ao) == 0) {
-                    throw exceptions::unauthorized_exception(sprint("You aren't allowed to alter the %s option.", ao));
+                    throw exceptions::unauthorized_exception(format("You aren't allowed to alter the {} option.", ao));
                 }
             };
 
@@ -307,7 +307,7 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
 
         if (_grantee && !user_has_grantee()) {
             throw exceptions::unauthorized_exception(
-                    sprint("You are not authorized to view the roles granted to role '%s'.", *_grantee));
+                    format("You are not authorized to view the roles granted to role '{}'.", *_grantee));
         }
     });
 }

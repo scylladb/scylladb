@@ -92,7 +92,7 @@ parse(const sstring& json_string, const std::vector<column_definition>& expected
         }
     }
     if (!prepared_map.empty()) {
-        throw exceptions::invalid_request_exception(sprint("JSON values map contains unrecognized column: %s", prepared_map.begin()->first));
+        throw exceptions::invalid_request_exception(format("JSON values map contains unrecognized column: {}", prepared_map.begin()->first));
     }
     return json_map;
 }
@@ -123,7 +123,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
     auto prefix = range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty();
     if (s->is_dense()) {
         if (prefix.is_empty(*s) || prefix.components().front().empty()) {
-            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", s->clustering_key_columns().begin()->name_as_text()));
+            throw exceptions::invalid_request_exception(format("Missing PRIMARY KEY part {}", s->clustering_key_columns().begin()->name_as_text()));
         }
         // An empty name for the value is what we use to recognize the case where there is not column
         // outside the PK, see CreateStatement.
@@ -136,7 +136,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
             if (_column_operations.empty()) {
-                throw exceptions::invalid_request_exception(sprint("Column %s is mandatory for this COMPACT STORAGE table", s->regular_begin()->name_as_text()));
+                throw exceptions::invalid_request_exception(format("Column {} is mandatory for this COMPACT STORAGE table", s->regular_begin()->name_as_text()));
             }
         }
     } else {
@@ -224,7 +224,7 @@ insert_prepared_json_statement::build_partition_keys(const query_options& option
     for (const auto& def : s->partition_key_columns()) {
         auto json_value = json_cache->at(def.name_as_text());
         if (!json_value) {
-            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
+            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", def.name_as_text()));
         }
         exploded.emplace_back(*json_value);
     }
@@ -240,7 +240,7 @@ query::clustering_row_ranges insert_prepared_json_statement::create_clustering_r
     for (const auto& def : s->clustering_key_columns()) {
         auto json_value = json_cache->at(def.name_as_text());
         if (!json_value) {
-            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
+            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", def.name_as_text()));
         }
         exploded.emplace_back(*json_value);
     }
@@ -252,7 +252,7 @@ query::clustering_row_ranges insert_prepared_json_statement::create_clustering_r
 void insert_prepared_json_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) {
     for (const auto& def : s->regular_columns()) {
         if (def.type->is_counter()) {
-            throw exceptions::invalid_request_exception(sprint("Cannot set the value of counter column %s in JSON", def.name_as_text()));
+            throw exceptions::invalid_request_exception(format("Cannot set the value of counter column {} in JSON", def.name_as_text()));
         }
 
         auto value = json_cache->at(def.name_as_text());
@@ -298,10 +298,10 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
         auto id = col->prepare_column_identifier(schema);
         auto def = get_column_definition(schema, *id);
         if (!def) {
-            throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
+            throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
         }
         if (column_ids.count(id->name())) {
-            throw exceptions::invalid_request_exception(sprint("Multiple definitions found for column %s", *id));
+            throw exceptions::invalid_request_exception(format("Multiple definitions found for column {}", *id));
         }
         column_ids.emplace(id->name());
 
@@ -360,14 +360,14 @@ update_statement::prepare_internal(database& db, schema_ptr schema,
         auto id = entry.first->prepare_column_identifier(schema);
         auto def = get_column_definition(schema, *id);
         if (!def) {
-            throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *entry.first));
+            throw exceptions::invalid_request_exception(format("Unknown identifier {}", *entry.first));
         }
 
         auto operation = entry.second->prepare(db, keyspace(), *def);
         operation->collect_marker_specification(bound_names);
 
         if (def->is_primary_key()) {
-            throw exceptions::invalid_request_exception(sprint("PRIMARY KEY part %s found in SET part", *entry.first));
+            throw exceptions::invalid_request_exception(format("PRIMARY KEY part {} found in SET part", *entry.first));
         }
         stmt->add_operation(std::move(operation));
     }

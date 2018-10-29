@@ -76,7 +76,7 @@ void drop_type_statement::validate(service::storage_proxy& proxy, const service:
             if (_if_exists) {
                 return;
             } else {
-                throw exceptions::invalid_request_exception(sprint("No user type named %s exists.", _name.to_string()));
+                throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_string()));
             }
         }
 
@@ -118,20 +118,20 @@ void drop_type_statement::validate(service::storage_proxy& proxy, const service:
             }
 
             if (ut->references_user_type(keyspace, name)) {
-                throw exceptions::invalid_request_exception(sprint("Cannot drop user type %s.%s as it is still used by user type %s", keyspace, type->get_name_as_string(), ut->get_name_as_string()));
+                throw exceptions::invalid_request_exception(format("Cannot drop user type {}.{} as it is still used by user type {}", keyspace, type->get_name_as_string(), ut->get_name_as_string()));
             }
         }
 
         for (auto&& cfm : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
             for (auto&& col : cfm->all_columns()) {
                 if (col.type->references_user_type(keyspace, name)) {
-                    throw exceptions::invalid_request_exception(sprint("Cannot drop user type %s.%s as it is still used by table %s.%s", keyspace, type->get_name_as_string(), cfm->ks_name(), cfm->cf_name()));
+                    throw exceptions::invalid_request_exception(format("Cannot drop user type {}.{} as it is still used by table {}.{}", keyspace, type->get_name_as_string(), cfm->ks_name(), cfm->cf_name()));
                 }
             }
         }
 
     } catch (no_such_keyspace& e) {
-        throw exceptions::invalid_request_exception(sprint("Cannot drop type in unknown keyspace %s", keyspace()));
+        throw exceptions::invalid_request_exception(format("Cannot drop type in unknown keyspace {}", keyspace()));
     }
 }
 

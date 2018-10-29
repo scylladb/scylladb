@@ -159,7 +159,7 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, ::sha
 constants::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
 {
     if (!is_assignable(test_assignment(db, keyspace, receiver))) {
-        throw exceptions::invalid_request_exception(sprint("Invalid %s constant (%s) for \"%s\" of type %s",
+        throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
             _type, _text, *receiver->name, receiver->type->as_cql3_type()->to_string()));
     }
     return ::make_shared<value>(cql3::raw_value::make_value(parsed_value(receiver->type)));

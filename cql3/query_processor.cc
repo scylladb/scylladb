@@ -432,12 +432,12 @@ query_processor::parse_statement(const sstring_view& query) {
         }
         return statement;
     } catch (const exceptions::recognition_exception& e) {
-        throw exceptions::syntax_exception(sprint("Invalid or malformed CQL query string: %s", e.what()));
+        throw exceptions::syntax_exception(format("Invalid or malformed CQL query string: {}", e.what()));
     } catch (const exceptions::cassandra_exception& e) {
         throw;
     } catch (const std::exception& e) {
         log.error("The statement: {} could not be parsed: {}", query, e.what());
-        throw exceptions::syntax_exception(sprint("Failed parsing statement: [%s] reason: %s", query, e.what()));
+        throw exceptions::syntax_exception(format("Failed parsing statement: [{}] reason: {}", query, e.what()));
     }
 }
 
@@ -449,7 +449,7 @@ query_options query_processor::make_internal_options(
         int32_t page_size) {
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(
-                sprint("Invalid number of values. Expecting %d but got %d", p->bound_names.size(), values.size()));
+                format("Invalid number of values. Expecting {:d} but got {:d}", p->bound_names.size(), values.size()));
     }
     auto ni = p->bound_names.begin();
     std::vector<cql3::raw_value> bound_values;

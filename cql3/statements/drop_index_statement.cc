@@ -111,7 +111,7 @@ schema_ptr drop_index_statement::lookup_indexed_table() const
 {
     auto& db = service::get_local_storage_proxy().get_db().local();
     if (!db.has_keyspace(keyspace())) {
-        throw exceptions::keyspace_not_defined_exception(sprint("Keyspace %s does not exist", keyspace()));
+        throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace()));
     }
     auto cfm = db.find_indexed_table(keyspace(), _index_name);
     if (cfm) {
@@ -121,7 +121,7 @@ schema_ptr drop_index_statement::lookup_indexed_table() const
         return nullptr;
     }
     throw exceptions::invalid_request_exception(
-            sprint("Index '%s' could not be found in any of the tables of keyspace '%s'", _index_name, keyspace()));
+            format("Index '{}' could not be found in any of the tables of keyspace '{}'", _index_name, keyspace()));
 }
 
 }

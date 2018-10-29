@@ -56,7 +56,7 @@ sstring index_target::as_cql_string(schema_ptr schema) const {
     if (!schema->get_column_definition(column->name())->type->is_collection()) {
         return column->to_cql_string();
     }
-    return sprint("%s(%s)", to_sstring(type), column->to_cql_string());
+    return format("{}({})", to_sstring(type), column->to_cql_string());
 }
 
 sstring index_target::as_string() const {
@@ -74,7 +74,7 @@ index_target::target_type index_target::from_sstring(const sstring& s)
     } else if (s == "full") {
         return index_target::target_type::full;
     }
-    throw std::runtime_error(sprint("Unknown target type: %s", s));
+    throw std::runtime_error(format("Unknown target type: {}", s));
 }
 
 sstring index_target::index_option(target_type type) {

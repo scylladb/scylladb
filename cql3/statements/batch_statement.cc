@@ -246,7 +246,7 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
             for (auto&& m : mutations) {
                 ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
             }
-            return sprint("Batch of prepared statements for %s is of size %d, exceeding specified %s threshold of %d by %d.",
+            return format("Batch of prepared statements for {} is of size {:d}, exceeding specified {} threshold of {:d} by {:d}.",
                     join(", ", ks_cf_pairs), size, type, threshold, size - threshold);
         };
         if (size > fail_threshold) {

@@ -70,8 +70,7 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
         checkContainsOnly(columnDefs, cfm.partitionKeyColumns(), "The token() function must contains only partition key components");
 #endif
         throw exceptions::invalid_request_exception(
-                sprint(
-                        "The token function arguments must be in the partition key order: %s",
+                format("The token function arguments must be in the partition key order: {}",
                         std::to_string(column_defs)));
     }
     //auto* c = column_defs.front();
@@ -93,7 +92,7 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
         database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names) {
     throw exceptions::invalid_request_exception(
-            sprint("%s cannot be used with the token function",
+            format("{} cannot be used with the token function",
                     get_operator()));
 }
 
@@ -113,12 +112,12 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
         database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names, bool isKey) {
     throw exceptions::invalid_request_exception(
-            sprint("%s cannot be used with the token function",
+            format("{} cannot be used with the token function",
                     get_operator()));
 }
 
 sstring cql3::token_relation::to_string() const {
-    return sprint("token(%s) %s %s", join(", ", _entities), get_operator(), _value);
+    return format("token({}) {} {}", join(", ", _entities), get_operator(), _value);
 }
 
 ::shared_ptr<cql3::term> cql3::token_relation::to_term(

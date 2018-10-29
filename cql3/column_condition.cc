@@ -57,7 +57,7 @@ void validate_operation_on_durations(const abstract_type& type, const cql3::oper
         check_false(type.is_user_type(), "Slice conditions are not supported on UDTs containing durations");
 
         // We're a duration.
-        throw exceptions::invalid_request_exception(sprint("Slice conditions are not supported on durations"));
+        throw exceptions::invalid_request_exception(format("Slice conditions are not supported on durations"));
     }
 }
 
@@ -119,7 +119,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
     }
 
     if (!receiver.type->is_collection()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid element access syntax for non-collection column %s", receiver.name_as_text()));
+        throw exceptions::invalid_request_exception(format("Invalid element access syntax for non-collection column {}", receiver.name_as_text()));
     }
 
     shared_ptr<column_specification> element_spec, value_spec;
@@ -131,7 +131,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         element_spec = maps::key_spec_of(*receiver.column_specification);
         value_spec = maps::value_spec_of(*receiver.column_specification);
     } else if (&ctype->_kind == &collection_type_impl::kind::set) {
-        throw exceptions::invalid_request_exception(sprint("Invalid element access syntax for set column %s", receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid element access syntax for set column {}", receiver.name()));
     } else {
         abort();
     }

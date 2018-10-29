@@ -158,7 +158,7 @@ public:
     // FIXME: no cql_statement::to_string() yet
 #if 0
     sstring to_string() const {
-        return sprint("BatchStatement(type=%s, statements=%s)", _type, join(", ", _statements));
+        return format("BatchStatement(type={}, statements={})", _type, join(", ", _statements));
     }
 #endif
 };

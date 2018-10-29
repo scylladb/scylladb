@@ -65,7 +65,7 @@ public:
             virtual sstring column_name() override {
                 auto&& name = _type->field_name(_field);
                 auto sname = sstring(reinterpret_cast<const char*>(name.begin()), name.size());
-                return sprint("%s.%s", _factory->column_name(), sname);
+                return format("{}.{}", _factory->column_name(), sname);
             }
 
             virtual data_type get_return_type() override {
@@ -115,7 +115,7 @@ public:
     virtual sstring assignment_testable_source_context() const override {
         auto&& name = _type->field_name(_field);
         auto sname = sstring(reinterpret_cast<const char*>(name.begin(), name.size()));
-        return sprint("%s.%s", _selected, sname);
+        return format("{}.{}", _selected, sname);
     }
 
     field_selector(user_type type, size_t field, shared_ptr<selector> selected)

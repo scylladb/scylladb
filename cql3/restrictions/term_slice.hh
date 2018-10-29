@@ -136,7 +136,7 @@ public:
         static auto print_term = [] (::shared_ptr<term> t) -> sstring {
             return t ? t->to_string() : "null";
         };
-        return sprint("(%s %s, %s %s)",
+        return format("({} {}, {} {})",
             _bounds[0].inclusive ? ">=" : ">", print_term(_bounds[0].t),
             _bounds[1].inclusive ? "<=" : "<", print_term(_bounds[1].t));
     }

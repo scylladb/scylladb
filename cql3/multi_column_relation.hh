@@ -181,7 +181,7 @@ protected:
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
                                                                            shared_ptr<variable_specifications> bound_names, bool is_key) override {
-        throw exceptions::invalid_request_exception(sprint("%s cannot be used for Multi-column relations", get_operator()));
+        throw exceptions::invalid_request_exception(format("{} cannot be used for Multi-column relations", get_operator()));
     }
 
     virtual ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override {
@@ -214,7 +214,7 @@ protected:
             if (def.position() != unsigned(previous_position + 1)) {
                 check_false(previous_position == -1, "Clustering columns may not be skipped in multi-column relations. "
                                                      "They should appear in the PRIMARY KEY order. Got %s", to_string());
-                throw exceptions::invalid_request_exception(sprint("Clustering columns must appear in the PRIMARY KEY order in multi-column relations: %s", to_string()));
+                throw exceptions::invalid_request_exception(format("Clustering columns must appear in the PRIMARY KEY order in multi-column relations: {}", to_string()));
             }
             names.emplace_back(&def);
             previous_position = def.position();

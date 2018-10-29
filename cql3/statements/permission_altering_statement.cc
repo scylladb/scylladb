@@ -54,7 +54,7 @@ static auth::permission_set filter_applicable_permissions(const auth::permission
 
     if (!filtered_permissions) {
         throw exceptions::invalid_request_exception(
-                sprint("Resource %s does not support any of the requested permissions.", r));
+                format("Resource {} does not support any of the requested permissions.", r));
     }
 
     return filtered_permissions;

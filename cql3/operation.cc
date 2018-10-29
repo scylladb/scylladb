@@ -56,9 +56,9 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
     using exceptions::invalid_request_exception;
     auto rtype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!rtype) {
-        throw invalid_request_exception(sprint("Invalid operation (%s) for non collection column %s", to_string(receiver), receiver.name()));
+        throw invalid_request_exception(format("Invalid operation ({}) for non collection column {}", to_string(receiver), receiver.name()));
     } else if (!rtype->is_multi_cell()) {
-        throw invalid_request_exception(sprint("Invalid operation (%s) for frozen collection column %s", to_string(receiver), receiver.name()));
+        throw invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
     }
 
     if (&rtype->_kind == &collection_type_impl::kind::list) {
@@ -71,7 +71,7 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
             return make_shared<lists::setter_by_index>(receiver, idx, lval);
         }
     } else if (&rtype->_kind == &collection_type_impl::kind::set) {
-        throw invalid_request_exception(sprint("Invalid operation (%s) for set column %s", to_string(receiver), receiver.name()));
+        throw invalid_request_exception(format("Invalid operation ({}) for set column {}", to_string(receiver), receiver.name()));
     } else if (&rtype->_kind == &collection_type_impl::kind::map) {
         auto key = _selector->prepare(db, keyspace, maps::key_spec_of(*receiver.column_specification));
         auto mval = _value->prepare(db, keyspace, maps::value_spec_of(*receiver.column_specification));
@@ -99,11 +99,11 @@ operation::addition::prepare(database& db, const sstring& keyspace, const column
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         if (!receiver.is_counter()) {
-            throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non counter column %s", to_string(receiver), receiver.name()));
+            throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name()));
         }
         return make_shared<constants::adder>(receiver, v);
     } else if (!ctype->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen collection column %s", to_string(receiver), receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
     }
 
     if (&ctype->_kind == &collection_type_impl::kind::list) {
@@ -132,14 +132,14 @@ operation::subtraction::prepare(database& db, const sstring& keyspace, const col
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         if (!receiver.is_counter()) {
-            throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non counter column %s", to_string(receiver), receiver.name()));
+            throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name()));
         }
         auto v = _value->prepare(db, keyspace, receiver.column_specification);
         return make_shared<constants::subtracter>(receiver, v);
     }
     if (!ctype->is_multi_cell()) {
         throw exceptions::invalid_request_exception(
-                sprint("Invalid operation (%s) for frozen collection column %s", to_string(receiver), receiver.name()));
+                format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
     }
 
     if (&ctype->_kind == &collection_type_impl::kind::list) {
@@ -174,9 +174,9 @@ operation::prepend::prepare(database& db, const sstring& keyspace, const column_
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
     if (!dynamic_cast<const list_type_impl*>(receiver.type.get())) {
-        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non list column %s", to_string(receiver), receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non list column {}", to_string(receiver), receiver.name()));
     } else if (!receiver.type->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen list column %s", to_string(receiver), receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for frozen list column {}", to_string(receiver), receiver.name()));
     }
 
     return make_shared<lists::prepender>(receiver, std::move(v));
@@ -193,7 +193,7 @@ operation::set_value::prepare(database& db, const sstring& keyspace, const colum
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
     if (receiver.type->is_counter()) {
-        throw exceptions::invalid_request_exception(sprint("Cannot set the value of counter column %s (counters can only be incremented/decremented, not set)", receiver.name_as_text()));
+        throw exceptions::invalid_request_exception(format("Cannot set the value of counter column {} (counters can only be incremented/decremented, not set)", receiver.name_as_text()));
     }
 
     if (!receiver.type->is_collection()) {
@@ -218,7 +218,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
     static thread_local const data_type counter_tuple_list_type = list_type_impl::get_instance(counter_tuple_type, true);
 
     if (!receiver.type->is_counter()) {
-        throw exceptions::invalid_request_exception(sprint("Column %s is not a counter", receiver.name_as_text()));
+        throw exceptions::invalid_request_exception(format("Column {} is not a counter", receiver.name_as_text()));
     }
 
     // We need to fake a column of list<tuple<...>> to prepare the value term
@@ -256,7 +256,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
 
                 if (id <= last) {
                     throw marshal_exception(
-                                    sprint("invalid counter id order, %s <= %s",
+                                    format("invalid counter id order, {} <= {}",
                                                     id.to_uuid().to_sstring(),
                                                     last.to_uuid().to_sstring()));
                 }
@@ -272,7 +272,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
                 case 'r':
                     throw marshal_exception("encountered remote shards in a counter cell");
                 default:
-                    throw marshal_exception(sprint("encountered unknown shard %d in a counter cell", shard));
+                    throw marshal_exception(format("encountered unknown shard {:d} in a counter cell", shard));
                 }
             }
             // Note. this is a counter value cell, not an update.
@@ -299,9 +299,9 @@ operation::element_deletion::affected_column() {
 shared_ptr<operation>
 operation::element_deletion::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     if (!receiver.type->is_collection()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid deletion operation for non collection column %s", receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid deletion operation for non collection column {}", receiver.name()));
     } else if (!receiver.type->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid deletion operation for frozen collection column %s", receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid deletion operation for frozen collection column {}", receiver.name()));
     }
     auto ctype = static_pointer_cast<const collection_type_impl>(receiver.type);
     if (&ctype->_kind == &collection_type_impl::kind::list) {

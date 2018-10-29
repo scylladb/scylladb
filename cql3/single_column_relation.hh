@@ -136,14 +136,14 @@ protected:
     virtual sstring to_string() const override {
         auto entity_as_string = _entity->to_cql_string();
         if (_map_key) {
-            entity_as_string = sprint("%s[%s]", std::move(entity_as_string), _map_key->to_string());
+            entity_as_string = format("{}[{}]", std::move(entity_as_string), _map_key->to_string());
         }
 
         if (is_IN()) {
-            return sprint("%s IN (%s)", entity_as_string, join(", ", _in_values));
+            return format("{} IN ({})", entity_as_string, join(", ", _in_values));
         }
 
-        return sprint("%s %s %s", entity_as_string, _relation_type, _value->to_string());
+        return format("{} {} {}", entity_as_string, _relation_type, _value->to_string());
     }
 
 protected:

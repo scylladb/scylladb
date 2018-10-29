@@ -133,7 +133,7 @@ public:
         // We use MIN_VALUE internally to mean the absence of of timestamp (in Selection, in sstable stats, ...), so exclude
         // it to avoid potential confusion.
         if (timestamp < api::min_timestamp || timestamp > api::max_timestamp) {
-            throw exceptions::invalid_request_exception(sprint("Out of bound timestamp, must be in [%d, %d]",
+            throw exceptions::invalid_request_exception(format("Out of bound timestamp, must be in [{:d}, {:d}]",
                     api::min_timestamp, api::max_timestamp));
         }
     }

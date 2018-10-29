@@ -159,9 +159,9 @@ public:
         } else if (_relation_type == operator_type::IS_NOT) {
             // This case is not supposed to happen: statement_restrictions
             // constructor does not call this function for views' IS_NOT.
-            throw exceptions::invalid_request_exception(sprint("Unsupported \"IS NOT\" relation: %s", to_string()));
+            throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", to_string()));
         } else {
-            throw exceptions::invalid_request_exception(sprint("Unsupported \"!=\" relation: %s", to_string()));
+            throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {}", to_string()));
         }
     }
 

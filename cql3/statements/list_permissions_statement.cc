@@ -88,7 +88,7 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
             if (!has_role) {
                 return make_exception_future<>(
                         exceptions::unauthorized_exception(
-                                sprint("You are not authorized to view %s's permissions", *_role_name)));
+                                format("You are not authorized to view {}'s permissions", *_role_name)));
             }
 
             return make_ready_future<>();
@@ -154,7 +154,7 @@ cql3::statements::list_permissions_statement::execute(
                 }();
 
                 const auto decomposed_role_name = utf8_type->decompose(pd.role_name);
-                const auto decomposed_resource = utf8_type->decompose(sstring(sprint("%s", pd.resource)));
+                const auto decomposed_resource = utf8_type->decompose(sstring(format("{}", pd.resource)));
 
                 for (const auto& ps : sorted_permission_names) {
                     rs->add_row(

@@ -64,7 +64,7 @@ public:
             }
 
             virtual sstring column_name() override {
-                return sprint("%s(%s)", _is_writetime ? "writetime" : "ttl", _column_name);
+                return format("{}({})", _is_writetime ? "writetime" : "ttl", _column_name);
             }
 
             virtual data_type get_return_type() override {

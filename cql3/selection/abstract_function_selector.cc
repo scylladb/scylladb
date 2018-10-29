@@ -54,7 +54,7 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
         }
     } else {
         if (factories->does_aggregation() && !factories->contains_only_aggregate_functions()) {
-            throw exceptions::invalid_request_exception(sprint("the %s function arguments must be either all aggregates or all none aggregates",
+            throw exceptions::invalid_request_exception(format("the {} function arguments must be either all aggregates or all none aggregates",
                                                             fun->name()));
         }
     }
