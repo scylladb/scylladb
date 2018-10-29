@@ -748,7 +748,7 @@ public:
             auto m = service::get_local_storage_service().get_token_to_endpoint_map();
             std::map<std::string, std::string> ret;
             for (auto&& p : m) {
-                ret[sprint("%s", p.first)] = p.second.to_sstring();
+                ret[format("{}", p.first)] = p.second.to_sstring();
             }
             return ret;
         });
@@ -759,7 +759,7 @@ public:
     }
 
     void describe_snitch(tcxx::function<void(std::string const& _return)> cob) {
-        cob(sprint("org.apache.cassandra.locator.%s", _db.local().get_snitch_name()));
+        cob(format("org.apache.cassandra.locator.{}", _db.local().get_snitch_name()));
     }
 
     void describe_keyspace(tcxx::function<void(KsDef const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
