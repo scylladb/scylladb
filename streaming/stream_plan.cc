@@ -75,7 +75,7 @@ future<stream_state> stream_plan::execute() {
         return make_ready_future<stream_state>(std::move(state));
     }
     if (_aborted) {
-        throw std::runtime_error(sprint("steam_plan %s is aborted", _plan_id));
+        throw std::runtime_error(format("steam_plan {} is aborted", _plan_id));
     }
     return stream_result_future::init_sending_side(_plan_id, _description, _handlers, _coordinator);
 }

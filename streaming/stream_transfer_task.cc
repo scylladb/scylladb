@@ -169,7 +169,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                         *got_error_from_peer = status == -1;
                         sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id.addr, si->plan_id, si->cf_id, status);
                         if (*got_error_from_peer) {
-                            throw std::runtime_error(sprint("Peer failed to process mutation_fragment peer=%s, plan_id=%s, cf_id=%s", si->id.addr, si->plan_id, si->cf_id));
+                            throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id.addr, si->plan_id, si->cf_id));
                         }
                         return stop_iteration::no;
                     } else {

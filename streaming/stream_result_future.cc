@@ -125,10 +125,10 @@ void stream_result_future::maybe_complete() {
             auto tx_bw = sstring("0");
             auto rx_bw = sstring("0");
             if (std::fabs(duration) > FLT_EPSILON) {
-                tx_bw = sprint("%.2f", sbytes.bytes_sent / duration / 1024);
-                rx_bw = sprint("%.2f", sbytes.bytes_received  / duration / 1024);
+                tx_bw = format("{:.2f}", sbytes.bytes_sent / duration / 1024);
+                rx_bw = format("{:.2f}", sbytes.bytes_received  / duration / 1024);
             }
-            *stats = sprint("tx=%ld KiB, %s KiB/s, rx=%ld KiB, %s KiB/s", sbytes.bytes_sent / 1024, tx_bw, sbytes.bytes_received / 1024, rx_bw);
+            *stats = format("tx={:d} KiB, {} KiB/s, rx={:d} KiB, {} KiB/s", sbytes.bytes_sent / 1024, tx_bw, sbytes.bytes_received / 1024, rx_bw);
         }).handle_exception([plan_id] (auto ep) {
             sslog.warn("[Stream #{}] Fail to get progess on all shards: {}", plan_id, ep);
         }).finally([this, plan_id, stats, &sm] () {
