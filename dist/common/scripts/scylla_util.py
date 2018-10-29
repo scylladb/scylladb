@@ -513,8 +513,11 @@ class sysconfig_parser:
     def get(self, key):
         return self._cfg.get('global', key).strip('"')
 
+    def has_option(self, key):
+        return self._cfg.has_option('global', key)
+
     def set(self, key, val):
-        if not self._cfg.has_option('global', key):
+        if not self.has_option(key):
             return self.__add(key, val)
         self._data = re.sub('^{}=[^\n]*$'.format(key), '{}="{}"'.format(key, self.__escape(val)), self._data, flags=re.MULTILINE)
         self.__load()
