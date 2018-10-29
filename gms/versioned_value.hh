@@ -221,7 +221,7 @@ public:
         }
 
         versioned_value rpcaddress(gms::inet_address endpoint) {
-            return versioned_value(sprint("%s", endpoint));
+            return versioned_value(format("{}", endpoint));
         }
 
         versioned_value release_version() {
