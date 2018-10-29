@@ -30,6 +30,25 @@
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <smmintrin.h>
+#elif defined(__aarch64__)
+#include <arm_acle.h>
+/* Implement x86-64 intrinsics with according aarch64 ones */
+static inline uint32_t _mm_crc32_u8(uint32_t crc, uint8_t in)
+{
+    return __crc32cb(crc, in);
+}
+static inline uint32_t _mm_crc32_u16(uint32_t crc, uint16_t in)
+{
+    return __crc32ch(crc, in);
+}
+static inline uint32_t _mm_crc32_u32(uint32_t crc, uint32_t in)
+{
+    return __crc32cw(crc, in);
+}
+static inline uint32_t _mm_crc32_u64(uint32_t crc, uint64_t in)
+{
+    return __crc32cd(crc, in);
+}
 #else
 #include <zlib.h>
 #endif
@@ -44,7 +63,7 @@ public:
     // All process() functions assume input is in
     // host byte order (i.e. equivalent to storing
     // the value in a buffer and crcing the buffer).
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
     // On x86 use the crc32 instruction added in SSE 4.2.
     void process_le(int8_t in) {
         _r = _mm_crc32_u8(_r, in);
