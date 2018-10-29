@@ -1817,7 +1817,7 @@ public:
             using counter_value_type = decltype(counter_value_type_instance);
 
             if (static_cast<counter_value_type>(value) != value) {
-                throw marshal_exception(sprint("The duration %s (%" PRId64 ") must be a %d bit integer",
+                throw marshal_exception(sprint("The duration %s (%d) must be a %d bit integer",
                                                counter_name,
                                                value,
                                                std::numeric_limits<counter_value_type>::digits + 1));
@@ -1831,7 +1831,7 @@ public:
         if (!(((months <= 0) && (days <= 0) && (nanoseconds <= 0))
               || ((months >= 0) && (days >= 0) && (nanoseconds >= 0)))) {
             throw marshal_exception(
-                    sprint("The duration months, days, and nanoseconds must be all of the same sign (%" PRId64 ", %" PRId64 ", %" PRId64 ")",
+                    sprint("The duration months, days, and nanoseconds must be all of the same sign (%d, %d, %d)",
                            months,
                            days,
                            nanoseconds));
