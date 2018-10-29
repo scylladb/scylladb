@@ -167,7 +167,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
                 std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
                 auto it = pending_range_addresses.find(desired_range);
                 if (it == pending_range_addresses.end()) {
-                    throw std::runtime_error(sprint("Can not find desired_range = {} in pending_range_addresses", desired_range));
+                    throw std::runtime_error(format("Can not find desired_range = {} in pending_range_addresses", desired_range));
                 }
 
                 std::unordered_set<inet_address> new_endpoints(it->second.begin(), it->second.end());
