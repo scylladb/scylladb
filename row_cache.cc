@@ -876,7 +876,7 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
         upgrade_entry(*i);
         return i;
     }, [&] (auto i) {
-        throw std::runtime_error(sprint("cache already contains entry for {}", m.key()));
+        throw std::runtime_error(format("cache already contains entry for {}", m.key()));
     });
   });
 }
@@ -886,7 +886,7 @@ mutation_source& row_cache::snapshot_for_phase(phase_type phase) {
         return _underlying;
     } else {
         if (phase + 1 < _underlying_phase) {
-            throw std::runtime_error(sprint("attempted to read from retired phase {} (current={})", phase, _underlying_phase));
+            throw std::runtime_error(format("attempted to read from retired phase {} (current={})", phase, _underlying_phase));
         }
         return *_prev_snapshot;
     }
