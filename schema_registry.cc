@@ -30,11 +30,11 @@ static logging::logger slogger("schema_registry");
 static thread_local schema_registry registry;
 
 schema_version_not_found::schema_version_not_found(table_schema_version v)
-        : std::runtime_error{sprint("Schema version %s not found", v)}
+        : std::runtime_error{format("Schema version {} not found", v)}
 { }
 
 schema_version_loading_failed::schema_version_loading_failed(table_schema_version v)
-        : std::runtime_error{sprint("Failed to load schema version %s", v)}
+        : std::runtime_error{format("Failed to load schema version {}", v)}
 { }
 
 schema_registry_entry::~schema_registry_entry() {
@@ -187,7 +187,7 @@ schema_ptr schema_registry_entry::get_schema() {
         slogger.trace("Activating {}", _version);
         auto s = _frozen_schema->unfreeze(*_registry._ctxt);
         if (s->version() != _version) {
-            throw std::runtime_error(sprint("Unfrozen schema version doesn't match entry version (%s): %s", _version, *s));
+            throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
         _erase_timer.cancel();
         s->_registry_entry = this;

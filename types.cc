@@ -200,7 +200,7 @@ struct integer_type_impl : simple_type_impl<T> {
     }
     T compose_value(const bytes& b) const {
         if (b.size() != sizeof(T)) {
-            throw marshal_exception(sprint("Size mismatch for type %s: got %d bytes", this->name(), b.size()));
+            throw marshal_exception(format("Size mismatch for type {}: got {:d} bytes", this->name(), b.size()));
         }
         return (T)net::ntoh(*reinterpret_cast<const T*>(b.begin()));
     }
@@ -211,7 +211,7 @@ struct integer_type_impl : simple_type_impl<T> {
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != sizeof(T)) {
-            throw marshal_exception(sprint("Validation failed for type %s: got %d bytes", this->name(), v.size()));
+            throw marshal_exception(format("Validation failed for type {}: got {:d} bytes", this->name(), v.size()));
         }
     }
     T parse_int(sstring_view s) const {
@@ -219,11 +219,11 @@ struct integer_type_impl : simple_type_impl<T> {
             auto value64 = boost::lexical_cast<int64_t>(s.begin(), s.size());
             auto value = static_cast<T>(value64);
             if (value != value64) {
-                throw marshal_exception(sprint("Value out of range for type %s: '%s'", this->name(), s));
+                throw marshal_exception(format("Value out of range for type {}: '{}'", this->name(), s));
             }
             return static_cast<T>(value);
         } catch (const boost::bad_lexical_cast& e) {
-            throw marshal_exception(sprint("Invalid number format '%s'", s));
+            throw marshal_exception(format("Invalid number format '{}'", s));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -255,7 +255,7 @@ struct byte_type_impl : integer_type_impl<int8_t> {
 
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != 1) {
-            throw marshal_exception(sprint("Expected 1 byte for a tinyint (%d)", v.size()));
+            throw marshal_exception(format("Expected 1 byte for a tinyint ({:d})", v.size()));
         }
     }
 
@@ -270,7 +270,7 @@ struct short_type_impl : integer_type_impl<int16_t> {
 
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != 2) {
-            throw marshal_exception(sprint("Expected 2 bytes for a smallint (%d)", v.size()));
+            throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size()));
         }
     }
 
@@ -477,13 +477,13 @@ struct boolean_type_impl : public simple_type_impl<bool> {
             return make_empty();
         }
         if (v.size() != 1) {
-            throw marshal_exception(sprint("Cannot deserialize boolean, size mismatch (%d)", v.size()));
+            throw marshal_exception(format("Cannot deserialize boolean, size mismatch ({:d})", v.size()));
         }
         return make_value(*v.begin() != 0);
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != 1) {
-            throw marshal_exception(sprint("Validation failed for boolean, got %d bytes", v.size()));
+            throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size()));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -494,7 +494,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         } else if (s_lower == "true") {
             return ::serialize_value(*this, true);
         } else {
-            throw marshal_exception(sprint("unable to make boolean from '%s'", s));
+            throw marshal_exception(format("unable to make boolean from '{}'", s));
         }
     }
     virtual sstring to_string(const bytes& b) const override {
@@ -502,7 +502,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
             return "";
         }
         if (b.size() != 1) {
-            throw marshal_exception(sprint("Unable to serialize boolean, got %d bytes", b.size()));
+            throw marshal_exception(format("Unable to serialize boolean, got {:d} bytes", b.size()));
         }
         return boolean_to_string(*b.begin());
     }
@@ -511,7 +511,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         if (!value.isBool()) {
-            throw marshal_exception(sprint("Invalid JSON object %s", value.toStyledString()));
+            throw marshal_exception(format("Invalid JSON object {}", value.toStyledString()));
         }
         return this->decompose(value.asBool());
     }
@@ -627,7 +627,7 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         msb = read_simple<uint64_t>(v);
         lsb = read_simple<uint64_t>(v);
         if (!v.empty()) {
-            throw marshal_exception(sprint("Failed to deserialize timeuuid, extra bytes left (%d)", v.size()));
+            throw marshal_exception(format("Failed to deserialize timeuuid, extra bytes left ({:d})", v.size()));
         }
         return make_value(utils::UUID(msb, lsb));
     }
@@ -653,13 +653,13 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != 16) {
-            throw marshal_exception(sprint("Validation failed for timeuuid - got %d bytes", v.size()));
+            throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size()));
         }
         auto msb = read_simple<uint64_t>(v);
         auto lsb = read_simple<uint64_t>(v);
         utils::UUID uuid(msb, lsb);
         if (uuid.version() != 1) {
-            throw marshal_exception(sprint("Unsupported UUID version (%d)", uuid.version()));
+            throw marshal_exception(format("Unsupported UUID version ({:d})", uuid.version()));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -668,11 +668,11 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         }
         static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
         if (!std::regex_match(s.begin(), s.end(), re)) {
-            throw marshal_exception(sprint("Invalid UUID format (%s)", s));
+            throw marshal_exception(format("Invalid UUID format ({})", s));
         }
         utils::UUID v(s);
         if (v.version() != 1) {
-            throw marshal_exception(sprint("Unsupported UUID version (%d)", v.version()));
+            throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
         }
         return v.serialize();
     }
@@ -688,7 +688,7 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         if (!value.isString()) {
-            throw marshal_exception(sprint("%s must be represented as string in JSON", value.toStyledString()));
+            throw marshal_exception(format("{} must be represented as string in JSON", value.toStyledString()));
         }
         return from_string(value.asString());
     }
@@ -745,7 +745,7 @@ public:
     // FIXME: isCompatibleWith(timestampuuid)
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != sizeof(uint64_t)) {
-            throw marshal_exception(sprint("Validation failed for timestamp - got %d bytes", v.size()));
+            throw marshal_exception(format("Validation failed for timestamp - got {:d} bytes", v.size()));
         }
     }
     static boost::posix_time::ptime get_time(const std::smatch& sm) {
@@ -765,7 +765,7 @@ public:
             static constexpr auto milliseconds_string_length = 3;
             auto length = sm[10].length();
             if (length > milliseconds_string_length) {
-                throw marshal_exception(sprint("Milliseconds length exceeds expected (%d)", length));
+                throw marshal_exception(format("Milliseconds length exceeds expected ({:d})", length));
             }
             auto value = boost::lexical_cast<int>(sm[10]);
             while (length < milliseconds_string_length) {
@@ -813,7 +813,7 @@ public:
             std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
             std::smatch dsm;
             if (!std::regex_search(str, dsm, date_re)) {
-                throw marshal_exception(sprint("Unable to parse timestamp from '%s'", str));
+                throw marshal_exception(format("Unable to parse timestamp from '{}'", str));
             }
             auto t = get_time(dsm);
 
@@ -831,13 +831,13 @@ public:
                 auto dst_offset = t2 - t;
                 t -= tz_offset + dst_offset;
             } else {
-                throw marshal_exception(sprint("Unable to parse timezone '%s'", tz));
+                throw marshal_exception(format("Unable to parse timezone '{}'", tz));
             }
             return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
         } catch (const marshal_exception& me) {
-            throw marshal_exception(sprint("unable to parse date '%s': %s", s, me.what()));
+            throw marshal_exception(format("unable to parse date '{}': {}", s, me.what()));
         } catch (...) {
-            throw marshal_exception(sprint("unable to parse date '%s'", s));
+            throw marshal_exception(format("unable to parse date '{}'", s));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -920,7 +920,7 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != 4) {
-            throw marshal_exception(sprint("Expected 4 byte long for date (%d)", v.size()));
+            throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -944,7 +944,7 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         static std::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
         std::smatch dsm;
         if (!std::regex_match(str, dsm, date_re)) {
-            throw marshal_exception(sprint("Unable to coerce '%s' to a formatted date (long)", str));
+            throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", str));
         }
         auto t = get_time(dsm);
         return serialize(str, date::local_days(t).time_since_epoch().count());
@@ -957,10 +957,10 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     }
     static uint32_t serialize(const std::string& input, int64_t days) {
         if (days < std::numeric_limits<int32_t>::min()) {
-            throw marshal_exception(sprint("Input date %s is less than min supported date -5877641-06-23", input));
+            throw marshal_exception(format("Input date {} is less than min supported date -5877641-06-23", input));
         }
         if (days > std::numeric_limits<int32_t>::max()) {
-            throw marshal_exception(sprint("Input date %s is greater than max supported date 5881580-07-11", input));
+            throw marshal_exception(format("Input date {} is greater than max supported date 5881580-07-11", input));
         }
         days += 1UL << 31;
         return static_cast<uint32_t>(days);
@@ -1013,7 +1013,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != 8) {
-            throw marshal_exception(sprint("Expected 8 byte long for time (%d)", v.size()));
+            throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size()));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -1033,7 +1033,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         }
         int64_t hours = std::stol(s.substr(0, hours_end).to_string());
         if (hours < 0 || hours >= 24) {
-            throw marshal_exception(sprint("Hour out of bounds (%d).", hours));
+            throw marshal_exception(format("Hour out of bounds ({:d}).", hours));
         }
         auto minutes_end = s.find(':', hours_end+1);
         if (minutes_end == std::string::npos) {
@@ -1041,7 +1041,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         }
         int64_t minutes = std::stol(s.substr(hours_end + 1, hours_end-minutes_end).to_string());
         if (minutes < 0 || minutes >= 60) {
-            throw marshal_exception(sprint("Minute out of bounds (%d).", minutes));
+            throw marshal_exception(format("Minute out of bounds ({:d}).", minutes));
         }
         auto seconds_end = s.find('.', minutes_end+1);
         if (seconds_end == std::string::npos) {
@@ -1049,14 +1049,14 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         }
         int64_t seconds = std::stol(s.substr(minutes_end + 1, minutes_end-seconds_end).to_string());
         if (seconds < 0 || seconds >= 60) {
-            throw marshal_exception(sprint("Second out of bounds (%d).", seconds));
+            throw marshal_exception(format("Second out of bounds ({:d}).", seconds));
         }
         int64_t nanoseconds = 0;
         if (seconds_end < s.length()) {
             nanoseconds = std::stol(s.substr(seconds_end + 1).to_string());
             nanoseconds *= std::pow(10, 9-(s.length() - (seconds_end + 1)));
             if (nanoseconds < 0 || nanoseconds >= 1000 * 1000 * 1000) {
-                throw marshal_exception(sprint("Nanosecond out of bounds (%d).", nanoseconds));
+                throw marshal_exception(format("Nanosecond out of bounds ({:d}).", nanoseconds));
             }
         }
         std::chrono::nanoseconds result{};
@@ -1105,7 +1105,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         auto msb = read_simple<uint64_t>(v);
         auto lsb = read_simple<uint64_t>(v);
         if (!v.empty()) {
-            throw marshal_exception(sprint("Cannot deserialize uuid, %d bytes left", v.size()));
+            throw marshal_exception(format("Cannot deserialize uuid, {:d} bytes left", v.size()));
         }
         return make_value(utils::UUID(msb, lsb));
     }
@@ -1140,7 +1140,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != 16) {
-            throw marshal_exception(sprint("Validation failed for uuid - got %d bytes", v.size()));
+            throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -1149,7 +1149,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         }
         static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
         if (!std::regex_match(s.begin(), s.end(), re)) {
-            throw marshal_exception(sprint("Cannot parse uuid from '%s'", s));
+            throw marshal_exception(format("Cannot parse uuid from '{}'", s));
         }
         utils::UUID v(s);
         return v.serialize();
@@ -1226,7 +1226,7 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
         case 16:
             return make_value(inet_address(*reinterpret_cast<const ::in6_addr *>(v.data())));
         default:
-            throw marshal_exception(sprint("Cannot deserialize inet_address, unsupported size %d bytes", v.size()));
+            throw marshal_exception(format("Cannot deserialize inet_address, unsupported size {:d} bytes", v.size()));
         }
     }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
@@ -1243,7 +1243,7 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
-            throw marshal_exception(sprint("Validation failed for inet_addr - got %d bytes", v.size()));
+            throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size()));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -1255,7 +1255,7 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
         try {
             ip = inet_address(std::string(s.data(), s.size()));
         } catch (...) {
-            throw marshal_exception(sprint("Failed to parse inet_addr from '%s'", s));
+            throw marshal_exception(format("Failed to parse inet_addr from '{}'", s));
         }
         bytes b(bytes::initialized_later(), ip.get().size());
         auto out = b.begin();
@@ -1349,7 +1349,7 @@ struct floating_type_impl : public simple_type_impl<T> {
         } x;
         x.i = read_simple<typename int_of_size<T>::itype>(v);
         if (!v.empty()) {
-            throw marshal_exception(sprint("Cannot deserialize floating - %d bytes left", v.size()));
+            throw marshal_exception(format("Cannot deserialize floating - {:d} bytes left", v.size()));
         }
         return this->make_value(x.d);
     }
@@ -1381,7 +1381,7 @@ struct floating_type_impl : public simple_type_impl<T> {
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != sizeof(T)) {
-            throw marshal_exception(sprint("Expected %d bytes for a floating type, got %d", sizeof(T), v.size()));
+            throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
         }
     }
     virtual bytes from_string(sstring_view s) const override {
@@ -1397,7 +1397,7 @@ struct floating_type_impl : public simple_type_impl<T> {
             return b;
         }
         catch(const boost::bad_lexical_cast& e) {
-            throw marshal_exception(sprint("Invalid number format '%s'", s));
+            throw marshal_exception(format("Invalid number format '{}'", s));
         }
     }
     virtual sstring to_string(const bytes& b) const override {
@@ -1564,7 +1564,7 @@ public:
             serialize(&num, out);
             return b;
         } catch (...) {
-            throw marshal_exception(sprint("unable to make int from '%s'", text));
+            throw marshal_exception(format("unable to make int from '{}'", text));
         }
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
@@ -1660,7 +1660,7 @@ public:
         if (value.isString()) {
             return from_string(value.asString());
         } else if (!value.isNumeric()) {
-            throw marshal_exception(sprint("%s must be represented as numeric or string in JSON", value.toStyledString()));
+            throw marshal_exception(format("{} must be represented as numeric or string in JSON", value.toStyledString()));
         }
 
         return from_string(json::to_sstring(value));
@@ -1676,7 +1676,7 @@ public:
             serialize(&bd, out);
             return b;
         } catch (...) {
-            throw marshal_exception(sprint("unable to make BigDecimal from '%s'", text));
+            throw marshal_exception(format("unable to make BigDecimal from '{}'", text));
         }
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
@@ -1807,7 +1807,7 @@ public:
     }
     virtual void validate(bytes_view v) const override {
         if (v.size() < 3) {
-            throw marshal_exception(sprint("Expected at least 3 bytes for a duration, got %d", v.size()));
+            throw marshal_exception(format("Expected at least 3 bytes for a duration, got {:d}", v.size()));
         }
 
         counter_type months, days, nanoseconds;
@@ -1817,7 +1817,7 @@ public:
             using counter_value_type = decltype(counter_value_type_instance);
 
             if (static_cast<counter_value_type>(value) != value) {
-                throw marshal_exception(sprint("The duration %s (%d) must be a %d bit integer",
+                throw marshal_exception(format("The duration {} ({:d}) must be a {:d} bit integer",
                                                counter_name,
                                                value,
                                                std::numeric_limits<counter_value_type>::digits + 1));
@@ -1831,7 +1831,7 @@ public:
         if (!(((months <= 0) && (days <= 0) && (nanoseconds <= 0))
               || ((months >= 0) && (days >= 0) && (nanoseconds >= 0)))) {
             throw marshal_exception(
-                    sprint("The duration months, days, and nanoseconds must be all of the same sign (%d, %d, %d)",
+                    format("The duration months, days, and nanoseconds must be all of the same sign ({:d}, {:d}, {:d})",
                            months,
                            days,
                            nanoseconds));
@@ -1883,7 +1883,7 @@ public:
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         if (!value.isString()) {
-            throw marshal_exception(sprint("%s must be represented as string in JSON", value.toStyledString()));
+            throw marshal_exception(format("{} must be represented as string in JSON", value.toStyledString()));
         }
         return from_string(value.asString());
     }
@@ -2163,7 +2163,7 @@ void write_collection_value(bytes::iterator& out, cql_serialization_format sf, b
     } else {
         if (val_bytes.size() > std::numeric_limits<uint16_t>::max()) {
             throw marshal_exception(
-                    sprint("Collection value exceeds the length limit for protocol v%d. Collection values are limited to %d bytes but %d bytes value provided",
+                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
                             sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val_bytes.size()));
         }
         serialize_int16(out, uint16_t(val_bytes.size()));
@@ -2469,7 +2469,7 @@ map_type_impl::serialize_partially_deserialized_form(
 }
 sstring
 map_type_impl::cql3_type_name() const {
-    return sprint("map<%s, %s>", _keys->as_cql3_type(), _values->as_cql3_type());
+    return format("map<{}, {}>", _keys->as_cql3_type(), _values->as_cql3_type());
 }
 
 bool
@@ -2988,7 +2988,7 @@ set_type_impl::serialize_partially_deserialized_form(
 
 sstring
 set_type_impl::cql3_type_name() const {
-    return sprint("set<%s>", _elements->as_cql3_type());
+    return format("set<{}>", _elements->as_cql3_type());
 }
 
 bool
@@ -3212,7 +3212,7 @@ list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
 
 sstring
 list_type_impl::cql3_type_name() const {
-    return sprint("list<%s>", _elements->as_cql3_type());
+    return format("list<{}>", _elements->as_cql3_type());
 }
 
 bool
@@ -3397,7 +3397,7 @@ bytes
 tuple_type_impl::from_string(sstring_view s) const {
     std::vector<sstring_view> field_strings = split_field_strings(s);
     if (field_strings.size() > size()) {
-        throw marshal_exception(sprint("Invalid tuple literal: too many elements. Type %s expects %d but got %d", as_cql3_type(), size(), field_strings.size()));
+        throw marshal_exception(format("Invalid tuple literal: too many elements. Type {} expects {:d} but got {:d}", as_cql3_type(), size(), field_strings.size()));
     }
     std::vector<bytes> fields(field_strings.size());
     std::vector<int32_t> field_len(field_strings.size(), -1);
@@ -3413,15 +3413,15 @@ tuple_type_impl::from_string(sstring_view s) const {
 
 sstring
 tuple_type_impl::to_string(const bytes& b) const {
-    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+    throw std::runtime_error(format("{} not implemented", __PRETTY_FUNCTION__));
 }
 
 sstring tuple_type_impl::to_json_string(const bytes &b) const {
-    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+    throw std::runtime_error(format("{} not implemented", __PRETTY_FUNCTION__));
 }
 
 bytes tuple_type_impl::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
-    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+    throw std::runtime_error(format("{} not implemented", __PRETTY_FUNCTION__));
 }
 
 bool
@@ -3475,7 +3475,7 @@ tuple_type_impl::as_cql3_type() const {
 
 sstring
 tuple_type_impl::make_name(const std::vector<data_type>& types) {
-    return sprint("org.apache.cassandra.db.marshal.TupleType(%s)", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
+    return format("org.apache.cassandra.db.marshal.TupleType({})", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
 }
 
 bool
@@ -3656,7 +3656,7 @@ data_type abstract_type::parse_type(const sstring& name)
     };
     auto it = types.find(name);
     if (it == types.end()) {
-        throw std::invalid_argument(sprint("unknown type: %s\n", name));
+        throw std::invalid_argument(format("unknown type: {}\n", name));
     }
     return it->second;
 }
@@ -4078,7 +4078,7 @@ thread_local castas_fctns_map castas_fctns {
 castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     auto it_candidate = castas_fctns.find(castas_fctn_key{to_type, from_type});
     if (it_candidate == castas_fctns.end()) {
-        throw exceptions::invalid_request_exception(sprint("%s cannot be cast to %s", from_type->name(), to_type->name()));
+        throw exceptions::invalid_request_exception(format("{} cannot be cast to {}", from_type->name(), to_type->name()));
     }
 
     return it_candidate->second;

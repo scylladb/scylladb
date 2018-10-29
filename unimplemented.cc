@@ -75,7 +75,7 @@ void warn(cause c) {
 }
 
 void fail(cause c) {
-    throw std::runtime_error(sprint("Not implemented: %s", c));
+    throw std::runtime_error(format("Not implemented: {}", c));
 }
 
 }

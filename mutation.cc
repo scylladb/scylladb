@@ -55,10 +55,10 @@ void mutation::set_static_cell(const column_definition& def, atomic_cell_or_coll
 void mutation::set_static_cell(const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
     if (!column_def) {
-        throw std::runtime_error(sprint("no column definition found for '%s'", name));
+        throw std::runtime_error(format("no column definition found for '{}'", name));
     }
     if (!column_def->is_static()) {
-        throw std::runtime_error(sprint("column '%s' is not static", name));
+        throw std::runtime_error(format("column '{}' is not static", name));
     }
     partition().static_row().apply(*column_def, atomic_cell::make_live(*column_def->type, timestamp, column_def->type->decompose(value), ttl));
 }
@@ -67,7 +67,7 @@ void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, 
         api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
     if (!column_def) {
-        throw std::runtime_error(sprint("no column definition found for '%s'", name));
+        throw std::runtime_error(format("no column definition found for '{}'", name));
     }
     return set_clustered_cell(key, *column_def, atomic_cell::make_live(*column_def->type, timestamp, column_def->type->decompose(value), ttl));
 }
@@ -81,7 +81,7 @@ void mutation::set_cell(const clustering_key_prefix& prefix, const bytes& name, 
         api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
     if (!column_def) {
-        throw std::runtime_error(sprint("no column definition found for '%s'", name));
+        throw std::runtime_error(format("no column definition found for '{}'", name));
     }
     return set_cell(prefix, *column_def, atomic_cell::make_live(*column_def->type, timestamp, column_def->type->decompose(value), ttl));
 }
@@ -273,7 +273,7 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reade
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
     const ::schema& s = *m.schema();
-    fprint(os, "{%s.%s %s ", s.ks_name(), s.cf_name(), m.decorated_key());
+    fmt_print(os, "{{{}.{} {} ", s.ks_name(), s.cf_name(), m.decorated_key());
     os << mutation_partition::printer(s, m.partition()) << "}";
     return os;
 }

@@ -111,7 +111,7 @@ public:
         } else if (short_name == "TimeWindowCompactionStrategy") {
             return compaction_strategy_type::time_window;
         } else {
-            throw exceptions::configuration_exception(sprint("Unable to find compaction strategy class '%s'", name));
+            throw exceptions::configuration_exception(format("Unable to find compaction strategy class '{}'", name));
         }
     }
 

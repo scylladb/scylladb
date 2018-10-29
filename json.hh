@@ -73,7 +73,7 @@ inline Json::Value to_json_value(const sstring& raw) {
     std::unique_ptr<Json::CharReader> reader(rbuilder.newCharReader());
     bool result = reader->parse(raw.begin(), raw.end(), &root, NULL);
     if (!result) {
-        throw std::runtime_error(sprint("Failed to parse JSON: %s", raw));
+        throw std::runtime_error(format("Failed to parse JSON: {}", raw));
     }
 #else
     Json::Reader reader;

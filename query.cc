@@ -51,7 +51,7 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
     if (ps._specific_ranges) {
         out << ", specific=[" << *ps._specific_ranges << "]";
     }
-    out << ", options=" << sprint("%x", ps.options.mask()); // FIXME: pretty print options
+    out << ", options=" << format("{:x}", ps.options.mask()); // FIXME: pretty print options
     out << ", cql_format=" << ps.cql_format();
     out << ", partition_row_limit=" << ps._partition_row_limit;
     return out << "}";

@@ -200,7 +200,7 @@ void compression_parameters::validate_options(const std::map<sstring, sstring>& 
     }
     for (auto&& opt : options) {
         if (!keywords.count(opt.first) && !ckw.count(opt.first)) {
-            throw exceptions::configuration_exception(sprint("Unknown compression option '%s'.", opt.first));
+            throw exceptions::configuration_exception(format("Unknown compression option '{}'.", opt.first));
         }
     }
 }

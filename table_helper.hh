@@ -171,12 +171,12 @@ public:
     bad_column_family(const sstring& keyspace, const sstring& cf)
         : _keyspace(keyspace)
         , _cf(cf)
-        , _what(sprint("%s.%s doesn't meet expected schema.", _keyspace, _cf))
+        , _what(format("{}.{} doesn't meet expected schema.", _keyspace, _cf))
     { }
     bad_column_family(const sstring& keyspace, const sstring& cf, const std::exception& e)
         : _keyspace(keyspace)
         , _cf(cf)
-        , _what(sprint("%s.%s doesn't meet expected schema: %s", _keyspace, _cf, e.what()))
+        , _what(format("{}.{} doesn't meet expected schema: {}", _keyspace, _cf, e.what()))
     { }
     const char* what() const noexcept override {
         return _what.c_str();

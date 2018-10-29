@@ -146,7 +146,7 @@ void init_ms_fd_gossiper(sstring listen_address_in
     }
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
     if (broadcast_address != listen && seeds.count(listen)) {
-        print("Use broadcast_address instead of listen_address for seeds list: seeds=%s, listen_address=%s, broadcast_address=%s\n",
+        fmt::print("Use broadcast_address instead of listen_address for seeds list: seeds={}, listen_address={}, broadcast_address={}\n",
                 to_string(seeds), listen_address_in, broadcast_address);
         throw std::runtime_error("Use broadcast_address for seeds list");
     }

@@ -60,7 +60,7 @@ validate_cql_key(schema_ptr schema, const partition_key& key) {
     // check that key can be handled by FBUtilities.writeShortByteArray
     auto b = key.representation();
     if (b.size() > max_key_size) {
-        throw exceptions::invalid_request_exception(sprint("Key length of %d is longer than maximum of %d", b.size(), max_key_size));
+        throw exceptions::invalid_request_exception(format("Key length of {:d} is longer than maximum of {:d}", b.size(), max_key_size));
     }
 
     try {
@@ -84,7 +84,7 @@ validate_column_family(database& db, const sstring& keyspace_name, const sstring
     try {
         return db.find_schema(keyspace_name, cf_name);
     } catch (...) {
-        throw exceptions::invalid_request_exception(sprint("unconfigured table %s", cf_name));
+        throw exceptions::invalid_request_exception(format("unconfigured table {}", cf_name));
     }
 }
 
@@ -103,7 +103,7 @@ void validate_keyspace(database& db, const sstring& keyspace_name) {
     try {
         db.find_keyspace(keyspace_name);
     } catch (...) {
-        throw exceptions::keyspace_not_defined_exception(sprint("Keyspace %s does not exist", keyspace_name));
+        throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace_name));
     }
 }
 

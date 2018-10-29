@@ -28,7 +28,7 @@ static const char scylla_release_str[] = SCYLLA_RELEASE;
 
 std::string scylla_version()
 {
-    return sprint("%s-%s", scylla_version_str, scylla_release_str);
+    return format("{}-{}", scylla_version_str, scylla_release_str);
 }
 
 // get the version number into writeable memory, so we can grep for it if we get a core dump

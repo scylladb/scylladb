@@ -83,7 +83,7 @@ std::ostream& operator<<(std::ostream& out, const column_mapping& cm) {
     auto pr_entry = [] (column_id i, const column_mapping_entry& e) {
         // Without schema we don't know if name is UTF8. If we had schema we could use
         // s->regular_column_name_type()->to_string(e.name()).
-        return sprint("{id=%s, name=0x%s, type=%s}", i, e.name(), e.type()->name());
+        return format("{{id={}, name=0x{}, type={}}}", i, e.name(), e.type()->name());
     };
 
     return out << "{static=[" << ::join(", ", boost::irange<column_id>(0, n_static) |
@@ -116,11 +116,11 @@ v3_columns v3_columns::from_v2_schema(const schema& s) {
     if (s.is_static_compact_table()) {
         if (s.has_static_columns()) {
             throw std::runtime_error(
-                sprint("v2 static compact table should not have static columns: %s.%s", s.ks_name(), s.cf_name()));
+                format("v2 static compact table should not have static columns: {}.{}", s.ks_name(), s.cf_name()));
         }
         if (s.clustering_key_size()) {
             throw std::runtime_error(
-                sprint("v2 static compact table should not have clustering columns: %s.%s", s.ks_name(), s.cf_name()));
+                format("v2 static compact table should not have clustering columns: {}.{}", s.ks_name(), s.cf_name()));
         }
         static_column_name_type = s.regular_column_name_type();
         for (auto& c : s.all_columns()) {
@@ -222,13 +222,13 @@ void schema::rebuild() {
     if (is_counter()) {
         for (auto&& cdef : boost::range::join(static_columns(), regular_columns())) {
             if (!cdef.type->is_counter()) {
-                throw exceptions::configuration_exception(sprint("Cannot add a non counter column (%s) in a counter column family", cdef.name_as_text()));
+                throw exceptions::configuration_exception(format("Cannot add a non counter column ({}) in a counter column family", cdef.name_as_text()));
             }
         }
     } else {
         for (auto&& cdef : all_columns()) {
             if (cdef.type->is_counter()) {
-                throw exceptions::configuration_exception(sprint("Cannot add a counter column (%s) in a non counter column family", cdef.name_as_text()));
+                throw exceptions::configuration_exception(format("Cannot add a counter column ({}) in a non counter column family", cdef.name_as_text()));
             }
         }
     }
@@ -249,7 +249,7 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
     : _raw(raw)
     , _offsets([this] {
         if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
-            throw std::runtime_error(sprint("Column count limit (%d) overflowed: %d",
+            throw std::runtime_error(format("Column count limit ({:d}) overflowed: {:d}",
                                             std::numeric_limits<column_count_type>::max(), _raw._columns.size()));
         }
 
@@ -689,7 +689,7 @@ column_definition& schema_builder::find_column(const cql3::column_identifier& c)
     if (i != _raw._columns.end()) {
         return *i;
     }
-    throw std::invalid_argument(sprint("No such column %s", c.name()));
+    throw std::invalid_argument(format("No such column {}", c.name()));
 }
 
 schema_builder& schema_builder::with_column(const column_definition& c) {
@@ -843,8 +843,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
                                 column_kind::regular_column, 0);
             } else if (regular_cols > 1) {
                 throw exceptions::configuration_exception(
-                                sprint(
-                                                "Expecting exactly one regular column. Found %d",
+                                format("Expecting exactly one regular column. Found {:d}",
                                                 regular_cols));
             }
         }
@@ -943,7 +942,7 @@ static sstring compound_name(const schema& s) {
         compound += "(";
         for (auto& c : s.collections()) {
             auto ct = static_pointer_cast<const collection_type_impl>(c.second);
-            compound += sprint("%s:%s,", to_hex(c.first), ct->name());
+            compound += format("{}:{},", to_hex(c.first), ct->name());
         }
         compound.back() = ')';
         compound += ",";
@@ -1098,7 +1097,7 @@ schema::regular_column_at(column_id id) const {
 const column_definition&
 schema::clustering_column_at(column_id id) const {
     if (id >= clustering_key_size()) {
-        throw std::out_of_range(sprint("clustering column id %d >= %d", id, clustering_key_size()));
+        throw std::out_of_range(format("clustering column id {:d} >= {:d}", id, clustering_key_size()));
     }
     return _raw._columns.at(column_offset(column_kind::clustering_key) + id);
 }
