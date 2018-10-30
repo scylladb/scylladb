@@ -37,15 +37,7 @@ namespace sstables {
 
 class file_writer;
 
-// This structure is used to store references to column_definitions
-// along with their respective column_ids.
-// This allows us to do shallow re-ordering without changing the original order in schema.
-struct column_definition_indexed_ref {
-    column_id id;
-    std::reference_wrapper<const column_definition> cdef;
-};
-
-using indexed_columns = std::vector<column_definition_indexed_ref>;
+using indexed_columns = std::vector<std::reference_wrapper<const column_definition>>;
 
 // Utilities for writing integral values in variable-length format
 // See vint-serialization.hh for more details

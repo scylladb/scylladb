@@ -2684,25 +2684,16 @@ GCC6_CONCEPT(
     };
 )
 
-static indexed_columns get_indexed_regular_columns_partitioned_by_atomicity(const schema& s) {
-    indexed_columns columns;
-    columns.reserve(s.regular_columns_count());
-    for (const auto& element: s.regular_columns() | boost::adaptors::indexed()) {
-        columns.push_back({static_cast<column_id>(element.index()), element.value()});
+static indexed_columns get_indexed_columns_partitioned_by_atomicity(schema::const_iterator_range_type columns) {
+    indexed_columns result;
+    result.reserve(columns.size());
+    for (const auto& col: columns) {
+        result.emplace_back(col);
     }
     boost::range::stable_partition(
-            columns,
-            [](const column_definition_indexed_ref& column) { return column.cdef.get().is_atomic();});
-    return columns;
-}
-
-static indexed_columns get_indexed_static_columns(const schema& s) {
-    indexed_columns columns;
-    columns.reserve(s.static_columns_count());
-    for (const auto& element: s.static_columns() | boost::adaptors::indexed()) {
-        columns.push_back({static_cast<column_id>(element.index()), element.value()});
-    }
-    return columns;
+            result,
+            [](const std::reference_wrapper<const column_definition>& column) { return column.get().is_atomic();});
+    return result;
 }
 
 // Used for writing SSTables in 'mc' format.
@@ -2728,13 +2719,11 @@ private:
     stdx::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
-    // For regular columns, we write all simple columns first followed by collections
-    // This container has regular columns paritioned by atomicity
-    const indexed_columns _regular_columns;
-    // TODO: unlike regular columns, static ones don't need re-ordering because
-    // they are always all atomic. Perhaps we should do a helper writing missing columns
-    // that would accept just the schema when writing a static row
+
+    // For static and regular columns, we write all simple columns first followed by collections
+    // These containers have columns partitioned by atomicity
     const indexed_columns _static_columns;
+    const indexed_columns _regular_columns;
 
     struct cdef_and_collection {
         const column_definition* cdef;
@@ -2831,7 +2820,7 @@ private:
     void write_collection(file_writer& writer, const column_definition& cdef, collection_mutation_view collection,
                           const row_time_properties& properties, bool has_complex_deletion);
 
-    void write_cells(file_writer& writer, column_kind kind, const row& row_body, const row_time_properties& properties, bool has_complex_deletion = false);
+    void write_cells(file_writer& writer, column_kind kind, const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
     void write_row_body(file_writer& writer, const clustering_row& row, bool has_complex_deletion);
     void write_static_row(const row& static_row);
 
@@ -2868,8 +2857,8 @@ public:
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _range_tombstones(_schema)
-        , _regular_columns(get_indexed_regular_columns_partitioned_by_atomicity(s))
-        , _static_columns(get_indexed_static_columns(s))
+        , _static_columns(get_indexed_columns_partitioned_by_atomicity(s.static_columns()))
+        , _regular_columns(get_indexed_columns_partitioned_by_atomicity(s.regular_columns()))
     {
         _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
         _sst.write_toc(_pc);
@@ -3209,26 +3198,26 @@ void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker
 void sstable_writer_m::write_collection(file_writer& writer, const column_definition& cdef,
         collection_mutation_view collection, const row_time_properties& properties, bool has_complex_deletion) {
     auto& ctype = *static_pointer_cast<const collection_type_impl>(cdef.type);
-  collection.data.with_linearized([&] (bytes_view collection_bv) {
-    auto mview = ctype.deserialize_mutation_form(collection_bv);
-    if (has_complex_deletion) {
-        auto dt = to_deletion_time(mview.tomb);
-        write_delta_deletion_time(writer, dt);
-        if (mview.tomb) {
-            _c_stats.update_timestamp(dt.marked_for_delete_at);
-            _c_stats.update_local_deletion_time(dt.local_deletion_time);
+    collection.data.with_linearized([&] (bytes_view collection_bv) {
+        auto mview = ctype.deserialize_mutation_form(collection_bv);
+        if (has_complex_deletion) {
+            auto dt = to_deletion_time(mview.tomb);
+            write_delta_deletion_time(writer, dt);
+            if (mview.tomb) {
+                _c_stats.update_timestamp(dt.marked_for_delete_at);
+                _c_stats.update_local_deletion_time(dt.local_deletion_time);
+            }
         }
-    }
 
-    write_vint(writer, mview.cells.size());
-    if (!mview.cells.empty()) {
-        ++_c_stats.column_count;
-    }
-    for (const auto& [cell_path, cell]: mview.cells) {
-        ++_c_stats.cells_count;
-        write_cell(writer, cell, cdef, properties, cell_path);
-    }
-  });
+        write_vint(writer, mview.cells.size());
+        if (!mview.cells.empty()) {
+            ++_c_stats.column_count;
+        }
+        for (const auto& [cell_path, cell]: mview.cells) {
+            ++_c_stats.cells_count;
+            write_cell(writer, cell, cdef, properties, cell_path);
+        }
+    });
 }
 
 void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const row& row_body,
@@ -3294,6 +3283,27 @@ uint64_t calculate_write_size(Func&& func) {
     return written_size;
 }
 
+// Find if any collection in the row contains a collection-wide tombstone
+static bool row_has_complex_deletion(const schema& s, const row& r, column_kind kind) {
+    bool result = false;
+    r.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& c) {
+        auto&& cdef = s.column_at(kind, id);
+        if (cdef.is_atomic()) {
+            return stop_iteration::no;
+        }
+        auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
+        return c.as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
+            auto mview = t->deserialize_mutation_form(c_bv);
+            if (mview.tomb) {
+                result = true;
+            }
+            return stop_iteration(static_cast<bool>(mview.tomb));
+        });
+    });
+
+    return result;
+}
+
 void sstable_writer_m::write_static_row(const row& static_row) {
     assert(_schema.is_compound());
 
@@ -3303,13 +3313,16 @@ void sstable_writer_m::write_static_row(const row& static_row) {
     if (static_row.size() == _schema.static_columns_count()) {
         flags |= row_flags::has_all_columns;
     }
-
+    bool has_complex_deletion = row_has_complex_deletion(_schema, static_row, column_kind::static_column);
+    if (has_complex_deletion) {
+        flags |= row_flags::has_complex_deletion;
+    }
     write(_sst.get_version(), *_data_writer, flags);
     write(_sst.get_version(), *_data_writer, row_extended_flags::is_static);
 
     // Calculate the size of the row body
-    auto write_row = [this, &static_row] (file_writer& writer) {
-        write_cells(writer, column_kind::static_column, static_row, row_time_properties{});
+    auto write_row = [this, &static_row, has_complex_deletion] (file_writer& writer) {
+        write_cells(writer, column_kind::static_column, static_row, row_time_properties{}, has_complex_deletion);
     };
 
     uint64_t row_body_size = calculate_write_size(write_row) + unsigned_vint::serialized_size(0);
@@ -3328,27 +3341,6 @@ stop_iteration sstable_writer_m::consume(static_row&& sr) {
     ensure_tombstone_is_written();
     write_static_row(sr.cells());
     return stop_iteration::no;
-}
-
-// Find if any collection in the row contains a collection-wide tombstone
-static bool row_has_complex_deletion(const schema& s, const row& r) {
-    bool result = false;
-    r.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& c) {
-        auto&& cdef = s.column_at(column_kind::regular_column, id);
-        if (cdef.is_atomic()) {
-            return stop_iteration::no;
-        }
-        auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
-      return c.as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
-        auto mview = t->deserialize_mutation_form(c_bv);
-        if (mview.tomb) {
-            result = true;
-        }
-        return stop_iteration(static_cast<bool>(mview.tomb));
-    });
-    });
-
-    return result;
 }
 
 void sstable_writer_m::write_clustered(const clustering_row& clustered_row, uint64_t prev_row_size) {
@@ -3373,7 +3365,7 @@ void sstable_writer_m::write_clustered(const clustering_row& clustered_row, uint
     if (clustered_row.cells().size() == _schema.regular_columns_count()) {
         flags |= row_flags::has_all_columns;
     }
-    bool has_complex_deletion = row_has_complex_deletion(_schema, clustered_row.cells());
+    bool has_complex_deletion = row_has_complex_deletion(_schema, clustered_row.cells(), column_kind::regular_column);
     if (has_complex_deletion) {
         flags |= row_flags::has_complex_deletion;
     }

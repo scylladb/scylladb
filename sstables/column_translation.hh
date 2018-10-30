@@ -114,9 +114,7 @@ private:
                         type->is_counter()
                     });
                 }
-                if (!is_static) {
-                    boost::range::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
-                }
+                boost::range::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
             }
             return cols;
         }
