@@ -348,8 +348,16 @@ public:
     // Return values are those of a trichotomic comparison.
     int compare_by_max_timestamp(const sstable& other) const;
 
+    sstring filename(const sstring& dir, component_type f) const {
+        return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+    }
+
     sstring filename(component_type f) const {
-        return filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+        return filename(get_dir(), f);
+    }
+
+    sstring temp_filename(component_type f) const {
+        return filename(get_temp_dir(), f);
     }
 
     sstring get_filename() const {
@@ -360,8 +368,20 @@ public:
         return filename(component_type::TOC);
     }
 
+    static sstring sst_dir_basename(unsigned long gen) {
+        return fmt::format("{:016d}.sstable", gen);
+    }
+
+    static sstring temp_sst_dir(const sstring& dir, unsigned long gen) {
+        return dir + "/" + sst_dir_basename(gen);
+    }
+
     const sstring& get_dir() const {
         return _dir;
+    }
+
+    const sstring get_temp_dir() const {
+        return temp_sst_dir(_dir, _generation);
     }
 
     bool is_staging() const;
@@ -470,6 +490,7 @@ private:
 
     schema_ptr _schema;
     sstring _dir;
+    std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
     unsigned long _generation = 0;
     version_types _version;
     format_types _format;
@@ -498,8 +519,12 @@ private:
     void write_crc(const checksum& c);
     void write_digest(uint32_t full_checksum);
 
+    future<file> rename_new_sstable_component_file(sstring from_file, sstring to_file, file fd);
     future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {});
     future<file> new_sstable_component_file_non_checked(component_type f, open_flags flags, file_open_options options = {});
+
+    future<> touch_temp_dir();
+    future<> remove_temp_dir();
 
     void generate_toc(compressor_ptr c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);
