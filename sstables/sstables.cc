@@ -60,6 +60,7 @@
 #include "counters.hh"
 #include "binary_search.hh"
 #include "utils/bloom_filter.hh"
+#include "utils/memory_data_sink.hh"
 
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
@@ -2733,6 +2734,8 @@ private:
     stdx::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
+    memory_data_sink_buffers _tmp_bufs;
+    file_writer _tmp_writer; // writes into _tmp_bufs.
 
     // For static and regular columns, we write all simple columns first followed by collections
     // These containers have columns partitioned by atomicity
@@ -2865,6 +2868,13 @@ private:
     }
     void write_promoted_index(file_writer& writer);
     void consume(rt_marker&& marker);
+
+    void flush_tmp_bufs() {
+        for (auto&& buf : _tmp_bufs.buffers()) {
+            _data_writer->write(buf.get(), buf.size()).get();
+        }
+        _tmp_bufs.clear();
+    }
 public:
 
     sstable_writer_m(sstable& sst, const schema& s, uint64_t estimated_partitions,
@@ -2874,6 +2884,7 @@ public:
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _range_tombstones(_schema)
+        , _tmp_writer(output_stream<char>(data_sink(std::make_unique<memory_data_sink>(_tmp_bufs)), _sst.sstable_buffer_size))
         , _static_columns(get_indexed_columns_partitioned_by_atomicity(s.static_columns()))
         , _regular_columns(get_indexed_columns_partitioned_by_atomicity(s.regular_columns()))
     {
@@ -3344,16 +3355,13 @@ void sstable_writer_m::write_static_row(const row& static_row) {
     write(_sst.get_version(), *_data_writer, flags);
     write(_sst.get_version(), *_data_writer, row_extended_flags::is_static);
 
-    // Calculate the size of the row body
-    auto write_row = [this, &static_row, has_complex_deletion] (file_writer& writer) {
-        write_cells(writer, column_kind::static_column, static_row, row_time_properties{}, has_complex_deletion);
-    };
+    write_cells(_tmp_writer, column_kind::static_column, static_row, row_time_properties{}, has_complex_deletion);
+    _tmp_writer.flush().get();
 
-    uint64_t row_body_size = calculate_write_size(write_row) + unsigned_vint::serialized_size(0);
+    uint64_t row_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(0);
     write_vint(*_data_writer, row_body_size);
     write_vint(*_data_writer, 0); // as the static row always comes first, the previous row size is always zero
-
-    write_row(*_data_writer);
+    flush_tmp_bufs();
 
     _partition_header_length += (_data_writer->offset() - current_pos);
 
@@ -3401,16 +3409,13 @@ void sstable_writer_m::write_clustered(const clustering_row& clustered_row, uint
 
     write_clustering_prefix(*_data_writer, _schema, clustered_row.key(), ephemerally_full_prefix{_schema.is_compact_table()});
 
-    auto write_row = [this, &clustered_row, has_complex_deletion] (file_writer& writer) {
-        write_row_body(writer, clustered_row, has_complex_deletion);
-    };
+    write_row_body(_tmp_writer, clustered_row, has_complex_deletion);
+    _tmp_writer.flush().get();
 
-    uint64_t row_body_size = calculate_write_size(write_row) + unsigned_vint::serialized_size(prev_row_size);
-
+    uint64_t row_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(prev_row_size);
     write_vint(*_data_writer, row_body_size);
     write_vint(*_data_writer, prev_row_size);
-
-    write_row(*_data_writer);
+    flush_tmp_bufs();
 
     // Collect statistics
     if (_schema.clustering_key_size()) {
@@ -3558,6 +3563,7 @@ void sstable_writer_m::consume_end_of_stream() {
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
     }
+    _tmp_writer.close().get();
     _cfg.monitor->on_flush_completed();
 }
 
