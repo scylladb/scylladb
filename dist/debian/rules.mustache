@@ -37,5 +37,8 @@ override_dh_shlibdeps:
 override_dh_fixperms:
 	dh_fixperms
 	chmod 755 $(CURDIR)/debian/{{product}}-server/opt/scylladb/lib/ld.so
+
+override_dh_strip_nondeterminism:
+
 %:
 	dh $@
