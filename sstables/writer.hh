@@ -120,12 +120,12 @@ GCC6_CONCEPT(
     requires ChecksumUtils<ChecksumType>
 )
 class checksummed_file_data_sink_impl : public data_sink_impl {
-    output_stream<char> _out;
+    data_sink _out;
     struct checksum& _c;
     uint32_t& _full_checksum;
 public:
     checksummed_file_data_sink_impl(file f, struct checksum& c, uint32_t& full_file_checksum, file_output_stream_options options)
-            : _out(make_file_output_stream(std::move(f), std::move(options)))
+            : _out(make_file_data_sink(std::move(f), std::move(options)))
             , _c(c)
             , _full_checksum(full_file_checksum)
             {}
@@ -143,8 +143,7 @@ public:
             _full_checksum = ChecksumType::checksum_combine(_full_checksum, per_chunk_checksum, size);
             _c.checksums.push_back(per_chunk_checksum);
         }
-        auto f = _out.write(buf.begin(), buf.size());
-        return f.then([buf = std::move(buf)] {});
+        return _out.put(std::move(buf));
     }
 
     virtual future<> close() {
