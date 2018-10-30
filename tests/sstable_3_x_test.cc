@@ -4670,7 +4670,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
 SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     auto abj = defer([] { await_background_jobs().get(); });
     sstring table_name = "interleaved_atomic_and_collection_columns";
-    //
+    // CREATE TABLE interleaved_atomic_and_collection_columns ( pk int, ck int, rc1 int, rc2 set<int>, rc3 int, rc4 set<int>,
+    //     rc5 int, rc6 set<int>, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
@@ -4687,7 +4688,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     // INSERT INTO interleaved_atomic_and_collection_columns (pk, ck, rc1, rc4, rc5)
-    //    VALUES (0, 0, 'hello', ['beautiful','world'], 'here') USING TIMESTAMP 1525385507816568;
+    //     VALUES (0, 1, 2, {3, 4}, 5) USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
@@ -4701,6 +4702,48 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     mut.set_clustered_cell(ckey, *s->get_column_definition("rc4"), set_of_ints_type->serialize_mutation_form(set_values));
 
     mut.set_cell(ckey, "rc5", data_value{5}, write_timestamp);
+    mt->apply(mut);
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_columns) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    sstring table_name = "static_interleaved_atomic_and_collection_columns";
+    // CREATE TABLE static_interleaved_atomic_and_collection_columns ( pk int, ck int, st1 int static,
+    //     st2 set<int> static, st3 int static, st4 set<int> static, st5 int static, st6 set<int> static,
+    //     PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+    auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck", int32_type, column_kind::clustering_key);
+    builder.with_column("st1", int32_type, column_kind::static_column);
+    builder.with_column("st2", set_of_ints_type, column_kind::static_column);
+    builder.with_column("st3", int32_type, column_kind::static_column);
+    builder.with_column("st4", set_of_ints_type, column_kind::static_column);
+    builder.with_column("st5", int32_type, column_kind::static_column);
+    builder.with_column("st6", set_of_ints_type, column_kind::static_column);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    // INSERT INTO static_interleaved_atomic_and_collection_columns (pk, ck, st1, st4, st5)
+    //     VALUES (0, 1, 2, {3, 4}, 5) USING TIMESTAMP 1525385507816568;
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut{s, key};
+    clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
+    mut.partition().apply_insert(*s, ckey, write_timestamp);
+    mut.set_static_cell("st1", data_value{2}, write_timestamp);
+
+    set_type_impl::mutation set_values;
+    set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
+    set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+    set_values.cells.emplace_back(int32_type->decompose(4), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+    mut.set_static_cell(*s->get_column_definition("st4"), set_of_ints_type->serialize_mutation_form(set_values));
+
+    mut.set_static_cell("st5", data_value{5}, write_timestamp);
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);

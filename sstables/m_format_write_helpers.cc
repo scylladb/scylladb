@@ -239,7 +239,7 @@ public:
         if (_mode ==  encoding_mode::small) {
             // Set bit for every missing column
             for (const auto& element: _columns | boost::adaptors::indexed()) {
-                auto cell = _row.find_cell(element.value().id);
+                auto cell = _row.find_cell(element.value().get().id);
                 if (!cell) {
                     _current_value |= (uint64_t(1) << element.index());
                 }
@@ -256,7 +256,7 @@ public:
 
             if (_mode == encoding_mode::large_encode_present) {
                 while (_current_index < total_size) {
-                    auto cell = _row.find_cell(_columns[_current_index].id);
+                    auto cell = _row.find_cell(_columns[_current_index].get().id);
                     if (cell) {
                         _current_value = _current_index;
                         ++_current_index;
@@ -267,7 +267,7 @@ public:
             } else {
                 assert(_mode == encoding_mode::large_encode_missing);
                 while (_current_index < total_size) {
-                    auto cell = _row.find_cell(_columns[_current_index].id);
+                    auto cell = _row.find_cell(_columns[_current_index].get().id);
                     if (!cell) {
                         _current_value = _current_index;
                         ++_current_index;
