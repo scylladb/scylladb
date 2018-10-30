@@ -3447,9 +3447,6 @@ static void write_clustering_prefix(file_writer& writer, bound_kind_m kind,
 
 void sstable_writer_m::write_promoted_index(file_writer& writer) {
     static constexpr size_t width_base = 65536;
-    if (_pi_write_m.promoted_index.size() < 2) {
-        return;
-    }
     write_vint(writer, _partition_header_length);
     write(_sst.get_version(), writer, to_deletion_time(_pi_write_m.tomb));
     write_vint(writer, _pi_write_m.promoted_index.size());
@@ -3514,9 +3511,13 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
         return write_promoted_index(writer);
     };
 
-    uint64_t pi_size = calculate_write_size(write_pi);
-    write_vint(*_index_writer, pi_size);
-    write_pi(*_index_writer);
+    if (_pi_write_m.promoted_index.size() < 2) {
+        write_vint(*_index_writer, uint64_t(0));
+    } else {
+        uint64_t pi_size = calculate_write_size(write_pi);
+        write_vint(*_index_writer, pi_size);
+        write_pi(*_index_writer);
+    }
 
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
