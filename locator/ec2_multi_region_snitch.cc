@@ -48,46 +48,42 @@ ec2_multi_region_snitch::ec2_multi_region_snitch(const sstring& fname, unsigned 
 future<> ec2_multi_region_snitch::start() {
     _state = snitch_state::initializing;
 
-    return ec2_snitch::load_config().then([this] {
+    return seastar::async([this] {
+        ec2_snitch::load_config().get();
         if (engine().cpu_id() == io_cpu_id()) {
-            return aws_api_call(AWS_QUERY_SERVER_ADDR, PUBLIC_IP_QUERY_REQ).then([this](sstring pub_addr){
-                inet_address local_public_address = inet_address(pub_addr);
-                logger().info("Ec2MultiRegionSnitch using publicIP as identifier: {}", local_public_address);
+            sstring pub_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, PUBLIC_IP_QUERY_REQ).get0();
+            inet_address local_public_address = inet_address(pub_addr);
+            logger().info("Ec2MultiRegionSnitch using publicIP as identifier: {}", local_public_address);
 
-                //
-                // Use the Public IP to broadcast Address to other nodes.
-                //
-                // Cassandra 2.1 manual explicitly instructs to set broadcast_address
-                // value to a public address in cassandra.yaml.
-                //
-                utils::fb_utilities::set_broadcast_address(local_public_address);
-                utils::fb_utilities::set_broadcast_rpc_address(local_public_address);
+            //
+            // Use the Public IP to broadcast Address to other nodes.
+            //
+            // Cassandra 2.1 manual explicitly instructs to set broadcast_address
+            // value to a public address in cassandra.yaml.
+            //
+            utils::fb_utilities::set_broadcast_address(local_public_address);
+            utils::fb_utilities::set_broadcast_rpc_address(local_public_address);
 
-                return aws_api_call(AWS_QUERY_SERVER_ADDR, PRIVATE_IP_QUERY_REQ).then(
-                        [this] (sstring priv_addr) {
-                    _local_private_address = priv_addr;
-                });
-            }).then([this] {
-                //
-                // Gossiper main instance is currently running on CPU0 -
-                // therefore we need to make sure the _local_private_address is
-                // set on the shard0 so that it may be used when Gossiper is
-                // going to invoke gossiper_starting() method.
-                //
-                return _my_distributed->invoke_on(0,
-                    [this] (snitch_ptr& local_s) {
+            sstring priv_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, PRIVATE_IP_QUERY_REQ).get0();
+            _local_private_address = priv_addr;
 
-                    if (engine().cpu_id() != io_cpu_id()) {
-                        local_s->set_local_private_addr(_local_private_address);
-                    }
-                });
-            }).then([this] {
-                set_snitch_ready();
-            });
+            //
+            // Gossiper main instance is currently running on CPU0 -
+            // therefore we need to make sure the _local_private_address is
+            // set on the shard0 so that it may be used when Gossiper is
+            // going to invoke gossiper_starting() method.
+            //
+            _my_distributed->invoke_on(0, [this] (snitch_ptr& local_s) {
+                if (engine().cpu_id() != io_cpu_id()) {
+                    local_s->set_local_private_addr(_local_private_address);
+                }
+            }).get();
+
+            set_snitch_ready();
+            return;
         }
 
         set_snitch_ready();
-        return make_ready_future<>();
     });
 }
 
