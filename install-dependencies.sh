@@ -21,23 +21,18 @@
 
 bash seastar/install-dependencies.sh
 
-if [ "$ID" = "ubuntu" ]; then
-    echo "Adding /etc/apt/sources.list.d/scylla.list"
-
-    if wget "http://downloads.scylladb.com/deb/3rdparty/${VERSION_CODENAME}/scylla-3rdparty.list" -q -O /dev/null; then
-        echo "deb  [trusted=yes arch=amd64] http://downloads.scylladb.com/deb/3rdparty/${VERSION_CODENAME} ${VERSION_CODENAME} scylladb/multiverse" > /etc/apt/sources.list.d/scylla-3rdparty.list
+if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
+    apt-get -y install python3-pyparsing libsnappy-dev libjsoncpp-dev scylla-libthrift010-dev scylla-antlr35-c++-dev thrift-compiler git
+    if [ "$VERSION_ID" = "8" ]; then
+        apt-get -y install libsystemd-dev scylla-antlr35 libyaml-cpp-dev
+    elif [ "$VERSION_ID" = "14.04" ]; then
+        apt-get -y install scylla-antlr35 libyaml-cpp-dev
+    elif [ "$VERSION_ID" = "9" ]; then
+        apt-get -y install libsystemd-dev antlr3 scylla-libyaml-cpp05-dev
     else
-        echo "Packages are not available for your Ubuntu release yet, using the Xenial (16.04) list instead"
-
-        echo "deb  [trusted=yes arch=amd64] http://downloads.scylladb.com/deb/3rdparty/xenial xenial scylladb/multiverse" > /etc/apt/sources.list.d/scylla-3rdparty.list
+        apt-get -y install libsystemd-dev antlr3 libyaml-cpp-dev
     fi
-
-    apt -y update
-
-    apt -y install libsystemd-dev python3-pyparsing libsnappy-dev libjsoncpp-dev libyaml-cpp-dev libthrift-dev antlr3-c++-dev antlr3 thrift-compiler
-elif [ "$ID" = "debian" ]; then
-    apt -y install libyaml-cpp-dev libjsoncpp-dev libsnappy-dev libsystemd-dev
-    echo antlr3 and thrift still missing - waiting for ppa
+    echo -e "Configure example:\n\t./configure.py --enable-dpdk --mode=release --static-thrift --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7 --cflags=\"-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/\" --ldflags=\"-Wl,-rpath=/opt/scylladb/lib\""
 elif [ "$ID" = "fedora" ]; then
     yum install -y yaml-cpp-devel thrift-devel antlr3-tool antlr3-C++-devel jsoncpp-devel snappy-devel systemd-devel
 elif [ "$ID" = "centos" ]; then
