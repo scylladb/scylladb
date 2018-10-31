@@ -126,4 +126,4 @@ if [ ! -d packer ]; then
     cd -
 fi
 
-packer/packer build -var-file=variables.json -var install_args="$INSTALL_ARGS" -var region="$REGION" -var source_ami="$AMI" -var ssh_username="$SSH_USERNAME" scylla.json
+env PACKER_LOG=1 PACKER_LOG_PATH=../../build/ami.log packer/packer build -var-file=variables.json -var install_args="$INSTALL_ARGS" -var region="$REGION" -var source_ami="$AMI" -var ssh_username="$SSH_USERNAME" scylla.json
