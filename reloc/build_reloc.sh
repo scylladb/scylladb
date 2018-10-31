@@ -52,15 +52,6 @@ if [ ! -e reloc/build_reloc.sh ]; then
     exit 1
 fi
 
-NINJA=$(which ninja-build) &&:
-if [ -z "$NINJA" ]; then
-    NINJA=$(which ninja) &&:
-fi
-if [ -z "$NINJA" ]; then
-    echo "ninja not found."
-    exit 1
-fi
-
 if [ "$CLEAN" = "yes" ]; then
     rm -rf build
 fi
@@ -71,6 +62,15 @@ fi
 
 if [ -z "$NODEPS" ]; then
     sudo ./install-dependencies.sh
+fi
+
+NINJA=$(which ninja-build) &&:
+if [ -z "$NINJA" ]; then
+    NINJA=$(which ninja) &&:
+fi
+if [ -z "$NINJA" ]; then
+    echo "ninja not found."
+    exit 1
 fi
 
 FLAGS="--with=scylla --with=iotune --mode=release"
