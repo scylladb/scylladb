@@ -678,6 +678,15 @@ void compaction_manager::on_compaction_complete(compaction_weight_registration& 
     reevaluate_postponed_compactions();
 }
 
+void compaction_manager::propagate_replacement(column_family* cf,
+        const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
+    for (auto& info : _compactions) {
+        if (info->cf == cf) {
+            info->pending_replacements.push_back({ removed, added });
+        }
+    }
+}
+
 double compaction_backlog_tracker::backlog() const {
     return _disabled ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
 }

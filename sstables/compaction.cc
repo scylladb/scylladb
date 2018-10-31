@@ -515,7 +515,7 @@ class regular_compaction : public compaction {
     // store a clone of sstable set for column family, which needs to be alive for incremental selector.
     sstable_set _set;
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
-    sstable_set::incremental_selector _selector;
+    std::optional<sstable_set::incremental_selector> _selector;
     // sstable being currently written.
     shared_sstable _sst;
     stdx::optional<sstable_writer> _writer;
@@ -567,7 +567,7 @@ public:
 
     virtual std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() override {
         return [this] (const dht::decorated_key& dk) {
-            return get_max_purgeable_timestamp(_cf, _selector, _compacting_for_max_purgeable_func, dk);
+            return get_max_purgeable_timestamp(_cf, *_selector, _compacting_for_max_purgeable_func, dk);
         };
     }
 
@@ -592,6 +592,7 @@ public:
             // TODO: calculate encoding_stats based on statistics of compacted sstables
             _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, encoding_stats{}, priority));
         }
+        do_pending_replacements();
         return &*_writer;
     }
 
@@ -653,9 +654,6 @@ private:
             // The goal is that exhausted sstables will be deleted as soon as possible,
             // so we need to release reference to them.
             std::for_each(exhausted, _sstables.end(), [this] (shared_sstable& sst) {
-                if (!_set.all()->empty()) { // set can be empty for testing scenario.
-                    _set.erase(sst);
-                }
                 _compacting_for_max_purgeable_func.erase(sst);
                 _compacting->erase(sst);
                 _monitor_generator.remove_sstable(_info->tracking, sst);
@@ -671,6 +669,31 @@ private:
             std::move(_sstables.begin(), _sstables.end(), std::back_inserter(sstables_compacted));
             _replacer(std::move(sstables_compacted), std::move(_unreplaced_new_tables));
         }
+    }
+
+    void do_pending_replacements() {
+        if (_set.all()->empty() || _info->pending_replacements.empty()) { // set can be empty for testing scenario.
+            return;
+        }
+        auto set = _set;
+        // Releases reference to sstables compacted by this compaction or another, both of which belongs
+        // to the same column family
+        for (auto& pending_replacement : _info->pending_replacements) {
+            for (auto& sst : pending_replacement.removed) {
+                // Set may not contain sstable to be removed because this compaction may have started
+                // before the creation of that sstable.
+                if (!set.all()->count(sst)) {
+                    continue;
+                }
+                set.erase(sst);
+            }
+            for (auto& sst : pending_replacement.added) {
+                set.insert(sst);
+            }
+        }
+        _set = std::move(set);
+        _selector.emplace(_set.make_incremental_selector());
+        _info->pending_replacements.clear();
     }
 };
 

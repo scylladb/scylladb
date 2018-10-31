@@ -219,6 +219,9 @@ public:
         _backlog_manager.register_backlog_tracker(backlog_tracker);
     }
 
+    // Propagate replacement of sstables to all ongoing compaction of a given column family
+    void propagate_replacement(column_family*cf, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
+
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
 };

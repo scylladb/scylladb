@@ -102,6 +102,11 @@ namespace sstables {
         sstring stop_requested;
         bool tracking = true;
         utils::UUID run_identifier;
+        struct replacement {
+            const std::vector<shared_sstable> removed;
+            const std::vector<shared_sstable> added;
+        };
+        std::vector<replacement> pending_replacements;
 
         bool is_stop_requested() const {
             return stop_requested.size() > 0;
