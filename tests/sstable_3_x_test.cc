@@ -3026,7 +3026,6 @@ static sstring get_write_test_path(sstring table_name, bool compressed = false) 
 static void compare_sstables(sstring result_path, sstring table_name, bool compressed = false) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
-                           component_type::Statistics,
                            component_type::Digest,
                            component_type::Filter}) {
         auto orig_filename =
