@@ -197,7 +197,7 @@ using stats_values = std::tuple<
 
 
 struct output_writer {
-    virtual void write_test_group(const test_group& group, bool running) = 0;
+    virtual void write_test_group(const test_group& group, const dataset& ds, bool running) = 0;
 
     virtual void write_test_names(const output_items& param_names, const output_items& stats_names) = 0;
 
@@ -244,8 +244,8 @@ private:
         return stats_values_to_strings_impl(values, std::index_sequence_for<Ts...>{});
     };
 public:
-    void write_test_group(const test_group& group, bool running) override {
-        std::cout << std::endl << (running ? "running: " : "skipping: ") << group.name << std::endl;
+    void write_test_group(const test_group& group, const dataset& ds, bool running) override {
+        std::cout << std::endl << (running ? "running: " : "skipping: ") << group.name << " on dataset " << ds.name() << std::endl;
         if (running) {
             std::cout << group.message << ":" << std::endl;
         }
@@ -347,7 +347,7 @@ public:
         _metadata.run_date_time = get_run_date_time();
     }
 
-    void write_common_test_group(const std::string& name, const std::string& message) {
+    void write_common_test_group(const std::string& name, const std::string& message, const dataset& ds) {
         _static_param = stdx::nullopt;
         _test_count.clear();
         _root = Json::Value{Json::objectValue};
@@ -356,10 +356,11 @@ public:
         fs::create_directory(_current_dir);
         _tg_properties["name"] = name;
         _tg_properties["message"] = message;
+        _tg_properties["dataset"] = ds.name();
     }
 
-    void write_test_group(const test_group& group, bool running) override {
-        write_common_test_group(group.name, group.message);
+    void write_test_group(const test_group& group, const dataset& ds, bool running) override {
+        write_common_test_group(group.name, group.message, ds);
         _tg_properties["partition_type"] = group.partition_type == test_group::large_partition ? "large" : "small";
         _tg_properties["needs_cache"] = (group.needs_cache == test_group::requires_cache::yes);
     }
@@ -469,8 +470,8 @@ public:
         }
     }
 
-    void add_test_group(const test_group& group, bool running) {
-        _writer->write_test_group(group, running);
+    void add_test_group(const test_group& group, const dataset& ds, bool running) {
+        _writer->write_test_group(group, ds, running);
     }
 
     void set_test_param_names(output_items param_names, output_items stats_names) {
@@ -1743,9 +1744,9 @@ int main(int argc, char** argv) {
                                      for (auto&& ds : enabled_datasets) {
                                       if (tc.test_fn->can_run(*ds)) {
                                         if (tc.needs_cache && !cache_enabled) {
-                                            output_mgr->add_test_group(tc, false);
+                                            output_mgr->add_test_group(tc, *ds, false);
                                         } else {
-                                            output_mgr->add_test_group(tc, true);
+                                            output_mgr->add_test_group(tc, *ds, true);
                                             on_test_group();
                                             tc.test_fn->run(find_table(db, *ds), *ds);
                                         }
