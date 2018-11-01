@@ -119,15 +119,15 @@ public:
         assert(_values); // "Got null values type for a collection";
 
         if (!_frozen && _values->supports_freezing() && !_values->_frozen) {
-            throw exceptions::invalid_request_exception(sprint("Non-frozen collections are not allowed inside collections: %s", *this));
+            throw exceptions::invalid_request_exception(format("Non-frozen collections are not allowed inside collections: {}", *this));
         }
         if (_values->is_counter()) {
-            throw exceptions::invalid_request_exception(sprint("Counters are not allowed inside collections: %s", *this));
+            throw exceptions::invalid_request_exception(format("Counters are not allowed inside collections: {}", *this));
         }
 
         if (_keys) {
             if (!_frozen && _keys->supports_freezing() && !_keys->_frozen) {
-                throw exceptions::invalid_request_exception(sprint("Non-frozen collections are not allowed inside collections: %s", *this));
+                throw exceptions::invalid_request_exception(format("Non-frozen collections are not allowed inside collections: {}", *this));
             }
         }
 
@@ -135,13 +135,13 @@ public:
             return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         } else if (_kind == &collection_type_impl::kind::set) {
             if (_values->is_duration()) {
-                throw exceptions::invalid_request_exception(sprint("Durations are not allowed inside sets: %s", *this));
+                throw exceptions::invalid_request_exception(format("Durations are not allowed inside sets: {}", *this));
             }
             return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         } else if (_kind == &collection_type_impl::kind::map) {
             assert(_keys); // "Got null keys type for a collection";
             if (_keys->is_duration()) {
-                throw exceptions::invalid_request_exception(sprint("Durations are not allowed as map keys: %s", *this));
+                throw exceptions::invalid_request_exception(format("Durations are not allowed as map keys: {}", *this));
             }
             return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types)->get_type(), _values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         }
@@ -160,11 +160,11 @@ public:
         sstring start = _frozen ? "frozen<" : "";
         sstring end = _frozen ? ">" : "";
         if (_kind == &collection_type_impl::kind::list) {
-            return sprint("%slist<%s>%s", start, _values, end);
+            return format("{}list<{}>{}", start, _values, end);
         } else if (_kind == &collection_type_impl::kind::set) {
-            return sprint("%sset<%s>%s", start, _values, end);
+            return format("{}set<{}>{}", start, _values, end);
         } else if (_kind == &collection_type_impl::kind::map) {
-            return sprint("%smap<%s, %s>%s", start, _keys, _values, end);
+            return format("{}map<{}, {}>{}", start, _keys, _values, end);
         }
         abort();
     }
@@ -199,7 +199,7 @@ public:
         }
         if (!user_types) {
             // bootstrap mode.
-            throw exceptions::invalid_request_exception(sprint("Unknown type %s", _name));
+            throw exceptions::invalid_request_exception(format("Unknown type {}", _name));
         }
         try {
             auto&& type = user_types->get_type(_name.get_user_type_name());
@@ -208,7 +208,7 @@ public:
             }
             return make_shared<cql3_type>(_name.to_string(), std::move(type));
         } catch (std::out_of_range& e) {
-            throw exceptions::invalid_request_exception(sprint("Unknown type %s", _name));
+            throw exceptions::invalid_request_exception(format("Unknown type {}", _name));
         }
     }
     bool references_user_type(const sstring& name) const override {
@@ -265,7 +265,7 @@ public:
     }
 
     virtual sstring to_string() const override {
-        return sprint("tuple<%s>", join(", ", _types));
+        return format("tuple<{}>", join(", ", _types));
     }
 };
 
@@ -286,7 +286,7 @@ cql3_type::raw::keyspace() const {
 
 void
 cql3_type::raw::freeze() {
-    sstring message = sprint("frozen<> is only allowed on collections, tuples, and user-defined types (got %s)", to_string());
+    sstring message = format("frozen<> is only allowed on collections, tuples, and user-defined types (got {})", to_string());
     throw exceptions::invalid_request_exception(message);
 }
 
@@ -380,7 +380,7 @@ cql3_type::values() {
 
 shared_ptr<cql3_type>
 make_cql3_tuple_type(tuple_type t) {
-    auto name = sprint("tuple<%s>",
+    auto name = format("tuple<{}>",
                        ::join(", ",
                             t->all_types()
                             | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));

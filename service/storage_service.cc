@@ -234,7 +234,7 @@ std::unordered_set<token> get_replace_tokens() {
     try {
         boost::split(tokens, tokens_string, boost::is_any_of(sstring(",")));
     } catch (...) {
-        throw std::runtime_error(sprint("Unable to parse replace_token=%s", tokens_string));
+        throw std::runtime_error(format("Unable to parse replace_token={}", tokens_string));
     }
     tokens.erase("");
     for (auto token_string : tokens) {
@@ -252,7 +252,7 @@ std::experimental::optional<UUID> get_replace_node() {
     try {
         return utils::UUID(replace_node);
     } catch (...) {
-        auto msg = sprint("Unable to parse %s as host-id", replace_node);
+        auto msg = format("Unable to parse {} as host-id", replace_node);
         slogger.error("{}", msg);
         throw std::runtime_error(msg);
     }
@@ -541,7 +541,7 @@ void storage_service::join_token_ring(int delay) {
                         }
                         current.insert(*existing);
                     } else {
-                        throw std::runtime_error(sprint("Cannot replace token %s which does not exist!", token));
+                        throw std::runtime_error(format("Cannot replace token {} which does not exist!", token));
                     }
                 }
             } else {
@@ -549,12 +549,12 @@ void storage_service::join_token_ring(int delay) {
             }
             std::stringstream ss;
             ss << _bootstrap_tokens;
-            set_mode(mode::JOINING, sprint("Replacing a node with token(s): %s", ss.str()), true);
+            set_mode(mode::JOINING, format("Replacing a node with token(s): {}", ss.str()), true);
         }
         bootstrap(_bootstrap_tokens);
         // bootstrap will block until finished
         if (_is_bootstrap_mode) {
-            auto err = sprint("We are not supposed in bootstrap mode any more");
+            auto err = format("We are not supposed in bootstrap mode any more");
             slogger.warn("{}", err);
             throw std::runtime_error(err);
         }
@@ -579,7 +579,7 @@ void storage_service::join_token_ring(int delay) {
             }
         } else {
             if (_bootstrap_tokens.size() != num_tokens) {
-                throw std::runtime_error(sprint("Cannot change the number of tokens from %ld to %ld", _bootstrap_tokens.size(), num_tokens));
+                throw std::runtime_error(format("Cannot change the number of tokens from {:d} to {:d}", _bootstrap_tokens.size(), num_tokens));
             } else {
                 slogger.info("Using saved tokens {}", _bootstrap_tokens);
             }
@@ -603,7 +603,7 @@ void storage_service::join_token_ring(int delay) {
             }
         }
         if (_token_metadata.sorted_tokens().empty()) {
-            auto err = sprint("join_token_ring: Sorted token in token_metadata is empty");
+            auto err = format("join_token_ring: Sorted token in token_metadata is empty");
             slogger.error("{}", err);
             throw std::runtime_error(err);
         }
@@ -642,7 +642,7 @@ future<> storage_service::join_ring() {
                 ss._is_survey_mode = false;
                 slogger.info("Leaving write survey mode and joining ring at operator request");
                 if (ss._token_metadata.sorted_tokens().empty()) {
-                    auto err = sprint("join_ring: Sorted token in token_metadata is empty");
+                    auto err = format("join_ring: Sorted token in token_metadata is empty");
                     slogger.error("{}", err);
                     throw std::runtime_error(err);
                 }
@@ -679,7 +679,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
             { gms::application_state::TOKENS, value_factory.tokens(tokens) },
             { gms::application_state::STATUS, value_factory.bootstrapping(tokens) },
         }).get();
-        set_mode(mode::JOINING, sprint("sleeping %s ms for pending range setup", get_ring_delay().count()), true);
+        set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
         gossiper.wait_for_range_setup().get();
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...
@@ -972,7 +972,7 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
-    throw std::runtime_error(sprint("Move opeartion is not supported only more, endpoint=%s", endpoint));
+    throw std::runtime_error(format("Move opeartion is not supported only more, endpoint={}", endpoint));
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
@@ -1006,14 +1006,14 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             // find the endpoint coordinating this removal that we need to notify when we're done
             auto* value = gossiper.get_application_state_ptr(endpoint, application_state::REMOVAL_COORDINATOR);
             if (!value) {
-                auto err = sprint("Can not find application_state for endpoint=%s", endpoint);
+                auto err = format("Can not find application_state for endpoint={}", endpoint);
                 slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
             std::vector<sstring> coordinator;
             boost::split(coordinator, value->value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
             if (coordinator.size() != 2) {
-                auto err = sprint("Can not split REMOVAL_COORDINATOR for endpoint=%s, value=%s", endpoint, value->value);
+                auto err = format("Can not split REMOVAL_COORDINATOR for endpoint={}, value={}", endpoint, value->value);
                 slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
@@ -1021,7 +1021,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             // grab any data we are now responsible for and notify responsible node
             auto ep = _token_metadata.get_endpoint_for_host_id(host_id);
             if (!ep) {
-                auto err = sprint("Can not find host_id=%s", host_id);
+                auto err = format("Can not find host_id={}", host_id);
                 slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
@@ -1504,7 +1504,7 @@ future<> storage_service::replicate_to_all_cores() {
     // sanity checks: this function is supposed to be run on shard 0 only and
     // when gossiper has already been initialized.
     if (engine().cpu_id() != 0) {
-        auto err = sprint("replicate_to_all_cores is not ran on cpu zero");
+        auto err = format("replicate_to_all_cores is not ran on cpu zero");
         slogger.warn("{}", err);
         throw std::runtime_error(err);
     }
@@ -1602,7 +1602,7 @@ void storage_service::remove_endpoint(inet_address endpoint) {
 
 future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
     if (!db().local().get_replace_address()) {
-        throw std::runtime_error(sprint("replace_address is empty"));
+        throw std::runtime_error(format("replace_address is empty"));
     }
     auto replace_address = db().local().get_replace_address().value();
     slogger.info("Gathering node replacement information for {}", replace_address);
@@ -1611,7 +1611,7 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
     //     MessagingService.instance().listen(FBUtilities.getLocalAddress());
     auto seeds = gms::get_local_gossiper().get_seeds();
     if (seeds.size() == 1 && seeds.count(replace_address)) {
-        throw std::runtime_error(sprint("Cannot replace_address %s because no seed node is up", replace_address));
+        throw std::runtime_error(format("Cannot replace_address {} because no seed node is up", replace_address));
     }
 
     // make magic happen
@@ -1622,12 +1622,12 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
         // now that we've gossiped at least once, we should be able to find the node we're replacing
         auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
         if (!state) {
-            throw std::runtime_error(sprint("Cannot replace_address %s because it doesn't exist in gossip", replace_address));
+            throw std::runtime_error(format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
         }
         auto host_id = gossiper.get_host_id(replace_address);
         auto* value = state->get_application_state_ptr(application_state::TOKENS);
         if (!value) {
-            throw std::runtime_error(sprint("Could not find tokens for %s to replace", replace_address));
+            throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
         }
         auto tokens = get_tokens_for(replace_address);
         // use the replacee's host Id as our own so we receive hints, etc
@@ -1740,7 +1740,7 @@ future<std::unordered_set<dht::token>> storage_service::get_local_tokens() {
     return db::system_keyspace::get_saved_tokens().then([] (auto&& tokens) {
         // should not be called before initServer sets this
         if (tokens.empty()) {
-            auto err = sprint("get_local_tokens: tokens is empty");
+            auto err = format("get_local_tokens: tokens is empty");
             slogger.error("{}", err);
             throw std::runtime_error(err);
         }
@@ -1805,7 +1805,7 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
 future<sstring> storage_service::get_operation_mode() {
     return run_with_no_api_lock([] (storage_service& ss) {
         auto mode = ss._operation_mode;
-        return make_ready_future<sstring>(sprint("%s", mode));
+        return make_ready_future<sstring>(format("{}", mode));
     });
 }
 
@@ -1879,7 +1879,7 @@ future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
         auto& cf = db.find_column_family(pair.second);
         return cf.snapshot_exists(name).then([ks_name = std::move(ks_name), name] (bool exists) {
             if (exists) {
-                throw std::runtime_error(sprint("Keyspace %s: snapshot %s already exists.", ks_name, name));
+                throw std::runtime_error(format("Keyspace {}: snapshot {} already exists.", ks_name, name));
             }
         });
     });
@@ -2200,7 +2200,7 @@ future<> storage_service::decommission() {
             }
 
             if (ss._operation_mode != mode::NORMAL) {
-                throw std::runtime_error(sprint("Node in %s state; wait for status to become normal or restart", ss._operation_mode));
+                throw std::runtime_error(format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
             }
 
             ss.update_pending_ranges().get();
@@ -2216,7 +2216,7 @@ future<> storage_service::decommission() {
             ss.start_leaving().get();
             // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
             auto timeout = ss.get_ring_delay();
-            ss.set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout.count()), true);
+            ss.set_mode(mode::LEAVING, format("sleeping {} ms for batch processing and pending range setup", timeout.count()), true);
             sleep(timeout).get();
 
             slogger.info("DECOMMISSIONING: unbootstrap starts");
@@ -2269,7 +2269,7 @@ future<> storage_service::removenode(sstring host_id_string) {
             }
 
             if (gossiper.get_live_members().count(endpoint)) {
-                throw std::runtime_error(sprint("Node %s is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
+                throw std::runtime_error(format("Node {} is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
             }
 
             // A leaving endpoint that is dead is already being removed.
@@ -2451,7 +2451,7 @@ double storage_service::get_load() {
 }
 
 sstring storage_service::get_load_string() {
-    return sprint("%f", get_load());
+    return format("{:f}", get_load());
 }
 
 future<std::map<sstring, double>> storage_service::get_load_map() {
@@ -2460,13 +2460,13 @@ future<std::map<sstring, double>> storage_service::get_load_map() {
         auto& lb = ss.get_load_broadcaster();
         if (lb) {
             for (auto& x : lb->get_load_info()) {
-                load_map.emplace(sprint("%s", x.first), x.second);
+                load_map.emplace(format("{}", x.first), x.second);
                 slogger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
             }
         } else {
             slogger.debug("load_broadcaster is not set yet!");
         }
-        load_map.emplace(sprint("%s", ss.get_broadcast_address()), ss.get_load());
+        load_map.emplace(format("{}", ss.get_broadcast_address()), ss.get_load());
         return load_map;
     });
 }
@@ -2704,7 +2704,7 @@ future<> storage_service::send_replication_notification(inet_address remote) {
 
 future<> storage_service::confirm_replication(inet_address node) {
     return run_with_no_api_lock([node] (storage_service& ss) {
-        auto removing_node = bool(ss._removing_node) ? sprint("%s", *ss._removing_node) : "NONE";
+        auto removing_node = bool(ss._removing_node) ? format("{}", *ss._removing_node) : "NONE";
         slogger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
         // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
         // but restarted before all 'replication finished' messages arrived. In that case, we'll
@@ -2928,7 +2928,7 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
         std::vector<inet_address> sources = snitch->get_sorted_list_by_proximity(my_address, possible_nodes);
 
         if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
-            auto err = sprint("get_new_source_ranges: sources=%s, my_address=%s", sources, my_address);
+            auto err = format("get_new_source_ranges: sources={}, my_address={}", sources, my_address);
             slogger.warn("{}", err);
             throw std::runtime_error(err);
         }
@@ -3092,7 +3092,7 @@ future<sstring> storage_service::get_removal_status() {
         if (tokens.empty()) {
             return make_ready_future<sstring>(sstring("Node has no token"));
         }
-        auto status = sprint("Removing token (%s). Waiting for replication confirmation from [%s].",
+        auto status = format("Removing token ({}). Waiting for replication confirmation from [{}].",
                 tokens.front(), join(",", ss._replicating_nodes));
         return make_ready_future<sstring>(status);
     });
@@ -3103,7 +3103,7 @@ future<> storage_service::force_remove_completion() {
         return seastar::async([&ss] {
             if (!ss._operation_in_progress.empty()) {
                 if (ss._operation_in_progress != sstring("removenode")) {
-                    throw std::runtime_error(sprint("Operation %s is in progress, try again", ss._operation_in_progress));
+                    throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
                 } else {
                     // This flag will make removenode stop waiting for the confirmation
                     ss._force_remove_completion = true;

@@ -102,7 +102,7 @@ public:
         for (auto& sstable : sstables) {
             uint32_t level = sstable->get_sstable_level();
             if (level >= manifest._generations.size()) {
-                throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (manifest._generations.size() - 1)));
+                throw std::runtime_error(format("Invalid level {:d} out of {:d}", level, (manifest._generations.size() - 1)));
             }
             logger.debug("Adding {} to L{}", sstable->get_filename(), level);
             manifest._generations[level].push_back(sstable);
@@ -149,7 +149,7 @@ public:
         }
         double bytes = pow(leveled_fan_out, level) * max_sstable_size_in_bytes;
         if (bytes > std::numeric_limits<int64_t>::max()) {
-            throw std::runtime_error(sprint("At most %ld bytes may be in a compaction level; your maxSSTableSize must be absurdly high to compute %f", 
+            throw std::runtime_error(format("At most {:d} bytes may be in a compaction level; your maxSSTableSize must be absurdly high to compute {:f}", 
                 std::numeric_limits<int64_t>::max(), bytes));
         }
         uint64_t bytes_u64 = bytes;
@@ -455,7 +455,7 @@ private:
         int idx = 0;
         for (auto& sstable : sstables) {
             if (uint32_t(level) >= last_compacted_keys.size()) {
-                throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (last_compacted_keys.size() - 1)));
+                throw std::runtime_error(format("Invalid level {:d} out of {:d}", level, (last_compacted_keys.size() - 1)));
             }
             auto& sstable_first = sstable->get_first_decorated_key();
             if (!last_compacted_keys[level] || sstable_first.tri_compare(s, *last_compacted_keys[level]) > 0) {

@@ -490,7 +490,7 @@ future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_meta
     ksm->validate();
     auto& proxy = get_local_storage_proxy();
     if (!proxy.get_db().local().has_keyspace(ksm->name())) {
-        throw exceptions::configuration_exception(sprint("Cannot update non existing keyspace '%s'.", ksm->name()));
+        throw exceptions::configuration_exception(format("Cannot update non existing keyspace '{}'.", ksm->name()));
     }
     mlogger.info("Update Keyspace: {}", ksm);
     auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
@@ -525,7 +525,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
         }
         if (db.column_family_exists(cfm->id())) {
-            throw exceptions::invalid_request_exception(sprint("Table with ID %s already exists: %s", cfm->id(), db.find_schema(cfm->id())));
+            throw exceptions::invalid_request_exception(format("Table with ID {} already exists: {}", cfm->id(), db.find_schema(cfm->id())));
         }
 
         mlogger.info("Create new ColumnFamily: {}", cfm);
@@ -534,7 +534,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
                 return announce(std::move(mutations), announce_locally);
             });
     } catch (const no_such_keyspace& e) {
-        throw exceptions::configuration_exception(sprint("Cannot add table '%s' to non existing keyspace '%s'.", cfm->cf_name(), cfm->ks_name()));
+        throw exceptions::configuration_exception(format("Cannot add table '{}' to non existing keyspace '{}'.", cfm->cf_name(), cfm->ks_name()));
     }
 }
 
@@ -569,7 +569,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
                 });
             });
     } catch (const no_such_column_family& e) {
-        throw exceptions::configuration_exception(sprint("Cannot update non existing table '%s' in keyspace '%s'.",
+        throw exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
                                                          cfm->cf_name(), cfm->ks_name()));
     }
 }
@@ -650,7 +650,7 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name, bool 
 {
     auto& db = get_local_storage_proxy().get_db().local();
     if (!db.has_keyspace(ks_name)) {
-        throw exceptions::configuration_exception(sprint("Cannot drop non existing keyspace '%s'.", ks_name));
+        throw exceptions::configuration_exception(format("Cannot drop non existing keyspace '{}'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
@@ -674,8 +674,7 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
             auto explicit_view_names = views
                                        | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
                                        | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
-            throw exceptions::invalid_request_exception(sprint(
-                        "Cannot drop table when materialized views still depend on it (%s.{%s})",
+            throw exceptions::invalid_request_exception(format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
                         ks_name, ::join(", ", explicit_view_names)));
         }
         mlogger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
@@ -694,7 +693,7 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
                 });
         });
     } catch (const no_such_column_family& e) {
-        throw exceptions::configuration_exception(sprint("Cannot drop non existing table '%s' in keyspace '%s'.", cf_name, ks_name));
+        throw exceptions::configuration_exception(format("Cannot drop non existing table '{}' in keyspace '{}'.", cf_name, ks_name));
     }
 
 }
@@ -727,7 +726,7 @@ future<> migration_manager::announce_new_view(view_ptr view, bool announce_local
                 return announce(std::move(mutations), announce_locally);
             });
     } catch (const no_such_keyspace& e) {
-        throw exceptions::configuration_exception(sprint("Cannot add view '%s' to non existing keyspace '%s'.", view->cf_name(), view->ks_name()));
+        throw exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name()));
     }
 }
 
@@ -752,7 +751,7 @@ future<> migration_manager::announce_view_update(view_ptr view, bool announce_lo
                 return announce(std::move(mutations), announce_locally);
             });
     } catch (const std::out_of_range& e) {
-        throw exceptions::configuration_exception(sprint("Cannot update non existing materialized view '%s' in keyspace '%s'.",
+        throw exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
                                                          view->cf_name(), view->ks_name()));
     }
 }
@@ -777,7 +776,7 @@ future<> migration_manager::announce_view_drop(const sstring& ks_name,
                 return announce(std::move(mutations), announce_locally);
             });
     } catch (const no_such_column_family& e) {
-        throw exceptions::configuration_exception(sprint("Cannot drop non existing materialized view '%s' in keyspace '%s'.",
+        throw exceptions::configuration_exception(format("Cannot drop non existing materialized view '{}' in keyspace '{}'.",
                                                          cf_name, ks_name));
     }
 }

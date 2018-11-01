@@ -290,7 +290,7 @@ public:
     struct default_exception_thrower {
         [[noreturn]] [[gnu::cold]]
         static void throw_out_of_range(size_t attempted_read, size_t actual_left) {
-            throw std::out_of_range(sprint("attempted to read %d bytes from a %d byte buffer", attempted_read, actual_left));
+            throw std::out_of_range(format("attempted to read {:d} bytes from a {:d} byte buffer", attempted_read, actual_left));
         }
     };
     GCC6_CONCEPT(static_assert(fragmented_temporary_buffer_concepts::ExceptionThrower<default_exception_thrower>));

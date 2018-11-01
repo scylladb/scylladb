@@ -396,7 +396,7 @@ private:
 
     void set_username(const stdx::optional<auth::authenticated_user>& user) {
         if (user) {
-            _records->session_rec.username = sprint("%s", *user);
+            _records->session_rec.username = format("{}", *user);
         }
     }
 

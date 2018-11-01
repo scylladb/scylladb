@@ -49,7 +49,7 @@ void time_it(Func func, int iterations = 5, int iterations_between_clock_reading
 
         auto end = clk::now();
         auto duration = std::chrono::duration<double>(end - start).count();
-        std::cout << sprint("%.2f", (double)count / duration) << " tps\n";
+        std::cout << format("{:.2f}", (double)count / duration) << " tps\n";
     }
 }
 
@@ -132,7 +132,7 @@ future<> time_parallel(Func func, unsigned concurrency_per_core, int iterations 
         }).then([start] (auto total) {
             auto end = clk::now();
             auto duration = std::chrono::duration<double>(end - start).count();
-            std::cout << sprint("%.2f", (double)total / duration) << " tps\n";
+            std::cout << format("{:.2f}", (double)total / duration) << " tps\n";
         }).then([exec] {
             return exec->stop().finally([exec] {});
         });

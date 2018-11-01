@@ -155,12 +155,11 @@ public:
     }
 
     virtual sstring to_string() const override {
-        return sprint("EQ(%s)", _value->to_string());
+        return format("EQ({})", _value->to_string());
     }
 
     virtual void merge_with(::shared_ptr<restriction> other) {
-        throw exceptions::invalid_request_exception(sprint(
-            "%s cannot be restricted by more than one relation if it includes an Equal", _column_def.name_as_text()));
+        throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal", _column_def.name_as_text()));
     }
 
     virtual bool is_satisfied_by(const schema& schema,
@@ -198,8 +197,7 @@ public:
     }
 
     virtual void merge_with(::shared_ptr<restriction> r) override {
-        throw exceptions::invalid_request_exception(sprint(
-            "%s cannot be restricted by more than one relation if it includes a IN", _column_def.name_as_text()));
+        throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN", _column_def.name_as_text()));
     }
 
     virtual bool is_satisfied_by(const schema& schema,
@@ -252,7 +250,7 @@ public:
     }
 
     virtual sstring to_string() const override {
-        return sprint("IN(%s)", std::to_string(_values));
+        return format("IN({})", std::to_string(_values));
     }
 
     virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
@@ -334,20 +332,17 @@ public:
 
     virtual void merge_with(::shared_ptr<restriction> r) override {
         if (!r->is_slice()) {
-            throw exceptions::invalid_request_exception(sprint(
-                "Column \"%s\" cannot be restricted by both an equality and an inequality relation", _column_def.name_as_text()));
+            throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation", _column_def.name_as_text()));
         }
 
         auto other_slice = static_pointer_cast<slice>(r);
 
         if (has_bound(statements::bound::START) && other_slice->has_bound(statements::bound::START)) {
-            throw exceptions::invalid_request_exception(sprint(
-                   "More than one restriction was found for the start bound on %s", _column_def.name_as_text()));
+            throw exceptions::invalid_request_exception(format("More than one restriction was found for the start bound on {}", _column_def.name_as_text()));
         }
 
         if (has_bound(statements::bound::END) && other_slice->has_bound(statements::bound::END)) {
-            throw exceptions::invalid_request_exception(sprint(
-                "More than one restriction was found for the end bound on %s", _column_def.name_as_text()));
+            throw exceptions::invalid_request_exception(format("More than one restriction was found for the end bound on {}", _column_def.name_as_text()));
         }
 
         _slice.merge(other_slice->_slice);
@@ -379,7 +374,7 @@ public:
 #endif
 
     virtual sstring to_string() const override {
-        return sprint("SLICE%s", _slice);
+        return format("SLICE{}", _slice);
     }
 
     virtual bool is_satisfied_by(const schema& schema,
@@ -427,8 +422,7 @@ public:
 
     virtual void merge_with(::shared_ptr<restriction> other_restriction) override {
         if (!other_restriction->is_contains()) {
-            throw exceptions::invalid_request_exception(sprint(
-                      "Collection column %s can only be restricted by CONTAINS, CONTAINS KEY, or map-entry equality",
+            throw exceptions::invalid_request_exception(format("Collection column {} can only be restricted by CONTAINS, CONTAINS KEY, or map-entry equality",
                       get_column_def().name_as_text()));
         }
 
@@ -491,7 +485,7 @@ public:
     }
 
     virtual sstring to_string() const override {
-        return sprint("CONTAINS(values=%s, keys=%s, entryKeys=%s, entryValues=%s)",
+        return format("CONTAINS(values={}, keys={}, entryKeys={}, entryValues={})",
             std::to_string(_values), std::to_string(_keys), std::to_string(_entry_keys), std::to_string(_entry_values));
     }
 

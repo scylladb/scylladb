@@ -965,7 +965,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
         // make sure it did not change
         auto& eps = get_endpoint_state(endpoint);
         if (eps.get_heart_beat_state().get_generation() != generation) {
-            throw std::runtime_error(sprint("Endpoint %s generation changed while trying to remove it", endpoint));
+            throw std::runtime_error(format("Endpoint {} generation changed while trying to remove it", endpoint));
         }
 
         // update the other node's generation to mimic it as if it had changed it itself
@@ -1017,7 +1017,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
                 tokens = ss.get_token_metadata().get_tokens(endpoint);
                 if (tokens.empty()) {
                     logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
-                    throw std::runtime_error(sprint("Unable to calculate tokens for %s", endpoint));
+                    throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
                 }
 
                 int generation = ep_state.get_heart_beat_state().get_generation();
@@ -1032,9 +1032,9 @@ future<> gossiper::assassinate_endpoint(sstring address) {
                 } else {
                     auto& new_state = *es;
                     if (new_state.get_heart_beat_state().get_generation() != generation) {
-                        throw std::runtime_error(sprint("Endpoint still alive: %s generation changed while trying to assassinate it", endpoint));
+                        throw std::runtime_error(format("Endpoint still alive: {} generation changed while trying to assassinate it", endpoint));
                     } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
-                        throw std::runtime_error(sprint("Endpoint still alive: %s heartbeat changed while trying to assassinate it", endpoint));
+                        throw std::runtime_error(format("Endpoint still alive: {} heartbeat changed while trying to assassinate it", endpoint));
                     }
                 }
                 ep_state.update_timestamp(); // make sure we don't evict it too soon
@@ -1161,7 +1161,7 @@ endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) {
 endpoint_state& gossiper::get_endpoint_state(inet_address ep) {
     auto ptr = get_endpoint_state_for_endpoint_ptr(ep);
     if (!ptr) {
-        throw std::out_of_range(sprint("ep=%s", ep));
+        throw std::out_of_range(format("ep={}", ep));
     }
     return *ptr;
 }
@@ -1195,11 +1195,11 @@ bool gossiper::uses_host_id(inet_address endpoint) {
 
 utils::UUID gossiper::get_host_id(inet_address endpoint) {
     if (!uses_host_id(endpoint)) {
-        throw std::runtime_error(sprint("Host %s does not use new-style tokens!", endpoint));
+        throw std::runtime_error(format("Host {} does not use new-style tokens!", endpoint));
     }
     auto app_state = get_application_state_ptr(endpoint, application_state::HOST_ID);
     if (!app_state) {
-        throw std::runtime_error(sprint("Host %s does not have HOST_ID application_state", endpoint));
+        throw std::runtime_error(format("Host {} does not have HOST_ID application_state", endpoint));
     }
     return utils::UUID(app_state->value);
 }
@@ -1242,7 +1242,7 @@ int gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
     auto* ep1 = get_endpoint_state_for_endpoint_ptr(addr1);
     auto* ep2 = get_endpoint_state_for_endpoint_ptr(addr2);
     if (!ep1 || !ep2) {
-        auto err = sprint("Can not get endpoint_state for %s or %s", addr1, addr2);
+        auto err = format("Can not get endpoint_state for {} or {}", addr1, addr2);
         logger.warn("{}", err);
         throw std::runtime_error(err);
     }
@@ -1463,7 +1463,7 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
         auto remote_gen = remote_state.get_heart_beat_state().get_generation();
         auto local_gen = local_state.get_heart_beat_state().get_generation();
         if(remote_gen != local_gen) {
-            auto err = sprint("Remote generation %d != local generation %d", remote_gen, local_gen);
+            auto err = format("Remote generation {:d} != local generation {:d}", remote_gen, local_gen);
             logger.warn("{}", err);
             throw std::runtime_error(err);
         }
@@ -1636,7 +1636,7 @@ future<> gossiper::do_shadow_round() {
             sleep(std::chrono::seconds(1)).get();
             if (this->_in_shadow_round) {
                 if (clk::now() > t + std::chrono::milliseconds(cfg.shadow_round_ms())) {
-                    throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
+                    throw std::runtime_error(format("Unable to gossip with any seeds (ShadowRound)"));
                 }
                 logger.info("Connect seeds again ... ({} seconds passed)", std::chrono::duration_cast<std::chrono::seconds>(clk::now() - t).count());
             }
@@ -1734,7 +1734,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
             auto permit = gossiper.lock_endpoint(ep_addr).get0();
             auto es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
             if (!es) {
-                auto err = sprint("endpoint_state_map does not contain endpoint = %s, application_states = %s",
+                auto err = format("endpoint_state_map does not contain endpoint = {}, application_states = {}",
                                   ep_addr, states);
                 logger.error("{}", err);
                 throw std::runtime_error(err);
@@ -2120,7 +2120,7 @@ void gossiper::check_knows_remote_features(sstring local_features_string) const 
         logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
                 local_endpoint, local_features, common_features);
     } else {
-        throw std::runtime_error(sprint("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node %s features = %s, Remote common_features = %s", local_endpoint, local_features, common_features));
+        throw std::runtime_error(format("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node {} features = {}, Remote common_features = {}", local_endpoint, local_features, common_features));
     }
 }
 
@@ -2132,7 +2132,7 @@ void gossiper::check_knows_remote_features(sstring local_features_string, std::u
         logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
                 local_endpoint, local_features, common_features);
     } else {
-        throw std::runtime_error(sprint("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node %s features = %s, Remote common_features = %s", local_endpoint, local_features, common_features));
+        throw std::runtime_error(format("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node {} features = {}, Remote common_features = {}", local_endpoint, local_features, common_features));
     }
 }
 

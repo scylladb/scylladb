@@ -54,10 +54,10 @@ public:
 
     virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
         if (!is_assignable(_term->test_assignment(db, keyspace, casted_spec_of(db, keyspace, receiver)))) {
-            throw exceptions::invalid_request_exception(sprint("Cannot cast value %s to type %s", _term, _type));
+            throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", _term, _type));
         }
         if (!is_assignable(test_assignment(db, keyspace, receiver))) {
-            throw exceptions::invalid_request_exception(sprint("Cannot assign value %s to %s of type %s", *this, receiver->name, receiver->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", *this, receiver->name, receiver->type->as_cql3_type()));
         }
         return _term->prepare(db, keyspace, receiver);
     }
@@ -83,7 +83,7 @@ public:
     }
 
     virtual sstring to_string() const override {
-        return sprint("(%s)%s", _type, _term);
+        return format("({}){}", _type, _term);
     }
 };
 

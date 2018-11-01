@@ -102,10 +102,10 @@ partition_slice_builder::with_regular_column(bytes name) {
 
     const column_definition* def = _schema.get_column_definition(name);
     if (!def) {
-        throw std::runtime_error(sprint("No such column: %s", _schema.regular_column_name_type()->to_string(name)));
+        throw std::runtime_error(format("No such column: {}", _schema.regular_column_name_type()->to_string(name)));
     }
     if (!def->is_regular()) {
-        throw std::runtime_error(sprint("Column is not regular: %s", _schema.column_name_type(*def)->to_string(name)));
+        throw std::runtime_error(format("Column is not regular: {}", _schema.column_name_type(*def)->to_string(name)));
     }
     _regular_columns->push_back(def->id);
     return *this;
@@ -125,10 +125,10 @@ partition_slice_builder::with_static_column(bytes name) {
 
     const column_definition* def = _schema.get_column_definition(name);
     if (!def) {
-        throw std::runtime_error(sprint("No such column: %s", utf8_type->to_string(name)));
+        throw std::runtime_error(format("No such column: {}", utf8_type->to_string(name)));
     }
     if (!def->is_static()) {
-        throw std::runtime_error(sprint("Column is not static: %s", utf8_type->to_string(name)));
+        throw std::runtime_error(format("Column is not static: {}", utf8_type->to_string(name)));
     }
     _static_columns->push_back(def->id);
     return *this;

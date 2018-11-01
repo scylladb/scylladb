@@ -227,7 +227,7 @@ verify_seastar_io_scheduler(bool has_max_io_requests, bool has_properties, bool 
         if (has_max_io_requests) {
             auto capacity = engine().get_io_queue().capacity();
             if (capacity < 4) {
-                auto cause = sprint("I/O Queue capacity for this shard is too low (%ld, minimum 4 expected).", capacity);
+                auto cause = format("I/O Queue capacity for this shard is too low ({:d}, minimum 4 expected).", capacity);
                 note_bad_conf(cause);
             }
         }
@@ -305,7 +305,7 @@ int main(int ac, char** av) {
     bpo::variables_map vm;
     bpo::store(bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run(), vm);
     if (vm["version"].as<bool>()) {
-        print("%s\n", scylla_version());
+        fmt::print("{}\n", scylla_version());
         return 0;
     }
 
@@ -334,7 +334,7 @@ int main(int ac, char** av) {
 
     return app.run_deprecated(ac, av, [&] {
 
-        print("Scylla version %s starting ...\n", scylla_version());
+        fmt::print("Scylla version {} starting ...\n", scylla_version());
         auto&& opts = app.configuration();
 
         namespace sm = seastar::metrics;
@@ -345,7 +345,7 @@ int main(int ac, char** av) {
         const std::unordered_set<sstring> ignored_options = { "auto-adjust-flush-quota", "background-writer-scheduling-quota" };
         for (auto& opt: ignored_options) {
             if (opts.count(opt)) {
-                print("%s option ignored (deprecated)\n", opt);
+                fmt::print("{} option ignored (deprecated)\n", opt);
             }
         }
 

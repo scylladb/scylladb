@@ -92,7 +92,7 @@ public:
     }
 
     virtual sstring column_name(const std::vector<sstring>& column_names) override {
-        return sprint("%s(%s)", _name, join(", ", column_names));
+        return format("{}({})", _name, join(", ", column_names));
     }
 
     virtual void print(std::ostream& os) const override;

@@ -149,19 +149,19 @@ BOOST_AUTO_TEST_CASE(output) {
     // data
     //
 
-    BOOST_REQUIRE_EQUAL(sprint("%s", auth::root_data_resource()), "<all keyspaces>");
-    BOOST_REQUIRE_EQUAL(sprint("%s", auth::make_data_resource("my_keyspace")), "<keyspace my_keyspace>");
+    BOOST_REQUIRE_EQUAL(format("{}", auth::root_data_resource()), "<all keyspaces>");
+    BOOST_REQUIRE_EQUAL(format("{}", auth::make_data_resource("my_keyspace")), "<keyspace my_keyspace>");
 
     BOOST_REQUIRE_EQUAL(
-            sprint("%s", auth::make_data_resource("my_keyspace", "my_table")),
+            format("{}", auth::make_data_resource("my_keyspace", "my_table")),
             "<table my_keyspace.my_table>");
 
     //
     // role
     //
 
-    BOOST_REQUIRE_EQUAL(sprint("%s", auth::root_role_resource()), "<all roles>");
-    BOOST_REQUIRE_EQUAL(sprint("%s", auth::make_role_resource("joe")), "<role joe>");
+    BOOST_REQUIRE_EQUAL(format("{}", auth::root_role_resource()), "<all roles>");
+    BOOST_REQUIRE_EQUAL(format("{}", auth::make_role_resource("joe")), "<role joe>");
 }
 
 BOOST_AUTO_TEST_CASE(expand) {

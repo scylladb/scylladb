@@ -139,7 +139,7 @@ void set_messaging_service(http_context& ctx, routes& r) {
                 messaging_verb v = i; // for type safety we use messaging_verb values
                 auto idx = static_cast<uint32_t>(v);
                 if (idx >= map->size()) {
-                    throw std::runtime_error(sprint("verb index out of bounds: %lu, map size: %lu", idx, map->size()));
+                    throw std::runtime_error(format("verb index out of bounds: {:d}, map size: {:d}", idx, map->size()));
                 }
                 if ((*map)[idx] > 0) {
                     c.count = (*map)[idx];

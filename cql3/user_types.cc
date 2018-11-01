@@ -93,7 +93,7 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
         for (auto&& id_val : _entries) {
             auto&& id = id_val.first;
             if (!boost::range::count(ut->field_names(), id.bytes_)) {
-                throw exceptions::invalid_request_exception(sprint("Unknown field '%s' in value of user defined type %s", id, ut->get_name_as_string()));
+                throw exceptions::invalid_request_exception(format("Unknown field '{}' in value of user defined type {}", id, ut->get_name_as_string()));
             }
         }
     }
@@ -109,7 +109,7 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
 void user_types::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
     auto&& ut = dynamic_pointer_cast<const user_type_impl>(receiver->type);
     if (!ut) {
-        throw exceptions::invalid_request_exception(sprint("Invalid user type literal for %s of type %s", receiver->name, receiver->type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
     }
 
     for (size_t i = 0; i < ut->size(); i++) {
@@ -120,7 +120,7 @@ void user_types::literal::validate_assignable_to(database& db, const sstring& ke
         shared_ptr<term::raw> value = _entries[field];
         auto&& field_spec = field_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, field_spec))) {
-            throw exceptions::invalid_request_exception(sprint("Invalid user type literal for %s: field %s is not of type %s", receiver->name, field, field_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver->name, field, field_spec->type->as_cql3_type()));
         }
     }
 }
@@ -139,8 +139,8 @@ sstring user_types::literal::assignment_testable_source_context() const {
 }
 
 sstring user_types::literal::to_string() const {
-    auto kv_to_str = [] (auto&& kv) { return sprint("%s:%s", kv.first, kv.second); };
-    return sprint("{%s}", ::join(", ", _entries | boost::adaptors::transformed(kv_to_str)));
+    auto kv_to_str = [] (auto&& kv) { return format("{}:{}", kv.first, kv.second); };
+    return format("{{{}}}", ::join(", ", _entries | boost::adaptors::transformed(kv_to_str)));
 }
 
 user_types::delayed_value::delayed_value(user_type type, std::vector<shared_ptr<term>> values)
@@ -166,7 +166,7 @@ std::vector<cql3::raw_value> user_types::delayed_value::bind_internal(const quer
     for (size_t i = 0; i < _type->size(); ++i) {
         const auto& value = _values[i]->bind_and_get(options);
         if (!_type->is_multi_cell() && value.is_unset_value()) {
-            throw exceptions::invalid_request_exception(sprint("Invalid unset value for field '%s' of user defined type %s", _type->field_name_as_string(i), _type->get_name_as_string()));
+            throw exceptions::invalid_request_exception(format("Invalid unset value for field '{}' of user defined type {}", _type->field_name_as_string(i), _type->get_name_as_string()));
         }
         buffers.push_back(cql3::raw_value::make_value(value));
         // Inside UDT values, we must force the serialization of collections to v3 whatever protocol

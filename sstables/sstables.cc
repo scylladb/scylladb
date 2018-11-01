@@ -732,7 +732,7 @@ inline void write(sstable_version_types v, file_writer& out, const summary& s) {
 future<summary_entry&> sstable::read_summary_entry(size_t i) {
     // The last one is the boundary marker
     if (i >= (_components->summary.entries.size())) {
-        throw std::out_of_range(sprint("Invalid Summary index: %ld", i));
+        throw std::out_of_range(format("Invalid Summary index: {:d}", i));
     }
 
     return make_ready_future<summary_entry&>(_components->summary.entries[i]);
@@ -1059,7 +1059,7 @@ void sstable::write_toc(const io_priority_class& pc) {
         // the generation of a sstable that exists.
         f.close().get();
         remove_file(file_path).get();
-        throw std::runtime_error(sprint("SSTable write failed due to existence of TOC file for generation %ld of %s.%s", _generation, _schema->ks_name(), _schema->cf_name()));
+        throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {:d} of {}.{}", _generation, _schema->ks_name(), _schema->cf_name()));
     }
 
     file_output_stream_options options;
@@ -1582,7 +1582,7 @@ static void write_compound_non_dense_column_name(sstable_version_types v, Writer
     }
     size_t sz = ck_bview.size() + c.size();
     if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+        throw std::runtime_error(format("Column name too large ({:d} > {:d})", sz, std::numeric_limits<uint16_t>::max()));
     }
     out.prepare(uint16_t(sz));
     out.write(ck_bview, c);
@@ -1597,7 +1597,7 @@ template<typename Writer>
 static void write_column_name(sstable_version_types v, Writer& out, bytes_view column_names) {
     size_t sz = column_names.size();
     if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+        throw std::runtime_error(format("Column name too large ({:d} > {:d})", sz, std::numeric_limits<uint16_t>::max()));
     }
     out.prepare(uint16_t(sz));
     out.write(column_names);
@@ -1913,7 +1913,7 @@ void sstable::write_range_tombstone(file_writer& out,
         const tombstone t,
         column_mask mask) {
     if (!_schema->is_compound() && (start_marker == composite::eoc::end || end_marker == composite::eoc::start)) {
-        throw std::logic_error(sprint("Cannot represent marker type in range tombstone for non-compound schemas"));
+        throw std::logic_error(format("Cannot represent marker type in range tombstone for non-compound schemas"));
     }
     write_range_tombstone_bound(out, *_schema, start, suffix, start_marker);
     write(_version, out, mask);
@@ -2439,7 +2439,7 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
     if (sm.token_ranges.elements.empty()) {
-        throw std::runtime_error(sprint("Failed to generate sharding metadata for %s", get_filename()));
+        throw std::runtime_error(format("Failed to generate sharding metadata for {}", get_filename()));
     }
 
     if (!_components->scylla_metadata) {
@@ -3848,7 +3848,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
             ks = dirmatch[1].str();
             cf = dirmatch[2].str();
         } else {
-            throw malformed_sstable_exception(seastar::sprint("invalid version for file %s with path %s. Path doesn't match known pattern.", fname, sstdir));
+            throw malformed_sstable_exception(seastar::format("invalid version for file {} with path {}. Path doesn't match known pattern.", fname, sstdir));
         }
         version = (match[1].str() == "la") ? sstable::version_types::la : sstable::version_types::mc;
         generation = match[2].str();
@@ -3862,7 +3862,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
         generation = match[3].str();
         component = sstring(match[4].str());
     } else {
-        throw malformed_sstable_exception(seastar::sprint("invalid version for file %s. Name doesn't match any known version.", fname));
+        throw malformed_sstable_exception(seastar::format("invalid version for file {}. Name doesn't match any known version.", fname));
     }
     return entry_descriptor(sstdir, ks, cf, version, boost::lexical_cast<unsigned long>(generation), sstable::format_from_sstring(format), sstable::component_from_sstring(version, component));
 }
@@ -3871,7 +3871,7 @@ sstable::version_types sstable::version_from_sstring(sstring &s) {
     try {
         return reverse_map(s, _version_string);
     } catch (std::out_of_range&) {
-        throw std::out_of_range(seastar::sprint("Unknown sstable version: %s", s.c_str()));
+        throw std::out_of_range(seastar::format("Unknown sstable version: {}", s.c_str()));
     }
 }
 
@@ -3879,7 +3879,7 @@ sstable::format_types sstable::format_from_sstring(sstring &s) {
     try {
         return reverse_map(s, _format_string);
     } catch (std::out_of_range&) {
-        throw std::out_of_range(seastar::sprint("Unknown sstable format: %s", s.c_str()));
+        throw std::out_of_range(seastar::format("Unknown sstable format: {}", s.c_str()));
     }
 }
 
@@ -3928,7 +3928,7 @@ void sstable::set_first_and_last_keys() {
     }
     auto decorate_key = [this] (const char *m, const bytes& value) {
         if (value.empty()) {
-            throw std::runtime_error(sprint("%s key of summary of %s is empty", m, get_filename()));
+            throw std::runtime_error(format("{} key of summary of {} is empty", m, get_filename()));
         }
         auto pk = key::from_bytes(value).to_partition_key(*_schema);
         return dht::global_partitioner().decorate_key(*_schema, std::move(pk));
@@ -3947,14 +3947,14 @@ const partition_key& sstable::get_last_partition_key() const {
 
 const dht::decorated_key& sstable::get_first_decorated_key() const {
     if (!_first) {
-        throw std::runtime_error(sprint("first key of %s wasn't set", get_filename()));
+        throw std::runtime_error(format("first key of {} wasn't set", get_filename()));
     }
     return *_first;
 }
 
 const dht::decorated_key& sstable::get_last_decorated_key() const {
     if (!_last) {
-        throw std::runtime_error(sprint("last key of %s wasn't set", get_filename()));
+        throw std::runtime_error(format("last key of {} wasn't set", get_filename()));
     }
     return *_last;
 }

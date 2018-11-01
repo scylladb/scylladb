@@ -38,16 +38,16 @@ shared_ptr<selector::factory>
 selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& def = s->get_column_definition(_id->name());
     if (!def) {
-        throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _id));
+        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _id));
     }
     if (def->is_primary_key()) {
         throw exceptions::invalid_request_exception(
-                sprint("Cannot use selection function %s on PRIMARY KEY part %s",
+                format("Cannot use selection function {} on PRIMARY KEY part {}",
                               _is_writetime ? "writeTime" : "ttl",
                               def->name()));
     }
     if (def->type->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(sprint("Cannot use selection function %s on non-frozen collections",
+        throw exceptions::invalid_request_exception(format("Cannot use selection function {} on non-frozen collections",
                                                         _is_writetime ? "writeTime" : "ttl"));
     }
 
@@ -56,7 +56,7 @@ selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, s
 
 sstring
 selectable::writetime_or_ttl::to_string() const {
-    return sprint("%s(%s)", _is_writetime ? "writetime" : "ttl", _id->to_string());
+    return format("{}({})", _is_writetime ? "writetime" : "ttl", _id->to_string());
 }
 
 shared_ptr<selectable>
@@ -76,10 +76,10 @@ selectable::with_function::new_selector_factory(database& db, schema_ptr s, std:
     // resolve built-in functions before user defined functions
     auto&& fun = functions::functions::get(db, s->ks_name(), _function_name, factories->new_instances(), s->ks_name(), s->cf_name());
     if (!fun) {
-        throw exceptions::invalid_request_exception(sprint("Unknown function '%s'", _function_name));
+        throw exceptions::invalid_request_exception(format("Unknown function '{}'", _function_name));
     }
     if (!fun->return_type()) {
-        throw exceptions::invalid_request_exception(sprint("Unknown function %s called in selection clause", _function_name));
+        throw exceptions::invalid_request_exception(format("Unknown function {} called in selection clause", _function_name));
     }
 
     return abstract_function_selector::new_factory(std::move(fun), std::move(factories));
@@ -87,7 +87,7 @@ selectable::with_function::new_selector_factory(database& db, schema_ptr s, std:
 
 sstring
 selectable::with_function::to_string() const {
-    return sprint("%s(%s)", _function_name.name, join(", ", _args));
+    return format("{}({})", _function_name.name, join(", ", _args));
 }
 
 shared_ptr<selectable>
@@ -120,7 +120,7 @@ selectable::with_anonymous_function::new_selector_factory(database& db, schema_p
 
 sstring
 selectable::with_anonymous_function::to_string() const {
-    return sprint("%s(%s)", _function->name().name, join(", ", _args));
+    return format("{}({})", _function->name().name, join(", ", _args));
 }
 
 shared_ptr<selectable>
@@ -145,7 +145,7 @@ selectable::with_field_selection::new_selector_factory(database& db, schema_ptr 
     auto&& ut = dynamic_pointer_cast<const user_type_impl>(std::move(type));
     if (!ut) {
         throw exceptions::invalid_request_exception(
-                sprint("Invalid field selection: %s of type %s is not a user type",
+                format("Invalid field selection: {} of type {} is not a user type",
                        _selected->to_string(), factory->new_instance()->get_type()->as_cql3_type()));
     }
     for (size_t i = 0; i < ut->size(); ++i) {
@@ -154,13 +154,13 @@ selectable::with_field_selection::new_selector_factory(database& db, schema_ptr 
         }
         return field_selector::new_factory(std::move(ut), i, std::move(factory));
     }
-    throw exceptions::invalid_request_exception(sprint("%s of type %s has no field %s",
+    throw exceptions::invalid_request_exception(format("{} of type {} has no field {}",
                                                        _selected->to_string(), ut->as_cql3_type(), _field));
 }
 
 sstring
 selectable::with_field_selection::to_string() const {
-    return sprint("%s.%s", _selected->to_string(), _field->to_string());
+    return format("{}.{}", _selected->to_string(), _field->to_string());
 }
 
 shared_ptr<selectable>
@@ -187,7 +187,7 @@ selectable::with_cast::new_selector_factory(database& db, schema_ptr s, std::vec
 
 sstring
 selectable::with_cast::to_string() const {
-    return sprint("cast(%s as %s)", _arg->to_string(), _type->to_string());
+    return format("cast({} as {})", _arg->to_string(), _type->to_string());
 }
 
 shared_ptr<selectable>

@@ -98,7 +98,7 @@ public:
     static bytes serialize_value(RangeOfSerializedComponents&& values) {
         auto size = serialized_size(values);
         if (size > std::numeric_limits<size_type>::max()) {
-            throw std::runtime_error(sprint("Key size too large: %d > %d", size, std::numeric_limits<size_type>::max()));
+            throw std::runtime_error(format("Key size too large: {:d} > {:d}", size, std::numeric_limits<size_type>::max()));
         }
         bytes b(bytes::initialized_later(), size);
         auto i = b.begin();
@@ -145,7 +145,7 @@ public:
                 }
                 len = read_simple<size_type>(_v);
                 if (_v.size() < len) {
-                    throw_with_backtrace<marshal_exception>(sprint("compound_type iterator - not enough bytes, expected %d, got %d", len, _v.size()));
+                    throw_with_backtrace<marshal_exception>(format("compound_type iterator - not enough bytes, expected {:d}, got {:d}", len, _v.size()));
                 }
             }
             _current = bytes_view(_v.begin(), len);

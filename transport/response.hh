@@ -121,7 +121,7 @@ private:
 
     sstring make_frame(uint8_t version, size_t length) {
         if (version > 0x04) {
-            throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", version));
+            throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", version));
         }
 
         if (version > 0x02) {

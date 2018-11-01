@@ -138,7 +138,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto prev_rows_merged_from_memtable = tracker.get_stats().rows_merged_from_memtable;
         auto prev_rows_dropped_from_memtable = tracker.get_stats().rows_dropped_from_memtable;
 
-        std::cout << sprint("cache: %d/%d [MB], memtable: %d/%d [MB], alloc/comp: %d/%d [MB] (amp: %.3f)\n",
+        std::cout << format("cache: {:d}/{:d} [MB], memtable: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f})\n",
             tracker.region().occupancy().used_space() / MB,
             tracker.region().occupancy().total_space() / MB,
             mt->occupancy().used_space() / MB,
@@ -174,7 +174,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto compacted = logalloc::memory_compacted() - prev_compacted;
         auto allocated = logalloc::memory_allocated() - prev_allocated;
 
-        std::cout << sprint("update: %.6f [ms], stall: %s, cache: %d/%d [MB], alloc/comp: %d/%d [MB] (amp: %.3f), pr/me/dr %d/%d/%d\n",
+        std::cout << format("update: {:.6f} [ms], stall: {}, cache: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f}), pr/me/dr {:d}/{:d}/{:d}\n",
             d.count() * 1000,
             slm,
             tracker.region().occupancy().used_space() / MB,
@@ -189,7 +189,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         cache.invalidate([] {}).get();
     });
 
-    std::cout << sprint("invalidation: %.6f [ms]", d.count() * 1000) << "\n";
+    std::cout << format("invalidation: {:.6f} [ms]", d.count() * 1000) << "\n";
 }
 
 void test_small_partitions() {

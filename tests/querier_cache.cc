@@ -81,7 +81,7 @@ private:
     const mutation_source _mutation_source;
 
     static sstring make_value(size_t i) {
-        return sprint("value%010d", i);
+        return format("value{:010d}", i);
     }
 
     static std::vector<mutation> make_mutations(simple_schema& s, const noncopyable_function<sstring(size_t)>& make_value) {

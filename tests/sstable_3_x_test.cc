@@ -106,7 +106,7 @@ public:
     void assert_toc(const std::set<component_type>& expected_components) {
         for (auto& expected : expected_components) {
             if(_sst->_recognized_components.count(expected) == 0) {
-                BOOST_FAIL(sprint("Expected component of TOC missing: %s\n ... in: %s",
+                BOOST_FAIL(format("Expected component of TOC missing: {}\n ... in: {}",
                                   expected,
                                   std::set<component_type>(
                                       cbegin(_sst->_recognized_components),
@@ -115,7 +115,7 @@ public:
         }
         for (auto& present : _sst->_recognized_components) {
             if (expected_components.count(present) == 0) {
-                BOOST_FAIL(sprint("Unexpected component of TOC: %s\n ... when expecting: %s",
+                BOOST_FAIL(format("Unexpected component of TOC: {}\n ... when expecting: {}",
                                   present,
                                   expected_components));
             }
@@ -1969,7 +1969,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) 
 
     std::vector<const column_definition*> column_defs(64);
     for (int i = 0; i < 64; ++i) {
-        column_defs[i] = UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA->get_column_definition(to_bytes(sprint("val%d", (i + 1))));
+        column_defs[i] = UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA->get_column_definition(to_bytes(format("val{:d}", (i + 1))));
         BOOST_REQUIRE(column_defs[i]);
     }
 
@@ -2180,7 +2180,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
 
     std::vector<const column_definition*> column_defs(64);
     for (int i = 0; i < 64; ++i) {
-        column_defs[i] = UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_SCHEMA->get_column_definition(to_bytes(sprint("val%d", (i + 1))));
+        column_defs[i] = UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_SCHEMA->get_column_definition(to_bytes(format("val{:d}", (i + 1))));
         BOOST_REQUIRE(column_defs[i]);
     }
 
@@ -2748,7 +2748,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
                 for (auto&& entry : m_view.cells) {
                     auto cmp = compare_unsigned(int32_type->decompose(int32_t(val[idx])), entry.first);
                     if (cmp != 0) {
-                        BOOST_FAIL(sprint("Expected row with column %s having value %s, but it has value %s",
+                        BOOST_FAIL(format("Expected row with column {} having value {}, but it has value {}",
                                           def.id,
                                           int32_type->decompose(int32_t(val[idx])),
                                           entry.first));
@@ -2768,7 +2768,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
                 for (auto&& entry : m_view.cells) {
                     auto cmp = compare_unsigned(utf8_type->decompose(val[idx]), entry.second.value().linearize());
                     if (cmp != 0) {
-                        BOOST_FAIL(sprint("Expected row with column %s having value %s, but it has value %s",
+                        BOOST_FAIL(format("Expected row with column {} having value {}, but it has value {}",
                                           def.id,
                                           utf8_type->decompose(val[idx]),
                                           entry.second.value().linearize()));
@@ -2790,7 +2790,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
                     auto cmp2 = compare_unsigned(utf8_type->decompose(val[idx].second), entry.second.value().linearize());
                     if (cmp1 != 0 || cmp2 != 0) {
                         BOOST_FAIL(
-                            sprint("Expected row with column %s having value (%s, %s), but it has value (%s, %s)",
+                            format("Expected row with column {} having value ({}, {}), but it has value ({}, {})",
                                    def.id,
                                    int32_type->decompose(int32_t(val[idx].first)),
                                    utf8_type->decompose(val[idx].second),

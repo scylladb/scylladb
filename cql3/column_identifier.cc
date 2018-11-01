@@ -125,12 +125,12 @@ std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id) {
 column_identifier::new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) {
     auto def = get_column_definition(schema, *this);
     if (!def) {
-        throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _text));
+        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _text));
     }
     // Do not allow explicitly selecting hidden columns. We also skip them on
     // "SELECT *" (see selection::wildcard()).
     if (def->is_view_virtual()) {
-        throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _text));
+        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _text));
     }
     return selection::simple_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), def->type);
 }

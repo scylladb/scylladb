@@ -284,7 +284,7 @@ public:
         // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
         // call set_keyspace() before calling login(), and we have to handle that.
         if (_user && !db.local().has_keyspace(keyspace)) {
-            throw exceptions::invalid_request_exception(sprint("Keyspace '%s' does not exist", keyspace));
+            throw exceptions::invalid_request_exception(format("Keyspace '{}' does not exist", keyspace));
         }
         _keyspace = keyspace;
         _dirty = true;

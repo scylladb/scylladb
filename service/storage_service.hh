@@ -2211,7 +2211,7 @@ public:
         return get_storage_service().invoke_on(0, [operation = std::move(operation),
                 func = std::forward<Func>(func)] (storage_service& ss) mutable {
             if (!ss._operation_in_progress.empty()) {
-                throw std::runtime_error(sprint("Operation %s is in progress, try again", ss._operation_in_progress));
+                throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
             }
             ss._operation_in_progress = std::move(operation);
             return func(ss).finally([&ss] {

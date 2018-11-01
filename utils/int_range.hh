@@ -49,7 +49,7 @@ stdx::optional<int_range> intersection(const int_range& a, const int_range& b) {
 inline
 int_range make_int_range(int start_inclusive, int end_exclusive) {
     if (end_exclusive <= start_inclusive) {
-        throw std::runtime_error(sprint("invalid range: [%d, %d)", start_inclusive, end_exclusive));
+        throw std::runtime_error(format("invalid range: [{:d}, {:d})", start_inclusive, end_exclusive));
     }
     return int_range({start_inclusive}, {end_exclusive - 1});
 }

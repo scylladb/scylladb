@@ -352,7 +352,7 @@ private:
                 auto bound_terms = prepared->statement->get_bound_terms();
                 if (bound_terms > std::numeric_limits<uint16_t>::max()) {
                     throw exceptions::invalid_request_exception(
-                            sprint("Too many markers(?). %d markers exceed the allowed maximum of %d",
+                            format("Too many markers(?). {:d} markers exceed the allowed maximum of {:d}",
                                    bound_terms,
                                    std::numeric_limits<uint16_t>::max()));
                 }

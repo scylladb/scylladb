@@ -1247,10 +1247,10 @@ SEASTAR_TEST_CASE(promoted_index_write) {
                 for (int k = 0; k < 20; k++) {
                     auto& row = m.partition().clustered_row(*s,
                             clustering_key::from_exploded(
-                                    *s, {to_bytes(sprint("%d%c%c", k, i, j))}));
+                                    *s, {to_bytes(format("{:d}{:c}{:c}", k, i, j))}));
                     row.cells().apply(*col,
                             atomic_cell::make_live(*col->type, 2345,
-                                    col->type->decompose(sstring(sprint("z%c",i)))));
+                                    col->type->decompose(sstring(format("z{:c}",i)))));
                     row.apply(row_marker(1234));
                 }
             }
@@ -1259,7 +1259,7 @@ SEASTAR_TEST_CASE(promoted_index_write) {
         auto sst = make_sstable(s, dirname, 100,
                 sstables::sstable::version_types::la, big);
         return write_memtable_to_sstable_for_test(*mtp, sst).then([s, dirname] {
-            auto large_partition_file = seastar::sprint("%s/la-3-big-Index.db", get_test_dir("large_partition", s));
+            auto large_partition_file = seastar::format("{}/la-3-big-Index.db", get_test_dir("large_partition", s));
             return compare_files(large_partition_file, dirname + "/la-100-big-Index.db");
         }).then([sst, mtp] {});
     });

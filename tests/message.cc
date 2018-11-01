@@ -62,7 +62,7 @@ public:
 public:
     void init_handler() {
         ms.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gms::gossip_digest_syn msg) {
-            print("Server got syn msg = %s\n", msg);
+            fmt::print("Server got syn msg = {}\n", msg);
 
             auto from = netw::messaging_service::get_source(cinfo);
             auto ep1 = inet_address("1.1.1.1");
@@ -78,13 +78,13 @@ public:
             };
             gms::gossip_digest_ack ack(std::move(digests), std::move(eps));
             ms.send_gossip_digest_ack(from, std::move(ack)).handle_exception([] (auto ep) {
-                print("Fail to send ack : %s", ep);
+                fmt::print("Fail to send ack : {}", ep);
             });
             return messaging_service::no_wait();
         });
 
         ms.register_gossip_digest_ack([this] (const rpc::client_info& cinfo, gms::gossip_digest_ack msg) {
-            print("Server got ack msg = %s\n", msg);
+            fmt::print("Server got ack msg = {}\n", msg);
             auto from = netw::messaging_service::get_source(cinfo);
             // Prepare gossip_digest_ack2 message
             auto ep1 = inet_address("3.3.3.3");
@@ -93,24 +93,24 @@ public:
             };
             gms::gossip_digest_ack2 ack2(std::move(eps));
             ms.send_gossip_digest_ack2(from, std::move(ack2)).handle_exception([] (auto ep) {
-                print("Fail to send ack2 : %s", ep);
+                fmt::print("Fail to send ack2 : {}", ep);
             });
             digest_test_done.set_value();
             return messaging_service::no_wait();
         });
 
         ms.register_gossip_digest_ack2([] (gms::gossip_digest_ack2 msg) {
-            print("Server got ack2 msg = %s\n", msg);
+            fmt::print("Server got ack2 msg = {}\n", msg);
             return messaging_service::no_wait();
         });
 
         ms.register_gossip_shutdown([] (inet_address from) {
-            print("Server got shutdown msg = %s\n", from);
+            fmt::print("Server got shutdown msg = {}\n", from);
             return messaging_service::no_wait();
         });
 
         ms.register_gossip_echo([] {
-            print("Server got gossip echo msg\n");
+            fmt::print("Server got gossip echo msg\n");
             throw std::runtime_error("I'm throwing runtime_error exception");
             return make_ready_future<>();
         });
@@ -118,7 +118,7 @@ public:
 
 public:
     future<> test_gossip_digest() {
-        print("=== %s ===\n", __func__);
+        fmt::print("=== {} ===\n", __func__);
         // Prepare gossip_digest_syn message
         auto id = get_msg_addr();
         auto ep1 = inet_address("1.1.1.1");
@@ -135,24 +135,24 @@ public:
     }
 
     future<> test_gossip_shutdown() {
-        print("=== %s ===\n", __func__);
+        fmt::print("=== {} ===\n", __func__);
         auto id = get_msg_addr();
         inet_address from("127.0.0.1");
         return ms.send_gossip_shutdown(id, from).then([] () {
-            print("Client sent gossip_shutdown got reply = void\n");
+            fmt::print("Client sent gossip_shutdown got reply = void\n");
             return make_ready_future<>();
         });
     }
 
     future<> test_echo() {
-        print("=== %s ===\n", __func__);
+        fmt::print("=== {} ===\n", __func__);
         auto id = get_msg_addr();
         return ms.send_gossip_echo(id).then_wrapped([] (auto&& f) {
             try {
                 f.get();
                 return make_ready_future<>();
             } catch (std::runtime_error& e) {
-                print("test_echo: %s\n", e.what());
+                fmt::print("test_echo: {}\n", e.what());
             }
             return make_ready_future<>();
         });
@@ -197,8 +197,8 @@ int main(int ac, char ** av) {
                 auto cpuid = config["cpuid"].as<uint32_t>();
                 t->set_server_ip(ip);
                 t->set_server_cpuid(cpuid);
-                print("=============TEST START===========\n");
-                print("Sending to server ....\n");
+                fmt::print("=============TEST START===========\n");
+                fmt::print("Sending to server ....\n");
                 t->test_gossip_digest().then([testers, t] {
                     return t->test_gossip_shutdown();
                 }).then([testers, t] {
@@ -207,7 +207,7 @@ int main(int ac, char ** av) {
                     if (stay_alive) {
                         return;
                     }
-                    print("=============TEST DONE===========\n");
+                    fmt::print("=============TEST DONE===========\n");
                     testers->stop().then([testers] {
                         delete testers;
                         netw::get_messaging_service().stop().then([]{

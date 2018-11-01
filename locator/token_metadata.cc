@@ -114,7 +114,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
         std::unordered_set<token>& tokens = i.second;
 
         if (tokens.empty()) {
-            auto msg = sprint("tokens is empty in update_normal_tokens");
+            auto msg = format("tokens is empty in update_normal_tokens");
             tlogger.error("{}", msg);
             throw std::runtime_error(msg);
         }
@@ -149,7 +149,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
 
 size_t token_metadata::first_token_index(const token& start) const {
     if (_sorted_tokens.empty()) {
-        auto msg = sprint("sorted_tokens is empty in first_token_index!");
+        auto msg = format("sorted_tokens is empty in first_token_index!");
         tlogger.error("{}", msg);
         throw std::runtime_error(msg);
     }
@@ -177,17 +177,17 @@ std::experimental::optional<inet_address> token_metadata::get_endpoint(const tok
 void token_metadata::debug_show() {
     auto reporter = std::make_shared<timer<lowres_clock>>();
     reporter->set_callback ([reporter, this] {
-        print("Endpoint -> Token\n");
+        fmt::print("Endpoint -> Token\n");
         for (auto x : _token_to_endpoint_map) {
-            print("inet_address=%s, token=%s\n", x.second, x.first);
+            fmt::print("inet_address={}, token={}\n", x.second, x.first);
         }
-        print("Endpoint -> UUID\n");
+        fmt::print("Endpoint -> UUID\n");
         for (auto x : _endpoint_to_host_id_map) {
-            print("inet_address=%s, uuid=%s\n", x.first, x.second);
+            fmt::print("inet_address={}, uuid={}\n", x.first, x.second);
         }
-        print("Sorted Token\n");
+        fmt::print("Sorted Token\n");
         for (auto x : _sorted_tokens) {
-            print("token=%s\n", x);
+            fmt::print("token={}\n", x);
         }
     });
     reporter->arm_periodic(std::chrono::seconds(1));
@@ -217,7 +217,7 @@ void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) 
 
 utils::UUID token_metadata::get_host_id(inet_address endpoint) const {
     if (!_endpoint_to_host_id_map.count(endpoint)) {
-        throw std::runtime_error(sprint("host_id for endpoint %s is not found", endpoint));
+        throw std::runtime_error(format("host_id for endpoint {} is not found", endpoint));
     }
     return _endpoint_to_host_id_map.at(endpoint);
 }
@@ -281,13 +281,13 @@ void token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet
     for (auto t : tokens) {
         auto old_endpoint = _bootstrap_tokens.find(t);
         if (old_endpoint != _bootstrap_tokens.end() && (*old_endpoint).second != endpoint) {
-            auto msg = sprint("Bootstrap Token collision between %s and %s (token %s", (*old_endpoint).second, endpoint, t);
+            auto msg = format("Bootstrap Token collision between {} and {} (token {}", (*old_endpoint).second, endpoint, t);
             throw std::runtime_error(msg);
         }
 
         auto old_endpoint2 = _token_to_endpoint_map.find(t);
         if (old_endpoint2 != _token_to_endpoint_map.end() && (*old_endpoint2).second != endpoint) {
-            auto msg = sprint("Bootstrap Token collision between %s and %s (token %s", (*old_endpoint2).second, endpoint, t);
+            auto msg = format("Bootstrap Token collision between {} and {} (token {}", (*old_endpoint2).second, endpoint, t);
             throw std::runtime_error(msg);
         }
     }
@@ -308,7 +308,7 @@ void token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet
 
 void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
     if (tokens.empty()) {
-        auto msg = sprint("tokens is empty in remove_bootstrap_tokens!");
+        auto msg = format("tokens is empty in remove_bootstrap_tokens!");
         tlogger.error("{}", msg);
         throw std::runtime_error(msg);
     }
@@ -335,7 +335,7 @@ token token_metadata::get_predecessor(token t) {
     auto& tokens = sorted_tokens();
     auto it = std::lower_bound(tokens.begin(), tokens.end(), t);
     if (it == tokens.end() || *it != t) {
-        auto msg = sprint("token error in get_predecessor!");
+        auto msg = format("token error in get_predecessor!");
         tlogger.error("{}", msg);
         throw std::runtime_error(msg);
     }

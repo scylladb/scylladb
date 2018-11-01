@@ -53,7 +53,7 @@ public:
         return ::make_shared<column_specification>(
                 column->ks_name,
                 column->cf_name,
-                ::make_shared<column_identifier>(sprint("%s[%d]", column->name, component), true),
+                ::make_shared<column_identifier>(format("{}[{:d}]", column->name, component), true),
                 static_pointer_cast<const tuple_type_impl>(column->type)->type(component));
     }
 
@@ -88,7 +88,7 @@ public:
 
         virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
             if (_elements.size() != receivers.size()) {
-                throw exceptions::invalid_request_exception(sprint("Expected %d elements in value tuple, but got %d: %s", receivers.size(), _elements.size(), *this));
+                throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), _elements.size(), *this));
             }
 
             std::vector<shared_ptr<term>> values;
@@ -114,18 +114,18 @@ public:
         void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
             auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver->type);
             if (!tt) {
-                throw exceptions::invalid_request_exception(sprint("Invalid tuple type literal for %s of type %s", receiver->name, receiver->type->as_cql3_type()));
+                throw exceptions::invalid_request_exception(format("Invalid tuple type literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
             }
             for (size_t i = 0; i < _elements.size(); ++i) {
                 if (i >= tt->size()) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid tuple literal for %s: too many elements. Type %s expects %d but got %d",
+                    throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: too many elements. Type {} expects {:d} but got {:d}",
                                                                     receiver->name, tt->as_cql3_type(), tt->size(), _elements.size()));
                 }
 
                 auto&& value = _elements[i];
                 auto&& spec = component_spec_of(receiver, i);
                 if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, spec))) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid tuple literal for %s: component %d is not of type %s", receiver->name, i, spec->type->as_cql3_type()));
+                    throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: component {:d} is not of type {}", receiver->name, i, spec->type->as_cql3_type()));
                 }
             }
         }
@@ -172,7 +172,7 @@ public:
             return _elements;
         }
         virtual sstring to_string() const override {
-            return sprint("(%s)", join(", ", _elements));
+            return format("({})", join(", ", _elements));
         }
     };
 
@@ -203,7 +203,7 @@ public:
             for (size_t i = 0; i < _elements.size(); ++i) {
                 const auto& value = _elements[i]->bind_and_get(options);
                 if (value.is_unset_value()) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple field number %d", i));
+                    throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
                 }
                 buffers[i] = to_bytes_opt(value);
                 // Inside tuples, we must force the serialization of collections to v3 whatever protocol
@@ -400,7 +400,7 @@ public:
             if (value.is_null()) {
                 return nullptr;
             } else if (value.is_unset_value()) {
-                throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple %s", _receiver->name->text()));
+                throw exceptions::invalid_request_exception(format("Invalid unset value for tuple {}", _receiver->name->text()));
             } else {
                 auto as_tuple_type = static_pointer_cast<const tuple_type_impl>(_receiver->type);
                 return make_shared(value::from_serialized(*value, as_tuple_type));
@@ -424,7 +424,7 @@ public:
             if (value.is_null()) {
                 return nullptr;
             } else if (value.is_unset_value()) {
-                throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple %s", _receiver->name->text()));
+                throw exceptions::invalid_request_exception(format("Invalid unset value for tuple {}", _receiver->name->text()));
             } else {
                 auto as_list_type = static_pointer_cast<const list_type_impl>(_receiver->type);
                 return make_shared(in_value::from_serialized(*value, as_list_type, options));
@@ -434,7 +434,7 @@ public:
 
     template <typename T>
     static sstring tuple_to_string(const std::vector<T>& items) {
-        return sprint("(%s)", join(", ", items));
+        return format("({})", join(", ", items));
     }
 };
 

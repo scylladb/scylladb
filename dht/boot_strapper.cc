@@ -78,7 +78,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
         for (auto& token_string : initial_tokens) {
             auto token = dht::global_partitioner().from_sstring(token_string);
             if (metadata.get_endpoint(token)) {
-                throw std::runtime_error(sprint("Bootstrapping to existing token %s is not allowed (decommission/removenode the old node first).", token_string));
+                throw std::runtime_error(format("Bootstrapping to existing token {} is not allowed (decommission/removenode the old node first).", token_string));
             }
             tokens.insert(token);
         }

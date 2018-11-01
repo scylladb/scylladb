@@ -61,7 +61,7 @@ void cql3::statements::index_prop_defs::validate() {
     if (get_raw_options().count(
             db::index::secondary_index::custom_index_option_name)) {
         throw exceptions::invalid_request_exception(
-                sprint("Cannot specify %s as a CUSTOM option",
+                format("Cannot specify {} as a CUSTOM option",
                         db::index::secondary_index::custom_index_option_name));
     }
 }

@@ -28,11 +28,11 @@
 namespace utils {
 static logging::logger filterlog("bloom_filter");
 
-filter_ptr i_filter::get_filter(int64_t num_elements, double max_false_pos_probability, filter_format format) {
+filter_ptr i_filter::get_filter(int64_t num_elements, double max_false_pos_probability, filter_format fformat) {
     assert(seastar::thread::running_in_thread());
 
     if (max_false_pos_probability > 1.0) {
-        throw std::invalid_argument(sprint("Invalid probability %f: must be lower than 1.0", max_false_pos_probability));
+        throw std::invalid_argument(format("Invalid probability {:f}: must be lower than 1.0", max_false_pos_probability));
     }
 
     if (max_false_pos_probability == 1.0) {
@@ -41,7 +41,7 @@ filter_ptr i_filter::get_filter(int64_t num_elements, double max_false_pos_proba
 
     int buckets_per_element = bloom_calculations::max_buckets_per_element(num_elements);
     auto spec = bloom_calculations::compute_bloom_spec(buckets_per_element, max_false_pos_probability);
-    return filter::create_filter(spec.K, num_elements, spec.buckets_per_element, format);
+    return filter::create_filter(spec.K, num_elements, spec.buckets_per_element, fformat);
 }
 
 hashed_key make_hashed_key(bytes_view b) {

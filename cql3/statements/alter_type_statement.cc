@@ -93,7 +93,7 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
     auto to_update = all_types.find(_name.get_user_type_name());
     // Shouldn't happen, unless we race with a drop
     if (to_update == all_types.end()) {
-        throw exceptions::invalid_request_exception(sprint("No user type named %s exists.", _name.to_string()));
+        throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_string()));
     }
 
     auto&& updated = make_updated_type(db, to_update->second);
@@ -149,7 +149,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::an
                     keyspace(),
                     _name.get_string_type_name());
         } catch (no_such_keyspace& e) {
-            throw exceptions::invalid_request_exception(sprint("Cannot alter type in unknown keyspace %s", keyspace()));
+            throw exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace()));
         }
     });
 }
@@ -165,7 +165,7 @@ alter_type_statement::add_or_alter::add_or_alter(const ut_name& name, bool is_ad
 user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_update) const
 {
     if (get_idx_of_field(to_update, _field_name)) {
-        throw exceptions::invalid_request_exception(sprint("Cannot add new field %s to type %s: a field of the same name already exists", _field_name->name(), _name.to_string()));
+        throw exceptions::invalid_request_exception(format("Cannot add new field {} to type {}: a field of the same name already exists", _field_name->name(), _name.to_string()));
     }
 
     std::vector<bytes> new_names(to_update->field_names());
@@ -173,7 +173,7 @@ user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_
     std::vector<data_type> new_types(to_update->field_types());
     auto&& add_type = _field_type->prepare(db, keyspace())->get_type();
     if (add_type->references_user_type(to_update->_keyspace, to_update->_name)) {
-        throw exceptions::invalid_request_exception(sprint("Cannot add new field %s of type %s to type %s as this would create a circular reference", _field_name->name(), _field_type->to_string(), _name.to_string()));
+        throw exceptions::invalid_request_exception(format("Cannot add new field {} of type {} to type {} as this would create a circular reference", _field_name->name(), _field_type->to_string(), _name.to_string()));
     }
     new_types.push_back(std::move(add_type));
     return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), std::move(new_types));
@@ -183,13 +183,13 @@ user_type alter_type_statement::add_or_alter::do_alter(database& db, user_type t
 {
     stdx::optional<uint32_t> idx = get_idx_of_field(to_update, _field_name);
     if (!idx) {
-        throw exceptions::invalid_request_exception(sprint("Unknown field %s in type %s", _field_name->name(), _name.to_string()));
+        throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", _field_name->name(), _name.to_string()));
     }
 
     auto previous = to_update->field_types()[*idx];
     auto new_type = _field_type->prepare(db, keyspace())->get_type();
     if (!new_type->is_compatible_with(*previous)) {
-        throw exceptions::invalid_request_exception(sprint("Type %s in incompatible with previous type %s of field %s in user type %s", _field_type->to_string(), previous->as_cql3_type()->to_string(), _field_name->name(), _name.to_string()));
+        throw exceptions::invalid_request_exception(format("Type {} in incompatible with previous type {} of field {} in user type {}", _field_type->to_string(), previous->as_cql3_type()->to_string(), _field_name->name(), _name.to_string()));
     }
 
     std::vector<data_type> new_types(to_update->field_types());
@@ -219,7 +219,7 @@ user_type alter_type_statement::renames::make_updated_type(database& db, user_ty
         auto&& from = rename.first;
         stdx::optional<uint32_t> idx = get_idx_of_field(to_update, from);
         if (!idx) {
-            throw exceptions::invalid_request_exception(sprint("Unknown field %s in type %s", from->to_string(), _name.to_string()));
+            throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", from->to_string(), _name.to_string()));
         }
         new_names[*idx] = rename.second->name();
     }

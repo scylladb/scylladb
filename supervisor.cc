@@ -58,9 +58,9 @@ bool supervisor::try_notify_upstart(sstring msg, bool ready) {
 void supervisor::try_notify_systemd(sstring msg, bool ready) {
 #ifdef HAVE_LIBSYSTEMD
     if (ready) {
-        sd_notify(0, sprint("%s\n%s=%s\n", systemd_ready_msg, systemd_status_msg_prefix, msg).c_str());
+        sd_notify(0, format("{}\n{}={}\n", systemd_ready_msg, systemd_status_msg_prefix, msg).c_str());
     } else {
-        sd_notify(0, sprint("%s=%s\n", systemd_status_msg_prefix, msg).c_str());
+        sd_notify(0, format("{}={}\n", systemd_status_msg_prefix, msg).c_str());
     }
 #endif
 }

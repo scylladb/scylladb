@@ -95,7 +95,7 @@ void secondary_index_manager::add_index(const index_metadata& im) {
 }
 
 sstring index_table_name(const sstring& index_name) {
-    return sprint("%s_index", index_name);
+    return format("{}_index", index_name);
 }
 
 static bytes get_available_token_column_name(const schema& schema) {
@@ -116,7 +116,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
     const auto* index_target = std::get<const column_definition*>(target);
     auto target_type = std::get<cql3::statements::index_target::target_type>(target);
     if (target_type != cql3::statements::index_target::target_type::values) {
-        throw std::runtime_error(sprint("Unsupported index target type: %s", to_sstring(target_type)));
+        throw std::runtime_error(format("Unsupported index target type: {}", to_sstring(target_type)));
     }
     builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
     // Additional token column is added to ensure token order on secondary index queries
@@ -134,7 +134,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         }
         builder.with_column(col.name(), col.type, column_kind::clustering_key);
     }
-    const sstring where_clause = sprint("%s IS NOT NULL", cql3::util::maybe_quote(index_target_name));
+    const sstring where_clause = format("{} IS NOT NULL", cql3::util::maybe_quote(index_target_name));
     builder.with_view_info(*schema, false, where_clause);
     return view_ptr{builder.build()};
 }

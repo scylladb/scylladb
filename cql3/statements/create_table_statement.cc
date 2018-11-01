@@ -185,10 +185,10 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     const sstring& cf_name = _cf_name->get_column_family();
     std::regex name_regex("\\w+");
     if (!std::regex_match(std::string(cf_name), name_regex)) {
-        throw exceptions::invalid_request_exception(sprint("\"%s\" is not a valid table name (must be alphanumeric character only: [0-9A-Za-z]+)", cf_name.c_str()));
+        throw exceptions::invalid_request_exception(format("\"{}\" is not a valid table name (must be alphanumeric character only: [0-9A-Za-z]+)", cf_name.c_str()));
     }
     if (cf_name.size() > size_t(schema::NAME_LENGTH)) {
-        throw exceptions::invalid_request_exception(sprint("Table names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, cf_name.c_str()));
+        throw exceptions::invalid_request_exception(format("Table names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, cf_name.c_str()));
     }
 
     // Check for duplicate column names
@@ -196,7 +196,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         return e1->text() == e2->text();
     });
     if (i != _defined_names.end()) {
-        throw exceptions::invalid_request_exception(sprint("Multiple definition of identifier %s", (*i)->text()));
+        throw exceptions::invalid_request_exception(format("Multiple definition of identifier {}", (*i)->text()));
     }
 
     _properties.validate(db.get_config().extensions());
@@ -232,13 +232,13 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         stmt->_key_aliases.emplace_back(alias->name());
         auto t = get_type_and_remove(stmt->_columns, alias);
         if (t->is_counter()) {
-            throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", alias->text()));
+            throw exceptions::invalid_request_exception(format("counter type is not supported for PRIMARY KEY part {}", alias->text()));
         }
         if (t->references_duration()) {
-            throw exceptions::invalid_request_exception(sprint("duration type is not supported for PRIMARY KEY part %s", alias->text()));
+            throw exceptions::invalid_request_exception(format("duration type is not supported for PRIMARY KEY part {}", alias->text()));
         }
         if (_static_columns.count(alias) > 0) {
-            throw exceptions::invalid_request_exception(sprint("Static column %s cannot be part of the PRIMARY KEY", alias->text()));
+            throw exceptions::invalid_request_exception(format("Static column {} cannot be part of the PRIMARY KEY", alias->text()));
         }
         key_types.emplace_back(t);
     }
@@ -265,15 +265,15 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             }
             auto alias = _column_aliases[0];
             if (_static_columns.count(alias) > 0) {
-                throw exceptions::invalid_request_exception(sprint("Static column %s cannot be part of the PRIMARY KEY", alias->text()));
+                throw exceptions::invalid_request_exception(format("Static column {} cannot be part of the PRIMARY KEY", alias->text()));
             }
             stmt->_column_aliases.emplace_back(alias->name());
             auto at = get_type_and_remove(stmt->_columns, alias);
             if (at->is_counter()) {
-                throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", stmt->_column_aliases[0]));
+                throw exceptions::invalid_request_exception(format("counter type is not supported for PRIMARY KEY part {}", stmt->_column_aliases[0]));
             }
             if (at->references_duration()) {
-                throw exceptions::invalid_request_exception(sprint("duration type is not supported for PRIMARY KEY part %s", stmt->_column_aliases[0]));
+                throw exceptions::invalid_request_exception(format("duration type is not supported for PRIMARY KEY part {}", stmt->_column_aliases[0]));
             }
             stmt->_clustering_key_types.emplace_back(at);
         } else {
@@ -282,13 +282,13 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                 stmt->_column_aliases.emplace_back(t->name());
                 auto type = get_type_and_remove(stmt->_columns, t);
                 if (type->is_counter()) {
-                    throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", t->text()));
+                    throw exceptions::invalid_request_exception(format("counter type is not supported for PRIMARY KEY part {}", t->text()));
                 }
                 if (type->references_duration()) {
-                    throw exceptions::invalid_request_exception(sprint("duration type is not supported for PRIMARY KEY part %s", t->text()));
+                    throw exceptions::invalid_request_exception(format("duration type is not supported for PRIMARY KEY part {}", t->text()));
                 }
                 if (_static_columns.count(t) > 0) {
-                    throw exceptions::invalid_request_exception(sprint("Static column %s cannot be part of the PRIMARY KEY", t->text()));
+                    throw exceptions::invalid_request_exception(format("Static column {} cannot be part of the PRIMARY KEY", t->text()));
                 }
                 types.emplace_back(type);
             }
@@ -328,7 +328,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 #endif
         } else {
             if (stmt->_columns.size() > 1) {
-                throw exceptions::invalid_request_exception(sprint("COMPACT STORAGE with composite PRIMARY KEY allows no more than one column not part of the PRIMARY KEY (got: %s)",
+                throw exceptions::invalid_request_exception(format("COMPACT STORAGE with composite PRIMARY KEY allows no more than one column not part of the PRIMARY KEY (got: {})",
                     ::join( ", ", stmt->_columns | boost::adaptors::map_keys)));
             }
 #if 0
@@ -366,9 +366,9 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
             if (!(*id == *c)) {
                 if (_properties.find_ordering_info(c)) {
-                    throw exceptions::invalid_request_exception(sprint("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key (%s must appear before %s)", c, id));
+                    throw exceptions::invalid_request_exception(format("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key ({} must appear before {})", c, id));
                 } else {
-                    throw exceptions::invalid_request_exception(sprint("Missing CLUSTERING ORDER for column %s", c));
+                    throw exceptions::invalid_request_exception(format("Missing CLUSTERING ORDER for column {}", c));
                 }
             }
             ++i;
@@ -382,11 +382,11 @@ data_type create_table_statement::raw_statement::get_type_and_remove(column_map_
 {
     auto it = columns.find(t);
     if (it == columns.end()) {
-        throw exceptions::invalid_request_exception(sprint("Unknown definition %s referenced in PRIMARY KEY", t->text()));
+        throw exceptions::invalid_request_exception(format("Unknown definition {} referenced in PRIMARY KEY", t->text()));
     }
     auto type = it->second;
     if (type->is_collection() && type->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid collection type for PRIMARY KEY component %s", t->text()));
+        throw exceptions::invalid_request_exception(format("Invalid collection type for PRIMARY KEY component {}", t->text()));
     }
     columns.erase(t);
 

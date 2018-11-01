@@ -392,7 +392,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             auto new_key = [&] {
                 static thread_local int next = 0;
                 return dht::global_partitioner().decorate_key(*s,
-                    partition_key::from_single_value(*s, to_bytes(sprint("key%d", next++))));
+                    partition_key::from_single_value(*s, to_bytes(format("key{:d}", next++))));
             };
             auto make_mutation = [&] {
                 mutation m(s, new_key());
@@ -516,11 +516,11 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
 
     auto assert_order = [] (atomic_cell_view first, atomic_cell_view second) {
         if (compare_atomic_cell_for_merge(first, second) >= 0) {
-            BOOST_TEST_MESSAGE(sprint("Expected %s < %s", first, second));
+            BOOST_TEST_MESSAGE(format("Expected {} < {}", first, second));
             abort();
         }
         if (compare_atomic_cell_for_merge(second, first) <= 0) {
-            BOOST_TEST_MESSAGE(sprint("Expected %s < %s", second, first));
+            BOOST_TEST_MESSAGE(format("Expected {} < {}", second, first));
             abort();
         }
     };
@@ -858,7 +858,7 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                     actual.add(s, c2);
                     auto expected_cont = expected.partition().get_continuity(s);
                     if (!actual.contained_in(expected_cont)) {
-                        BOOST_FAIL(sprint("Continuity should be contained in the expected one, expected %s (%s + %s), got %s (%s + %s)",
+                        BOOST_FAIL(format("Continuity should be contained in the expected one, expected {} ({} + {}), got {} ({} + {})",
                             expected_cont, target.partition().get_continuity(s), second.partition().get_continuity(s),
                             actual, c1, c2));
                     }
@@ -1050,12 +1050,12 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
                 auto h2 = get_hash(m2);
                 if (eq) {
                     if (h1 != h2) {
-                        BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
+                        BOOST_FAIL(format("Hash should be equal for {} and {}", m1, m2));
                     }
                 } else {
                     // We're using a strong hasher, collision should be unlikely
                     if (h1 == h2) {
-                        BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
+                        BOOST_FAIL(format("Hash should be different for {} and {}", m1, m2));
                     }
                 }
             };
@@ -1079,7 +1079,7 @@ SEASTAR_TEST_CASE(test_query_digest) {
             auto digest1 = *m1.query(ps1, query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
             auto digest2 = *m2.query(ps2, query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
             if (digest1 != digest2) {
-                BOOST_FAIL(sprint("Digest should be the same for %s and %s", m1, m2));
+                BOOST_FAIL(format("Digest should be the same for {} and {}", m1, m2));
             }
         };
 
@@ -1540,7 +1540,7 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
     return seastar::async([] {
         auto check_partitions_match = [] (const mutation_partition& mp1, const mutation_partition& mp2, const schema& s) {
             if (!mp1.equal(s, mp2)) {
-                BOOST_FAIL(sprint("Partitions don't match, got: %s\n...and: %s", mutation_partition::printer(s, mp1), mutation_partition::printer(s, mp2)));
+                BOOST_FAIL(format("Partitions don't match, got: {}\n...and: {}", mutation_partition::printer(s, mp1), mutation_partition::printer(s, mp2)));
             }
         };
         for_each_mutation_pair([&] (auto&& m1, auto&& m2, are_equal eq) {

@@ -96,7 +96,7 @@ public:
             const column_definition* other_cdef = entry.first;
             const column_definition* this_cdef = _schema->get_column_definition(other_cdef->name());
             if (!this_cdef) {
-                throw exceptions::invalid_request_exception(sprint("Base column %s not found in view index schema", other_cdef->name_as_text()));
+                throw exceptions::invalid_request_exception(format("Base column {} not found in view index schema", other_cdef->name_as_text()));
             }
             ::shared_ptr<single_column_restriction> restriction = entry.second;
             _restrictions->add_restriction(restriction->apply_to(*this_cdef));
@@ -145,15 +145,13 @@ public:
             auto new_column = restriction->get_column_def();
 
             if (_slice && _schema->position(new_column) > _schema->position(last_column)) {
-                throw exceptions::invalid_request_exception(sprint(
-                    "Clustering column \"%s\" cannot be restricted (preceding column \"%s\" is restricted by a non-EQ relation)",
+                throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                     new_column.name_as_text(), last_column.name_as_text()));
             }
 
             if (_schema->position(new_column) < _schema->position(last_column)) {
                 if (restriction->is_slice()) {
-                    throw exceptions::invalid_request_exception(sprint(
-                        "PRIMARY KEY column \"%s\" cannot be restricted (preceding column \"%s\" is restricted by a non-EQ relation)",
+                    throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                         last_column.name_as_text(), new_column.name_as_text()));
                 }
             }
@@ -191,8 +189,7 @@ public:
         }
         if (restriction->is_on_token()) {
             throw exceptions::invalid_request_exception(
-                    sprint(
-                            "Columns \"%s\" cannot be restricted by both a normal relation and a token relation",
+                    format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                             join(", ", get_column_defs())));
         }
         do_merge_with(::static_pointer_cast<single_column_restriction>(restriction));
@@ -209,7 +206,7 @@ public:
             std::vector<bytes_opt> values = r->values(options);
             for (auto&& val : values) {
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null value for column %s", def->name_as_text()));
+                    throw exceptions::invalid_request_exception(format("Invalid null value for column {}", def->name_as_text()));
                 }
             }
             if (values.empty()) {
@@ -392,7 +389,7 @@ public:
         return _restrictions->size();
     }
     sstring to_string() const override {
-        return sprint("Restrictions(%s)", join(", ", get_column_defs()));
+        return format("Restrictions({})", join(", ", get_column_defs()));
     }
 
     virtual bool is_satisfied_by(const schema& schema,

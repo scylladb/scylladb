@@ -47,7 +47,7 @@ public:
             auto rp = dht::ring_position(token, k.key().to_partition_key(s));
 
             if (!rp_cmp(prev, rp)) {
-                BOOST_FAIL(sprint("Partitions have invalid order: %s >= %s", prev, rp));
+                BOOST_FAIL(format("Partitions have invalid order: {} >= {}", prev, rp));
             }
 
             prev = rp;
@@ -66,7 +66,7 @@ public:
                                   << ": +" << e.offset() << " len=" << e.width() << std::endl;
                     }
                     auto next = std::next(it);
-                    BOOST_FAIL(sprint("Index blocks are not monotonic: %s >= %s", it->end(s), next->start(s)));
+                    BOOST_FAIL(format("Index blocks are not monotonic: {} >= {}", it->end(s), next->start(s)));
                 }
             }
             _r->advance_to_next_partition().get();

@@ -68,7 +68,7 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
 
     auto cf_id = mv.table_id();
     if (s->id() != cf_id) {
-        throw std::runtime_error(sprint("Attempted to deserialize canonical_mutation of table %s with schema of table %s (%s.%s)",
+        throw std::runtime_error(format("Attempted to deserialize canonical_mutation of table {} with schema of table {} ({}.{})",
                                         cf_id, s->id(), s->ks_name(), s->cf_name()));
     }
 

@@ -87,13 +87,13 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, shared_ptr<v
         auto&& id = deletion->affected_column()->prepare_column_identifier(schema);
         auto def = get_column_definition(schema, *id);
         if (!def) {
-            throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
+            throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
         }
 
         // For compact, we only have one value except the key, so the only form of DELETE that make sense is without a column
         // list. However, we support having the value name for coherence with the static/sparse case
         if (def->is_primary_key()) {
-            throw exceptions::invalid_request_exception(sprint("Invalid identifier %s for deletion (should not be a PRIMARY KEY part)", def->name_as_text()));
+            throw exceptions::invalid_request_exception(format("Invalid identifier {} for deletion (should not be a PRIMARY KEY part)", def->name_as_text()));
         }
 
         auto&& op = deletion->prepare(db, schema->ks_name(), *def);

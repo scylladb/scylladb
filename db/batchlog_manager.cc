@@ -138,7 +138,7 @@ future<> db::batchlog_manager::stop() {
 }
 
 future<size_t> db::batchlog_manager::count_all_batches() const {
-    sstring query = sprint("SELECT count(*) FROM %s.%s", system_keyspace::NAME, system_keyspace::BATCHLOG);
+    sstring query = format("SELECT count(*) FROM {}.{}", system_keyspace::NAME, system_keyspace::BATCHLOG);
     return _qp.execute_internal(query).then([](::shared_ptr<cql3::untyped_result_set> rs) {
        return size_t(rs->one().get_as<int64_t>("count"));
     });
@@ -295,7 +295,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         blogger.debug("Started replayAllFailedBatches (cpu {})", engine().cpu_id());
 
         typedef ::shared_ptr<cql3::untyped_result_set> page_ptr;
-        sstring query = sprint("SELECT id, data, written_at, version FROM %s.%s LIMIT %d", system_keyspace::NAME, system_keyspace::BATCHLOG, page_size);
+        sstring query = format("SELECT id, data, written_at, version FROM {}.{} LIMIT {:d}", system_keyspace::NAME, system_keyspace::BATCHLOG, page_size);
         return _qp.execute_internal(query).then([this, batch = std::move(batch)](page_ptr page) {
             return do_with(std::move(page), [this, batch = std::move(batch)](page_ptr & page) mutable {
                 return repeat([this, &page, batch = std::move(batch)]() mutable {
@@ -307,7 +307,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
                         if (page->size() < page_size) {
                             return make_ready_future<stop_iteration>(stop_iteration::yes); // we've exhausted the batchlog, next query would be empty.
                         }
-                        sstring query = sprint("SELECT id, data, written_at, version FROM %s.%s WHERE token(id) > token(?) LIMIT %d",
+                        sstring query = format("SELECT id, data, written_at, version FROM {}.{} WHERE token(id) > token(?) LIMIT {:d}",
                                 system_keyspace::NAME,
                                 system_keyspace::BATCHLOG,
                                 page_size);

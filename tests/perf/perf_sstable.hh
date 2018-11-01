@@ -78,7 +78,7 @@ private:
         std::vector<schema::column> columns;
 
         for (unsigned i = 0; i < _cfg.num_columns; ++i) {
-            columns.push_back(schema::column{ to_bytes(sprint("column%04d", i)), utf8_type });
+            columns.push_back(schema::column{ to_bytes(format("column{:04d}", i)), utf8_type });
         }
 
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", "perf-test"), "ks", "perf-test",
@@ -243,6 +243,6 @@ future<> time_runs(unsigned iterations, unsigned parallelism, distributed<test_e
             });
         });
     }).then([acc, iterations, parallelism] {
-        std::cout << sprint("%.2f", mean(*acc)) << " +- " << sprint("%.2f", error_of<tag::mean>(*acc)) << " partitions / sec (" << iterations << " runs, " << parallelism << " concurrent ops)\n";
+        std::cout << format("{:.2f}", mean(*acc)) << " +- " << format("{:.2f}", error_of<tag::mean>(*acc)) << " partitions / sec (" << iterations << " runs, " << parallelism << " concurrent ops)\n";
     });
 }

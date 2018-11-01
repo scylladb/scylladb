@@ -276,7 +276,7 @@ public:
     }
 
     future<> create_keyspace(sstring name) {
-        auto query = sprint("create keyspace %s with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };", name);
+        auto query = format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 }};", name);
         return execute_cql(query).discard_result();
     }
 

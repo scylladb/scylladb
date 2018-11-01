@@ -106,7 +106,7 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
 
         if (cd == nullptr) {
             throw exceptions::invalid_request_exception(
-                    sprint("No column definition found for column %s", *target->column));
+                    format("No column definition found for column {}", *target->column));
         }
 
         if (cd->type->references_duration()) {
@@ -130,8 +130,7 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
 
         if (cd->kind == column_kind::partition_key && cd->is_on_all_components()) {
             throw exceptions::invalid_request_exception(
-                    sprint(
-                            "Cannot create secondary index on partition key column %s",
+                    format("Cannot create secondary index on partition key column {}",
                             *target->column));
         }
 
@@ -145,7 +144,7 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
         } else if (is_collection) {
             // NOTICE(sarna): should be lifted after #2962 (indexes on non-frozen collections) is implemented
             throw exceptions::invalid_request_exception(
-                    sprint("Cannot create secondary index on non-frozen collection column %s", cd->name_as_text()));
+                    format("Cannot create secondary index on non-frozen collection column {}", cd->name_as_text()));
         } else {
             validate_not_full_index(target);
             validate_is_values_index_if_target_column_not_collection(cd, target);
@@ -168,7 +167,7 @@ void create_index_statement::validate_for_frozen_collection(::shared_ptr<index_t
 {
     if (target->type != index_target::target_type::full) {
         throw exceptions::invalid_request_exception(
-                sprint("Cannot create index on %s of frozen<map> column %s",
+                format("Cannot create index on {} of frozen<map> column {}",
                         index_target::index_option(target->type),
                         *target->column));
     }
@@ -187,7 +186,7 @@ void create_index_statement::validate_is_values_index_if_target_column_not_colle
     if (!cd->type->is_collection()
             && target->type != index_target::target_type::values) {
         throw exceptions::invalid_request_exception(
-                sprint("Cannot create index on %s of column %s; only non-frozen collections support %s indexes",
+                format("Cannot create index on {} of column {}; only non-frozen collections support {} indexes",
                        index_target::index_option(target->type),
                        *target->column,
                        index_target::index_option(target->type)));
@@ -200,7 +199,7 @@ void create_index_statement::validate_target_column_is_map_if_index_involves_key
             || target->type == index_target::target_type::keys_and_values) {
         if (!is_map) {
             throw exceptions::invalid_request_exception(
-                    sprint("Cannot create index on %s of column %s with non-map type",
+                    format("Cannot create index on {} of column {} with non-map type",
                            index_target::index_option(target->type), *target->column));
         }
     }
@@ -214,7 +213,7 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     std::unordered_set<::shared_ptr<column_identifier>> columns;
     for (auto& target : targets) {
         if (columns.count(target->column) > 0) {
-            throw exceptions::invalid_request_exception(sprint("Duplicate column %s in index target list", target->column->name()));
+            throw exceptions::invalid_request_exception(format("Duplicate column {} in index target list", target->column->name()));
         }
         columns.emplace(target->column);
     }
@@ -254,7 +253,7 @@ create_index_statement::announce_migration(service::storage_proxy& proxy, bool i
             return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
         } else {
             throw exceptions::invalid_request_exception(
-                    sprint("Index %s is a duplicate of existing index %s", index.name(), existing_index.value().name()));
+                    format("Index {} is a duplicate of existing index {}", index.name(), existing_index.value().name()));
         }
     }
     ++_cql_stats->secondary_index_creates;

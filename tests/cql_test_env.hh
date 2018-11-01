@@ -53,7 +53,7 @@ namespace cql3 {
 
 class not_prepared_exception : public std::runtime_error {
 public:
-    not_prepared_exception(const cql3::prepared_cache_key_type& id) : std::runtime_error(sprint("Not prepared: %s", id)) {}
+    not_prepared_exception(const cql3::prepared_cache_key_type& id) : std::runtime_error(format("Not prepared: {}", id)) {}
 };
 
 namespace db {

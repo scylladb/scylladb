@@ -94,7 +94,7 @@ static uint64_t aggregate_querier_cache_stat(distributed<database>& db, uint64_t
 
 static void check_cache_population(distributed<database>& db, size_t queriers,
         std::experimental::source_location sl = std::experimental::source_location::current()) {
-    BOOST_TEST_MESSAGE(sprint("%s() called from %s() %s:%i", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line()));
+    BOOST_TEST_MESSAGE(format("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line()));
 
     parallel_for_each(boost::irange(0u, smp::count), [queriers, &db] (unsigned shard) {
         return db.invoke_on(shard, [queriers] (database& local_db) {
@@ -106,7 +106,7 @@ static void check_cache_population(distributed<database>& db, size_t queriers,
 
 static void require_eventually_empty_caches(distributed<database>& db,
         std::experimental::source_location sl = std::experimental::source_location::current()) {
-    BOOST_TEST_MESSAGE(sprint("%s() called from %s() %s:%i", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line()));
+    BOOST_TEST_MESSAGE(format("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line()));
 
     auto aggregated_population_is_zero = [&] () mutable {
         return aggregate_querier_cache_stat(db, &query::querier_cache::stats::population) == 0;
@@ -240,7 +240,7 @@ void check_results_are_equal(std::vector<mutation>& results1, std::vector<mutati
     boost::sort(results1, mut_less);
     boost::sort(results2, mut_less);
     for (unsigned i = 0; i < results1.size(); ++i) {
-        BOOST_TEST_MESSAGE(sprint("Comparing mutation #%i", i));
+        BOOST_TEST_MESSAGE(format("Comparing mutation #{:d}", i));
         assert_that(results2[i]).is_equal_to(results1[i]);
     }
 }

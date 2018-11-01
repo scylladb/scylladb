@@ -57,7 +57,7 @@ inline bool any_authentication_options(const authentication_options& aos) noexce
 class unsupported_authentication_option : public std::invalid_argument {
 public:
     explicit unsupported_authentication_option(authentication_option k)
-            : std::invalid_argument(sprint("The %s option is not supported.", k)) {
+            : std::invalid_argument(format("The {} option is not supported.", k)) {
     }
 };
 

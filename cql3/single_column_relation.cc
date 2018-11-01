@@ -96,8 +96,7 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
     auto receiver = column_def.column_specification;
 
     if (schema->is_dense() && column_def.is_regular()) {
-        throw exceptions::invalid_request_exception(sprint(
-            "Predicates on the non-primary-key column (%s) of a COMPACT table are not yet supported", column_def.name_as_text()));
+        throw exceptions::invalid_request_exception(format("Predicates on the non-primary-key column ({}) of a COMPACT table are not yet supported", column_def.name_as_text()));
     }
 
     if (is_IN()) {
@@ -106,18 +105,17 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
         // Note: for backward compatibility reason, we conside a IN of 1 value the same as a EQ, so we let that
         // slide.
         if (!column_def.is_primary_key() && !can_have_only_one_value()) {
-            throw exceptions::invalid_request_exception(sprint(
-                   "IN predicates on non-primary-key columns (%s) is not yet supported", column_def.name_as_text()));
+            throw exceptions::invalid_request_exception(format("IN predicates on non-primary-key columns ({}) is not yet supported", column_def.name_as_text()));
         }
     }
 
     if (is_contains() && !receiver->type->is_collection()) {
-        throw exceptions::invalid_request_exception(sprint("Cannot use CONTAINS on non-collection column \"%s\"", receiver->name));
+        throw exceptions::invalid_request_exception(format("Cannot use CONTAINS on non-collection column \"{}\"", receiver->name));
     }
 
     if (is_contains_key()) {
         if (!dynamic_cast<const map_type_impl*>(receiver->type.get())) {
-            throw exceptions::invalid_request_exception(sprint("Cannot use CONTAINS KEY on non-map column %s", receiver->name));
+            throw exceptions::invalid_request_exception(format("Cannot use CONTAINS KEY on non-map column {}", receiver->name));
         }
     }
 

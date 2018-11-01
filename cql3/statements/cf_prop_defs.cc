@@ -265,7 +265,7 @@ void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_va
 {
     auto val = get_int(field, default_value);
     if (val < minimum_value) {
-        throw exceptions::configuration_exception(sprint("%s cannot be smaller than %s, (default %s)",
+        throw exceptions::configuration_exception(format("{} cannot be smaller than {}, (default {})",
                                                          field, minimum_value, default_value));
     }
 }

@@ -34,7 +34,7 @@ static inline bool needs_escaping(const sstring& s) {
 
 sstring value_to_quoted_string(const sstring& value) {
     if (!needs_escaping(value)) {
-        return sprint("\"%s\"", value);
+        return format("\"{}\"", value);
     }
     std::ostringstream oss;
     oss << std::hex << std::uppercase << std::setfill('0');

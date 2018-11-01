@@ -52,7 +52,7 @@ property_definitions::property_definitions()
 void property_definitions::add_property(const sstring& name, sstring value) {
     auto it = _properties.find(name);
     if (it != _properties.end()) {
-        throw exceptions::syntax_exception(sprint("Multiple definition for property '%s'", name));
+        throw exceptions::syntax_exception(format("Multiple definition for property '{}'", name));
     }
     _properties.emplace(name, value);
 }
@@ -60,7 +60,7 @@ void property_definitions::add_property(const sstring& name, sstring value) {
 void property_definitions::add_property(const sstring& name, const std::map<sstring, sstring>& value) {
     auto it = _properties.find(name);
     if (it != _properties.end()) {
-        throw exceptions::syntax_exception(sprint("Multiple definition for property '%s'", name));
+        throw exceptions::syntax_exception(format("Multiple definition for property '{}'", name));
     }
     _properties.emplace(name, value);
 }
@@ -76,7 +76,7 @@ void property_definitions::validate(const std::set<sstring>& keywords, const std
             logger.warn("Ignoring obsolete property {}", name);
 #endif
         } else {
-            throw exceptions::syntax_exception(sprint("Unknown property '%s'", name));
+            throw exceptions::syntax_exception(format("Unknown property '{}'", name));
         }
     }
 }
@@ -89,7 +89,7 @@ std::experimental::optional<sstring> property_definitions::get_simple(const sstr
     try {
         return std::get<sstring>(it->second);
     } catch (const std::bad_variant_access& e) {
-        throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a string", name));
+        throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a string", name));
     }
 }
 
@@ -101,7 +101,7 @@ std::experimental::optional<std::map<sstring, sstring>> property_definitions::ge
     try {
         return std::get<map_type>(it->second);
     } catch (const std::bad_variant_access& e) {
-        throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a map.", name));
+        throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a map.", name));
     }
 }
 
@@ -142,7 +142,7 @@ double property_definitions::to_double(sstring key, std::experimental::optional<
         try {
             return std::stod(val);
         } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sprint("Invalid double value %s for '%s'", val, key));
+            throw exceptions::syntax_exception(format("Invalid double value {} for '{}'", val, key));
         }
     } else {
         return default_value;
@@ -161,7 +161,7 @@ int32_t property_definitions::to_int(sstring key, std::experimental::optional<ss
         try {
             return std::stoi(val);
         } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sprint("Invalid integer value %s for '%s'", val, key));
+            throw exceptions::syntax_exception(format("Invalid integer value {} for '{}'", val, key));
         }
     } else {
         return default_value;
@@ -174,7 +174,7 @@ long property_definitions::to_long(sstring key, std::experimental::optional<sstr
         try {
             return std::stol(val);
         } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sprint("Invalid long value %s for '%s'", val, key));
+            throw exceptions::syntax_exception(format("Invalid long value {} for '{}'", val, key));
         }
     } else {
         return default_value;
@@ -192,7 +192,7 @@ void property_definitions::remove_from_map_if_exists(const sstring& name, const 
         map.erase(key);
         _properties[name] = map;
     } catch (const std::bad_variant_access& e) {
-        throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a map.", name));
+        throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a map.", name));
     }
 }
 

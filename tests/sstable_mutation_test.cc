@@ -1066,7 +1066,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
         int id = 0;
         for (auto& compact : { schema_builder::compact_storage::no, schema_builder::compact_storage::yes }) {
             const auto generation = id++;
-            schema_builder builder("ks", sprint("cf%d", generation));
+            schema_builder builder("ks", format("cf{:d}", generation));
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c1", bytes_type, column_kind::clustering_key);
             builder.with_column("v", int32_type);
@@ -1369,7 +1369,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
 
     auto make_pkey_text = [] (size_t pad_size) -> sstring {
         static int i = 0;
-        return sprint("pkey_0x%x_%s", i++, make_random_string(pad_size));
+        return format("pkey_0x{:x}_{}", i++, make_random_string(pad_size));
     };
 
     // Choose min from several random keys
@@ -1429,7 +1429,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
     auto large_allocs_after = memory::stats().large_allocations();
     auto duration = std::chrono::steady_clock::now() - t0;
 
-    BOOST_TEST_MESSAGE(sprint("Read took %d us", duration / 1us));
+    BOOST_TEST_MESSAGE(format("Read took {:d} us", duration / 1us));
 
     assert_that(actual).is_equal_to(expected);
     BOOST_REQUIRE_EQUAL(large_allocs_after - large_allocs_before, 0);

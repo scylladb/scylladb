@@ -80,10 +80,10 @@ void create_keyspace_statement::validate(service::storage_proxy&, const service:
     // keyspace name
     std::regex name_regex("\\w+");
     if (!std::regex_match(name, name_regex)) {
-        throw exceptions::invalid_request_exception(sprint("\"%s\" is not a valid keyspace name", _name.c_str()));
+        throw exceptions::invalid_request_exception(format("\"{}\" is not a valid keyspace name", _name.c_str()));
     }
     if (name.length() > schema::NAME_LENGTH) {
-        throw exceptions::invalid_request_exception(sprint("Keyspace names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, _name.c_str()));
+        throw exceptions::invalid_request_exception(format("Keyspace names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _name.c_str()));
     }
 
     _attrs->validate();

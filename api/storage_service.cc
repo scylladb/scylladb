@@ -454,7 +454,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         return service::get_storage_service().map_reduce(adder<service::storage_service::drain_progress>(), [] (auto& ss) {
             return ss.get_drain_progress();
         }).then([] (auto&& progress) {
-            auto progress_str = sprint("Drained %s/%s ColumnFamilies", progress.remaining_cfs, progress.total_cfs);
+            auto progress_str = format("Drained {}/{} ColumnFamilies", progress.remaining_cfs, progress.total_cfs);
             return make_ready_future<json::json_return_type>(std::move(progress_str));
         });
     });
@@ -699,7 +699,7 @@ void set_storage_service(http_context& ctx, routes& r) {
             } catch (std::out_of_range& e) {
                 throw httpd::bad_param_exception(e.what());
             } catch (std::invalid_argument&){
-                throw httpd::bad_param_exception(sprint("Bad format in a probability value: \"%s\"", probability.c_str()));
+                throw httpd::bad_param_exception(format("Bad format in a probability value: \"{}\"", probability.c_str()));
             }
         });
     });
@@ -735,7 +735,7 @@ void set_storage_service(http_context& ctx, routes& r) {
                 return make_ready_future<json::json_return_type>(json_void());
             });
         } catch (...) {
-            throw httpd::bad_param_exception(sprint("Bad format value: "));
+            throw httpd::bad_param_exception(format("Bad format value: "));
         }
     });
 

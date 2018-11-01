@@ -212,7 +212,7 @@ private:
         if (cell) {
             auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
             if (!ctype->is_multi_cell()) {
-                throw std::logic_error(sprint("cannot prefetch frozen collection: %s", def.name_as_text()));
+                throw std::logic_error(format("cannot prefetch frozen collection: {}", def.name_as_text()));
             }
             auto map_type = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
             update_parameters::prefetch_data::cell_list list;
@@ -286,7 +286,7 @@ modification_statement::read_required_rows(
     try {
         validate_for_read(keyspace(), cl);
     } catch (exceptions::invalid_request_exception& e) {
-        throw exceptions::invalid_request_exception(sprint("Write operation require a read but consistency %s is not supported on reads", cl));
+        throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
 
     static auto is_collection = [] (const column_definition& def) {
@@ -343,8 +343,7 @@ modification_statement::create_clustering_ranges(const query_options& options, c
         // (see above)
         if (!type.is_insert()) {
             if (_restrictions->has_clustering_columns_restriction()) {
-                throw exceptions::invalid_request_exception(sprint(
-                    "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
+                throw exceptions::invalid_request_exception(format("Invalid restriction on clustering column {} since the {} statement modifies only static columns",
                     _restrictions->get_clustering_columns_restrictions()->get_column_defs().front()->name_as_text(), type));
             }
 
@@ -452,7 +451,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
     _restrictions = ::make_shared<restrictions::statement_restrictions>(
             db, s, type, where_clause, std::move(names), applies_only_to_static_columns(), _sets_a_collection, false);
     if (_restrictions->get_partition_key_restrictions()->is_on_token()) {
-        throw exceptions::invalid_request_exception(sprint("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: %s",
+        throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
                 _restrictions->get_partition_key_restrictions()->to_string()));
     }
     if (!_restrictions->get_non_pk_restriction().empty()) {
@@ -460,11 +459,11 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
                                          | boost::adaptors::map_keys
                                          | boost::adaptors::indirected
                                          | boost::adaptors::transformed(std::mem_fn(&column_definition::name)));
-        throw exceptions::invalid_request_exception(sprint("Invalid where clause contains non PRIMARY KEY columns: %s", column_names));
+        throw exceptions::invalid_request_exception(format("Invalid where clause contains non PRIMARY KEY columns: {}", column_names));
     }
     auto ck_restrictions = _restrictions->get_clustering_columns_restrictions();
     if (ck_restrictions->is_slice() && !allow_clustering_key_slices()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid operator in where clause %s", ck_restrictions->to_string()));
+        throw exceptions::invalid_request_exception(format("Invalid operator in where clause {}", ck_restrictions->to_string()));
     }
     if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !s->is_dense()) {
         // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
@@ -478,7 +477,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
         // the check seems redundant.
         if (require_full_clustering_key()) {
             auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
-            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", col.name_as_text()));
+            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", col.name_as_text()));
         }
         // In general, we can't modify specific columns if not all clustering columns have been specified.
         // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
@@ -486,8 +485,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
             auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
             for (auto&& op : _column_operations) {
                 if (!op->column.is_static()) {
-                    throw exceptions::invalid_request_exception(sprint(
-                        "Primary key column '%s' must be specified in order to modify column '%s'",
+                    throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
                         col.name_as_text(), op->column.name_as_text()));
                 }
             }
@@ -495,7 +493,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
     }
     if (_restrictions->has_partition_key_unrestricted_components()) {
         auto& col = s->column_at(column_kind::partition_key, _restrictions->get_partition_key_restrictions()->size());
-        throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", col.name_as_text()));
+        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", col.name_as_text()));
     }
 }
 
@@ -541,14 +539,14 @@ modification_statement::prepare(database& db, ::shared_ptr<variable_specificatio
                 auto id = entry.first->prepare_column_identifier(schema);
                 const column_definition* def = get_column_definition(schema, *id);
                 if (!def) {
-                    throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
+                    throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
                 }
 
                 auto condition = entry.second->prepare(db, keyspace(), *def);
                 condition->collect_marker_specificaton(bound_names);
 
                 if (def->is_primary_key()) {
-                    throw exceptions::invalid_request_exception(sprint("PRIMARY KEY column '%s' cannot have IF conditions", *id));
+                    throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", *id));
                 }
                 stmt->add_condition(condition);
             }

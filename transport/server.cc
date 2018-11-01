@@ -138,7 +138,7 @@ event::event_type parse_event_type(const sstring& value)
     } else if (value == "SCHEMA_CHANGE") {
         return event::event_type::SCHEMA_CHANGE;
     } else {
-        throw exceptions::protocol_exception(sprint("Invalid value '%s' for Event.Type", value));
+        throw exceptions::protocol_exception(format("Invalid value '{}' for Event.Type", value));
     }
 }
 
@@ -222,7 +222,7 @@ cql_server::listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_bui
           ? seastar::tls::listen(creds->build_server_credentials(), make_ipv4_address(addr), lo)
           : engine().listen(make_ipv4_address(addr), lo);
     } catch (...) {
-        throw std::runtime_error(sprint("CQLServer error while listening on %s -> %s", make_ipv4_address(addr), std::current_exception()));
+        throw std::runtime_error(format("CQLServer error while listening on {} -> {}", make_ipv4_address(addr), std::current_exception()));
     }
     _listeners.emplace_back(std::move(ss));
     _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
@@ -297,10 +297,10 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) {
         break;
     }
     default:
-        throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", _version));
+        throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", _version));
     }
     if (v3.version != _version) {
-        throw exceptions::protocol_exception(sprint("Invalid message version. Got %d but previous messages on this connection had version %d", v3.version, _version));
+        throw exceptions::protocol_exception(format("Invalid message version. Got {:d} but previous messages on this connection had version {:d}", v3.version, _version));
 
     }
     return v3;
@@ -321,7 +321,7 @@ cql_server::connection::read_frame() {
             if (_version < 1 || _version > current_version) {
                 auto client_version = _version;
                 _version = current_version;
-                throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", client_version));
+                throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", client_version));
             }
             return _read_buf.read_exactly(frame_size() - 1).then([this] (temporary_buffer<char> tail) {
                 temporary_buffer<char> full(frame_size());
@@ -371,13 +371,13 @@ future<cql_server::connection::processing_result>
         switch (client_state.get_auth_state()) {
             case auth_state::UNINITIALIZED:
                 if (cqlop != cql_binary_opcode::STARTUP && cqlop != cql_binary_opcode::OPTIONS) {
-                    throw exceptions::protocol_exception(sprint("Unexpected message %d, expecting STARTUP or OPTIONS", int(cqlop)));
+                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting STARTUP or OPTIONS", int(cqlop)));
                 }
                 break;
             case auth_state::AUTHENTICATION:
                 // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
                 if (cqlop != cql_binary_opcode::AUTH_RESPONSE && cqlop != cql_binary_opcode::CREDENTIALS) {
-                    throw exceptions::protocol_exception(sprint("Unexpected message %d, expecting %s", int(cqlop), _version == 1 ? "CREDENTIALS" : "SASL_RESPONSE"));
+                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting {}", int(cqlop), _version == 1 ? "CREDENTIALS" : "SASL_RESPONSE"));
                 }
                 break;
             case auth_state::READY: default:
@@ -408,7 +408,7 @@ future<cql_server::connection::processing_result>
         case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), std::move(client_state));
         case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), std::move(client_state));
         case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(in), std::move(client_state));
-        default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", int(cqlop)));
+        default:                               throw exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop)));
         }
     }).then_wrapped([this, cqlop, stream, client_state, linearization_buffer = std::move(linearization_buffer)] (future<response_type> f) -> processing_result {
         auto stop_trace = defer([&] {
@@ -577,8 +577,7 @@ future<> cql_server::connection::process_request() {
         auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
 
         if (mem_estimate > _server._max_request_size) {
-            throw exceptions::invalid_request_exception(sprint(
-                    "request size too large (frame size %d; estimate %d; allowed %d",
+            throw exceptions::invalid_request_exception(format("request size too large (frame size {:d}; estimate {:d}; allowed {:d}",
                     f.length, mem_estimate, _server._max_request_size));
         }
 
@@ -698,7 +697,7 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
                 return uncomp;
             });
         } else {
-            throw exceptions::protocol_exception(sprint("Unknown compression algorithm"));
+            throw exceptions::protocol_exception(format("Unknown compression algorithm"));
         }
     }
     return _buffer_reader.read_exactly(_read_buf, length);
@@ -724,7 +723,7 @@ future<response_type> cql_server::connection::process_startup(uint16_t stream, r
          } else if (compression == "snappy") {
              _compression = cql_compression::snappy;
          } else {
-             throw exceptions::protocol_exception(sprint("Unknown compression algorithm: %s", compression));
+             throw exceptions::protocol_exception(format("Unknown compression algorithm: {}", compression));
          }
     }
     auto& a = client_state.get_auth_service()->underlying_authenticator();
@@ -957,7 +956,7 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
 
         auto stmt = ps->statement;
         if (stmt->get_bound_terms() != tmp.size()) {
-            throw exceptions::invalid_request_exception(sprint("There were %d markers(?) in CQL but %d bound variables",
+            throw exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
                             stmt->get_bound_terms(), tmp.size()));
         }
         values.emplace_back(std::move(tmp));
@@ -1042,7 +1041,7 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_mutation_writ
     response->write_consistency(cl);
     response->write_int(received);
     response->write_int(blockfor);
-    response->write_string(sprint("%s", type));
+    response->write_string(format("{}", type));
     return response;
 }
 
@@ -1058,7 +1057,7 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_mutation_writ
     response->write_int(received);
     response->write_int(blockfor);
     response->write_int(numfailures);
-    response->write_string(sprint("%s", type));
+    response->write_string(format("{}", type));
     return response;
 }
 
@@ -1120,10 +1119,10 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     opts.insert({"COMPRESSION", "lz4"});
     opts.insert({"COMPRESSION", "snappy"});
     auto& part = dht::global_partitioner();
-    opts.insert({"SCYLLA_SHARD", sprint("%d", engine().cpu_id())});
-    opts.insert({"SCYLLA_NR_SHARDS", sprint("%d", smp::count)});
+    opts.insert({"SCYLLA_SHARD", format("{:d}", engine().cpu_id())});
+    opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
     opts.insert({"SCYLLA_SHARDING_ALGORITHM", part.cpu_sharding_algorithm_name()});
-    opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", sprint("%d", part.sharding_ignore_msb())});
+    opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", part.sharding_ignore_msb())});
     opts.insert({"SCYLLA_PARTITIONER", part.name()});
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
     response->write_string_multimap(opts);
@@ -1389,7 +1388,7 @@ inline
 T cast_if_fits(size_t v) {
     size_t max = std::numeric_limits<T>::max();
     if (v > max) {
-        throw std::runtime_error(sprint("Value too large, %d > %d", v, max));
+        throw std::runtime_error(format("Value too large, {:d} > {:d}", v, max));
     }
     return static_cast<T>(v);
 }

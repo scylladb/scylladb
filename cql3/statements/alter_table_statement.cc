@@ -85,12 +85,12 @@ static data_type validate_alter(schema_ptr schema, const column_definition& def,
     case column_kind::partition_key:
         if (type->is_counter()) {
             throw exceptions::invalid_request_exception(
-                    sprint("counter type is not supported for PRIMARY KEY part %s", def.name_as_text()));
+                    format("counter type is not supported for PRIMARY KEY part {}", def.name_as_text()));
         }
 
         if (!type->is_value_compatible_with(*def.type)) {
             throw exceptions::configuration_exception(
-                    sprint("Cannot change %s from type %s to type %s: types are incompatible.",
+                    format("Cannot change {} from type {} to type {}: types are incompatible.",
                            def.name_as_text(),
                            def.type->as_cql3_type(),
                            validator));
@@ -100,7 +100,7 @@ static data_type validate_alter(schema_ptr schema, const column_definition& def,
     case column_kind::clustering_key:
         if (!schema->is_cql3_table()) {
             throw exceptions::invalid_request_exception(
-                    sprint("Cannot alter clustering column %s in a non-CQL3 table", def.name_as_text()));
+                    format("Cannot alter clustering column {} in a non-CQL3 table", def.name_as_text()));
         }
 
         // Note that CFMetaData.validateCompatibility already validate the change we're about to do. However, the error message it
@@ -108,7 +108,7 @@ static data_type validate_alter(schema_ptr schema, const column_definition& def,
         // Do note that we need isCompatibleWith here, not just isValueCompatibleWith.
         if (!type->is_compatible_with(*def.type)) {
             throw exceptions::configuration_exception(
-                    sprint("Cannot change %s from type %s to type %s: types are not order-compatible.",
+                    format("Cannot change {} from type {} to type {}: types are not order-compatible.",
                            def.name_as_text(),
                            def.type->as_cql3_type(),
                            validator));
@@ -124,7 +124,7 @@ static data_type validate_alter(schema_ptr schema, const column_definition& def,
         // ColumnDefinition already).
         if (!type->is_value_compatible_with(*def.type)) {
             throw exceptions::configuration_exception(
-                    sprint("Cannot change %s from type %s to type %s: types are incompatible.",
+                    format("Cannot change {} from type {} to type {}: types are incompatible.",
                            def.name_as_text(),
                            def.type->as_cql3_type(),
                            validator));
@@ -138,15 +138,15 @@ static void validate_column_rename(database& db, const schema& schema, const col
 {
     auto def = schema.get_column_definition(from.name());
     if (!def) {
-        throw exceptions::invalid_request_exception(sprint("Cannot rename unknown column %s in table %s", from, schema.cf_name()));
+        throw exceptions::invalid_request_exception(format("Cannot rename unknown column {} in table {}", from, schema.cf_name()));
     }
 
     if (schema.get_column_definition(to.name())) {
-        throw exceptions::invalid_request_exception(sprint("Cannot rename column %s to %s in table %s; another column of that name already exist", from, to, schema.cf_name()));
+        throw exceptions::invalid_request_exception(format("Cannot rename column {} to {} in table {}; another column of that name already exist", from, to, schema.cf_name()));
     }
 
     if (def->is_part_of_cell_name()) {
-        throw exceptions::invalid_request_exception(sprint("Cannot rename non PRIMARY KEY part %s", from));
+        throw exceptions::invalid_request_exception(format("Cannot rename non PRIMARY KEY part {}", from));
     }
 
     if (!schema.indices().empty()) {
@@ -156,7 +156,7 @@ static void validate_column_rename(database& db, const schema& schema, const col
                 return im.name();
             }));
             throw exceptions::invalid_request_exception(
-                    sprint("Cannot rename column %s because it has dependent secondary indexes (%s)", from, index_names));
+                    format("Cannot rename column {} because it has dependent secondary indexes ({})", from, index_names));
         }
     }
 }
@@ -173,15 +173,15 @@ void alter_table_statement::add_column(schema_ptr schema, const table& cf, schem
 
     if (def) {
         if (def->is_partition_key()) {
-            throw exceptions::invalid_request_exception(sprint("Invalid column name %s because it conflicts with a PRIMARY KEY part", column_name));
+            throw exceptions::invalid_request_exception(format("Invalid column name {} because it conflicts with a PRIMARY KEY part", column_name));
         } else {
-            throw exceptions::invalid_request_exception(sprint("Invalid column name %s because it conflicts with an existing column", column_name));
+            throw exceptions::invalid_request_exception(format("Invalid column name {} because it conflicts with an existing column", column_name));
         }
     }
 
     // Cannot re-add a dropped counter column. See #7831.
     if (schema->is_counter() && schema->dropped_columns().count(column_name->text())) {
-        throw exceptions::invalid_request_exception(sprint("Cannot re-add previously dropped counter column %s", column_name));
+        throw exceptions::invalid_request_exception(format("Cannot re-add previously dropped counter column {}", column_name));
     }
 
     auto type = validator->get_type();
@@ -230,7 +230,7 @@ void alter_table_statement::add_column(schema_ptr schema, const table& cf, schem
 
 void alter_table_statement::alter_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const shared_ptr<cql3_type> validator, const column_definition* def, bool is_static) {
     if (!def) {
-        throw exceptions::invalid_request_exception(sprint("Column %s was not found in table %s", column_name, column_family()));
+        throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
 
     auto type = validate_alter(schema, *def, *validator);
@@ -252,11 +252,11 @@ void alter_table_statement::alter_column(schema_ptr schema, const table& cf, sch
 
 void alter_table_statement::drop_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const shared_ptr<cql3_type> validator, const column_definition* def, bool is_static) {
     if (!def) {
-        throw exceptions::invalid_request_exception(sprint("Column %s was not found in table %s", column_name, column_family()));
+        throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
 
     if (def->is_primary_key()) {
-        throw exceptions::invalid_request_exception(sprint("Cannot drop PRIMARY KEY part %s", column_name));
+        throw exceptions::invalid_request_exception(format("Cannot drop PRIMARY KEY part {}", column_name));
     } else {
         for (auto&& column_def : boost::range::join(schema->static_columns(), schema->regular_columns())) { // find
             if (column_def.name() == column_name->name()) {
@@ -315,8 +315,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             throw exceptions::invalid_request_exception("Cannot drop columns from a non-CQL3 table");
         }
         if (!cf.views().empty()) {
-            throw exceptions::invalid_request_exception(sprint(
-                    "Cannot drop columns from base table %s.%s with materialized views",
+            throw exceptions::invalid_request_exception(format("Cannot drop columns from base table {}.{} with materialized views",
                     keyspace(), column_family()));
         }
         invoke_column_change_fn(std::mem_fn(&alter_table_statement::drop_column));

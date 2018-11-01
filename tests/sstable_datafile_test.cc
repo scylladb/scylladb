@@ -2862,7 +2862,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
                 } else if (col.name_as_text() == "c2") {
                     BOOST_REQUIRE_EQUAL(ccv.total_value(), -92);
                 } else {
-                    BOOST_FAIL(sprint("Unexpected column \'%s\'", col.name_as_text()));
+                    BOOST_FAIL(format("Unexpected column \'{}\'", col.name_as_text()));
                 }
               });
             });
@@ -2876,7 +2876,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
                 if (col.name_as_text() == "c1") {
                     BOOST_REQUIRE(!c.as_atomic_cell(col).is_live());
                 } else {
-                    BOOST_FAIL(sprint("Unexpected column \'%s\'", col.name_as_text()));
+                    BOOST_FAIL(format("Unexpected column \'{}\'", col.name_as_text()));
                 }
             });
 
@@ -3720,7 +3720,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
             auto ck1 = table.make_ckey(1);
             auto ck2 = table.make_ckey((1 + i) / 2);
             auto ck3 = table.make_ckey(i);
-            BOOST_TEST_MESSAGE(sprint("checking %s %s", ck2, ck3));
+            BOOST_TEST_MESSAGE(format("checking {} {}", ck2, ck3));
             auto slice = partition_slice_builder(*table.schema())
                 .with_range(query::clustering_range::make_singular(ck1))
                 .with_range(query::clustering_range::make_singular(ck2))

@@ -301,7 +301,7 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
         auto* base_col = _base->get_column_definition(cdef.name());
         if (!base_col) {
             if (!_view_info.is_index()) {
-                throw std::logic_error(sprint("Column %s doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
+                throw std::logic_error(format("Column {} doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
             }
             auto& partitioner = dht::global_partitioner();
             return linearized_values.emplace_back(partitioner.token_to_bytes(token_for(base_key)));
@@ -433,7 +433,7 @@ void create_virtual_column(schema_builder& builder, const bytes& name, const dat
     if (!ctype) {
         // TODO: When #2201 is done, we also need to handle here
         // unfrozen UDTs.
-        throw exceptions::invalid_request_exception(sprint("Unsupported unselected multi-cell non-collection column %s for Materialized View", name));
+        throw exceptions::invalid_request_exception(format("Unsupported unselected multi-cell non-collection column {} for Materialized View", name));
     }
     if (ctype->is_list()) {
         // A list has ints as keys, and values (the list's items).

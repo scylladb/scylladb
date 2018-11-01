@@ -1865,7 +1865,7 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
     return do_with(qualified_name(keyspace, table), [&proxy] (auto&& qn) {
         return read_table_mutations(proxy, qn, tables()).then([qn, &proxy] (schema_mutations sm) {
             if (!sm.live()) {
-               throw std::runtime_error(sprint("%s:%s not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name));
+               throw std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name));
             }
             return create_table_from_mutations(proxy, std::move(sm));
         });
@@ -2323,7 +2323,7 @@ static future<view_ptr> create_view_from_table_row(distributed<service::storage_
     return do_with(std::move(qn), [&proxy] (auto&& qn) {
         return read_table_mutations(proxy, qn, views()).then([&] (schema_mutations sm) {
             if (!sm.live()) {
-                throw std::runtime_error(sprint("%s:%s not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name));
+                throw std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name));
             }
             return create_view_from_mutations(proxy, std::move(sm));
         });

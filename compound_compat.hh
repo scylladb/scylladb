@@ -284,7 +284,7 @@ private:
             // bytes is the static prefix or not).
             auto value_size = size(*it);
             if (value_size > static_cast<size_type>(std::numeric_limits<size_type>::max() - uint8_t(is_compound))) {
-                throw std::runtime_error(sprint("First component size too large: %d > %d", value_size, std::numeric_limits<size_type>::max() - is_compound));
+                throw std::runtime_error(format("First component size too large: {:d} > {:d}", value_size, std::numeric_limits<size_type>::max() - is_compound));
             }
             if (!is_compound) {
                 return value_size;
@@ -295,7 +295,7 @@ private:
         for ( ; it != values.end(); ++it) {
             auto value_size = size(*it);
             if (value_size > std::numeric_limits<size_type>::max()) {
-                throw std::runtime_error(sprint("Component size too large: %d > %d", value_size, std::numeric_limits<size_type>::max()));
+                throw std::runtime_error(format("Component size too large: {:d} > {:d}", value_size, std::numeric_limits<size_type>::max()));
             }
             len += sizeof(size_type) + value_size + sizeof(eoc_type);
         }
@@ -346,7 +346,7 @@ public:
                 }
                 len = read_simple<size_type>(_v);
                 if (_v.size() < len) {
-                    throw_with_backtrace<marshal_exception>(sprint("composite iterator - not enough bytes, expected %d, got %d", len, _v.size()));
+                    throw_with_backtrace<marshal_exception>(format("composite iterator - not enough bytes, expected {:d}, got {:d}", len, _v.size()));
                 }
             }
             auto value = bytes_view(_v.begin(), len);
@@ -468,7 +468,7 @@ public:
 
     template <typename Component>
     friend inline std::ostream& operator<<(std::ostream& os, const std::pair<Component, eoc>& c) {
-        return os << "{value=" << c.first << "; eoc=" << sprint("0x%02x", eoc_type(c.second) & 0xff) << "}";
+        return os << "{value=" << c.first << "; eoc=" << format("0x{:02x}", eoc_type(c.second) & 0xff) << "}";
     }
 
     friend std::ostream& operator<<(std::ostream& os, const composite& v);
@@ -511,7 +511,7 @@ public:
             auto marker = it->second;
             ++it;
             if (it != e && marker != composite::eoc::none) {
-                throw runtime_exception(sprint("non-zero component divider found (%d) mid", sprint("0x%02x", composite::eoc_type(marker) & 0xff)));
+                throw runtime_exception(format("non-zero component divider found ({:d}) mid", format("0x{:02x}", composite::eoc_type(marker) & 0xff)));
             }
         }
         return ret;

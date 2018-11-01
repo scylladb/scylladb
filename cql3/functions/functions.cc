@@ -162,7 +162,7 @@ functions::make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
     std::transform(name.begin(), name.end(), name.begin(), ::tolower);
     return ::make_shared<column_specification>(receiver_ks,
                                    receiver_cf,
-                                   ::make_shared<column_identifier>(sprint("arg%d(%s)", i, name), true),
+                                   ::make_shared<column_identifier>(format("arg{:d}({})", i, name), true),
                                    fun.arg_types()[i]);
 }
 
@@ -282,13 +282,13 @@ functions::get(database& db,
 
     if (compatibles.empty()) {
         throw exceptions::invalid_request_exception(
-                sprint("Invalid call to function %s, none of its type signatures match (known type signatures: %s)",
+                format("Invalid call to function {}, none of its type signatures match (known type signatures: {})",
                                                         name, join(", ", candidates)));
     }
 
     if (compatibles.size() > 1) {
         throw exceptions::invalid_request_exception(
-                sprint("Ambiguous call to function %s (can be matched by following signatures: %s): use type casts to disambiguate",
+                format("Ambiguous call to function {} (can be matched by following signatures: {}): use type casts to disambiguate",
                     name, join(", ", compatibles)));
     }
 
@@ -327,7 +327,7 @@ functions::validate_types(database& db,
                           const sstring& receiver_cf) {
     if (provided_args.size() != fun->arg_types().size()) {
         throw exceptions::invalid_request_exception(
-                sprint("Invalid number of arguments in call to function %s: %d required but %d provided",
+                format("Invalid number of arguments in call to function {}: {:d} required but {:d} provided",
                         fun->name(), fun->arg_types().size(), provided_args.size()));
     }
 
@@ -343,7 +343,7 @@ functions::validate_types(database& db,
         auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
         if (!is_assignable(provided->test_assignment(db, keyspace, expected))) {
             throw exceptions::invalid_request_exception(
-                    sprint("Type error: %s cannot be passed as argument %d of function %s of type %s",
+                    format("Type error: {} cannot be passed as argument {:d} of function {} of type {}",
                             provided, i, fun->name(), expected->type->as_cql3_type()));
         }
     }
@@ -418,7 +418,7 @@ function_call::bind_and_get(const query_options& options) {
         // simplify things.
         auto val = t->bind_and_get(options);
         if (!val) {
-            throw exceptions::invalid_request_exception(sprint("Invalid null value for argument to %s", *_fun));
+            throw exceptions::invalid_request_exception(format("Invalid null value for argument to {}", *_fun));
         }
         buffers.push_back(std::move(to_bytes_opt(val)));
     }
@@ -436,7 +436,7 @@ function_call::execute_internal(cql_serialization_format sf, scalar_function& fu
         }
         return result;
     } catch (marshal_exception& e) {
-        throw runtime_exception(sprint("Return of function %s (%s) is not a valid value for its declared return type %s",
+        throw runtime_exception(format("Return of function {} ({}) is not a valid value for its declared return type {}",
                                        fun, to_hex(result),
                                        *fun.return_type()->as_cql3_type()
                                        ));
@@ -484,7 +484,7 @@ function_call::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<
     });
     auto&& fun = functions::functions::get(db, keyspace, _name, args, receiver->ks_name, receiver->cf_name, receiver);
     if (!fun) {
-        throw exceptions::invalid_request_exception(sprint("Unknown function %s called", _name));
+        throw exceptions::invalid_request_exception(format("Unknown function {} called", _name));
     }
     if (fun->is_aggregate()) {
         throw exceptions::invalid_request_exception("Aggregation function are not supported in the where clause");
@@ -496,13 +496,13 @@ function_call::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<
     // Functions.get() will complain if no function "name" type check with the provided arguments.
     // We still have to validate that the return type matches however
     if (!receiver->type->is_value_compatible_with(*scalar_fun->return_type())) {
-        throw exceptions::invalid_request_exception(sprint("Type error: cannot assign result of function %s (type %s) to %s (type %s)",
+        throw exceptions::invalid_request_exception(format("Type error: cannot assign result of function {} (type {}) to {} (type {})",
                                                     fun->name(), fun->return_type()->as_cql3_type(),
                                                     receiver->name, receiver->type->as_cql3_type()));
     }
 
     if (scalar_fun->arg_types().size() != _terms.size()) {
-        throw exceptions::invalid_request_exception(sprint("Incorrect number of arguments specified for function %s (expected %d, found %d)",
+        throw exceptions::invalid_request_exception(format("Incorrect number of arguments specified for function {} (expected {:d}, found {:d})",
                                                     fun->name(), fun->arg_types().size(), _terms.size()));
     }
 
@@ -561,7 +561,7 @@ function_call::raw::test_assignment(database& db, const sstring& keyspace, share
 
 sstring
 function_call::raw::to_string() const {
-    return sprint("%s(%s)", _name, join(", ", _terms));
+    return format("{}({})", _name, join(", ", _terms));
 }
 
 

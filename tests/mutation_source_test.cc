@@ -67,7 +67,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
             .with_ranges(ranges)
             .build();
 
-        BOOST_TEST_MESSAGE(sprint("ranges: %s", ranges));
+        BOOST_TEST_MESSAGE(format("ranges: {}", ranges));
 
         mutation_source ms = populate(m.schema(), {m});
 
@@ -120,7 +120,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
         fwd_reader.consume(consumer(m.schema(), builder), db::no_timeout).get0();
         BOOST_REQUIRE(bool(builder));
         for (auto&& range : ranges) {
-            BOOST_TEST_MESSAGE(sprint("fwd %s", range));
+            BOOST_TEST_MESSAGE(format("fwd {}", range));
             fwd_reader.fast_forward_to(position_range(range), db::no_timeout).get();
             fwd_reader.consume(consumer(m.schema(), builder), db::no_timeout).get0();
         }
@@ -177,7 +177,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
 
         for (; start < end; ++start) {
             if (!contains_key(start)) {
-                BOOST_TEST_MESSAGE(sprint("skip %d", start));
+                BOOST_TEST_MESSAGE(format("skip {:d}", start));
                 continue;
             }
             sm.produces_row_with_key(keys[start]);
@@ -555,7 +555,7 @@ static void test_range_queries(populate_fn populate) {
     auto ds = populate(s, partitions);
 
     auto test_slice = [&] (dht::partition_range r) {
-        BOOST_TEST_MESSAGE(sprint("Testing range %s", r));
+        BOOST_TEST_MESSAGE(format("Testing range {}", r));
         assert_that(ds.make_reader(s, r))
             .produces(slice(partitions, r))
             .produces_end_of_stream();
@@ -1046,7 +1046,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
 
         rd.consume_pausable([&] (mutation_fragment&& mf) {
             if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
-                BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mutation_fragment::printer(*s, mf), range));
+                BOOST_FAIL(format("Received fragment which is not relevant for the slice: {}, slice: {}", mutation_fragment::printer(*s, mf), range));
             }
             result.partition().apply(*s, std::move(mf));
             return stop_iteration::no;
@@ -1075,7 +1075,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
         auto consume_clustered = [&] (mutation_fragment&& mf) {
             position_in_partition::less_compare less(*s);
             if (less(mf.position(), last_pos)) {
-                BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mutation_fragment::printer(*s, mf), last_pos));
+                BOOST_FAIL(format("Out of order fragment: {}, last pos: {}", mutation_fragment::printer(*s, mf), last_pos));
             }
             last_pos = position_in_partition(mf.position());
             result.partition().apply(*s, std::move(mf));
@@ -1391,12 +1391,12 @@ class random_mutation_generator::impl {
         // Create enough columns so that row can overflow its vector storage
         for (column_id i = 0; i < column_count; ++i) {
             {
-                auto column_name = sprint("v%d", i);
+                auto column_name = format("v{:d}", i);
                 auto col_type = type == counter_type || _bool_dist(_gen) ? type : list_type_impl::get_instance(type, true);
                 builder.with_column(to_bytes(column_name), col_type, column_kind::regular_column);
             }
             {
-                auto column_name = sprint("s%d", i);
+                auto column_name = format("s{:d}", i);
                 builder.with_column(to_bytes(column_name), type, column_kind::static_column);
             }
         }

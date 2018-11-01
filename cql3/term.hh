@@ -104,7 +104,7 @@ public:
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 
     virtual sstring to_string() const {
-        return sprint("term@%p", static_cast<const void*>(this));
+        return format("term@{:p}", static_cast<const void*>(this));
     }
 
     friend std::ostream& operator<<(std::ostream& out, const term& t) {

@@ -52,13 +52,13 @@ public:
 
     ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
         if (restriction->is_multi_column()) {
-            throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+            throw std::runtime_error(format("{} not implemented", __PRETTY_FUNCTION__));
         }
         return ::make_shared<single_column_primary_key_restrictions<T>>(schema, _allow_filtering)->merge_to(schema, restriction);
     }
     ::shared_ptr<primary_key_restrictions<T>> merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) override {
         if (restriction->is_multi_column()) {
-            throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+            throw std::runtime_error(format("{} not implemented", __PRETTY_FUNCTION__));
         }
         if (restriction->is_on_token()) {
             return static_pointer_cast<token_restriction>(restriction);
@@ -200,12 +200,12 @@ statement_restrictions::statement_restrictions(database& db,
                 auto col_id = r->get_entity()->prepare_column_identifier(schema);
                 const auto *cd = get_column_definition(schema, *col_id);
                 if (!cd) {
-                    throw exceptions::invalid_request_exception(sprint("restriction '%s' unknown column %s", relation->to_string(), r->get_entity()->to_string()));
+                    throw exceptions::invalid_request_exception(format("restriction '{}' unknown column {}", relation->to_string(), r->get_entity()->to_string()));
                 }
                 _not_null_columns.insert(cd);
 
                 if (!for_view) {
-                    throw exceptions::invalid_request_exception(sprint("restriction '%s' is only supported in materialized view creation", relation->to_string()));
+                    throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", relation->to_string()));
                 }
             } else {
                 add_restriction(relation->to_restriction(db, schema, bound_names), for_view, allow_filtering);
@@ -231,8 +231,7 @@ statement_restrictions::statement_restrictions(database& db,
 
     if (selects_only_static_columns && has_clustering_columns_restriction()) {
         if (type.is_update() || type.is_delete()) {
-            throw exceptions::invalid_request_exception(sprint(
-                "Invalid restrictions on clustering columns since the %s statement modifies only static columns", type));
+            throw exceptions::invalid_request_exception(format("Invalid restrictions on clustering columns since the {} statement modifies only static columns", type));
         }
 
         if (type.is_select()) {
@@ -440,8 +439,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool has_qu
                 const column_definition* clustering_column = &(*clustering_columns_iter);
                 ++clustering_columns_iter;
                 if (clustering_column != restricted_column) {
-                        throw exceptions::invalid_request_exception(sprint(
-                            "PRIMARY KEY column \"%s\" cannot be restricted as preceding column \"%s\" is not restricted",
+                        throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted as preceding column \"{}\" is not restricted",
                             restricted_column->name_as_text(), clustering_column->name_as_text()));
                 }
             }

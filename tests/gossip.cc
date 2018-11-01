@@ -78,7 +78,7 @@ int main(int ac, char ** av) {
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();
             auto listen = server.listen_address();
-            print("Messaging server listening on ip %s port %d ...\n", listen, port);
+            fmt::print("Messaging server listening on ip {} port {:d} ...\n", listen, port);
             return gms::get_failure_detector().start();
         }).then([vv, config] {
             return gms::get_gossiper().start();

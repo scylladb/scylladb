@@ -56,7 +56,7 @@ struct target_parser {
         sstring target = im.options().at(cql3::statements::index_target::target_option_name);
         auto result = parse(schema, target);
         if (!result) {
-            throw exceptions::configuration_exception(sprint("Unable to parse targets for index %s (%s)", im.name(), target));
+            throw exceptions::configuration_exception(format("Unable to parse targets for index {} ({})", im.name(), target));
         }
         return *result;
     }

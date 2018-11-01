@@ -334,13 +334,13 @@ SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
             mutation m(s.schema(), pkeys[n]);
 
             int i{0};
-            s.add_row(m, ckeys[i], sprint("val_%i", i));
+            s.add_row(m, ckeys[i], format("val_{:d}", i));
             ++i;
-            s.add_row(m, ckeys[i], sprint("val_%i", i));
+            s.add_row(m, ckeys[i], format("val_{:d}", i));
             ++i;
-            s.add_row(m, ckeys[i], sprint("val_%i", i));
+            s.add_row(m, ckeys[i], format("val_{:d}", i));
             ++i;
-            s.add_row(m, ckeys[i], sprint("val_%i", i));
+            s.add_row(m, ckeys[i], format("val_{:d}", i));
 
             return m;
         };
@@ -422,10 +422,10 @@ SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
         for (auto pkey_index : pkey_indexes) {
             muts.emplace_back(s.schema(), pkeys[pkey_index]);
             auto& mut = muts.back();
-            s.add_row(mut, ckeys[ckey_index], sprint("%s_%i_val", value_prefix, ckey_index));
+            s.add_row(mut, ckeys[ckey_index], format("{}_{:d}_val", value_prefix, ckey_index));
 
             if (static_row) {
-                s.add_static_row(mut, sprint("%s_static_val", value_prefix));
+                s.add_static_row(mut, format("{}_static_val", value_prefix));
             }
         }
 
@@ -512,7 +512,7 @@ static mutation make_mutation_with_key(simple_schema& s, dht::decorated_key dk) 
     static int i{0};
 
     mutation m(s.schema(), std::move(dk));
-    s.add_row(m, s.make_ckey(++i), sprint("val_%i", i));
+    s.add_row(m, s.make_ckey(++i), format("val_{:d}", i));
     return m;
 }
 
@@ -711,10 +711,10 @@ sstables::shared_sstable create_sstable(simple_schema& sschema, const sstring& p
 
     for (std::size_t p = 0; p < (1 << 10); ++p) {
         mutation m(sschema.schema(), sschema.make_pkey(p));
-        sschema.add_static_row(m, sprint("%i_static_val", p));
+        sschema.add_static_row(m, format("{:d}_static_val", p));
 
         for (std::size_t c = 0; c < (1 << 4); ++c) {
-            sschema.add_row(m, sschema.make_ckey(c), sprint("val_%i", c));
+            sschema.add_row(m, sschema.make_ckey(c), format("val_{:d}", c));
         }
 
         mutations.emplace_back(std::move(m));
@@ -1237,7 +1237,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
             rd.consume_pausable([&](mutation_fragment&& mf) {
                 position_in_partition::less_compare less(*s);
                 if (!less(mf.position(), position_in_partition_view::before_all_clustered_rows())) {
-                    BOOST_FAIL(sprint("Received clustering fragment: %s", mutation_fragment::printer(*s, mf)));
+                    BOOST_FAIL(format("Received clustering fragment: {}", mutation_fragment::printer(*s, mf)));
                 }
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
@@ -1248,11 +1248,11 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                 rd.fast_forward_to(prange, db::no_timeout).get();
                 rd.consume_pausable([&](mutation_fragment&& mf) {
                     if (!mf.relevant_for_range(*s, prange.start())) {
-                        BOOST_FAIL(sprint("Received fragment which is not relevant for range: %s, range: %s", mutation_fragment::printer(*s, mf), prange));
+                        BOOST_FAIL(format("Received fragment which is not relevant for range: {}, range: {}", mutation_fragment::printer(*s, mf), prange));
                     }
                     position_in_partition::less_compare less(*s);
                     if (!less(mf.position(), prange.end())) {
-                        BOOST_FAIL(sprint("Received fragment is out of range: %s, range: %s", mutation_fragment::printer(*s, mf), prange));
+                        BOOST_FAIL(format("Received fragment is out of range: {}, range: {}", mutation_fragment::printer(*s, mf), prange));
                     }
                     result.partition().apply(*s, std::move(mf));
                     return stop_iteration::no;
@@ -1304,7 +1304,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
 
             rd.consume_pausable([&] (mutation_fragment&& mf) {
                 if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
-                    BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mutation_fragment::printer(*s, mf), range));
+                    BOOST_FAIL(format("Received fragment which is not relevant for the slice: {}, slice: {}", mutation_fragment::printer(*s, mf), range));
                 }
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
@@ -1339,7 +1339,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
             auto consume_clustered = [&] (mutation_fragment&& mf) {
                 position_in_partition::less_compare less(*s);
                 if (less(mf.position(), last_pos)) {
-                    BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mutation_fragment::printer(*s, mf), last_pos));
+                    BOOST_FAIL(format("Out of order fragment: {}, last pos: {}", mutation_fragment::printer(*s, mf), last_pos));
                 }
                 last_pos = position_in_partition(mf.position());
                 result.partition().apply(*s, std::move(mf));
@@ -2103,7 +2103,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
 
         const auto min_size = std::min(reference_muts.size(), tested_muts.size());
         for (size_t i = 0; i < min_size; ++i) {
-            BOOST_TEST_MESSAGE(sprint("Comparing mutation %i/%i", i, min_size - 1));
+            BOOST_TEST_MESSAGE(format("Comparing mutation {:d}/{:d}", i, min_size - 1));
             assert_that(tested_muts[i]).is_equal_to(reference_muts[i]);
         }
 

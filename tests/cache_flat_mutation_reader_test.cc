@@ -125,7 +125,7 @@ struct expected_row {
     void check(const rows_entry& r) const {
         position_in_partition::equal_compare ck_eq(*SCHEMA);
         if (!ck_eq(r.position(), pos)) {
-            BOOST_FAIL(sprint("Expected %s, but got %s", pos, r.position()));
+            BOOST_FAIL(format("Expected {}, but got {}", pos, r.position()));
         }
         BOOST_REQUIRE_EQUAL(r.continuous(), continuous);
         BOOST_REQUIRE_EQUAL(r.dummy(), dummy);
@@ -148,7 +148,7 @@ static void assert_cached_rows(partition_snapshot_ptr snp, std::deque<expected_r
         expected.pop_front();
     }
     if (!expected.empty()) {
-        BOOST_FAIL(sprint("Expected %s next, but no more rows", expected.front()));
+        BOOST_FAIL(format("Expected {} next, but no more rows", expected.front()));
     }
 }
 
@@ -178,7 +178,7 @@ static void assert_cached_tombstones(partition_snapshot_ptr snp, std::deque<rang
     for (auto&& rt : rts) {
         BOOST_REQUIRE(!expected.empty());
         if (!expected.front().equal(*SCHEMA, rt)) {
-            BOOST_FAIL(sprint("Expected %s, but found %s", expected.front(), rt));
+            BOOST_FAIL(format("Expected {}, but found {}", expected.front(), rt));
         }
         expected.pop_front();
     }

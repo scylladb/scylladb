@@ -1147,7 +1147,7 @@ select_statement::prepare_restrictions(database& db,
             selection->contains_only_static_columns(), selection->contains_a_collection(), for_view, allow_filtering);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
-            throw exceptions::invalid_request_exception(sprint("Aliases aren't allowed in the where clause ('%s')", e.relation->to_string()));
+            throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the where clause ('{}')", e.relation->to_string()));
         }
         throw;
     }
@@ -1186,8 +1186,7 @@ void select_statement::validate_distinct_selection(schema_ptr schema,
     }
     for (auto&& def : selection->get_columns()) {
         if (!def->is_partition_key() && !def->is_static()) {
-            throw exceptions::invalid_request_exception(sprint(
-                "SELECT DISTINCT queries must only request partition key columns and/or static columns (not %s)",
+            throw exceptions::invalid_request_exception(format("SELECT DISTINCT queries must only request partition key columns and/or static columns (not {})",
                 def->name_as_text()));
         }
     }
@@ -1200,8 +1199,7 @@ void select_statement::validate_distinct_selection(schema_ptr schema,
 
     for (auto&& def : schema->partition_key_columns()) {
         if (!selection->has_column(def)) {
-            throw exceptions::invalid_request_exception(sprint(
-                "SELECT DISTINCT queries must request all the partition key columns (missing %s)", def.name_as_text()));
+            throw exceptions::invalid_request_exception(format("SELECT DISTINCT queries must request all the partition key columns (missing {})", def.name_as_text()));
         }
     }
 }
@@ -1209,9 +1207,9 @@ void select_statement::validate_distinct_selection(schema_ptr schema,
 void select_statement::handle_unrecognized_ordering_column(::shared_ptr<column_identifier> column)
 {
     if (contains_alias(column)) {
-        throw exceptions::invalid_request_exception(sprint("Aliases are not allowed in order by clause ('%s')", *column));
+        throw exceptions::invalid_request_exception(format("Aliases are not allowed in order by clause ('{}')", *column));
     }
-    throw exceptions::invalid_request_exception(sprint("Order by on unknown column %s", *column));
+    throw exceptions::invalid_request_exception(format("Order by on unknown column {}", *column));
 }
 
 select_statement::ordering_comparator_type
@@ -1280,8 +1278,7 @@ bool select_statement::is_reversed(schema_ptr schema) {
         }
 
         if (!def->is_clustering_key()) {
-            throw exceptions::invalid_request_exception(sprint(
-                "Order by is currently only supported on the clustered columns of the PRIMARY KEY, got %s", *column));
+            throw exceptions::invalid_request_exception(format("Order by is currently only supported on the clustered columns of the PRIMARY KEY, got {}", *column));
         }
 
         if (i != def->component_index()) {

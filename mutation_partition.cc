@@ -900,14 +900,14 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
 
 std::ostream&
 operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection::printer&>& c) {
-    return fprint(os, "{column: %s %s}", c.first, c.second);
+    return fmt_print(os, "{{column: {} {}}}", c.first, c.second);
 }
 
 // Transforms given range of printable into a range of strings where each element
 // in the original range is prefxied with given string.
 template<typename RangeOfPrintable>
 static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
-    return r | boost::adaptors::transformed([&] (auto&& e) { return sprint("%s%s", prefix, e); });
+    return r | boost::adaptors::transformed([&] (auto&& e) { return format("{}{}", prefix, e); });
 }
 
 std::ostream&
@@ -928,17 +928,17 @@ operator<<(std::ostream& os, const row::printer& p) {
         cells = ::join(",", prefixed("\n      ", p._row.get_range_vector() | boost::adaptors::transformed(add_printer)));
         break;
     }
-    return fprint(os, "{row: %s}", cells);
+    return fmt_print(os, "{{row: {}}}", cells);
 }
 
 std::ostream&
 operator<<(std::ostream& os, const row_marker& rm) {
     if (rm.is_missing()) {
-        return fprint(os, "{row_marker: }");
+        return fmt_print(os, "{{row_marker: }}");
     } else if (rm._ttl == row_marker::dead) {
-        return fprint(os, "{row_marker: dead %s %s}", rm._timestamp, rm._expiry.time_since_epoch().count());
+        return fmt_print(os, "{{row_marker: dead {} {}}}", rm._timestamp, rm._expiry.time_since_epoch().count());
     } else {
-        return fprint(os, "{row_marker: %s %s %s}", rm._timestamp, rm._ttl.count(),
+        return fmt_print(os, "{{row_marker: {} {} {}}}", rm._timestamp, rm._ttl.count(),
             rm._ttl != row_marker::no_ttl ? rm._expiry.time_since_epoch().count() : 0);
     }
 }
@@ -959,7 +959,7 @@ operator<<(std::ostream& os, const deletable_row::printer& p) {
 std::ostream&
 operator<<(std::ostream& os, const rows_entry::printer& p) {
     auto& re = p._rows_entry;
-    return fprint(os, "{rows_entry: cont=%d dummy=%d %s %s}", re.continuous(), re.dummy(), re.position(),
+    return fmt_print(os, "{{rows_entry: cont={:d} dummy={:d} {} {}}}", re.continuous(), re.dummy(), re.position(),
                   deletable_row::printer(p._schema, re._row));
 }
 
@@ -1502,7 +1502,7 @@ row::cell_entry::cell_entry(cell_entry&& o) noexcept
 const atomic_cell_or_collection& row::cell_at(column_id id) const {
     auto&& cell = find_cell(id);
     if (!cell) {
-        throw_with_backtrace<std::out_of_range>(sprint("Column not found for id = %d", id));
+        throw_with_backtrace<std::out_of_range>(format("Column not found for id = {:d}", id));
     }
     return *cell;
 }

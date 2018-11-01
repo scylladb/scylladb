@@ -78,8 +78,7 @@ make_from_blob_function(data_type to_type) {
             return val;
         } catch (marshal_exception& e) {
             using namespace exceptions;
-            throw invalid_request_exception(sprint(
-                    "In call to function %s, value 0x%s is not a valid binary representation for type %s",
+            throw invalid_request_exception(format("In call to function {}, value 0x{} is not a valid binary representation for type {}",
                     name, to_hex(val), to_type->as_cql3_type()->to_string()));
         }
     });
