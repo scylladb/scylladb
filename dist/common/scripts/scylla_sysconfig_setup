@@ -40,7 +40,7 @@ if __name__ == '__main__':
         cfg = sysconfig_parser('/etc/sysconfig/scylla-server')
     else:
         cfg = sysconfig_parser('/etc/default/scylla-server')
-    set_nic = str2bool(cfg.get('SET_NIC'))
+    set_nic_and_disks = str2bool(get_set_nic_and_disks_config_value(cfg))
     ami = str2bool(cfg.get('AMI'))
 
     parser = argparse.ArgumentParser(description='Setting parameters on Scylla sysconfig file.')
@@ -58,8 +58,8 @@ if __name__ == '__main__':
                         help='scylla home directory')
     parser.add_argument('--confdir',
                         help='scylla config directory')
-    parser.add_argument('--setup-nic', action='store_true', default=set_nic,
-                        help='setup NIC\'s interrupts, RPS, XPS')
+    parser.add_argument('--setup-nic-and-disks', action='store_true', default=set_nic_and_disks,
+                        help='setup NIC\'s and disks\' interrupts, RPS, XPS, nomerges and I/O scheduler')
     parser.add_argument('--ami', action='store_true', default=ami,
                         help='AMI instance mode')
     args = parser.parse_args()
@@ -71,8 +71,8 @@ if __name__ == '__main__':
     ifname = args.nic if args.nic else cfg.get('IFNAME')
     network_mode = args.mode if args.mode else cfg.get('NETWORK_MODE')
 
-    if args.setup_nic:
-        rps_cpus = out('/usr/lib/scylla/posix_net_conf.sh --cpu-mask {}'.format(ifname))
+    if args.setup_nic_and_disks:
+        rps_cpus = out('{} --tune net --nic {} --get-cpu-mask'.format(perftune_base_command(), ifname))
         if len(rps_cpus) > 0:
             cpuset = hex2list(rps_cpus)
             run('/usr/lib/scylla/scylla_cpuset_setup --cpuset {}'.format(cpuset))
@@ -104,8 +104,13 @@ if __name__ == '__main__':
         cfg.set('SCYLLA_HOME', args.homedir)
     if args.confdir:
         cfg.set('SCYLLA_CONF', args.confdir)
-    if str2bool(cfg.get('SET_NIC')) != args.setup_nic:
-        cfg.set('SET_NIC', bool2str(args.setup_nic))
+
+    if str2bool(get_set_nic_and_disks_config_value(cfg)) != args.setup_nic_and_disks:
+        if cfg.has_option('SET_NIC'):
+            cfg.set('SET_NIC', bool2str(args.setup_nic_and_disks))
+        else:
+            cfg.set('SET_NIC_AND_DISKS', bool2str(args.setup_nic_and_disks))
+
     if str2bool(cfg.get('AMI')) != args.ami:
         cfg.set('AMI', bool2str(args.ami))
     cfg.commit()
