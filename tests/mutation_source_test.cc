@@ -1388,17 +1388,14 @@ class random_mutation_generator::impl {
                 .with_column("ck1", bytes_type, column_kind::clustering_key)
                 .with_column("ck2", bytes_type, column_kind::clustering_key);
 
+        auto add_column = [&] (const sstring& column_name, column_kind kind) {
+            auto col_type = type == counter_type || _bool_dist(_gen) ? type : list_type_impl::get_instance(type, true);
+            builder.with_column(to_bytes(column_name), col_type, kind);
+        };
         // Create enough columns so that row can overflow its vector storage
         for (column_id i = 0; i < column_count; ++i) {
-            {
-                auto column_name = format("v{:d}", i);
-                auto col_type = type == counter_type || _bool_dist(_gen) ? type : list_type_impl::get_instance(type, true);
-                builder.with_column(to_bytes(column_name), col_type, column_kind::regular_column);
-            }
-            {
-                auto column_name = format("s{:d}", i);
-                builder.with_column(to_bytes(column_name), type, column_kind::static_column);
-            }
+            add_column(format("v{:d}", i), column_kind::regular_column);
+            add_column(format("s{:d}", i), column_kind::static_column);
         }
 
         return builder.build();
