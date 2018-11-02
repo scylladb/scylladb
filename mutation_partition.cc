@@ -686,7 +686,7 @@ struct max_timestamp {
 template<>
 struct appending_hash<row> {
     template<typename Hasher>
-    void operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const std::vector<column_id>& columns, max_timestamp& max_ts) const {
+    void operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
         for (auto id : columns) {
             const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
             if (!cell_and_hash) {
@@ -759,7 +759,7 @@ static void get_compacted_row_slice(const schema& s,
     const query::partition_slice& slice,
     column_kind kind,
     const row& cells,
-    const std::vector<column_id>& columns,
+    const query::column_id_vector& columns,
     RowWriter& writer)
 {
     for (auto id : columns) {

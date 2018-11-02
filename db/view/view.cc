@@ -1058,7 +1058,7 @@ static query::partition_slice make_partition_slice(const schema& s) {
     return query::partition_slice(
             {query::full_clustering_range},
             { },
-            boost::copy_range<std::vector<column_id>>(s.regular_columns()
+            boost::copy_range<query::column_id_vector>(s.regular_columns()
                     | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
             std::move(opts));
 }

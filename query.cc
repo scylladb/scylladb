@@ -72,8 +72,8 @@ std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
 }
 
 partition_slice::partition_slice(clustering_row_ranges row_ranges,
-    std::vector<column_id> static_columns,
-    std::vector<column_id> regular_columns,
+    query::column_id_vector static_columns,
+    query::column_id_vector regular_columns,
     option_set options,
     std::unique_ptr<specific_ranges> specific_ranges,
     cql_serialization_format cql_format,

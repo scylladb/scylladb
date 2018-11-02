@@ -88,7 +88,7 @@ class build_progress_virtual_reader {
 
         query::partition_slice adjust_partition_slice() {
             auto slice = _legacy_slice;
-            std::vector<column_id> adjusted_columns;
+            query::column_id_vector adjusted_columns;
             for (auto col_id : slice.regular_columns) {
                 if (col_id == _legacy_last_token_col) {
                     adjusted_columns.push_back(_scylla_next_token_col);

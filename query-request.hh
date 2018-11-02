@@ -29,8 +29,11 @@
 #include "enum_set.hh"
 #include "range.hh"
 #include "tracing/tracing.hh"
+#include "utils/small_vector.hh"
 
 namespace query {
+
+using column_id_vector = utils::small_vector<column_id, 8>;
 
 template <typename T>
 using range = wrapping_range<T>;
@@ -115,16 +118,16 @@ public:
         option::bypass_cache>>;
     clustering_row_ranges _row_ranges;
 public:
-    std::vector<column_id> static_columns; // TODO: consider using bitmap
-    std::vector<column_id> regular_columns;  // TODO: consider using bitmap
+    column_id_vector static_columns; // TODO: consider using bitmap
+    column_id_vector regular_columns;  // TODO: consider using bitmap
     option_set options;
 private:
     std::unique_ptr<specific_ranges> _specific_ranges;
     cql_serialization_format _cql_format;
     uint32_t _partition_row_limit;
 public:
-    partition_slice(clustering_row_ranges row_ranges, std::vector<column_id> static_columns,
-        std::vector<column_id> regular_columns, option_set options,
+    partition_slice(clustering_row_ranges row_ranges, column_id_vector static_columns,
+        column_id_vector regular_columns, option_set options,
         std::unique_ptr<specific_ranges> specific_ranges = nullptr,
         cql_serialization_format = cql_serialization_format::internal(),
         uint32_t partition_row_limit = max_rows);

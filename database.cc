@@ -3401,7 +3401,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     m.upgrade(cf.schema());
 
     // prepare partition slice
-    std::vector<column_id> static_columns;
+    query::column_id_vector static_columns;
     static_columns.reserve(m.partition().static_row().size());
     m.partition().static_row().for_each_cell([&] (auto id, auto&&) {
         static_columns.emplace_back(id);
@@ -3409,7 +3409,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
 
     query::clustering_row_ranges cr_ranges;
     cr_ranges.reserve(8);
-    std::vector<column_id> regular_columns;
+    query::column_id_vector regular_columns;
     regular_columns.reserve(32);
 
     for (auto&& cr : m.partition().clustered_rows()) {
