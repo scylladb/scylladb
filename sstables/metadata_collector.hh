@@ -191,6 +191,10 @@ public:
         _ancestors.insert(generation);
     }
 
+    std::set<int> ancestors() const {
+        return _ancestors;
+    }
+
     void sstable_level(int sstable_level) {
         _sstable_level = sstable_level;
     }
