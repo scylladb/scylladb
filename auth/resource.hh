@@ -56,6 +56,7 @@
 #include "seastarx.hh"
 #include "stdx.hh"
 #include "utils/hash.hh"
+#include "utils/small_vector.hh"
 
 namespace auth {
 
@@ -98,7 +99,7 @@ struct role_resource_t final {};
 class resource final {
     resource_kind _kind;
 
-    std::vector<sstring> _parts;
+    utils::small_vector<sstring, 3> _parts;
 
 public:
     ///
@@ -123,7 +124,7 @@ public:
     permission_set applicable_permissions() const;
 
 private:
-    resource(resource_kind, std::vector<sstring> parts);
+    resource(resource_kind, utils::small_vector<sstring, 3> parts);
 
     friend class std::hash<resource>;
     friend class data_resource_view;

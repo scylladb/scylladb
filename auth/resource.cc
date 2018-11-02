@@ -105,8 +105,7 @@ resource::resource(resource_kind kind) : _kind(kind) {
     _parts.emplace_back(roots.at(kind));
 }
 
-resource::resource(resource_kind kind, std::vector<sstring> parts) : resource(kind) {
-    _parts.reserve(parts.size() + 1);
+resource::resource(resource_kind kind, utils::small_vector<sstring, 3> parts) : resource(kind) {
     _parts.insert(_parts.end(), std::make_move_iterator(parts.begin()), std::make_move_iterator(parts.end()));
 }
 
@@ -243,7 +242,7 @@ resource parse_resource(stdx::string_view name) {
         return result;
     }();
 
-    std::vector<sstring> parts;
+    utils::small_vector<sstring, 3> parts;
     boost::split(parts, name, [](char ch) { return ch == '/'; });
 
     if (parts.empty()) {
