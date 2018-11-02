@@ -120,6 +120,7 @@ boost_tests = [
     'auth_passwords_test',
     'multishard_mutation_query_test',
     'top_k_test',
+    'small_vector_test',
 ]
 
 other_tests = [

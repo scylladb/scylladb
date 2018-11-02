@@ -359,6 +359,7 @@ scylla_tests = [
     'tests/auth_passwords_test',
     'tests/multishard_mutation_query_test',
     'tests/top_k_test',
+    'tests/small_vector_test',
 ]
 
 perf_tests = [
@@ -808,6 +809,7 @@ pure_boost_tests = set([
     'tests/json_test',
     'tests/auth_passwords_test',
     'tests/top_k_test',
+    'tests/small_vector_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
@@ -826,6 +828,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/memory_footprint',
     'tests/gossip',
     'tests/perf/perf_sstable',
+    'tests/small_vector_test',
 ]) | pure_boost_tests
 
 for t in tests_not_using_seastar_test_framework:
@@ -861,6 +864,7 @@ deps['tests/perf/perf_fast_forward'] += ['release.cc']
 deps['tests/meta_test'] = ['tests/meta_test.cc']
 deps['tests/imr_test'] = ['tests/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/reusable_buffer_test'] = ['tests/reusable_buffer_test.cc']
+deps['tests/small_vector_test'] = ['tests/small_vector_test.cc']
 
 deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
 
