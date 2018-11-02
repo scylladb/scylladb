@@ -24,6 +24,7 @@
 #include "serializer.hh"
 #include <seastar/util/bool_class.hh>
 #include <boost/range/algorithm/for_each.hpp>
+#include "utils/small_vector.hh"
 
 namespace ser {
 
@@ -90,6 +91,20 @@ struct container_traits<std::vector<T>> {
         }
     };
     void resize(std::vector<T>& c, size_t size) {
+        c.resize(size);
+    }
+};
+
+template<typename T, size_t N>
+struct container_traits<utils::small_vector<T, N>> {
+    struct back_emplacer {
+        utils::small_vector<T, N>& c;
+        back_emplacer(utils::small_vector<T, N>& c_) : c(c_) {}
+        void operator()(T&& v) {
+            c.emplace_back(std::move(v));
+        }
+    };
+    void resize(utils::small_vector<T, N>& c, size_t size) {
         c.resize(size);
     }
 };
@@ -200,6 +215,11 @@ struct serializer<std::vector<T>>
 template<typename T>
 struct serializer<utils::chunked_vector<T>>
     : idl::serializers::internal::vector_serializer<utils::chunked_vector<T>>
+{ };
+
+template<typename T, size_t N>
+struct serializer<utils::small_vector<T, N>>
+    : idl::serializers::internal::vector_serializer<utils::small_vector<T, N>>
 { };
 
 template<typename T, typename Ratio>
