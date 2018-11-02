@@ -51,10 +51,54 @@ class intrusive_set_external_comparator final {
     typedef boost::intrusive::mhtraits<Elem, intrusive_set_external_comparator_member_hook, PtrToMember> value_traits;
     typedef typename value_traits::node_traits node_traits;
     typedef typename node_traits::node_ptr node_ptr;
+
+    using boost_iterator = typename bi::tree_iterator<value_traits, false>;
+    using boost_const_iterator = typename bi::tree_iterator<value_traits, true>;
 public:
     typedef Elem value_type;
-    typedef typename bi::tree_iterator<value_traits, false> iterator;
-    typedef typename bi::tree_iterator<value_traits, true> const_iterator;
+
+    struct iterator : boost_iterator {
+        using boost_iterator::boost_iterator;
+        iterator(boost_iterator it) noexcept : boost_iterator(it) { }
+        iterator(const iterator& other) = default;
+        iterator(iterator&& other) noexcept : boost_iterator(other) { }
+        iterator& operator=(const iterator& other) = default;
+        iterator& operator=(iterator&& other) noexcept {
+            return *this = other;
+        }
+        iterator& operator++() {
+            boost_iterator::operator++();
+            return *this;
+        }
+        iterator operator++(int) {
+            return iterator(boost_iterator::operator++(int()));
+        }
+        iterator unconst() const {
+            return *this;
+        }
+    };
+    struct const_iterator : boost_const_iterator {
+        using boost_const_iterator::boost_const_iterator;
+        const_iterator(boost_const_iterator it) noexcept : boost_const_iterator(it) { }
+        const_iterator(const const_iterator& other) = default;
+        const_iterator(const iterator& other) : boost_const_iterator(boost_iterator(other)) { }
+        const_iterator(const_iterator&& other) noexcept : boost_const_iterator(other) { }
+        const_iterator& operator=(const const_iterator& other) = default;
+        const_iterator& operator=(const_iterator&& other) noexcept {
+            return *this = other;
+        }
+        const_iterator& operator++() {
+            boost_const_iterator::operator++();
+            return *this;
+        }
+        const_iterator operator++(int) {
+            return const_iterator(boost_const_iterator::operator++(int()));
+        }
+        iterator unconst() const {
+            return iterator(boost_const_iterator::unconst());
+        }
+    };
+
     typedef typename std::reverse_iterator<iterator> reverse_iterator;
     typedef typename std::reverse_iterator<const_iterator> const_reverse_iterator;
 
@@ -105,7 +149,7 @@ private:
     }
 public:
     intrusive_set_external_comparator() { algo::init_header(_header.this_ptr()); }
-    intrusive_set_external_comparator(intrusive_set_external_comparator&& o) {
+    intrusive_set_external_comparator(intrusive_set_external_comparator&& o) noexcept {
         algo::init_header(_header.this_ptr());
         algo::swap_tree(_header.this_ptr(), node_ptr(o._header.this_ptr()));
     }
