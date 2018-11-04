@@ -17,5 +17,5 @@ try:
     setup.arguments()
     setup.set_housekeeping()
     os.system("/usr/bin/supervisord -c /etc/supervisord.conf")
-except:
+except Exception:
     logging.exception('failed!')
