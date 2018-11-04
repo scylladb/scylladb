@@ -52,6 +52,7 @@ def curl(url, byte=False):
 
 class aws_instance:
     """Describe several aspects of the current AWS instance"""
+
     def __disk_name(self, dev):
         name = re.compile(r"(?:/dev/)?(?P<devname>[a-zA-Z]+)\d*")
         return name.search(dev).group("devname")
@@ -193,6 +194,7 @@ class scylla_cpuinfo:
     """Class containing information about how Scylla sees CPUs in this machine.
     Information that can be probed include in which hyperthreads Scylla is configured
     to run, how many total threads exist in the system, etc"""
+
     def __parse_cpuset(self):
         f = open("/etc/scylla.d/cpuset.conf", "r")
         pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
@@ -385,6 +387,7 @@ def get_mode_cpuset(nic, mode):
     except subprocess.CalledProcessError:
         return '-1'
 
+
 def get_scylla_dirs():
     """
     Returns a list of scylla directories configured in /etc/scylla/scylla.yaml.
@@ -411,9 +414,11 @@ def get_scylla_dirs():
 
     return [d for d in dirs if d is not None]
 
+
 def perftune_base_command():
     disk_tune_param = "--tune disks " + " ".join("--dir {}".format(d) for d in get_scylla_dirs())
     return '/usr/lib/scylla/perftune.py {}'.format(disk_tune_param)
+
 
 def get_cur_cpuset():
     cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
@@ -450,6 +455,8 @@ def is_valid_nic(nic):
     return os.path.exists('/sys/class/net/{}'.format(nic))
 
 # Remove this when we do not support SET_NIC configuration value anymore
+
+
 def get_set_nic_and_disks_config_value(cfg):
     """
     Get the SET_NIC_AND_DISKS configuration value.
@@ -465,9 +472,10 @@ def get_set_nic_and_disks_config_value(cfg):
 
     try:
         return cfg.get('SET_NIC_AND_DISKS')
-    except:
+    except Exception:
         # For backwards compatibility
         return cfg.get('SET_NIC')
+
 
 class SystemdException(Exception):
     pass
