@@ -23,9 +23,6 @@ import os
 import sys
 import argparse
 import subprocess
-import signal
-import shlex
-import threading
 import concurrent.futures
 import io
 
@@ -175,6 +172,7 @@ class Alarm(Exception):
 def alarm_handler(signum, frame):
     raise Alarm
 
+
 if __name__ == "__main__":
     all_modes = ['debug', 'release']
 
@@ -183,9 +181,9 @@ if __name__ == "__main__":
     default_num_jobs = ((sysmem - 4e9) // testmem)
 
     parser = argparse.ArgumentParser(description="Scylla test runner")
-    parser.add_argument('--fast',  action="store_true",
+    parser.add_argument('--fast', action="store_true",
                         help="Run only fast tests")
-    parser.add_argument('--name',  action="store",
+    parser.add_argument('--name', action="store",
                         help="Run only test whose name contains given string")
     parser.add_argument('--mode', choices=all_modes,
                         help="Run only tests for given build mode")
@@ -211,7 +209,7 @@ if __name__ == "__main__":
     modes_to_run = all_modes if not args.mode else [args.mode]
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
-        standard_args =  '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
+        standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
         seastar_args = '-c2 -m2G'.split()
         for test in other_tests:
             test_to_run.append((os.path.join(prefix, test), 'other', custom_seastar_args.get(test, seastar_args) + standard_args))
@@ -242,6 +240,7 @@ if __name__ == "__main__":
     env['ASAN_OPTIONS'] = 'alloc_dealloc_mismatch=0'
     env['UBSAN_OPTIONS'] = 'print_stacktrace=1'
     env['BOOST_TEST_CATCH_SYSTEM_ERRORS'] = 'no'
+
     def run_test(path, type, exec_args):
         boost_args = []
         # avoid modifying in-place, it will change test_to_run
@@ -251,38 +250,38 @@ if __name__ == "__main__":
             mode = 'release'
             if path.startswith(os.path.join('build', 'debug')):
                 mode = 'debug'
-            xmlout = (args.jenkins + "." + mode + "." +
-                      os.path.basename(path.split()[0]) + ".boost.xml")
+            xmlout = (args.jenkins + "." + mode + "." + os.path.basename(path.split()[0]) + ".boost.xml")
             boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
         if type == 'boost':
             boost_args += ['--']
-        def report_error(out, report_subcause):
-            report_subcause()
+
+        def report_error(exc, out, report_subcause):
+            report_subcause(exc)
             if out:
                 print('=== stdout START ===', file=file)
                 print(out, file=file)
                 print('=== stdout END ===', file=file)
-        out = None
         success = False
         try:
-            out = subprocess.check_output([path] + boost_args + exec_args,
-                                stderr=subprocess.STDOUT,
-                                timeout=args.timeout,
-                                env=env, preexec_fn=os.setsid)
+            subprocess.check_output([path] + boost_args + exec_args,
+                                    stderr=subprocess.STDOUT,
+                                    timeout=args.timeout,
+                                    env=env, preexec_fn=os.setsid)
             success = True
         except subprocess.TimeoutExpired as e:
-            def report_subcause():
+            def report_subcause(e):
                 print('  timed out', file=file)
-            report_error(e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
+            report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
         except subprocess.CalledProcessError as e:
-            def report_subcause():
+            def report_subcause(e):
                 print('  with error code {code}\n'.format(code=e.returncode), file=file)
-            report_error(e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
+            report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
         except Exception as e:
-            def report_subcause():
+            def report_subcause(e):
                 print('  with error {e}\n'.format(e=e), file=file)
-            report_error(e, report_subcause=report_subcause)
+            report_error(e, e, report_subcause=report_subcause)
         return (path, boost_args + exec_args, success, file.getvalue())
+
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
     futures = []
     for n, test in enumerate(test_to_run):
