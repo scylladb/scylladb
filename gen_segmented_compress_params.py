@@ -49,15 +49,15 @@ def relative_offset_size(data_size, chunk_size, n):
     if n == 1:
         return int(0)
     else:
-        return int(math.ceil(math.log2((n - 1)*(chunk_size + 64))))
+        return int(math.ceil(math.log2((n - 1) * (chunk_size + 64))))
 
 
 def segment_size(data_size, chunk_size, n):
-    return base_offset_size(data_size, chunk_size, n) + (n - 1)*relative_offset_size(data_size, chunk_size, n)
+    return base_offset_size(data_size, chunk_size, n) + (n - 1) * relative_offset_size(data_size, chunk_size, n)
 
 
 def no_of_segments(data_size, chunk_size, n):
-    return int(math.ceil((data_size/chunk_size)/n))
+    return int(math.ceil((data_size / chunk_size) / n))
 
 
 def n_for(data_size, chunk_size, n_values):
@@ -67,7 +67,7 @@ def n_for(data_size, chunk_size, n_values):
 
 
 def size_deque(data_size, chunk_size):
-    return int(math.ceil(data_size/chunk_size))*64
+    return int(math.ceil(data_size / chunk_size)) * 64
 
 
 def size_grouped_segments(data_size, chunk_size, n):
@@ -96,14 +96,14 @@ def segments_per_bucket(data_size, chunk_size, n, bucket_size):
     bucket_size_bits = bucket_size * 8 - 56
     segment_size_bits = segment_size(data_size, chunk_size, n)
 
-    fits = int(math.floor(bucket_size_bits/segment_size_bits))
+    fits = int(math.floor(bucket_size_bits / segment_size_bits))
 
     # We can't have more segments than the sizes support
     return min(no_of_segments(data_size, chunk_size, n), fits)
 
 
 def all_n_values():
-    optimal_sizes={}
+    optimal_sizes = {}
 
     for f in data_size_range_log2():
         for c in chunk_size_range_log2():
@@ -115,7 +115,6 @@ def all_n_values():
                     optimal_size = (f, c, n, s)
 
             optimal_sizes[(f, c)] = optimal_size
-
 
     n_values = []
     for k in sorted(optimal_sizes.keys()):
@@ -197,7 +196,7 @@ if __name__ == '__main__':
             print("Bucket size is either too large or too small")
             exit(1)
     else:
-        bucket_size_log2 = 12 #4K
+        bucket_size_log2 = 12  # 4K
 
     bucket_size = 2**bucket_size_log2
 
@@ -215,8 +214,8 @@ if __name__ == '__main__':
             bucket_infos.append("    {{{}, {}, {} /*out of the max of {}*/}}".format(
                 chunk_size_log2,
                 data_size_log2,
-                segments_per_bucket(data_size, chunk_size, n, bucket_size), # no of segments that fit into the bucket
-                no_of_segments(data_size, chunk_size, n))); # normal no of segments for these sizes
+                segments_per_bucket(data_size, chunk_size, n, bucket_size),  # no of segments that fit into the bucket
+                no_of_segments(data_size, chunk_size, n)))  # normal no of segments for these sizes
             data_sizes.append(data_size_log2)
 
         segment_infos = []
