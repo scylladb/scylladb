@@ -205,7 +205,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
             .produces_row(to_ck(110), to_expected(1010))
             .produces_partition_end()
             .produces_partition_start(to_key(2))
-            .produces_static_row({})
             .produces_row(to_ck(101), to_expected(1001))
             .produces_row(to_ck(102), to_expected(1002))
             .produces_row(to_ck(103), to_expected(1003))
@@ -235,7 +234,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
             .produces_row(to_ck(108), to_expected(1008))
             .produces_partition_end()
             .produces_partition_start(to_key(2))
-            .produces_static_row({})
             .produces_row(to_ck(102), to_expected(1002))
             .produces_row(to_ck(103), to_expected(1003))
             .produces_row(to_ck(107), to_expected(1007))
@@ -271,7 +269,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
         r.next_partition();
 
         r.produces_partition_start(to_key(2))
-            .produces_static_row({})
             .produces_end_of_stream();
 
         r.fast_forward_to(to_ck(103), to_ck(104));
@@ -318,7 +315,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
         r.next_partition();
 
         r.produces_partition_start(to_key(2))
-            .produces_static_row({})
             .produces_end_of_stream();
 
         r.fast_forward_to(to_ck(103), to_ck(104));
