@@ -2717,7 +2717,7 @@ private:
     std::unique_ptr<file_writer> _data_writer;
     std::optional<file_writer> _index_writer;
     bool _tombstone_written = false;
-    bool _row_deletion_written = false;
+    bool _static_row_written = false;
     // The length of partition header (partition key, partition deletion and static row, if present)
     // as written to the data file
     // Used for writing promoted index
@@ -2774,6 +2774,12 @@ private:
     void ensure_tombstone_is_written() {
         if (!_tombstone_written) {
             consume(tombstone());
+        }
+    }
+
+    void ensure_static_row_is_written_if_needed() {
+        if (!_static_columns.empty() && !_static_row_written) {
+            consume(static_row{});
         }
     }
 
@@ -3008,6 +3014,7 @@ void sstable_writer_m::drain_tombstones(std::optional<position_in_partition_view
     };
 
     ensure_tombstone_is_written();
+    ensure_static_row_is_written_if_needed();
     position_in_partition::less_compare less{_schema};
     position_in_partition::equal_compare eq{_schema};
     while (auto mfo = get_next_rt()) {
@@ -3080,6 +3087,7 @@ void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
     _partition_header_length = _data_writer->offset() - _c_stats.start_offset;
 
     _tombstone_written = false;
+    _static_row_written = false;
 }
 
 void sstable_writer_m::consume(tombstone t) {
@@ -3350,6 +3358,7 @@ void sstable_writer_m::write_static_row(const row& static_row) {
 stop_iteration sstable_writer_m::consume(static_row&& sr) {
     ensure_tombstone_is_written();
     write_static_row(sr.cells());
+    _static_row_written = true;
     return stop_iteration::no;
 }
 
