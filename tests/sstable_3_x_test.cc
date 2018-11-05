@@ -4746,3 +4746,40 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_col
     validate_read(s, tmp.path, {mut});
 }
 
+SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    sstring table_name = "empty_static_row";
+    // CREATE TABLE empty_static_row (pk int, ck int, st int static, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck", int32_type, column_kind::clustering_key);
+    builder.with_column("st", int32_type, column_kind::static_column);
+    builder.with_column("rc", int32_type);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    api::timestamp_type ts = write_timestamp;
+
+    // INSERT INTO empty_static_row (pk, ck, rc) VALUES ( 0, 1, 2) USING TIMESTAMP 1525385507816568;
+    auto key1 = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut1{s, key1};
+    clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
+    mut1.partition().apply_insert(*s, ckey, ts);
+    mut1.set_cell(ckey, "rc", data_value{2}, ts);
+    mt->apply(mut1);
+
+    ts += 10;
+
+    // INSERT INTO empty_static_row (pk, ck, st, rc) VALUES ( 1, 1, 2, 3) USING TIMESTAMP 1525385507816578;
+    auto key2 = partition_key::from_deeply_exploded(*s, {1});
+    mutation mut2{s, key2};
+    mut2.partition().apply_insert(*s, ckey, ts);
+    mut2.set_static_cell("st", data_value{2}, ts);
+    mut2.set_cell(ckey, "rc", data_value{3}, ts);
+    mt->apply(mut2);
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut2, mut1}); // Mutations are re-ordered according to decorated_key order
+}
+
