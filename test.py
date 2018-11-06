@@ -126,18 +126,27 @@ other_tests = [
     'memory_footprint',
 ]
 
+CONCOLORS = {'green': '\033[1;32m', 'red': '\033[1;31m', 'nocolor': '\033[0m'}
+
+def colorformat(msg, **kwargs):
+    fmt = dict(CONCOLORS)
+    fmt.update(kwargs)
+    return msg.format(**fmt)
+
+def status_to_string(success):
+    if success:
+        status = colorformat("{green}PASSED{nocolor}") if os.isatty(sys.stdout.fileno()) else "PASSED"
+    else:
+        status = colorformat("{red}FAILED{nocolor}") if os.isatty(sys.stdout.fileno()) else "FAILED"
+
+    return status
 
 def print_progress_succint(test_path, test_args, success, cookie):
     if type(cookie) is int:
         cookie = (0, 1, cookie)
 
     last_len, n, n_total = cookie
-    if success:
-        status = "PASSED"
-    else:
-        status = "FAILED"
-
-    msg = "[{}/{}] {} {} {}".format(n, n_total, status, test_path, ' '.join(test_args))
+    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test_path, ' '.join(test_args))
     if sys.stdout.isatty():
         print('\r' + ' ' * last_len, end='')
         last_len = len(msg)
@@ -153,12 +162,7 @@ def print_status_verbose(test_path, test_args, success, cookie):
         cookie = (1, cookie)
 
     n, n_total = cookie
-    if success:
-        status = "PASSED"
-    else:
-        status = "FAILED"
-
-    msg = "[{}/{}] {} {} {}".format(n, n_total, status, test_path, ' '.join(test_args))
+    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test_path, ' '.join(test_args))
     print(msg)
 
     return (n + 1, n_total)
