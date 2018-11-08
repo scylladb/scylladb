@@ -10,6 +10,7 @@ class ScyllaSetup:
         self._seeds = arguments.seeds
         self._cpuset = arguments.cpuset
         self._listenAddress = arguments.listenAddress
+        self._rpcAddress = arguments.rpcAddress
         self._broadcastAddress = arguments.broadcastAddress
         self._broadcastRpcAddress = arguments.broadcastRpcAddress
         self._apiAddress = arguments.apiAddress
@@ -20,6 +21,9 @@ class ScyllaSetup:
         self._experimental = arguments.experimental
         self._authenticator = arguments.authenticator
         self._authorizer = arguments.authorizer
+        self._clusterName = arguments.clusterName
+        self._endpointSnitch = arguments.endpointSnitch
+        self._replaceAddressFirstBoot = arguments.replaceAddressFirstBoot
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -64,13 +68,19 @@ class ScyllaSetup:
         args = []
         if self._memory is not None:
             args += ["--memory %s" % self._memory]
+
         if self._smp is not None:
             args += ["--smp %s" % self._smp]
+
         if self._overprovisioned == "1" or (self._overprovisioned is None and self._cpuset is None):
             args += ["--overprovisioned"]
 
         if self._listenAddress is None:
             self._listenAddress = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+
+        if self._rpcAddress is None:
+            self._rpcAddress = self._listenAddress
+
         if self._seeds is None:
             if self._broadcastAddress is not None:
                 self._seeds = self._broadcastAddress
@@ -78,7 +88,7 @@ class ScyllaSetup:
                 self._seeds = self._listenAddress
 
         args += ["--listen-address %s" % self._listenAddress,
-                 "--rpc-address %s" % self._listenAddress,
+                 "--rpc-address %s" % self._rpcAddress,
                  "--seed-provider-parameters seeds=%s" % self._seeds]
 
         if self._broadcastAddress is not None:
@@ -97,6 +107,15 @@ class ScyllaSetup:
 
         if self._experimental == "1":
             args += ["--experimental=on"]
+
+        if self._clusterName is not None:
+            args += ["--cluster-name %s" % self._clusterName]
+
+        if self._endpointSnitch is not None:
+            args += ["--endpoint-snitch %s" % self._endpointSnitch]
+
+        if self._replaceAddressFirstBoot is not None:
+            args += ["--replace-address-first-boot %s" % self._replaceAddressFirstBoot]
 
         args += ["--blocked-reactor-notify-ms 999999999"]
 
