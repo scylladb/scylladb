@@ -1195,16 +1195,18 @@ public:
             fill_cells(column_kind::static_column, _in_progress_static_row.cells());
             sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_static_row={})", this, static_row::printer(*_schema, _in_progress_static_row));
             _inside_static_row = false;
-            auto action = _mf_filter->apply(_in_progress_static_row);
-            switch (action) {
-            case mutation_fragment_filter::result::emit:
-                _reader->push_mutation_fragment(std::move(_in_progress_static_row));
-                break;
-            case mutation_fragment_filter::result::ignore:
-                break;
-            case mutation_fragment_filter::result::store_and_finish:
-                // static row is always either emited or ignored.
-                throw runtime_exception("We should never need to store static row");
+            if (!_in_progress_static_row.empty()) {
+                auto action = _mf_filter->apply(_in_progress_static_row);
+                switch (action) {
+                case mutation_fragment_filter::result::emit:
+                    _reader->push_mutation_fragment(std::move(_in_progress_static_row));
+                    break;
+                case mutation_fragment_filter::result::ignore:
+                    break;
+                case mutation_fragment_filter::result::store_and_finish:
+                    // static row is always either emited or ignored.
+                    throw runtime_exception("We should never need to store static row");
+                }
             }
         } else {
             if (!_cells.empty()) {
