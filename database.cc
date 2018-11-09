@@ -2080,8 +2080,12 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
 
     return do_with(std::vector<future<>>(), [&db, sstdir = std::move(sstdir), verifier, ks, cf] (std::vector<future<>>& futures) {
         return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, &futures] (fs::path sstdir, directory_entry de) {
-            // FIXME: detect and clean up temp sst directory
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
+
+            if (de.type && *de.type == directory_entry_type::directory && sstables::sstable::is_temp_dir(de.name)) {
+                return lister::rmdir(sstdir / de.name);
+            }
+
             auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, sstdir, de] (auto entry) {
                 if (entry.component == component_type::TemporaryStatistics) {
                     return remove_file(sstables::sstable::filename(sstdir.native(), entry.ks, entry.cf, entry.version, entry.generation,
