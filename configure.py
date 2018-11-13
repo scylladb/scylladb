@@ -431,6 +431,7 @@ extra_cxxflags = {}
 cassandra_interface = Thrift(source='interface/cassandra.thrift', service='Cassandra')
 
 scylla_core = (['database.cc',
+                'table.cc',
                 'atomic_cell.cc',
                 'schema.cc',
                 'frozen_schema.cc',
@@ -579,6 +580,7 @@ scylla_core = (['database.cc',
                 'db/marshal/type_parser.cc',
                 'db/batchlog_manager.cc',
                 'db/view/view.cc',
+                'db/view/view_update_from_staging_generator.cc',
                 'db/view/row_locking.cc',
                 'index/secondary_index_manager.cc',
                 'index/secondary_index.cc',

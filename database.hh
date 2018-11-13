@@ -432,6 +432,9 @@ private:
     // but for correct compaction we need to start the compaction only after
     // reading all sstables.
     std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_need_rewrite;
+    // sstables that should not be compacted (e.g. because they need to be used
+    // to generate view updates later)
+    std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_staging;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // There are situations in which we need to stop writing sstables. Flushers will take
@@ -485,6 +488,11 @@ private:
     utils::phased_barrier _pending_reads_phaser;
 public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst);
+    void move_sstable_from_staging_in_thread(sstables::shared_sstable sst);
+    sstables::shared_sstable get_staging_sstable(uint64_t generation) {
+        auto it = _sstables_staging.find(generation);
+        return it != _sstables_staging.end() ? it->second : nullptr;
+    }
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
@@ -618,6 +626,14 @@ public:
             tracing::trace_state_ptr trace_state = nullptr,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
+    flat_mutation_reader make_reader_excluding_sstable(schema_ptr schema,
+            sstables::shared_sstable sst,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = nullptr,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
 
     flat_mutation_reader make_reader(schema_ptr schema, const dht::partition_range& range = query::full_partition_range) const {
         auto& full_slice = schema->full_slice();
@@ -632,9 +648,13 @@ public:
     flat_mutation_reader make_streaming_reader(schema_ptr schema,
             const dht::partition_range_vector& ranges) const;
 
-    sstables::shared_sstable make_streaming_sstable_for_write();
+    sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
+    sstables::shared_sstable make_streaming_staging_sstable() {
+        return make_streaming_sstable_for_write("staging");
+    }
 
     mutation_source as_mutation_source() const;
+    mutation_source as_mutation_source_excluding(sstables::shared_sstable sst) const;
 
     void set_virtual_reader(mutation_source virtual_reader) {
         _virtual_reader = std::move(virtual_reader);
@@ -842,6 +862,8 @@ public:
     void clear_views();
     const std::vector<view_ptr>& views() const;
     future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout) const;
+    future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout) const;
+    future<row_locker::lock_holder> stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, sstables::shared_sstable excluded_sstable) const;
     void add_coordinator_read_latency(utils::estimated_histogram::duration latency);
     std::chrono::milliseconds get_coordinator_read_latency_percentile(double percentile);
 
@@ -860,6 +882,7 @@ public:
             flat_mutation_reader&&);
 
 private:
+    future<row_locker::lock_holder> do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source) const;
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
             std::vector<view_ptr>&& views,

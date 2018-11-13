@@ -69,6 +69,7 @@
 #include "vint-serialization.hh"
 #include "db/large_partition_handler.hh"
 #include "sstables/random_access_reader.hh"
+#include <boost/algorithm/string/predicate.hpp>
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -3724,6 +3725,10 @@ sstring sstable::toc_filename() const {
     return filename(component_type::TOC);
 }
 
+bool sstable::is_staging() const {
+    return boost::algorithm::ends_with(_dir, "staging");
+}
+
 const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
                                 format_types format, component_type component) {
 
@@ -3815,11 +3820,27 @@ future<> sstable::set_generation(int64_t new_generation) {
     });
 }
 
+void sstable::move_to_new_dir_in_thread(sstring new_dir, int64_t new_generation) {
+    create_links(new_dir, new_generation).get();
+    remove_file(filename(component_type::TOC)).get();
+    sstable_write_io_check(sync_directory, _dir).get();
+    sstring old_dir = std::exchange(_dir, std::move(new_dir));
+    int64_t old_generation = std::exchange(_generation, new_generation);
+    parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
+        if (p.first == component_type::TOC) {
+            return make_ready_future<>();
+        }
+        return remove_file(sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
+    }).get();
+    sync_directory(_dir).get();
+    sync_directory(old_dir).get();
+}
+
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
     static std::regex la_mc("(la|mc)-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
-    static std::regex dir(".*/([^/]*)/(\\w+)-[\\da-fA-F]+(?:/upload|/snapshots/[^/]+)?/?");
+    static std::regex dir(".*/([^/]*)/(\\w+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
 
     std::smatch match;
 

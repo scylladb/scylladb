@@ -446,6 +446,13 @@ void storage_service::join_token_ring(int delay) {
     get_storage_service().invoke_on_all([] (auto&& ss) {
         ss._joined = true;
     }).get();
+    if (!_is_survey_mode) {
+        supervisor::notify("starting system distributed keyspace");
+        _sys_dist_ks.start(
+                std::ref(cql3::get_query_processor()),
+                std::ref(service::get_migration_manager())).get();
+        _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
+    }
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
     // we'll skip streaming data from other nodes and jump directly into the ring.
@@ -618,12 +625,6 @@ void storage_service::join_token_ring(int delay) {
 
         supervisor::notify("starting tracing");
         tracing::tracing::start_tracing().get();
-
-        supervisor::notify("starting system distributed keyspace");
-        _sys_dist_ks.start(
-                std::ref(cql3::get_query_processor()),
-                std::ref(service::get_migration_manager())).get();
-        _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
     } else {
         slogger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }

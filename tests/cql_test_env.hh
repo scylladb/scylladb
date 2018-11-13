@@ -36,6 +36,7 @@
 #include "bytes.hh"
 #include "schema.hh"
 #include "tests/eventually.hh"
+#include "db/view/view_update_from_staging_generator.hh"
 
 class database;
 
@@ -102,6 +103,8 @@ public:
     virtual auth::service& local_auth_service() = 0;
 
     virtual db::view::view_builder& local_view_builder() = 0;
+
+    virtual db::view::view_update_from_staging_generator& local_view_update_generator() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func);

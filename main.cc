@@ -62,6 +62,7 @@
 #include "service/cache_hitrate_calculator.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
+#include <db/view/view_update_from_staging_generator.hh>
 
 seastar::metrics::metric_groups app_metrics;
 
@@ -647,6 +648,21 @@ int main(int ac, char** av) {
 
             supervisor::notify("loading sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy).get();
+
+            static sharded<db::view::view_update_from_staging_generator> view_update_from_staging_generator;
+            view_update_from_staging_generator.start(std::ref(db), std::ref(proxy)).get();
+            supervisor::notify("discovering staging sstables");
+            db.invoke_on_all([] (database& db) {
+                for (auto& x : db.get_column_families()) {
+                    table& t = *(x.second);
+                    for (sstables::shared_sstable sst : *t.get_sstables()) {
+                        if (sst->is_staging()) {
+                            view_update_from_staging_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());
+                        }
+                    }
+                }
+            }).get();
+
             // register connection drop notification to update cf's cache hit rate data
             db.invoke_on_all([] (database& db) {
                 db.register_connection_drop_notifier(netw::get_local_messaging_service());
@@ -700,8 +716,9 @@ int main(int ac, char** av) {
             proxy.invoke_on_all([] (service::storage_proxy& p) {
                 p.init_messaging_service();
             }).get();
+
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db).get();
+            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_from_staging_generator).get();
             api::set_server_stream_manager(ctx).get();
 
             supervisor::notify("starting hinted handoff manager");
@@ -755,6 +772,11 @@ int main(int ac, char** av) {
                 local_proxy.allow_replaying_hints();
             }).get();
 
+            if (cfg->view_building()) {
+                supervisor::notify("Launching generate_mv_updates for non system tables");
+                view_update_from_staging_generator.invoke_on_all(&db::view::view_update_from_staging_generator::start).get();
+            }
+
             static sharded<db::view::view_builder> view_builder;
             if (cfg->view_building()) {
                 supervisor::notify("starting the view builder");
@@ -798,6 +820,10 @@ int main(int ac, char** av) {
 
             engine().at_exit([] {
                 return view_builder.stop();
+            });
+
+            engine().at_exit([] {
+                return view_update_from_staging_generator.stop();
             });
 
             engine().at_exit([&db] {
