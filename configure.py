@@ -273,6 +273,7 @@ scylla_tests = [
     'tests/perf/perf_sstable',
     'tests/cql_query_test',
     'tests/secondary_index_test',
+    'tests/json_cql_query_test',
     'tests/filtering_test',
     'tests/storage_proxy_test',
     'tests/schema_change_test',

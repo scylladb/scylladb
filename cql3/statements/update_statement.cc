@@ -84,7 +84,9 @@ parse(const sstring& json_string, const std::vector<column_definition>& expected
     for (const auto& def : expected_receivers) {
         sstring cql_name = def.name_as_text();
         auto value_it = prepared_map.find(cql_name);
-        if (value_it == prepared_map.end() || value_it->second.isNull()) {
+        if (value_it == prepared_map.end()) {
+            continue;
+        } else if (value_it->second.isNull()) {
             json_map.emplace(std::move(cql_name), bytes_opt{});
         } else {
             json_map.emplace(std::move(cql_name), def.type->from_json_object(value_it->second, sf));
@@ -255,8 +257,12 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
             throw exceptions::invalid_request_exception(sprint("Cannot set the value of counter column %s in JSON", def.name_as_text()));
         }
 
-        auto value = json_cache->at(def.name_as_text());
-        execute_set_value(m, prefix, params, def, value);
+        auto it = json_cache->find(def.name_as_text());
+        if (it != json_cache->end()) {
+            execute_set_value(m, prefix, params, def, it->second);
+        } else if (!_default_unset) {
+            execute_set_value(m, prefix, params, def, bytes_opt{});
+        }
     }
 }
 
@@ -322,12 +328,14 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
 insert_json_statement::insert_json_statement(  ::shared_ptr<cf_name> name,
                                                ::shared_ptr<attributes::raw> attrs,
                                                ::shared_ptr<term::raw> json_value,
-                                               bool if_not_exists)
+                                               bool if_not_exists,
+                                               bool default_unset)
     : raw::modification_statement{name, attrs, conditions_vector{}, if_not_exists, false}
     , _name(name)
     , _attrs(attrs)
     , _json_value(json_value)
-    , _if_not_exists(if_not_exists) { }
+    , _if_not_exists(if_not_exists)
+    , _default_unset(default_unset) { }
 
 ::shared_ptr<cql3::statements::modification_statement>
 insert_json_statement::prepare_internal(database& db, schema_ptr schema,
@@ -337,7 +345,7 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = _json_value->prepare(db, "", ::make_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     prepared_json_value->collect_marker_specification(bound_names);
-    return ::make_shared<cql3::statements::insert_prepared_json_statement>(bound_names->size(), schema, std::move(attrs), &stats.inserts, std::move(prepared_json_value));
+    return ::make_shared<cql3::statements::insert_prepared_json_statement>(bound_names->size(), schema, std::move(attrs), &stats.inserts, std::move(prepared_json_value), _default_unset);
 }
 
 update_statement::update_statement(            ::shared_ptr<cf_name> name,

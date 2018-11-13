@@ -470,6 +470,7 @@ insertStatement returns [::shared_ptr<raw::modification_statement> expr]
         std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
         std::vector<::shared_ptr<cql3::term::raw>> values;
         bool if_not_exists = false;
+        bool default_unset = false;
         ::shared_ptr<cql3::term::raw> json_value;
     }
     : K_INSERT K_INTO cf=columnFamilyName
@@ -487,13 +488,15 @@ insertStatement returns [::shared_ptr<raw::modification_statement> expr]
               }
         | K_JSON
           json_token=jsonValue { json_value = $json_token.value; }
+            ( K_DEFAULT K_UNSET { default_unset = true; } | K_DEFAULT K_NULL )?
             ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
             ( usingClause[attrs] )?
               {
               $expr = ::make_shared<raw::insert_json_statement>(std::move(cf),
                                                        std::move(attrs),
                                                        std::move(json_value),
-                                                       if_not_exists);
+                                                       if_not_exists,
+                                                       default_unset);
               }
         )
     ;
@@ -1835,6 +1838,8 @@ K_OR:          O R;
 K_REPLACE:     R E P L A C E;
 K_DETERMINISTIC: D E T E R M I N I S T I C;
 K_JSON:        J S O N;
+K_DEFAULT:     D E F A U L T;
+K_UNSET:       U N S E T;
 
 K_EMPTY:       E M P T Y;
 
