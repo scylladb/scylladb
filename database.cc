@@ -684,9 +684,11 @@ table::make_reader(schema_ptr s,
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
 }
 
-sstables::shared_sstable
-table::make_streaming_sstable_for_write() {
+sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<sstring> subdir) {
     sstring dir = _config.datadir;
+    if (subdir) {
+        dir += "/" + *subdir;
+    }
     auto newtab = sstables::make_sstable(_schema,
             dir, calculate_generation_for_new_table(),
             get_highest_supported_format(),
@@ -841,7 +843,11 @@ void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsi
     new_sstables->insert(sstable);
     _sstables = std::move(new_sstables);
     update_stats_for_new_sstable(sstable->bytes_on_disk(), shards_for_the_sstable);
-    _compaction_strategy.get_backlog_tracker().add_sstable(sstable);
+    if (sstable->is_staging()) {
+        _sstables_staging.emplace(sstable->generation(), sstable);
+    } else {
+        _compaction_strategy.get_backlog_tracker().add_sstable(sstable);
+    }
 }
 
 future<>
@@ -1629,7 +1635,9 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
 
 std::vector<sstables::shared_sstable> table::candidates_for_compaction() const {
     return boost::copy_range<std::vector<sstables::shared_sstable>>(*get_sstables()
-        | boost::adaptors::filtered([this] (auto& sst) { return !_sstables_need_rewrite.count(sst->generation()); }));
+            | boost::adaptors::filtered([this] (auto& sst) {
+        return !_sstables_need_rewrite.count(sst->generation()) && !_sstables_staging.count(sst->generation());
+    }));
 }
 
 std::vector<sstables::shared_sstable> table::sstables_need_rewrite() const {
@@ -1985,6 +1993,12 @@ future<sstables::entry_descriptor> distributed_loader::probe_file(distributed<da
     }
     auto cf_sstable_open = [sstdir, comps, fname] (column_family& cf, sstables::foreign_sstable_open_info info) {
         cf.update_sstables_known_generation(comps.generation);
+        if (shared_sstable sst = cf.get_staging_sstable(comps.generation)) {
+            dblog.warn("SSTable {} is already present in staging/ directory. Moving from staging will be retried.", sst->get_filename());
+            return seastar::async([sst = std::move(sst), comps = std::move(comps)] () {
+                sst->move_to_new_dir_in_thread(comps.sstdir, comps.generation);
+            });
+        }
         {
             auto i = boost::range::find_if(*cf._sstables->all(), [gen = comps.generation] (sstables::shared_sstable sst) { return sst->generation() == gen; });
             if (i != cf._sstables->all()->end()) {
@@ -2466,6 +2480,8 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
                 auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
                 dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
                 return ks.make_directory_for_column_family(cfname, uuid).then([&db, sstdir, uuid, ks_name, cfname] {
+                    return distributed_loader::populate_column_family(db, sstdir + "/staging", ks_name, cfname);
+                }).then([&db, sstdir, uuid, ks_name, cfname] {
                     return distributed_loader::populate_column_family(db, sstdir, ks_name, cfname);
                 }).handle_exception([ks_name, cfname, sstdir](std::exception_ptr eptr) {
                     std::string msg =
@@ -2946,6 +2962,7 @@ keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid
             io_check(recursive_touch_directory, cfdir).get();
         }
         io_check(touch_directory, cfdirs[0] + "/upload").get();
+        io_check(touch_directory, cfdirs[0] + "/staging").get();
     });
 }
 
@@ -4460,64 +4477,6 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
                 [this, base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
             db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats).handle_exception([units = std::move(units)] (auto ignored) { });
         });
-    });
-}
-
-/**
- * Given an update for the base table, calculates the set of potentially affected views,
- * generates the relevant updates, and sends them to the paired view replicas.
- */
-future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout) const {
-    //FIXME: Avoid unfreezing here.
-    auto m = fm.unfreeze(s);
-    auto& base = schema();
-    m.upgrade(base);
-    auto views = affected_views(base, m);
-    if (views.empty()) {
-        return make_ready_future<row_locker::lock_holder>();
-    }
-    auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
-    if (cr_ranges.empty()) {
-        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }, timeout).then([] {
-                // In this case we are not doing a read-before-write, just a
-                // write, so no lock is needed.
-                return make_ready_future<row_locker::lock_holder>();
-        });
-    }
-    // We read the whole set of regular columns in case the update now causes a base row to pass
-    // a view's filters, and a view happens to include columns that have no value in this update.
-    // Also, one of those columns can determine the lifetime of the base row, if it has a TTL.
-    auto columns = boost::copy_range<std::vector<column_id>>(
-            base->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-    query::partition_slice::option_set opts;
-    opts.set(query::partition_slice::option::send_partition_key);
-    opts.set(query::partition_slice::option::send_clustering_key);
-    opts.set(query::partition_slice::option::send_timestamp);
-    opts.set(query::partition_slice::option::send_ttl);
-    auto slice = query::partition_slice(
-            std::move(cr_ranges), { }, std::move(columns), std::move(opts), { }, cql_serialization_format::internal(), query::max_rows);
-    // Take the shard-local lock on the base-table row or partition as needed.
-    // We'll return this lock to the caller, which will release it after
-    // writing the base-table update.
-    future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
-    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout] (row_locker::lock_holder lock) {
-      return do_with(
-        dht::partition_range::make_singular(m.decorated_key()),
-        std::move(slice),
-        std::move(m),
-        [base, views = std::move(views), lock = std::move(lock), this, timeout] (auto& pk, auto& slice, auto& m) mutable {
-            auto reader = this->make_reader(
-                base,
-                pk,
-                slice,
-                service::get_local_sstable_query_read_priority());
-            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), timeout).then([lock = std::move(lock)] () mutable {
-                // return the local partition/row lock we have taken so it
-                // remains locked until the caller is done modifying this
-                // partition/row and destroys the lock object.
-                return std::move(lock);
-            });
-      });
     });
 }
 

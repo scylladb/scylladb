@@ -196,6 +196,7 @@ public:
     future<> update_info_for_opened_data();
 
     future<> set_generation(int64_t generation);
+    void move_to_new_dir_in_thread(sstring dir, int64_t generation);
 
     int64_t generation() const {
         return _generation;
@@ -363,6 +364,8 @@ public:
         return _dir;
     }
     sstring toc_filename() const;
+
+    bool is_staging() const;
 
     metadata_collector& get_metadata_collector() {
         return _collector;

@@ -91,6 +91,7 @@ private:
     ::shared_ptr<distributed<database>> _db;
     ::shared_ptr<sharded<auth::service>> _auth_service;
     ::shared_ptr<sharded<db::view::view_builder>> _view_builder;
+    ::shared_ptr<sharded<db::view::view_update_from_staging_generator>> _view_update_generator;
     lw_shared_ptr<tmpdir> _data_dir;
 private:
     struct core_local_state {
@@ -118,10 +119,12 @@ public:
     single_node_cql_env(
             ::shared_ptr<distributed<database>> db,
             ::shared_ptr<sharded<auth::service>> auth_service,
-            ::shared_ptr<sharded<db::view::view_builder>> view_builder)
+            ::shared_ptr<sharded<db::view::view_builder>> view_builder,
+            ::shared_ptr<sharded<db::view::view_update_from_staging_generator>> view_update_generator)
             : _db(db)
             , _auth_service(std::move(auth_service))
             , _view_builder(std::move(view_builder))
+            , _view_update_generator(std::move(view_update_generator))
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -265,6 +268,10 @@ public:
 
     virtual db::view::view_builder& local_view_builder() override {
         return _view_builder->local();
+    }
+
+    virtual db::view::view_update_from_staging_generator& local_view_update_generator() override {
+        return _view_update_generator->local();
     }
 
     future<> start() {
@@ -418,7 +425,13 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, auth_service, view_builder);
+            auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_from_staging_generator>>();
+            view_update_generator->start(std::ref(*db), std::ref(proxy));
+            view_update_generator->invoke_on_all(&db::view::view_update_from_staging_generator::start);
+            auto stop_view_update_generator = defer([view_update_generator] {
+                view_update_generator->stop().get();
+            });
+            single_node_cql_env env(db, auth_service, view_builder, view_update_generator);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

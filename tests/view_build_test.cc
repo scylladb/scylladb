@@ -28,8 +28,34 @@
 #include "tests/test-utils.hh"
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
+#include "schema_builder.hh"
+#include "service/priority_manager.hh"
 
 using namespace std::literals::chrono_literals;
+
+static db::nop_large_partition_handler nop_lp_handler;
+
+schema_ptr test_table_schema() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema(
+                generate_legacy_id("try1", "data"), "try1", "data",
+        // partition key
+        {{"p", utf8_type}},
+        // clustering key
+        {{"c", utf8_type}},
+        // regular columns
+        {{"v", utf8_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        ""
+       )));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return s;
+}
 
 SEASTAR_TEST_CASE(test_builder_with_large_partition) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
@@ -337,6 +363,64 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
             assert_that(msg).is_rows().is_empty();
             msg = e.execute_cql("select * from system_distributed.view_build_status").get0();
             assert_that(msg).is_rows().is_empty();
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_view_update_generator) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table t (p text, c text, v text, primary key (p, c))").get();
+        for (auto i = 0; i < 1024; ++i) {
+            e.execute_cql(fmt::format("insert into t (p, c, v) values ('a', 'c{}', 'x')", i)).get();
+        }
+        for (auto i = 0; i < 512; ++i) {
+            e.execute_cql(fmt::format("insert into t (p, c, v) values ('b', 'c{}', '{}')", i, i + 1)).get();
+        }
+        auto& view_update_generator = e.local_view_update_generator();
+        auto s = test_table_schema();
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("a")});
+        mutation m(s, key);
+        auto col = s->get_column_definition("v");
+        for (int i = 1024; i < 1280; ++i) {
+            auto& row = m.partition().clustered_row(*s, clustering_key::from_exploded(*s, {to_bytes(fmt::format("c{}", i))}));
+            row.cells().apply(*col, atomic_cell::make_live(*col->type, 2345, col->type->decompose(sstring(fmt::format("v{}", i)))));
+        }
+        lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
+
+        auto sst = t->make_streaming_staging_sstable();
+        sstables::sstable_writer_config sst_cfg;
+        sst_cfg.large_partition_handler = &nop_lp_handler;
+        auto& pc = service::get_local_streaming_write_priority();
+        sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
+        sst->open_data().get();
+        t->add_sstable_and_update_cache(sst).get();
+        view_update_generator.register_staging_sstable(sst, t).get();
+
+        eventually([&] {
+            auto msg = e.execute_cql("SELECT * FROM t WHERE p = 'a'").get0();
+            assert_that(msg).is_rows().with_size(1280);
+            msg = e.execute_cql("SELECT * FROM t WHERE p = 'b'").get0();
+            assert_that(msg).is_rows().with_size(512);
+
+            for (int i = 0; i < 1024; ++i) {
+                auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = 'a' and c = 'c{}'", i)).get0();
+                assert_that(msg).is_rows().with_size(1).with_row({
+                     {utf8_type->decompose(sstring("a"))},
+                     {utf8_type->decompose(sstring(fmt::format("c{}", i)))},
+                     {utf8_type->decompose(sstring("x"))}
+                 });
+
+            }
+            for (int i = 1024; i < 1280; ++i) {
+                auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = 'a' and c = 'c{}'", i)).get0();
+                assert_that(msg).is_rows().with_size(1).with_row({
+                     {utf8_type->decompose(sstring("a"))},
+                     {utf8_type->decompose(sstring(fmt::format("c{}", i)))},
+                     {utf8_type->decompose(sstring(fmt::format("v{}", i)))}
+                 });
+
+            }
         });
     });
 }
