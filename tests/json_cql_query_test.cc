@@ -433,3 +433,47 @@ SEASTAR_TEST_CASE(test_prepared_json) {
 
     });
 }
+
+SEASTAR_TEST_CASE(test_json_default_unset) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto prepared = e.execute_cql(
+            "CREATE TABLE json_data ("
+                "    a text,"
+                "    b int,"
+                "    c int,"
+                "    d int,"
+                "PRIMARY KEY (a, b));").get();
+
+        e.require_table_exists("ks", "json_data").get();
+
+        e.execute_cql("INSERT INTO json_data JSON '{\"a\": \"abc\", \"b\": 2, \"c\": 1}'").get();
+
+        auto msg = e.execute_cql("select * from json_data where a='abc'").get0();
+        assert_that(msg).is_rows().with_rows({{
+            {utf8_type->decompose(sstring("abc"))},
+            {int32_type->decompose(2)},
+            {int32_type->decompose(1)},
+            {}
+        }});
+
+        e.execute_cql("INSERT INTO json_data JSON '{\"a\": \"abc\", \"b\": 2, \"d\": 5}' DEFAULT UNSET").get();
+
+        msg = e.execute_cql("select * from json_data where a='abc'").get0();
+        assert_that(msg).is_rows().with_rows({{
+            {utf8_type->decompose(sstring("abc"))},
+            {int32_type->decompose(2)},
+            {int32_type->decompose(1)},
+            {int32_type->decompose(5)}
+        }});
+
+        e.execute_cql("INSERT INTO json_data JSON '{\"a\": \"abc\", \"b\": 2, \"d\": 4}' DEFAULT NULL").get();
+
+        msg = e.execute_cql("select * from json_data where a='abc'").get0();
+        assert_that(msg).is_rows().with_rows({{
+            {utf8_type->decompose(sstring("abc"))},
+            {int32_type->decompose(2)},
+            {},
+            {int32_type->decompose(4)}
+        }});
+    });
+}
