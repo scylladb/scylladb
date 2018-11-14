@@ -376,6 +376,16 @@ public:
         return consume_in_thread(std::move(consumer), [] (const dht::decorated_key&) { return true; }, timeout);
     }
 
+    // Skips to the next partition.
+    //
+    // Skips over the remaining fragments of the current partitions. If the
+    // reader is currently positioned at a partition boundary (partition
+    // start) nothing is done.
+    // Only skips within the current partition range, i.e. if the current
+    // partition is the last in the range the reader will be at EOS.
+    //
+    // Can be used to skip over entire partitions if interleaved with
+    // `operator()()` calls.
     void next_partition() { _impl->next_partition(); }
 
     future<> fill_buffer(db::timeout_clock::time_point timeout) { return _impl->fill_buffer(timeout); }
