@@ -235,7 +235,7 @@ void alter_table_statement::alter_column(schema_ptr schema, const table& cf, sch
 
     auto type = validate_alter(schema, *def, *validator);
     // In any case, we update the column definition
-    cfm.with_altered_column_type(column_name->name(), type);
+    cfm.alter_column_type(column_name->name(), type);
 
     // We also have to validate the view types here. If we have a view which includes a column as part of
     // the clustering key, we need to make sure that it is indeed compatible.
@@ -244,7 +244,7 @@ void alter_table_statement::alter_column(schema_ptr schema, const table& cf, sch
         if (view_def) {
             schema_builder builder(view);
             auto view_type = validate_alter(view, *view_def, *validator);
-            builder.with_altered_column_type(column_name->name(), std::move(view_type));
+            builder.alter_column_type(column_name->name(), std::move(view_type));
             view_updates.push_back(view_ptr(builder.build()));
         }
     }
@@ -260,7 +260,7 @@ void alter_table_statement::drop_column(schema_ptr schema, const table& cf, sche
     } else {
         for (auto&& column_def : boost::range::join(schema->static_columns(), schema->regular_columns())) { // find
             if (column_def.name() == column_name->name()) {
-                cfm.without_column(column_name->name());
+                cfm.remove_column(column_name->name());
                 break;
             }
         }
@@ -350,7 +350,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             auto to = entry.second->prepare_column_identifier(schema);
 
             validate_column_rename(db, *schema, *from, *to);
-            cfm.with_column_rename(from->name(), to->name());
+            cfm.rename_column(from->name(), to->name());
 
             // If the view includes a renamed column, it must be renamed in
             // the view table and the definition.
@@ -361,7 +361,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
                     auto view_from = entry.first->prepare_column_identifier(view);
                     auto view_to = entry.second->prepare_column_identifier(view);
                     validate_column_rename(db, *view, *view_from, *view_to);
-                    builder.with_column_rename(view_from->name(), view_to->name());
+                    builder.rename_column(view_from->name(), view_to->name());
 
                     auto new_where = util::rename_column_in_where_clause(
                             view->view_info()->where_clause(),
