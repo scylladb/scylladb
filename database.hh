@@ -294,6 +294,8 @@ public:
 class table;
 using column_family = table;
 
+class database_sstable_write_monitor;
+
 class table : public enable_lw_shared_from_this<table> {
 public:
     struct config {
@@ -389,7 +391,7 @@ private:
     // plan memtables and the resulting sstables are not made visible until
     // the streaming is complete.
     struct monitored_sstable {
-        std::unique_ptr<sstables::write_monitor> monitor;
+        std::unique_ptr<database_sstable_write_monitor> monitor;
         sstables::shared_sstable sstable;
     };
 
