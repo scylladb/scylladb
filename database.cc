@@ -4272,6 +4272,7 @@ future<> table::fail_streaming_mutations(utils::UUID plan_id) {
     _streaming_memtables_big.erase(it);
     return entry->flush_in_progress.close().then([this, entry] {
         for (auto&& sst : entry->sstables) {
+            sst.monitor->write_failed();
             sst.sstable->mark_for_deletion();
         }
     });
