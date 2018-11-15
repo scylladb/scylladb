@@ -259,6 +259,9 @@ public:
         }
         void reset() {
         }
+        uint32_t get_rows_dropped() const {
+            return 0;
+        }
     };
     class restrictions_filter {
         ::shared_ptr<restrictions::statement_restrictions> _restrictions;
@@ -267,6 +270,7 @@ public:
         const bool _skip_ck_restrictions;
         mutable bool _current_partition_key_does_not_match = false;
         mutable bool _current_static_row_does_not_match = false;
+        mutable uint32_t _rows_dropped = 0;
     public:
         explicit restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions, const query_options& options)
                 : _restrictions(restrictions)
@@ -278,7 +282,13 @@ public:
         void reset() {
             _current_partition_key_does_not_match = false;
             _current_static_row_does_not_match = false;
+            _rows_dropped = 0;
         }
+        uint32_t get_rows_dropped() const {
+            return _rows_dropped;
+        }
+    private:
+        bool do_filter(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view& row) const;
     };
 
     result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf);
@@ -378,7 +388,7 @@ public:
             }
         }
 
-        void accept_partition_end(const query::result_row_view& static_row) {
+        uint32_t accept_partition_end(const query::result_row_view& static_row) {
             if (_row_count == 0) {
                 _builder.new_row();
                 auto static_row_iterator = static_row.iterator();
@@ -392,6 +402,7 @@ public:
                     }
                 }
             }
+            return _filter.get_rows_dropped();
         }
     };
 
