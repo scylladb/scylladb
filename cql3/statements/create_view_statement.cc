@@ -84,7 +84,6 @@ create_view_statement::create_view_statement(
     , _clustering_keys{clustering_keys}
     , _if_not_exists{if_not_exists}
 {
-    service::get_local_storage_proxy().get_db().local().get_config().check_experimental("Creating materialized views");
     if (!service::get_local_storage_service().cluster_supports_materialized_views()) {
         throw exceptions::invalid_request_exception("Can't create materialized views until the whole cluster has been upgraded");
     }

@@ -209,14 +209,15 @@ sstring storage_service::get_config_supported_features() {
         ROLES_FEATURE,
         LA_SSTABLE_FEATURE,
         STREAM_WITH_RPC_STREAM,
+        MATERIALIZED_VIEWS_FEATURE,
+        INDEXES_FEATURE
     };
     auto& config = service::get_local_storage_service()._db.local().get_config();
     if (config.enable_sstables_mc_format()) {
         features.push_back(MC_SSTABLE_FEATURE);
     }
     if (config.experimental()) {
-        features.push_back(MATERIALIZED_VIEWS_FEATURE);
-        features.push_back(INDEXES_FEATURE);
+        // push additional experimental features
     }
     return join(",", features);
 }
@@ -432,11 +433,8 @@ void storage_service::register_features() {
     _la_sstable_feature = gms::feature(LA_SSTABLE_FEATURE);
     _stream_with_rpc_stream_feature = gms::feature(STREAM_WITH_RPC_STREAM);
     _mc_sstable_feature = gms::feature(MC_SSTABLE_FEATURE);
-
-    if (_db.local().get_config().experimental()) {
-        _materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);
-        _indexes_feature = gms::feature(INDEXES_FEATURE);
-    }
+    _materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);
+    _indexes_feature = gms::feature(INDEXES_FEATURE);
 }
 
 // Runs inside seastar::async context
