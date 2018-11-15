@@ -623,7 +623,7 @@ void test_unselected_columns_ttl(cql_test_env& e, std::function<void()>&& maybe_
 
     e.execute_cql("insert into cf (p, c) values (1, 1)").get();
     e.execute_cql("update cf using ttl 100 set v = 0 where p = 1 and c = 1").get();
-    e.execute_cql("insert into cf (p, c) values (3, 3) using ttl 3").get();
+    e.execute_cql("insert into cf (p, c) values (3, 3) using ttl 100").get();
 
     forward_jump_clocks(101s);
 
