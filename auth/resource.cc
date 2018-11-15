@@ -101,7 +101,8 @@ static permission_set applicable_permissions(const role_resource_view& rv) {
             permission::DESCRIBE>();
 }
 
-resource::resource(resource_kind kind) : _kind(kind), _parts{sstring(roots.at(kind))}  {
+resource::resource(resource_kind kind) : _kind(kind) {
+    _parts.emplace_back(roots.at(kind));
 }
 
 resource::resource(resource_kind kind, std::vector<sstring> parts) : resource(kind) {
@@ -109,16 +110,17 @@ resource::resource(resource_kind kind, std::vector<sstring> parts) : resource(ki
     _parts.insert(_parts.end(), std::make_move_iterator(parts.begin()), std::make_move_iterator(parts.end()));
 }
 
-resource::resource(data_resource_t, stdx::string_view keyspace)
-        : resource(resource_kind::data, std::vector<sstring>{sstring(keyspace)}) {
+resource::resource(data_resource_t, stdx::string_view keyspace) : resource(resource_kind::data) {
+    _parts.emplace_back(keyspace);
 }
 
-resource::resource(data_resource_t, stdx::string_view keyspace, stdx::string_view table)
-        : resource(resource_kind::data, std::vector<sstring>{sstring(keyspace), sstring(table)}) {
+resource::resource(data_resource_t, stdx::string_view keyspace, stdx::string_view table) : resource(resource_kind::data) {
+    _parts.emplace_back(keyspace);
+    _parts.emplace_back(table);
 }
 
-resource::resource(role_resource_t, stdx::string_view role)
-        : resource(resource_kind::role, std::vector<sstring>{sstring(role)}) {
+resource::resource(role_resource_t, stdx::string_view role) : resource(resource_kind::role) {
+    _parts.emplace_back(role);
 }
 
 sstring resource::name() const {
