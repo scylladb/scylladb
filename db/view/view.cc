@@ -1614,10 +1614,10 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
     });
 }
 
-future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& view_name, lowres_clock::time_point timeout) {
-    return container().invoke_on(0, [ks_name, view_name, timeout] (view_builder& builder) {
+future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& view_name) {
+    return container().invoke_on(0, [ks_name, view_name] (view_builder& builder) {
         auto v = std::pair(std::move(ks_name), std::move(view_name));
-        return builder._build_notifiers[std::move(v)].get_shared_future(timeout);
+        return builder._build_notifiers[std::move(v)].get_shared_future();
     });
 }
 

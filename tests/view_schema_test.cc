@@ -3530,7 +3530,7 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         };
         for (auto&& view : views_matching) {
             auto name = make_view_name();
-            auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+            auto f = e.local_view_builder().wait_until_built("ks", name);
             e.execute_cql(sprint(view, name)).get();
             f.get();
             auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
@@ -3555,14 +3555,14 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         };
         for (auto&& view : views_not_matching) {
             auto name = make_view_name();
-            auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+            auto f = e.local_view_builder().wait_until_built("ks", name);
             e.execute_cql(sprint(view, name)).get();
             f.get();
             auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
             assert_that(msg).is_rows().is_empty();
         }
         auto name = make_view_name();
-        auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+        auto f = e.local_view_builder().wait_until_built("ks", name);
         e.execute_cql(sprint("create materialized view %s as select * from cf "
                              "where p1 is not null and p2 is not null and c is not null and v is not null "
                              "primary key (v, p1, p2, c)", name)).get();

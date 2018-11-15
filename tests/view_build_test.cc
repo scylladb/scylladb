@@ -65,7 +65,7 @@ SEASTAR_TEST_CASE(test_builder_with_large_partition) {
             e.execute_cql(sprint("insert into cf (p, c, v) values (0, %d, 0)", i)).get();
         }
 
-        auto f = e.local_view_builder().wait_until_built("ks", "vcf", lowres_clock::now() + 10s);
+        auto f = e.local_view_builder().wait_until_built("ks", "vcf");
         e.execute_cql("create materialized view vcf as select * from cf "
                       "where p is not null and c is not null and v is not null "
                       "primary key (v, c, p)").get();
@@ -89,7 +89,7 @@ SEASTAR_TEST_CASE(test_builder_with_multiple_partitions) {
             e.execute_cql(sprint("insert into cf (p, c, v) values (%d, %d, 0)", i % 5, i)).get();
         }
 
-        auto f = e.local_view_builder().wait_until_built("ks", "vcf", lowres_clock::now() + 10s);
+        auto f = e.local_view_builder().wait_until_built("ks", "vcf");
         e.execute_cql("create materialized view vcf as select * from cf "
                       "where p is not null and c is not null and v is not null "
                       "primary key (v, c, p)").get();
@@ -113,7 +113,7 @@ SEASTAR_TEST_CASE(test_builder_with_multiple_partitions_of_batch_size_rows) {
             e.execute_cql(sprint("insert into cf (p, c, v) values (%d, %d, 0)", i % db::view::view_builder::batch_size, i)).get();
         }
 
-        auto f = e.local_view_builder().wait_until_built("ks", "vcf", lowres_clock::now() + 10s);
+        auto f = e.local_view_builder().wait_until_built("ks", "vcf");
         e.execute_cql("create materialized view vcf as select * from cf "
                       "where p is not null and c is not null and v is not null "
                       "primary key (v, c, p)").get();
@@ -137,8 +137,8 @@ SEASTAR_TEST_CASE(test_builder_view_added_during_ongoing_build) {
             e.execute_cql(sprint("insert into cf (p, c, v) values (0, %d, 0)", i)).get();
         }
 
-        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf1", lowres_clock::now() + 60s);
-        auto f2 = e.local_view_builder().wait_until_built("ks", "vcf2", lowres_clock::now() + 30s);
+        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf1");
+        auto f2 = e.local_view_builder().wait_until_built("ks", "vcf2");
 
         e.execute_cql("create materialized view vcf1 as select * from cf "
                       "where p is not null and c is not null and v is not null "
@@ -196,8 +196,8 @@ SEASTAR_TEST_CASE(test_builder_across_tokens_with_large_partitions) {
             }
         }
 
-        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf1", lowres_clock::now() + 60s);
-        auto f2 = e.local_view_builder().wait_until_built("ks", "vcf2", lowres_clock::now() + 30s);
+        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf1");
+        auto f2 = e.local_view_builder().wait_until_built("ks", "vcf2");
 
         e.execute_cql("create materialized view vcf1 as select * from cf "
                       "where p is not null and c is not null and v is not null "
@@ -238,8 +238,8 @@ SEASTAR_TEST_CASE(test_builder_across_tokens_with_small_partitions) {
             }
         }
 
-        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf1", lowres_clock::now() + 60s);
-        auto f2 = e.local_view_builder().wait_until_built("ks", "vcf2", lowres_clock::now() + 30s);
+        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf1");
+        auto f2 = e.local_view_builder().wait_until_built("ks", "vcf2");
 
         e.execute_cql("create materialized view vcf1 as select * from cf "
                       "where p is not null and c is not null and v is not null "
@@ -278,7 +278,7 @@ SEASTAR_TEST_CASE(test_builder_with_tombstones) {
         e.execute_cql("delete from cf where p = 0 and c1 = 0").get();
         e.execute_cql("delete from cf where p = 0 and c1 = 1 and c2 >= 50 and c2 < 101").get();
 
-        auto f = e.local_view_builder().wait_until_built("ks", "vcf", lowres_clock::now() + 30s);
+        auto f = e.local_view_builder().wait_until_built("ks", "vcf");
         e.execute_cql("create materialized view vcf as select * from cf "
                       "where p is not null and c1 is not null and c2 is not null and v is not null "
                       "primary key ((v, p), c1, c2)").get();
@@ -316,7 +316,7 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_writes) {
             }
         }
 
-        auto f = e.local_view_builder().wait_until_built("ks", "vcf", lowres_clock::now() + 60s);
+        auto f = e.local_view_builder().wait_until_built("ks", "vcf");
         e.execute_cql("create materialized view vcf as select * from cf "
                       "where p is not null and c is not null and v is not null "
                       "primary key (v, c, p)").get();
