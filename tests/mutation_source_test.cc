@@ -1607,8 +1607,26 @@ public:
             is_continuous continuous = is_continuous(_bool_dist(_gen));
             if (_not_dummy_dist(_gen)) {
                 deletable_row& row = m.partition().clustered_row(*_schema, ckey, is_dummy::no, continuous);
-                set_random_cells(row.cells(), column_kind::regular_column);
-                row.marker() = random_row_marker();
+                if (_bool_dist(_gen)) {
+                    set_random_cells(row.cells(), column_kind::regular_column);
+                    row.marker() = random_row_marker();
+                } else {
+                    bool is_regular = _bool_dist(_gen);
+                    if (is_regular) {
+                        row.apply(random_tombstone());
+                    } else {
+                        row.apply(shadowable_tombstone{random_tombstone()});
+                    }
+                    bool second_tombstone = _bool_dist(_gen);
+                    if (second_tombstone) {
+                        // Need to add the opposite of what has been just added
+                        if (is_regular) {
+                            row.apply(shadowable_tombstone{random_tombstone()});
+                        } else {
+                            row.apply(random_tombstone());
+                        }
+                    }
+                }
             } else {
                 m.partition().clustered_row(*_schema, position_in_partition_view::after_key(ckey), is_dummy::yes, continuous);
             }
