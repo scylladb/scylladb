@@ -182,7 +182,7 @@ public:
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
 
     // For tests
-    future<> wait_until_built(const sstring& ks_name, const sstring& view_name, lowres_clock::time_point timeout);
+    future<> wait_until_built(const sstring& ks_name, const sstring& view_name);
 
 private:
     build_step& get_or_create_build_step(utils::UUID);

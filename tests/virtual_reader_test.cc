@@ -273,8 +273,8 @@ SEASTAR_TEST_CASE(test_query_built_indexes_virtual_table) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto idx = secondary_index::index_table_name("idx");
         e.execute_cql("create table cf(p int PRIMARY KEY, v int);").get();
-        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf", lowres_clock::now() + 10min);
-        auto f2 = e.local_view_builder().wait_until_built("ks", idx, lowres_clock::now() + 10min);
+        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf");
+        auto f2 = e.local_view_builder().wait_until_built("ks", idx);
         e.execute_cql("create materialized view vcf as select * from cf "
                       "where v is not null and p is not null "
                       "primary key (v, p)").get();
