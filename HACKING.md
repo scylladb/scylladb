@@ -112,6 +112,8 @@ The usual is "Tests: unit (release)", although running debug tests is encouraged
 
 5. When answering review comments, prefer inline quotes as they make it easier to track the conversation across multiple e-mails.
 
+6. The Linux kernel's [Submitting Patches](https://www.kernel.org/doc/html/v4.19/process/submitting-patches.html) document offers excellent advice on how to prepare patches and patchsets for review. Since the Scylla development process is derived from the kernel's, almost all of the advice there is directly applicable.
+
 ### Finding a person to review and merge your patches
 
 You can use the `scripts/find-maintainer` script to find a subsystem maintainer and/or reviewer for your patches. The script accepts a filename in the git source tree as an argument and outputs a list of subsystems the file belongs to and their respective maintainers and reviewers. For example, if you changed the `cql3/statements/create_view_statement.hh` file, run the script as follows:
