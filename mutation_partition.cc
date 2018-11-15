@@ -959,7 +959,7 @@ operator<<(std::ostream& os, const deletable_row::printer& p) {
 std::ostream&
 operator<<(std::ostream& os, const rows_entry::printer& p) {
     auto& re = p._rows_entry;
-    return fmt_print(os, "{{rows_entry: cont={:d} dummy={:d} {} {}}}", re.continuous(), re.dummy(), re.position(),
+    return fmt_print(os, "{{rows_entry: cont={} dummy={} {} {}}}", re.continuous(), re.dummy(), re.position(),
                   deletable_row::printer(p._schema, re._row));
 }
 
