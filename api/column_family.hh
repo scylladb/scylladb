@@ -24,6 +24,7 @@
 #include "api.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "database.hh"
+#include "core/future-util.hh"
 #include <any>
 
 namespace api {
@@ -71,12 +72,13 @@ struct map_reduce_column_families_locally {
     std::any init;
     std::function<std::any (column_family&)> mapper;
     std::function<std::any (std::any, std::any)> reducer;
-    std::any operator()(database& db) const {
-        auto res = init;
-        for (auto i : db.get_column_families()) {
-            res = reducer(res, mapper(*i.second.get()));
-        }
-        return res;
+    future<std::any> operator()(database& db) const {
+        auto res = seastar::make_lw_shared<std::any>(init);
+        return do_for_each(db.get_column_families(), [res, this](const std::pair<utils::UUID, seastar::lw_shared_ptr<table>>& i) {
+            *res = reducer(*res.get(), mapper(*i.second.get()));
+        }).then([res] {
+            return *res;
+        });
     }
 };
 
