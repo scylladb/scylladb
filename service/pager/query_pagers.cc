@@ -202,7 +202,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             }
         }
 
-        auto max_rows = std::min(_max, page_size);
+        auto max_rows = max_rows_to_fetch(page_size);
 
         // We always need PK so we can determine where to start next.
         _cmd->slice.options.set<query::partition_slice::option::send_partition_key>();
@@ -283,6 +283,10 @@ public:
                           cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options)),
                           std::move(qr.query_result), page_size, now);
         });
+    }
+protected:
+    virtual uint32_t max_rows_to_fetch(uint32_t page_size) override {
+        return page_size;
     }
 };
 
