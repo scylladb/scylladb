@@ -42,6 +42,7 @@ boost_tests = [
     'cql_query_test',
     'secondary_index_test',
     'json_cql_query_test',
+    'filtering_test',
     'storage_proxy_test',
     'schema_change_test',
     'sstable_mutation_test',
