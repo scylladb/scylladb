@@ -3275,6 +3275,54 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
     });
 }
 
+SEASTAR_TEST_CASE(test_allow_filtering_contains) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (p frozen<map<text, text>>, c1 frozen<list<int>>, c2 frozen<set<int>>, v map<text, text>, PRIMARY KEY(p, c1, c2));").get();
+        e.require_table_exists("ks", "t").get();
+
+        e.execute_cql("INSERT INTO t (p, c1, c2, v) VALUES ({'a':'a'}, [1,2,3], {1, 5}, {'x':'xyz', 'y1':'abc'});").get();
+        e.execute_cql("INSERT INTO t (p, c1, c2, v) VALUES ({'b':'b'}, [2,3,4], {3, 4}, {'d':'def', 'y1':'abc'});").get();
+        e.execute_cql("INSERT INTO t (p, c1, c2, v) VALUES ({'c':'c'}, [3,4,5], {1, 2, 3}, {});").get();
+
+        auto my_list_type = list_type_impl::get_instance(int32_type, false);
+        auto my_set_type = set_type_impl::get_instance(int32_type, false);
+        auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+        auto my_nonfrozen_map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
+
+        auto msg = e.execute_cql("SELECT p FROM t WHERE p CONTAINS KEY 'a' ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type({{sstring("a"), sstring("a")}})))}
+        });
+
+        msg = e.execute_cql("SELECT c1 FROM t WHERE c1 CONTAINS 3 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type({{1, 2, 3}})))},
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type({{2, 3, 4}})))},
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type({{3, 4, 5}})))}
+        });
+
+        msg = e.execute_cql("SELECT c2 FROM t WHERE c2 CONTAINS 1 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_set_type->decompose(make_set_value(my_set_type, set_type_impl::native_type({{1, 5}})))},
+            {my_set_type->decompose(make_set_value(my_set_type, set_type_impl::native_type({{1, 2, 3}})))}
+        });
+
+        msg = e.execute_cql("SELECT v FROM t WHERE v CONTAINS KEY 'y1' ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_nonfrozen_map_type->decompose(make_map_value(my_nonfrozen_map_type, map_type_impl::native_type({{sstring("x"), sstring("xyz")}, {sstring("y1"), sstring("abc")}})))},
+            {my_nonfrozen_map_type->decompose(make_map_value(my_nonfrozen_map_type, map_type_impl::native_type({{sstring("d"), sstring("def")}, {sstring("y1"), sstring("abc")}})))}
+        });
+
+        msg = e.execute_cql("SELECT c2, v FROM t WHERE v CONTAINS KEY 'y1' AND c2 CONTAINS 5 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                my_set_type->decompose(make_set_value(my_set_type, set_type_impl::native_type({{1, 5}}))),
+                my_nonfrozen_map_type->decompose(make_map_value(my_nonfrozen_map_type, map_type_impl::native_type({{sstring("x"), sstring("xyz")}, {sstring("y1"), sstring("abc")}})))
+            }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_in_restriction_on_not_last_partition_key) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int,b int,c int,d int,PRIMARY KEY ((a, b), c));").get();
