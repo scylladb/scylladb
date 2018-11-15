@@ -30,6 +30,11 @@
 #include "flat_mutation_reader.hh"
 
 
+static constexpr size_t merger_small_vector_size = 4;
+
+template<typename T>
+using merger_vector = utils::small_vector<T, merger_small_vector_size>;
+
 GCC6_CONCEPT(
     template<typename Producer>
     concept bool FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range,
@@ -37,7 +42,7 @@ GCC6_CONCEPT(
         // The returned fragments are expected to have the same
         // position_in_partition. Iterators and references are expected
         // to be valid until the next call to operator()().
-        { p(timeout) } -> future<boost::iterator_range<std::vector<mutation_fragment>::iterator>>;
+        { p(timeout) } -> future<boost::iterator_range<merger_vector<mutation_fragment>::iterator>>;
         // These have the same semantics as their
         // flat_mutation_reader counterparts.
         { p.next_partition() };
@@ -66,7 +71,7 @@ GCC6_CONCEPT(
     requires FragmentProducer<Producer>
 )
 class mutation_fragment_merger {
-    using iterator = std::vector<mutation_fragment>::iterator;
+    using iterator = merger_vector<mutation_fragment>::iterator;
 
     const schema_ptr _schema;
     Producer _producer;
@@ -158,7 +163,7 @@ public:
         }
     };
 
-    using mutation_fragment_batch = boost::iterator_range<std::vector<mutation_fragment>::iterator>;
+    using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment>::iterator>;
 private:
     struct reader_heap_compare;
     struct fragment_heap_compare;
@@ -170,14 +175,14 @@ private:
     // Readers positioned at a partition, different from the one we are
     // reading from now. For these readers the attached fragment is
     // always partition_start. Used to pick the next partition.
-    std::vector<reader_and_fragment> _reader_heap;
+    merger_vector<reader_and_fragment> _reader_heap;
     // Readers and their current fragments, belonging to the current
     // partition.
-    std::vector<reader_and_fragment> _fragment_heap;
-    std::vector<reader_and_last_fragment_kind> _next;
+    merger_vector<reader_and_fragment> _fragment_heap;
+    merger_vector<reader_and_last_fragment_kind> _next;
     // Readers that reached EOS.
-    std::vector<reader_and_last_fragment_kind> _halted_readers;
-    std::vector<mutation_fragment> _current;
+    merger_vector<reader_and_last_fragment_kind> _halted_readers;
+    merger_vector<mutation_fragment> _current;
     // Optimisation for cases where only a single reader emits a particular
     // partition. If _single_reader.reader is not null that reader is
     // guaranteed to be the only one having relevant data until the partition
@@ -393,7 +398,7 @@ future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::
             return make_ready_future<mutation_fragment_batch>(_current);
         }
 
-        auto key = [] (const std::vector<reader_and_fragment>& heap) -> const dht::decorated_key& {
+        auto key = [] (const merger_vector<reader_and_fragment>& heap) -> const dht::decorated_key& {
             return heap.front().fragment.as_partition_start().key();
         };
 
