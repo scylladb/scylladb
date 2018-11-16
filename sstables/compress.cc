@@ -533,10 +533,8 @@ public:
 
         if constexpr (mode == compressed_checksum_mode::checksum_all) {
             uint32_t be_per_chunk_checksum = cpu_to_be(per_chunk_checksum);
-            uint32_t digest_checksum = ChecksumType::checksum(
-                    reinterpret_cast<const char*>(&be_per_chunk_checksum),
-                    sizeof(be_per_chunk_checksum));
-            _full_checksum = ChecksumType::checksum_combine(_full_checksum, digest_checksum, sizeof(be_per_chunk_checksum));
+            _full_checksum = ChecksumType::checksum(_full_checksum,
+                reinterpret_cast<const char*>(&be_per_chunk_checksum), sizeof(be_per_chunk_checksum));
         }
 
         _compression_metadata->set_full_checksum(_full_checksum);
