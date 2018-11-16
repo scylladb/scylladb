@@ -22,6 +22,7 @@
 #pragma once
 
 #include <zlib.h>
+#include <seastar/util/gcc6-concepts.hh>
 
 GCC6_CONCEPT(
 template<typename Checksum>
