@@ -23,6 +23,7 @@
 
 #include <zlib.h>
 #include <seastar/util/gcc6-concepts.hh>
+#include "libdeflate/libdeflate.h"
 
 GCC6_CONCEPT(
 template<typename Checksum>
@@ -85,6 +86,26 @@ struct zlib_crc32_checksummer {
     static constexpr bool prefer_combine() { return false; } // crc32_combine() is very slow
 };
 
+struct libdeflate_crc32_checksummer {
+    static uint32_t init_checksum() {
+        return 0;
+    }
+
+    static uint32_t checksum(const char* input, size_t input_len) {
+        return checksum(init_checksum(), input, input_len);
+    }
+
+    static uint32_t checksum(uint32_t prev, const char* input, size_t input_len) {
+        return libdeflate_crc32(prev, input, input_len);
+    }
+
+    static uint32_t checksum_combine(uint32_t first, uint32_t second, size_t input_len2) {
+        return zlib_crc32_checksummer::checksum_combine(first, second, input_len2);
+    }
+
+    static constexpr bool prefer_combine() { return false; }
+};
+
 template<typename Checksum>
 inline uint32_t checksum_combine_or_feed(uint32_t first, uint32_t second, const char* input, size_t input_len) {
     if constexpr (Checksum::prefer_combine()) {
@@ -94,4 +115,4 @@ inline uint32_t checksum_combine_or_feed(uint32_t first, uint32_t second, const 
     }
 }
 
-using crc32_utils = zlib_crc32_checksummer;
+using crc32_utils = libdeflate_crc32_checksummer;
