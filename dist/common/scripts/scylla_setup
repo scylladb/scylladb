@@ -336,8 +336,8 @@ if __name__ == '__main__':
     if interactive:
         sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', 'yes')
     if sysconfig_setup:
-        nic = interactive_choose_nic()
         if interactive:
+            nic = interactive_choose_nic()
             set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', 'yes')
     if sysconfig_setup:
         setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
