@@ -802,6 +802,11 @@ future<> parse(sstable_version_types v, random_access_reader& in, utils::estimat
         if (length == 0) {
             throw malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!");
         }
+
+        // Arrays are potentially pre-initialized by the estimated_histogram constructor.
+        eh.bucket_offsets.clear();
+        eh.buckets.clear();
+
         eh.bucket_offsets.reserve(length - 1);
         eh.buckets.reserve(length);
 
