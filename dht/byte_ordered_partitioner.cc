@@ -121,7 +121,7 @@ token byte_ordered_partitioner::midpoint(const token& t1, const token& t2) const
     t.reserve(sigbytes + (remainder ? 1 : 0));
     // E.g., mid = 0x123456, sigbytes = 4, remainder = true
     while (mid) {
-        t.push_back(mid.convert_to<int8_t>());
+        t.push_back((mid & 0xff).convert_to<uint8_t>());
         mid >>= 8;
     }
     // now t = 0x56 0x34 0x12
