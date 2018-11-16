@@ -62,7 +62,7 @@ struct adler32_utils {
     static constexpr bool prefer_combine() { return true; }
 };
 
-struct crc32_utils {
+struct zlib_crc32_checksummer {
     inline static uint32_t init_checksum() {
         return crc32(0, Z_NULL, 0);
     }
@@ -94,3 +94,4 @@ inline uint32_t checksum_combine_or_feed(uint32_t first, uint32_t second, const 
     }
 }
 
+using crc32_utils = zlib_crc32_checksummer;
