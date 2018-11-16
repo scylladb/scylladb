@@ -31,6 +31,11 @@ concept bool ChecksumUtils = requires(const char* input, size_t size, uint32_t c
     { Checksum::checksum(input, size) } -> uint32_t;
     { Checksum::checksum(checksum, input, size) } -> uint32_t;
     { Checksum::checksum_combine(checksum, checksum, size) } -> uint32_t;
+
+    // Tells whether checksum_combine() should be preferred over checksum().
+    // For same checksummers it's faster to re-feed the buffer to checksum() than to
+    // combine the checksum of the buffer.
+    { Checksum::prefer_combine() } -> bool;
 };
 )
 
@@ -53,6 +58,8 @@ struct adler32_utils {
     inline static uint32_t checksum_combine(uint32_t first, uint32_t second, size_t input_len2) {
         return adler32_combine(first, second, input_len2);
     }
+
+    static constexpr bool prefer_combine() { return true; }
 };
 
 struct crc32_utils {
@@ -74,5 +81,16 @@ struct crc32_utils {
     inline static uint32_t checksum_combine(uint32_t first, uint32_t second, size_t input_len2) {
         return crc32_combine(first, second, input_len2);
     }
+
+    static constexpr bool prefer_combine() { return false; } // crc32_combine() is very slow
 };
+
+template<typename Checksum>
+inline uint32_t checksum_combine_or_feed(uint32_t first, uint32_t second, const char* input, size_t input_len) {
+    if constexpr (Checksum::prefer_combine()) {
+        return Checksum::checksum_combine(first, second, input_len);
+    } else {
+        return Checksum::checksum(first, input, input_len);
+    }
+}
 
