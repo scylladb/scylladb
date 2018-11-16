@@ -361,6 +361,7 @@ scylla_tests = [
 
 perf_tests = [
     'tests/perf/perf_mutation_readers',
+    'tests/perf/perf_checksum',
     'tests/perf/perf_mutation_fragment',
     'tests/perf/perf_idl',
 ]
