@@ -909,7 +909,6 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
     class shard_reader {
         struct state {
             std::unique_ptr<foreign_reader> reader;
-            unsigned pending_next_partition = 0;
             bool stopped = false;
             promise<> reader_promise;
         };
@@ -1011,10 +1010,12 @@ future<> multishard_combining_reader::shard_reader::fill_buffer(db::timeout_cloc
 }
 
 void multishard_combining_reader::shard_reader::next_partition() {
+    // The only case this can be called with an uncreated reader is when
+    // `next_partition()` is called on the multishard reader before the
+    // first `fill_buffer()` call. In this case we are right before the first
+    // partition so this call has no effect, hence we can ignore it.
     if (_state->reader) {
         _state->reader->next_partition();
-    } else {
-        ++_state->pending_next_partition;
     }
 }
 
@@ -1038,9 +1039,6 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
             _parent._fwd_mr).then(
             [schema = _parent._schema, state = _state] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
         state->reader = std::make_unique<foreign_reader>(std::move(schema), std::move(r));
-        for (;state->pending_next_partition; --state->pending_next_partition) {
-            state->reader->next_partition();
-        }
 
         if (!state->stopped) {
             state->reader_promise.set_value();
