@@ -718,10 +718,10 @@ class foreign_reader : public flat_mutation_reader::impl {
 
     foreign_unique_ptr<flat_mutation_reader> _reader;
     foreign_unique_ptr<future<>> _read_ahead_future;
-    // Increase this counter every time next_partition() is called.
-    // These pending calls will be executed the next time we go to the remote
+    // Set this flag when next_partition() is called.
+    // This pending call will be executed the next time we go to the remote
     // reader (a fill_buffer() or a fast_forward_to() call).
-    unsigned _pending_next_partition = 0;
+    bool _pending_next_partition = false;
     streamed_mutation::forwarding _fwd_sm;
 
     // Forward an operation to the reader on the remote shard.
@@ -735,12 +735,11 @@ class foreign_reader : public flat_mutation_reader::impl {
     Result forward_operation(db::timeout_clock::time_point timeout, Operation op) {
         return smp::submit_to(_reader.get_owner_shard(), [reader = _reader.get(),
                 read_ahead_future = std::exchange(_read_ahead_future, nullptr),
-                pending_next_partition = std::exchange(_pending_next_partition, 0),
+                pending_next_partition = std::exchange(_pending_next_partition, false),
                 timeout,
                 op = std::move(op)] () mutable {
             auto exec_op_and_read_ahead = [=] () mutable {
-                while (pending_next_partition) {
-                    --pending_next_partition;
+                if (pending_next_partition) {
                     reader->next_partition();
                 }
                 return op().then([=] (auto... results) {
@@ -829,12 +828,12 @@ void foreign_reader::next_partition() {
     if (_fwd_sm == streamed_mutation::forwarding::yes) {
         clear_buffer();
         _end_of_stream = false;
-        ++_pending_next_partition;
+        _pending_next_partition = true;
     } else {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
             _end_of_stream = false;
-            ++_pending_next_partition;
+            _pending_next_partition = true;
         }
     }
 }
@@ -860,10 +859,10 @@ future<stopped_foreign_reader> foreign_reader::stop() {
         const auto owner_shard = _reader.get_owner_shard();
         return smp::submit_to(owner_shard, [reader = _reader.get(),
                 read_ahead_future = std::exchange(_read_ahead_future, nullptr),
-                pending_next_partition = std::exchange(_pending_next_partition, 0)] () mutable {
+                pending_next_partition = std::exchange(_pending_next_partition, false)] () mutable {
             auto fut = read_ahead_future ? std::move(*read_ahead_future) : make_ready_future<>();
             return fut.then([=] () mutable {
-                for (;pending_next_partition > 0; --pending_next_partition) {
+                if (pending_next_partition) {
                     reader->next_partition();
                 }
             });
