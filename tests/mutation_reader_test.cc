@@ -1643,66 +1643,66 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     }
 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
-      auto make_populate = [] (test_reader_lifecycle_policy::delay_function delay, bool evict_paused_readers) {
-        return [delay = std::move(delay), evict_paused_readers] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
-            // We need to group mutations that have the same token so they land on the same shard.
-            std::map<dht::token, std::vector<mutation>> mutations_by_token;
+        auto make_populate = [] (test_reader_lifecycle_policy::delay_function delay, bool evict_paused_readers) {
+            return [delay = std::move(delay), evict_paused_readers] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
+                // We need to group mutations that have the same token so they land on the same shard.
+                std::map<dht::token, std::vector<mutation>> mutations_by_token;
 
-            for (const auto& mut : mutations) {
-                mutations_by_token[mut.token()].push_back(mut);
-            }
+                for (const auto& mut : mutations) {
+                    mutations_by_token[mut.token()].push_back(mut);
+                }
 
-            auto partitioner = make_lw_shared<dummy_partitioner>(dht::global_partitioner(), mutations_by_token);
+                auto partitioner = make_lw_shared<dummy_partitioner>(dht::global_partitioner(), mutations_by_token);
 
-            auto merged_mutations = boost::copy_range<std::vector<std::vector<mutation>>>(mutations_by_token | boost::adaptors::map_values);
+                auto merged_mutations = boost::copy_range<std::vector<std::vector<mutation>>>(mutations_by_token | boost::adaptors::map_values);
 
-            auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<memtable>>>>();
-            for (unsigned shard = 0; shard < partitioner->shard_count(); ++shard) {
-                auto remote_mt = smp::submit_to(shard, [shard, s = global_schema_ptr(s), &merged_mutations, partitioner = *partitioner] {
-                    auto mt = make_lw_shared<memtable>(s.get());
+                auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<memtable>>>>();
+                for (unsigned shard = 0; shard < partitioner->shard_count(); ++shard) {
+                    auto remote_mt = smp::submit_to(shard, [shard, s = global_schema_ptr(s), &merged_mutations, partitioner = *partitioner] {
+                        auto mt = make_lw_shared<memtable>(s.get());
 
-                    for (unsigned i = shard; i < merged_mutations.size(); i += partitioner.shard_count()) {
-                        for (auto& mut : merged_mutations[i]) {
-                            mt->apply(mut);
+                        for (unsigned i = shard; i < merged_mutations.size(); i += partitioner.shard_count()) {
+                            for (auto& mut : merged_mutations[i]) {
+                                mt->apply(mut);
+                            }
                         }
-                    }
 
-                    return make_foreign(mt);
-                }).get0();
-                remote_memtables->emplace_back(std::move(remote_mt));
-            }
+                        return make_foreign(mt);
+                    }).get0();
+                    remote_memtables->emplace_back(std::move(remote_mt));
+                }
 
-            return mutation_source([&delay, partitioner, remote_memtables, evict_paused_readers] (schema_ptr s,
-                    const dht::partition_range& range,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    tracing::trace_state_ptr trace_state,
-                    streamed_mutation::forwarding fwd_sm,
-                    mutation_reader::forwarding fwd_mr) mutable {
-                auto factory = [remote_memtables] (unsigned shard,
-                        schema_ptr s,
+                return mutation_source([&delay, partitioner, remote_memtables, evict_paused_readers] (schema_ptr s,
                         const dht::partition_range& range,
                         const query::partition_slice& slice,
                         const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state,
-                        mutation_reader::forwarding fwd_mr) {
-                    return smp::submit_to(shard, [mt = &*remote_memtables->at(shard), s = global_schema_ptr(s), &range, &slice, &pc,
-                            trace_state = tracing::global_trace_state_ptr(trace_state), fwd_mr] () mutable {
-                        return make_foreign(std::make_unique<flat_mutation_reader>(mt->make_flat_reader(s.get(),
-                                range,
-                                slice,
-                                pc,
-                                trace_state.get(),
-                                streamed_mutation::forwarding::no,
-                                fwd_mr)));
-                    });
-                };
+                        streamed_mutation::forwarding fwd_sm,
+                        mutation_reader::forwarding fwd_mr) mutable {
+                    auto factory = [remote_memtables] (unsigned shard,
+                            schema_ptr s,
+                            const dht::partition_range& range,
+                            const query::partition_slice& slice,
+                            const io_priority_class& pc,
+                            tracing::trace_state_ptr trace_state,
+                            mutation_reader::forwarding fwd_mr) {
+                        return smp::submit_to(shard, [mt = &*remote_memtables->at(shard), s = global_schema_ptr(s), &range, &slice, &pc,
+                                trace_state = tracing::global_trace_state_ptr(trace_state), fwd_mr] () mutable {
+                            return make_foreign(std::make_unique<flat_mutation_reader>(mt->make_flat_reader(s.get(),
+                                    range,
+                                    slice,
+                                    pc,
+                                    trace_state.get(),
+                                    streamed_mutation::forwarding::no,
+                                    fwd_mr)));
+                        });
+                    };
 
-                auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), delay, evict_paused_readers);
-                return make_multishard_combining_reader(std::move(lifecycle_policy), *partitioner, s, range, slice, pc, trace_state, fwd_mr);
-            });
+                    auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), delay, evict_paused_readers);
+                    return make_multishard_combining_reader(std::move(lifecycle_policy), *partitioner, s, range, slice, pc, trace_state, fwd_mr);
+                });
+            };
         };
-      };
 
         auto make_random_delay = [] (int from, int to) {
             return [gen = std::default_random_engine(std::random_device()()),
