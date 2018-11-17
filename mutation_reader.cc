@@ -910,7 +910,6 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
         struct state {
             std::unique_ptr<foreign_reader> reader;
             bool stopped = false;
-            promise<> reader_promise;
         };
         const multishard_combining_reader& _parent;
         const unsigned _shard;
@@ -1033,16 +1032,12 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
         return make_ready_future<>();
     }
     if (_read_ahead) {
-        return _state->reader_promise.get_future();
+        return *std::exchange(_read_ahead, std::nullopt);
     }
     return _parent._reader_factory(_shard, _parent._schema, *_parent._pr, _parent._ps, _parent._pc, _parent._trace_state,
             _parent._fwd_mr).then(
             [schema = _parent._schema, state = _state] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
         state->reader = std::make_unique<foreign_reader>(std::move(schema), std::move(r));
-
-        if (!state->stopped) {
-            state->reader_promise.set_value();
-        }
     });
 }
 
