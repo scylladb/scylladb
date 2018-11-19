@@ -2017,3 +2017,282 @@ public:
 };
 
 }
+
+void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mutation>&,
+                                               schema_ptr, const std::vector<mutation>&)> fn) {
+    auto map_of_int_to_int = map_type_impl::get_instance(int32_type, int32_type, true);
+    auto map_of_int_to_bytes = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto frozen_map_of_int_to_int = map_type_impl::get_instance(int32_type, int32_type, false);
+    auto frozen_map_of_int_to_bytes = map_type_impl::get_instance(int32_type, bytes_type, false);
+    auto tuple_of_int_long = tuple_type_impl::get_instance({ int32_type, long_type });
+    auto tuple_of_bytes_long = tuple_type_impl::get_instance( { bytes_type, long_type });
+    auto tuple_of_bytes_bytes = tuple_type_impl::get_instance( { bytes_type, bytes_type });
+    auto set_of_text = set_type_impl::get_instance(utf8_type, true);
+    auto set_of_bytes = set_type_impl::get_instance(bytes_type, true);
+    auto udt_int_text = user_type_impl::get_instance("ks", "udt",
+        { utf8_type->decompose("f1"), utf8_type->decompose("f2"), },
+        { int32_type, utf8_type });
+    auto udt_int_blob_long = user_type_impl::get_instance("ks", "udt",
+        { utf8_type->decompose("v1"), utf8_type->decompose("v2"), utf8_type->decompose("v3"), },
+        { int32_type, bytes_type, long_type });
+
+    auto random_int32_value = [] {
+        return int32_type->decompose(tests::random::get_int<int32_t>());
+    };
+    int32_t key_id = 0;
+    auto random_partition_key = [&] () -> tests::data_model::mutation_description::key {
+        return { random_int32_value(), random_int32_value(), int32_type->decompose(key_id++), };
+    };
+    auto random_clustering_key = [&] () -> tests::data_model::mutation_description::key {
+        return {
+            utf8_type->decompose(tests::random::get_sstring()),
+            utf8_type->decompose(tests::random::get_sstring()),
+            utf8_type->decompose(format("{}", key_id++)),
+        };
+    };
+    auto random_map = [&] () -> tests::data_model::mutation_description::collection {
+        return {
+            { int32_type->decompose(1), random_int32_value() },
+            { int32_type->decompose(2), random_int32_value() },
+            { int32_type->decompose(3), random_int32_value() },
+        };
+    };
+    auto random_frozen_map = [&] {
+        return map_of_int_to_int->decompose(make_map_value(map_of_int_to_int, map_type_impl::native_type({
+            { 1, tests::random::get_int<int32_t>() },
+            { 2, tests::random::get_int<int32_t>() },
+            { 3, tests::random::get_int<int32_t>() },
+        })));
+    };
+    auto random_tuple = [&] {
+        return tuple_of_int_long->decompose(make_tuple_value(tuple_of_int_long, tuple_type_impl::native_type{
+            tests::random::get_int<int32_t>(), tests::random::get_int<int64_t>(),
+        }));
+    };
+    auto random_set = [&] () -> tests::data_model::mutation_description::collection {
+        return {
+            { utf8_type->decompose("a"), bytes() },
+            { utf8_type->decompose("b"), bytes() },
+            { utf8_type->decompose("c"), bytes() },
+        };
+    };
+    auto random_udt = [&] {
+        return udt_int_text->decompose(make_user_value(udt_int_text, user_type_impl::native_type{
+            tests::random::get_int<int32_t>(),
+            tests::random::get_sstring(),
+        }));
+    };
+
+    struct column_description {
+        int id;
+        data_type type;
+        std::vector<data_type> alter_to;
+        std::vector<std::function<tests::data_model::mutation_description::value()>> data_generators;
+        data_type old_type;
+    };
+
+    auto columns = std::vector<column_description> {
+        { 100, int32_type, { varint_type, bytes_type }, { [&] { return random_int32_value(); }, [&] { return bytes(); } }, uuid_type },
+        { 200, map_of_int_to_int, { map_of_int_to_bytes }, { [&] { return random_map(); } }, empty_type },
+        { 300, int32_type, { varint_type, bytes_type }, { [&] { return random_int32_value(); }, [&] { return bytes(); } }, empty_type },
+        { 400, frozen_map_of_int_to_int, { frozen_map_of_int_to_bytes }, { [&] { return random_frozen_map(); } }, empty_type },
+        { 500, tuple_of_int_long, { tuple_of_bytes_long, tuple_of_bytes_bytes }, { [&] { return random_tuple(); } }, empty_type },
+        { 600, set_of_text, { set_of_bytes }, { [&] { return random_set(); } }, empty_type },
+        { 700, udt_int_text, { udt_int_blob_long }, { [&] { return random_udt(); } }, empty_type },
+    };
+    auto static_columns = columns;
+    auto regular_columns = columns;
+
+    // Base schema
+    auto s = tests::data_model::table_description({ { "pk1", int32_type }, { "pk2", int32_type }, { "pk3", int32_type }, },
+                                                  { { "ck1", utf8_type }, { "ck2", utf8_type }, { "ck3", utf8_type }, });
+    for (auto& sc : static_columns) {
+        auto name = format("s{}", sc.id);
+        s.add_static_column(name, sc.type);
+        if (sc.old_type != empty_type) {
+            s.add_old_static_column(name, sc.old_type);
+        }
+    }
+    for (auto& rc : regular_columns) {
+        auto name = format("r{}", rc.id);
+        s.add_regular_column(name, rc.type);
+        if (rc.old_type != empty_type) {
+            s.add_old_regular_column(name, rc.old_type);
+        }
+    }
+
+    auto max_generator_count = std::max(
+        // boost::max_elements wants the iterators to be copy-assignable. The ones we get
+        // from boost::adaptors::transformed aren't.
+        boost::accumulate(static_columns | boost::adaptors::transformed([] (const column_description& c) {
+            return c.data_generators.size();
+        }), 0u, [] (size_t a, size_t b) { return std::max(a, b); }),
+        boost::accumulate(regular_columns | boost::adaptors::transformed([] (const column_description& c) {
+            return c.data_generators.size();
+        }), 0u, [] (size_t a, size_t b) { return std::max(a, b); })
+    );
+
+    // Base data
+
+    // Single column in a static row, nothing else
+    for (auto& [id, type, alter_to, data_generators, old_type] : static_columns) {
+        auto name = format("s{}", id);
+        for (auto& dg : data_generators) {
+            auto m = tests::data_model::mutation_description(random_partition_key());
+            m.add_static_cell(name, dg());
+            s.unordered_mutations().emplace_back(std::move(m));
+        }
+    }
+
+    // Partition with rows each having a single column
+    auto m = tests::data_model::mutation_description(random_partition_key());
+    for (auto& [id, type, alter_to, data_generators, old_type] : regular_columns) {
+        auto name = format("r{}", id);
+        for (auto& dg : data_generators) {
+            m.add_clustered_cell(random_clustering_key(), name, dg());
+        }
+    }
+    s.unordered_mutations().emplace_back(std::move(m));
+
+    // Absolutely everything
+    for (auto i = 0u; i < max_generator_count; i++) {
+        auto m = tests::data_model::mutation_description(random_partition_key());
+        for (auto& [id, type, alter_to, data_generators, old_type] : static_columns) {
+            auto name = format("s{}", id);
+            m.add_static_cell(name, data_generators[std::min<size_t>(i, data_generators.size() - 1)]());
+        }
+        for (auto& [id, type, alter_to, data_generators, old_type] : regular_columns) {
+            auto name = format("r{}", id);
+            m.add_clustered_cell(random_clustering_key(), name, data_generators[std::min<size_t>(i, data_generators.size() - 1)]());
+        }
+
+        m.add_range_tombstone(random_clustering_key(), random_clustering_key());
+        m.add_range_tombstone(random_clustering_key(), random_clustering_key());
+        m.add_range_tombstone(random_clustering_key(), random_clustering_key());
+
+        s.unordered_mutations().emplace_back(std::move(m));
+    }
+
+    // Transformations
+    auto base = s.build();
+
+    std::vector<tests::data_model::table_description::table> schemas;
+    schemas.emplace_back(base);
+
+    auto test_mutated_schemas = [&] {
+        auto& [ base_change_log, base_schema, base_mutations ] = base;
+        for (auto&& [ mutated_change_log, mutated_schema, mutated_mutations ] : schemas) {
+            BOOST_TEST_MESSAGE(format("\nSchema change from:\n\n{}\n\nto:\n\n{}\n", base_change_log, mutated_change_log));
+            fn(base_schema, base_mutations, mutated_schema, mutated_mutations);
+        }
+        for (auto i = 2u; i < schemas.size(); i++) {
+            auto& [ base_change_log, base_schema, base_mutations ] = schemas[i - 1];
+            auto& [ mutated_change_log, mutated_schema, mutated_mutations ] = schemas[i];
+            BOOST_TEST_MESSAGE(format("\nSchema change from:\n\n{}\n\nto:\n\n{}\n", base_change_log, mutated_change_log));
+            fn(base_schema, base_mutations, mutated_schema, mutated_mutations);
+        }
+        schemas.clear();
+        schemas.emplace_back(base);
+    };
+
+    auto original_s = s;
+     // Remove and add back all static columns
+    for (auto& sc : static_columns) {
+        s.remove_static_column(format("s{}", sc.id));
+        schemas.emplace_back(s.build());
+    }
+    for (auto& sc : static_columns) {
+        s.add_static_column(format("s{}", sc.id), uuid_type);
+        auto mutated = s.build();
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+
+    s = original_s;
+    // Remove and add back all regular columns
+    for (auto& rc : regular_columns) {
+        s.remove_regular_column(format("r{}", rc.id));
+        schemas.emplace_back(s.build());
+    }
+    auto temp_s = s;
+    auto temp_schemas = schemas;
+    for (auto& rc : regular_columns) {
+        s.add_regular_column(format("r{}", rc.id), uuid_type);
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+
+    s = temp_s;
+    schemas = temp_schemas;
+    // Add back all regular columns as collections
+    for (auto& rc : regular_columns) {
+        s.add_regular_column(format("r{}", rc.id), map_of_int_to_bytes);
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+
+    s = temp_s;
+    schemas = temp_schemas;
+    // Add back all regular columns as frozen collections
+    for (auto& rc : regular_columns) {
+        s.add_regular_column(format("r{}", rc.id), frozen_map_of_int_to_int);
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+
+    s = original_s;
+    // Add more static columns
+    for (auto& sc : static_columns) {
+        s.add_static_column(format("s{}", sc.id + 1), uuid_type);
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+
+    s = original_s;
+    // Add more regular columns
+    for (auto& rc : regular_columns) {
+        s.add_regular_column(format("r{}", rc.id + 1), uuid_type);
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+
+    s = original_s;
+    // Alter column types
+    for (auto& sc : static_columns) {
+        for (auto& target : sc.alter_to) {
+            s.alter_static_column_type(format("s{}", sc.id), target);
+            schemas.emplace_back(s.build());
+        }
+    }
+    for (auto& rc : regular_columns) {
+        for (auto& target : rc.alter_to) {
+            s.alter_regular_column_type(format("r{}", rc.id), target);
+            schemas.emplace_back(s.build());
+        }
+    }
+    for (auto i = 1; i <= 3; i++) {
+        s.alter_clustering_column_type(format("ck{}", i), bytes_type);
+        schemas.emplace_back(s.build());
+    }
+    for (auto i = 1; i <= 3; i++) {
+        s.alter_partition_column_type(format("pk{}", i), bytes_type);
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+
+    s = original_s;
+    // Rename clustering key
+    for (auto i = 1; i <= 3; i++) {
+        s.rename_clustering_column(format("ck{}", i), format("ck{}", 100 - i));
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+
+    s = original_s;
+    // Rename partition key
+    for (auto i = 1; i <= 3; i++) {
+        s.rename_partition_column(format("pk{}", i), format("pk{}", 100 - i));
+        schemas.emplace_back(s.build());
+    }
+    test_mutated_schemas();
+}
