@@ -73,7 +73,9 @@ private:
                 new_view.cells.emplace_back(c.first, upgrade_cell(*new_ctype->value_comparator(), *old_ctype->value_comparator(), c.second, atomic_cell::collection_member::yes));
             }
         }
-        dst.apply(new_def, new_ctype->serialize_mutation_form(std::move(new_view)));
+        if (new_view.tomb || !new_view.cells.empty()) {
+            dst.apply(new_def, new_ctype->serialize_mutation_form(std::move(new_view)));
+        }
       });
     }
 public:
