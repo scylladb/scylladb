@@ -68,10 +68,11 @@ public:
 
     // Starts a new phase and waits for all operations started in any of the earlier phases.
     // It is fine to start multiple awaits in parallel.
+    // Strong exception guarantees.
     future<> advance_and_await() {
+        auto new_gate = make_lw_shared<gate>();
         ++_phase;
-        auto old_gate = std::move(_gate);
-        _gate = make_lw_shared<gate>();
+        auto old_gate = std::exchange(_gate, std::move(new_gate));
         return old_gate->close().then([old_gate, op = start()] {});
     }
 
