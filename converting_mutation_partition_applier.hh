@@ -38,44 +38,42 @@ private:
     static bool is_compatible(const column_definition& new_def, const data_type& old_type, column_kind kind) {
         return ::is_compatible(new_def.kind, kind) && new_def.type->is_value_compatible_with(*old_type);
     }
+    static atomic_cell upgrade_cell(const abstract_type& new_type, const abstract_type& old_type, atomic_cell_view cell,
+                                    atomic_cell::collection_member cm = atomic_cell::collection_member::no) {
+        if (cell.is_live() && !old_type.is_counter()) {
+            if (cell.is_live_and_has_ttl()) {
+                return atomic_cell::make_live(new_type, cell.timestamp(), cell.value().linearize(), cell.expiry(), cell.ttl(), cm);
+            }
+            return atomic_cell::make_live(new_type, cell.timestamp(), cell.value().linearize(), cm);
+        } else {
+            return atomic_cell(new_type, cell);
+        }
+    }
     static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
         if (!is_compatible(new_def, old_type, kind) || cell.timestamp() <= new_def.dropped_at()) {
             return;
         }
-        auto new_cell = [&] {
-            if (cell.is_live() && !old_type->is_counter()) {
-                if (cell.is_live_and_has_ttl()) {
-                    return atomic_cell_or_collection(
-                        atomic_cell::make_live(*new_def.type, cell.timestamp(), cell.value().linearize(), cell.expiry(), cell.ttl())
-                    );
-                }
-                return atomic_cell_or_collection(
-                    atomic_cell::make_live(*new_def.type, cell.timestamp(), cell.value().linearize())
-                );
-            } else {
-                return atomic_cell_or_collection(*new_def.type, cell);
-            }
-        }();
-        dst.apply(new_def, std::move(new_cell));
+        dst.apply(new_def, upgrade_cell(*new_def.type, *old_type, cell));
     }
     static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, collection_mutation_view cell) {
         if (!is_compatible(new_def, old_type, kind)) {
             return;
         }
       cell.data.with_linearized([&] (bytes_view cell_bv) {
-        auto&& ctype = static_pointer_cast<const collection_type_impl>(old_type);
-        auto old_view = ctype->deserialize_mutation_form(cell_bv);
+        auto new_ctype = static_pointer_cast<const collection_type_impl>(new_def.type);
+        auto old_ctype = static_pointer_cast<const collection_type_impl>(old_type);
+        auto old_view = old_ctype->deserialize_mutation_form(cell_bv);
 
-        collection_type_impl::mutation_view new_view;
+        collection_type_impl::mutation new_view;
         if (old_view.tomb.timestamp > new_def.dropped_at()) {
             new_view.tomb = old_view.tomb;
         }
         for (auto& c : old_view.cells) {
             if (c.second.timestamp() > new_def.dropped_at()) {
-                new_view.cells.emplace_back(std::move(c));
+                new_view.cells.emplace_back(c.first, upgrade_cell(*new_ctype->value_comparator(), *old_ctype->value_comparator(), c.second, atomic_cell::collection_member::yes));
             }
         }
-        dst.apply(new_def, ctype->serialize_mutation_form(std::move(new_view)));
+        dst.apply(new_def, new_ctype->serialize_mutation_form(std::move(new_view)));
       });
     }
 public:
