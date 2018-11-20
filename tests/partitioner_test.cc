@@ -636,7 +636,7 @@ BOOST_AUTO_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
 BOOST_AUTO_TEST_CASE(test_random_partitioner) {
     using int128 = boost::multiprecision::int128_t;
     auto prev_token = [] (const dht::i_partitioner& part, dht::token token) {
-        return part.from_sstring(std::string(int128(std::string(part.to_sstring(token))) - 1));
+        return part.from_sstring(std::string((int128(std::string(part.to_sstring(token))) - 1).str()));
     };
     auto make_token_vector = [] (dht::i_partitioner& part, std::vector<const char*> v) {
         auto from_string = [&] (const char* s) { return part.from_sstring(s); };
