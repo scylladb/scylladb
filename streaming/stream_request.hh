@@ -38,7 +38,7 @@
 
 #pragma once
 
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "range.hh"
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"

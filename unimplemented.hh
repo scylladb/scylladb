@@ -22,9 +22,9 @@
 #pragma once
 
 #include <iosfwd>
-#include "core/print.hh"
-#include "core/sstring.hh"
-#include "core/enum.hh"
+#include <seastar/core/print.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/core/enum.hh>
 
 namespace unimplemented {
 

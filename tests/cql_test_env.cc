@@ -22,12 +22,12 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
 #include <sstables/sstables.hh>
-#include "core/do_with.hh"
+#include <seastar/core/do_with.hh>
 #include "cql_test_env.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
-#include "core/distributed.hh"
-#include "core/shared_ptr.hh"
+#include <seastar/core/distributed.hh>
+#include <seastar/core/shared_ptr.hh>
 #include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
 #include "message/messaging_service.hh"

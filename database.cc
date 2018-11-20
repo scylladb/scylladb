@@ -23,7 +23,7 @@
 #include "lister.hh"
 #include "database.hh"
 #include "unimplemented.hh"
-#include "core/future-util.hh"
+#include <seastar/core/future-util.hh>
 #include "db/commitlog/commitlog_entry.hh"
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
@@ -32,7 +32,7 @@
 #include "to_string.hh"
 #include "query-result-writer.hh"
 #include "cql3/column_identifier.hh"
-#include "core/seastar.hh"
+#include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics.hh>
@@ -57,12 +57,12 @@
 #include <boost/range/adaptor/map.hpp>
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
-#include "core/do_with.hh"
+#include <seastar/core/do_with.hh>
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
-#include <core/fstream.hh>
+#include <seastar/core/fstream.hh>
 #include <seastar/core/enum.hh>
 #include "utils/latency.hh"
 #include "schema_registry.hh"

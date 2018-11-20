@@ -38,8 +38,8 @@
 
 #pragma once
 #include "streaming/progress_info.hh"
-#include "core/shared_ptr.hh"
-#include "core/distributed.hh"
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/distributed.hh>
 #include "utils/UUID.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/inet_address.hh"

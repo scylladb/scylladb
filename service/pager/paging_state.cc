@@ -42,7 +42,7 @@
 #include "bytes.hh"
 #include "keys.hh"
 #include "paging_state.hh"
-#include "core/simple-stream.hh"
+#include <seastar/core/simple-stream.hh>
 #include "idl/keys.dist.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/paging_state.dist.hh"

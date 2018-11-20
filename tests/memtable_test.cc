@@ -27,7 +27,7 @@
 #include "tests/test-utils.hh"
 #include "schema_builder.hh"
 
-#include "core/thread.hh"
+#include <seastar/core/thread.hh>
 #include "memtable.hh"
 #include "mutation_source_test.hh"
 #include "mutation_assertions.hh"

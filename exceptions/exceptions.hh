@@ -44,8 +44,8 @@
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include <stdexcept>
-#include "core/sstring.hh"
-#include "core/print.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/print.hh>
 #include "bytes.hh"
 
 namespace exceptions {

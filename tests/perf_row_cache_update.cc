@@ -20,10 +20,10 @@
  */
 
 #include <chrono>
-#include <core/distributed.hh>
-#include <core/app-template.hh>
-#include <core/sstring.hh>
-#include <core/thread.hh>
+#include <seastar/core/distributed.hh>
+#include <seastar/core/app-template.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/core/weak_ptr.hh>
 
 #include "utils/managed_bytes.hh"

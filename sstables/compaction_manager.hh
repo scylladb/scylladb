@@ -21,12 +21,12 @@
 
 #pragma once
 
-#include "core/semaphore.hh"
-#include "core/sstring.hh"
-#include "core/shared_ptr.hh"
-#include "core/gate.hh"
-#include "core/shared_future.hh"
-#include "core/rwlock.hh"
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/shared_future.hh>
+#include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/scheduling.hh>
 #include "log.hh"

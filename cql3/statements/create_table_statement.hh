@@ -50,7 +50,7 @@
 #include "service/migration_manager.hh"
 #include "schema.hh"
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 
 #include <seastar/util/indirect.hh>
 #include <unordered_map>

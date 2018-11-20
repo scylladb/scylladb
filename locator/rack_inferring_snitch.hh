@@ -38,7 +38,7 @@
 
 #pragma once
 
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
 #include "snitch_base.hh"
 #include "utils/fb_utilities.hh"

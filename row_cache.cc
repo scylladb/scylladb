@@ -20,9 +20,9 @@
  */
 
 #include "row_cache.hh"
-#include "core/memory.hh"
-#include "core/do_with.hh"
-#include "core/future-util.hh"
+#include <seastar/core/memory.hh>
+#include <seastar/core/do_with.hh>
+#include <seastar/core/future-util.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include "memtable.hh"

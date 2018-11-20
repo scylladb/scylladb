@@ -22,7 +22,7 @@
 #pragma once
 
 #include "mutation_reader.hh"
-#include "core/future.hh"
+#include <seastar/core/future.hh>
 #include "flat_mutation_reader.hh"
 
 /*

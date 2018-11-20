@@ -22,11 +22,11 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "core/sstring.hh"
-#include "core/future-util.hh"
-#include "core/align.hh"
-#include "core/do_with.hh"
-#include "core/sleep.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/future-util.hh>
+#include <seastar/core/align.hh>
+#include <seastar/core/do_with.hh>
+#include <seastar/core/sleep.hh>
 #include "sstables/sstables.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/key.hh"

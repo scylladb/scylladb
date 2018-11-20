@@ -20,7 +20,7 @@
  */
 
 #include "message/messaging_service.hh"
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
@@ -31,7 +31,7 @@
 #include "gms/gossiper.hh"
 #include "query-request.hh"
 #include "query-result.hh"
-#include "rpc/rpc.hh"
+#include <seastar/rpc/rpc.hh>
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "dht/i_partitioner.hh"
@@ -75,8 +75,8 @@
 #include "idl/partition_checksum.dist.impl.hh"
 #include "idl/query.dist.impl.hh"
 #include "idl/cache_temperature.dist.impl.hh"
-#include "rpc/lz4_compressor.hh"
-#include "rpc/multi_algo_compressor_factory.hh"
+#include <seastar/rpc/lz4_compressor.hh>
+#include <seastar/rpc/multi_algo_compressor_factory.hh>
 #include "partition_range_compat.hh"
 #include "stdx.hh"
 #include <boost/range/adaptor/filtered.hpp>

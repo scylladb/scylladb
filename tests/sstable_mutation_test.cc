@@ -25,8 +25,8 @@
 #include "tests/test-utils.hh"
 #include "sstable_test.hh"
 #include "sstables/key.hh"
-#include "core/do_with.hh"
-#include "core/thread.hh"
+#include <seastar/core/do_with.hh>
+#include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
 #include "database.hh"
 #include "timestamp.hh"

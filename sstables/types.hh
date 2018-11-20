@@ -22,7 +22,7 @@
 #pragma once
 
 #include "disk_types.hh"
-#include "core/enum.hh"
+#include <seastar/core/enum.hh>
 #include "bytes.hh"
 #include "gc_clock.hh"
 #include "tombstone.hh"

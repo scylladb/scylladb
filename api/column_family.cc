@@ -22,7 +22,7 @@
 #include "column_family.hh"
 #include "api/api-doc/column_family.json.hh"
 #include <vector>
-#include "http/exception.hh"
+#include <seastar/http/exception.hh>
 #include "sstables/sstables.hh"
 #include "utils/estimated_histogram.hh"
 #include <algorithm>

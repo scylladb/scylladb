@@ -45,7 +45,7 @@
 #include "cql3/restrictions/single_column_restriction.hh"
 #include "statements/request_validations.hh"
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include "to_string.hh"
 
 #include "cql3/relation.hh"

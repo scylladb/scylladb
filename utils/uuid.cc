@@ -21,12 +21,12 @@
 
 
 #include "UUID.hh"
-#include "net/byteorder.hh"
+#include <seastar/net/byteorder.hh>
 #include <random>
 #include <boost/iterator/function_input_iterator.hpp>
 #include <boost/algorithm/string.hpp>
 #include <string>
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "utils/serialization.hh"
 #include "marshal_exception.hh"
 

@@ -28,9 +28,9 @@
 #include <array>
 #include <iosfwd>
 
-#include "core/sstring.hh"
-#include "core/print.hh"
-#include "net/byteorder.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/print.hh>
+#include <seastar/net/byteorder.hh>
 #include "bytes.hh"
 #include "hashing.hh"
 #include "utils/serialization.hh"

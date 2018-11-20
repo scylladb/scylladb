@@ -25,7 +25,7 @@
 
 #include "utils/murmur_hash.hh"
 #include "bytes.hh"
-#include "core/print.hh"
+#include <seastar/core/print.hh>
 
 static const bytes full_sequence("012345678901234567890123456789012345678901234567890123456789");
 

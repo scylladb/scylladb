@@ -22,14 +22,14 @@
 #pragma once
 
 #include "auth/service.hh"
-#include "core/reactor.hh"
+#include <seastar/core/reactor.hh>
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/values.hh"
 #include "auth/authenticator.hh"
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "timeout_config.hh"
 #include <seastar/core/semaphore.hh>
 #include <memory>

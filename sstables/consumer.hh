@@ -22,8 +22,8 @@
 #pragma once
 
 #include "vint-serialization.hh"
-#include "core/future.hh"
-#include "core/iostream.hh"
+#include <seastar/core/future.hh>
+#include <seastar/core/iostream.hh>
 #include "sstables/exceptions.hh"
 #include "sstables/progress_monitor.hh"
 #include <seastar/core/byteorder.hh>

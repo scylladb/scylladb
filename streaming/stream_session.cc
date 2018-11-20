@@ -47,9 +47,9 @@
 #include "database.hh"
 #include "utils/fb_utilities.hh"
 #include "streaming/stream_plan.hh"
-#include "core/sleep.hh"
+#include <seastar/core/sleep.hh>
 #include "service/storage_service.hh"
-#include "core/thread.hh"
+#include <seastar/core/thread.hh>
 #include "cql3/query_processor.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_session_state.hh"

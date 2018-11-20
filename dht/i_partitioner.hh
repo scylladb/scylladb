@@ -40,8 +40,8 @@
 
 #pragma once
 
-#include "core/shared_ptr.hh"
-#include "core/sstring.hh"
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
 #include "types.hh"
 #include "keys.hh"
 #include "utils/managed_bytes.hh"

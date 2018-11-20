@@ -24,8 +24,8 @@
 
 #include "transport/messages/result_message_base.hh"
 #include "bytes.hh"
-#include "core/shared_ptr.hh"
-#include "core/future.hh"
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/future.hh>
 
 class rows_assertions {
     shared_ptr<cql_transport::messages::result_message::rows> _rows;

@@ -22,7 +22,7 @@
 #pragma once
 
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include "query-request.hh"
 #include "query-result.hh"
 #include "schema.hh"

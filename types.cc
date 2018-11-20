@@ -27,8 +27,8 @@
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
 #include "types.hh"
-#include "core/print.hh"
-#include "net/ip.hh"
+#include <seastar/core/print.hh>
+#include <seastar/net/ip.hh>
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"
 #include "combine.hh"

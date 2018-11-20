@@ -20,9 +20,9 @@
  */
 
 #include "api.hh"
-#include "http/file_handler.hh"
-#include "http/transformers.hh"
-#include "http/api_docs.hh"
+#include <seastar/http/file_handler.hh>
+#include <seastar/http/transformers.hh>
+#include <seastar/http/api_docs.hh>
 #include "storage_service.hh"
 #include "commitlog.hh"
 #include "gossiper.hh"
@@ -36,7 +36,7 @@
 #include "endpoint_snitch.hh"
 #include "compaction_manager.hh"
 #include "hinted_handoff.hh"
-#include "http/exception.hh"
+#include <seastar/http/exception.hh>
 #include "stream_manager.hh"
 #include "system.hh"
 #include "api/config.hh"

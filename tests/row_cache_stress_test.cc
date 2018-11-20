@@ -22,7 +22,7 @@
 #include <boost/range/irange.hpp>
 #include "seastarx.hh"
 #include "tests/simple_schema.hh"
-#include "core/app-template.hh"
+#include <seastar/core/app-template.hh>
 #include "memtable.hh"
 #include "row_cache.hh"
 #include "partition_slice_builder.hh"

@@ -25,9 +25,9 @@
 
 #include "mutation.hh"
 #include "clustering_key_filter.hh"
-#include "core/future.hh"
-#include "core/future-util.hh"
-#include "core/do_with.hh"
+#include <seastar/core/future.hh>
+#include <seastar/core/future-util.hh>
+#include <seastar/core/do_with.hh>
 #include "tracing/trace_state.hh"
 #include "flat_mutation_reader.hh"
 #include "reader_concurrency_semaphore.hh"

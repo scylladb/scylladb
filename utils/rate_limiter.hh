@@ -21,9 +21,9 @@
 
 #pragma once
 
-#include "core/timer.hh"
-#include "core/semaphore.hh"
-#include "core/reactor.hh"
+#include <seastar/core/timer.hh>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/reactor.hh>
 #include "seastarx.hh"
 
 namespace utils {

@@ -23,11 +23,11 @@
 
 #include "messaging_service_fwd.hh"
 #include "msg_addr.hh"
-#include "core/reactor.hh"
-#include "core/distributed.hh"
-#include "core/sstring.hh"
+#include <seastar/core/reactor.hh>
+#include <seastar/core/distributed.hh>
+#include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
-#include "rpc/rpc_types.hh"
+#include <seastar/rpc/rpc_types.hh>
 #include <unordered_map>
 #include "query-request.hh"
 #include "mutation_query.hh"

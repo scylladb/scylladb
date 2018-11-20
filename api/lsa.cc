@@ -23,7 +23,7 @@
 #include "api/lsa.hh"
 #include "api/api.hh"
 
-#include "http/exception.hh"
+#include <seastar/http/exception.hh>
 #include "utils/logalloc.hh"
 #include "log.hh"
 

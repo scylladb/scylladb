@@ -42,7 +42,7 @@
 #pragma once
 
 #include "exceptions.hh"
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include "cql3/column_identifier.hh"
 #include "cql3/relation.hh"
 

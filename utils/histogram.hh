@@ -24,7 +24,7 @@
 #include <boost/circular_buffer.hpp>
 #include "latency.hh"
 #include <cmath>
-#include "core/timer.hh"
+#include <seastar/core/timer.hh>
 #include <iosfwd>
 #include "seastarx.hh"
 

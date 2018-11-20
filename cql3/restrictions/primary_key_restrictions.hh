@@ -51,7 +51,7 @@
 #include "cql3/restrictions/abstract_restriction.hh"
 #include "types.hh"
 #include "query-request.hh"
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 
 namespace cql3 {
 namespace restrictions {

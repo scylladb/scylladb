@@ -39,7 +39,7 @@
 
 #pragma once
 
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "schema.hh"
 #include "compound_compat.hh"
 #include <cmath>

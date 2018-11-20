@@ -21,7 +21,7 @@
 #pragma once
 #include "database.hh"
 #include "service/storage_proxy.hh"
-#include "http/httpd.hh"
+#include <seastar/http/httpd.hh>
 
 namespace api {
 

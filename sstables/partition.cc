@@ -21,10 +21,10 @@
 #include "mutation.hh"
 #include "sstables.hh"
 #include "types.hh"
-#include "core/future-util.hh"
+#include <seastar/core/future-util.hh>
 #include "key.hh"
 #include "keys.hh"
-#include "core/do_with.hh"
+#include <seastar/core/do_with.hh>
 #include "unimplemented.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/byteorder.hh>

@@ -21,13 +21,13 @@
 
 #pragma once
 
-#include "json/json_elements.hh"
+#include <seastar/json/json_elements.hh>
 #include <boost/lexical_cast.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include "api/api-doc/utils.json.hh"
 #include "utils/histogram.hh"
-#include "http/exception.hh"
+#include <seastar/http/exception.hh>
 #include "api_init.hh"
 #include "seastarx.hh"
 

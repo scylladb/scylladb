@@ -40,7 +40,7 @@
 
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"

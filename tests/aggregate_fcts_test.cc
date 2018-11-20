@@ -33,7 +33,7 @@
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 
-#include "core/future-util.hh"
+#include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
 
 #include "db/config.hh"

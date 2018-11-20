@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "net/ip.hh"
+#include <seastar/net/ip.hh>
 #include "utils/serialization.hh"
 #include <sstream>
 

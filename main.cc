@@ -21,11 +21,11 @@
 
 #include "supervisor.hh"
 #include "database.hh"
-#include "core/app-template.hh"
-#include "core/distributed.hh"
+#include <seastar/core/app-template.hh>
+#include <seastar/core/distributed.hh>
 #include "thrift/server.hh"
 #include "transport/server.hh"
-#include "http/httpd.hh"
+#include <seastar/http/httpd.hh>
 #include "api/api_init.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
@@ -49,12 +49,12 @@
 #include "release.hh"
 #include "repair/repair.hh"
 #include <cstdio>
-#include <core/file.hh>
+#include <seastar/core/file.hh>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include "disk-error-handler.hh"
 #include "tracing/tracing.hh"
-#include "core/prometheus.hh"
+#include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
 #include <seastar/net/dns.hh>
 #include <seastar/core/memory.hh>

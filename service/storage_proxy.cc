@@ -47,12 +47,12 @@
 #include "frozen_mutation.hh"
 #include "supervisor.hh"
 #include "query_result_merger.hh"
-#include "core/do_with.hh"
+#include <seastar/core/do_with.hh>
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "storage_service.hh"
-#include "core/future-util.hh"
+#include <seastar/core/future-util.hh>
 #include "db/read_repair_decision.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
@@ -80,7 +80,7 @@
 #include "schema_registry.hh"
 #include "utils/joinpoint.hh"
 #include <seastar/util/lazy.hh>
-#include "core/metrics.hh"
+#include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
 #include "multishard_mutation_query.hh"

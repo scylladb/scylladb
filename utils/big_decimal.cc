@@ -22,7 +22,7 @@
 #include "big_decimal.hh"
 #include <cassert>
 #include "marshal_exception.hh"
-#include "core/print.hh"
+#include <seastar/core/print.hh>
 
 #include <regex>
 

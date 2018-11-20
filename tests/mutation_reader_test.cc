@@ -24,9 +24,9 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
 
-#include "core/sleep.hh"
-#include "core/do_with.hh"
-#include "core/thread.hh"
+#include <seastar/core/sleep.hh>
+#include <seastar/core/do_with.hh>
+#include <seastar/core/thread.hh>
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"

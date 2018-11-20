@@ -21,8 +21,8 @@
 
 #include <unordered_map>
 #include "unimplemented.hh"
-#include "core/sstring.hh"
-#include "core/enum.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/enum.hh>
 #include "log.hh"
 #include "seastarx.hh"
 

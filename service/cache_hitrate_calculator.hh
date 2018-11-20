@@ -22,8 +22,8 @@
 #pragma  once
 
 #include "database.hh"
-#include "core/timer.hh"
-#include "core/sharded.hh"
+#include <seastar/core/timer.hh>
+#include <seastar/core/sharded.hh>
 
 namespace service {
 

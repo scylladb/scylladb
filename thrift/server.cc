@@ -21,11 +21,11 @@
 
 #include "server.hh"
 #include "handler.hh"
-#include "core/future-util.hh"
-#include "core/circular_buffer.hh"
+#include <seastar/core/future-util.hh>
+#include <seastar/core/circular_buffer.hh>
 #include <seastar/core/metrics.hh>
-#include "net/byteorder.hh"
-#include "core/scattered_message.hh"
+#include <seastar/net/byteorder.hh>
+#include <seastar/core/scattered_message.hh>
 #include "log.hh"
 #include <thrift/server/TServer.h>
 #include <thrift/transport/TBufferTransports.h>

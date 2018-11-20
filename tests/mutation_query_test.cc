@@ -35,8 +35,8 @@
 #include "tests/mutation_source_test.hh"
 
 #include "mutation_query.hh"
-#include "core/do_with.hh"
-#include "core/thread.hh"
+#include <seastar/core/do_with.hh>
+#include <seastar/core/thread.hh>
 #include "schema_builder.hh"
 #include "partition_slice_builder.hh"
 

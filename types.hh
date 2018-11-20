@@ -27,10 +27,10 @@
 #include "data/cell.hh"
 #include <sstream>
 
-#include "core/sstring.hh"
-#include "core/shared_ptr.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/shared_ptr.hh>
 #include "utils/UUID.hh"
-#include "net/byteorder.hh"
+#include <seastar/net/byteorder.hh>
 #include "db_clock.hh"
 #include "bytes.hh"
 #include "log.hh"
@@ -44,9 +44,9 @@
 #include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/numeric.hpp>
 #include <boost/range/combine.hpp>
-#include "net/ip.hh"
+#include <seastar/net/ip.hh>
 #include <seastar/net/inet_address.hh>
-#include "util/backtrace.hh"
+#include <seastar/util/backtrace.hh>
 #include "hashing.hh"
 #include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
 #include "stdx.hh"

@@ -44,7 +44,7 @@
 #include "service/migration_listener.hh"
 #include "gms/endpoint_state.hh"
 #include "db/schema_tables.hh"
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "gms/inet_address.hh"
 #include "message/msg_addr.hh"
 #include "utils/UUID.hh"

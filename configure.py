@@ -1098,7 +1098,7 @@ with open(buildfile, 'w') as f:
             command = echo -e $text > $out
             description = GEN $out
         rule swagger
-            command = seastar/json/json2code.py -f $in -o $out
+            command = seastar/scripts/seastar-json2code.py -f $in -o $out
             description = SWAGGER $out
         rule serializer
             command = {python} ./idl-compiler.py --ns ser -f $in -o $out
@@ -1116,7 +1116,7 @@ with open(buildfile, 'w') as f:
     for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = {opt} -DXXH_PRIVATE_API -I. -I $builddir/{mode}/gen -I seastar -I seastar/build/{mode}/gen
+            cxxflags_{mode} = {opt} -DXXH_PRIVATE_API -I. -I $builddir/{mode}/gen -I seastar/include -I seastar/include -I seastar/build/{mode}/gen/include
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
               description = CXX $out
@@ -1223,8 +1223,8 @@ with open(buildfile, 'w') as f:
         for obj in compiles:
             src = compiles[obj]
             gen_headers = list(ragels.keys())
-            gen_headers += ['seastar/build/{}/gen/http/request_parser.hh'.format(mode)]
-            gen_headers += ['seastar/build/{}/gen/http/http_response_parser.hh'.format(mode)]
+            gen_headers += ['seastar/build/{}/gen/include/seastar/http/request_parser.hh'.format(mode)]
+            gen_headers += ['seastar/build/{}/gen/include/seastar/http/response_parser.hh'.format(mode)]
             for th in thrifts:
                 gen_headers += th.headers('$builddir/{}/gen'.format(mode))
             for g in antlr3_grammars:
@@ -1239,7 +1239,7 @@ with open(buildfile, 'w') as f:
             f.write('build {}: ragel {}\n'.format(hh, src))
         for hh in swaggers:
             src = swaggers[hh]
-            f.write('build {}: swagger {} | seastar/json/json2code.py\n'.format(hh, src))
+            f.write('build {}: swagger {} | seastar/scripts/seastar-json2code.py\n'.format(hh, src))
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
@@ -1259,11 +1259,11 @@ with open(buildfile, 'w') as f:
                 if cc.endswith('Parser.cpp') and has_sanitize_address_use_after_scope:
                     # Parsers end up using huge amounts of stack space and overflowing their stack
                     f.write('  obj_cxxflags = -fno-sanitize-address-use-after-scope\n')
-        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune seastar/build/{mode}/gen/http/request_parser.hh seastar/build/{mode}/gen/http/http_response_parser.hh: ninja {seastar_deps}\n'
+        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune seastar/build/{mode}/gen/include/seastar/http/request_parser.hh seastar/build/{mode}/gen/include/seastar/http/response_parser.hh: ninja {seastar_deps}\n'
                 .format(**locals()))
         f.write('  pool = seastar_pool\n')
         f.write('  subdir = seastar\n')
-        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune build/{mode}/gen/http/request_parser.hh build/{mode}/gen/http/http_response_parser.hh\n'.format(**locals()))
+        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune build/{mode}/gen/include/seastar/http/request_parser.hh build/{mode}/gen/include/seastar/http/response_parser.hh\n'.format(**locals()))
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
             ''').format(**locals()))

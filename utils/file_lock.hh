@@ -23,8 +23,8 @@
 
 #include <memory>
 #include <ostream>
-#include <core/sstring.hh>
-#include <core/future.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/core/future.hh>
 
 #include "seastarx.hh"
 

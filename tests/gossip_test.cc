@@ -29,9 +29,9 @@
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
-#include "core/reactor.hh"
+#include <seastar/core/reactor.hh>
 #include "service/storage_service.hh"
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "database.hh"
 #include "db/system_distributed_keyspace.hh"
 

@@ -43,7 +43,7 @@
 
 #include "cql3/keyspace_element_name.hh"
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include "cql3/cf_name.hh"
 
 namespace cql3 {

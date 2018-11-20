@@ -45,8 +45,8 @@
 #include <unordered_map>
 #include <boost/range/adaptor/map.hpp>
 
-#include <core/future.hh>
-#include <core/sharded.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/sharded.hh>
 
 #include "commitlog.hh"
 #include "commitlog_replayer.hh"

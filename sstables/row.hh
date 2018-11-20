@@ -26,7 +26,7 @@
 
 #include "bytes.hh"
 #include "key.hh"
-#include "core/temporary_buffer.hh"
+#include <seastar/core/temporary_buffer.hh>
 #include "consumer.hh"
 #include "sstables/types.hh"
 #include "reader_concurrency_semaphore.hh"

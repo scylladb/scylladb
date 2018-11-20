@@ -23,7 +23,7 @@
 #include "seastarx.hh"
 #include "tests/simple_schema.hh"
 #include "tests/cql_test_env.hh"
-#include "core/app-template.hh"
+#include <seastar/core/app-template.hh>
 #include "database.hh"
 #include "db/config.hh"
 #include "partition_slice_builder.hh"

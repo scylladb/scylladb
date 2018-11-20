@@ -36,7 +36,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
 #include "log.hh"

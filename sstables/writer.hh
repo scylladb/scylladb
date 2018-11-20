@@ -21,8 +21,8 @@
 
 #pragma once
 
-#include "core/iostream.hh"
-#include "core/fstream.hh"
+#include <seastar/core/iostream.hh>
+#include <seastar/core/fstream.hh>
 #include "types.hh"
 #include "checksum_utils.hh"
 #include "progress_monitor.hh"

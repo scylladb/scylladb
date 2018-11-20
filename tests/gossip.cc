@@ -20,8 +20,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "core/reactor.hh"
-#include "core/app-template.hh"
+#include <seastar/core/reactor.hh>
+#include <seastar/core/app-template.hh>
 #include "db/system_distributed_keyspace.hh"
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"

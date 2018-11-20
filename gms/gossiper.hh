@@ -39,9 +39,9 @@
 #pragma once
 
 #include "unimplemented.hh"
-#include "core/distributed.hh"
-#include "core/shared_ptr.hh"
-#include "core/print.hh"
+#include <seastar/core/distributed.hh>
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/print.hh>
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
 #include "gms/i_failure_detection_event_listener.hh"

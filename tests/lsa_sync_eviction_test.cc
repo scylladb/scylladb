@@ -19,10 +19,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <core/distributed.hh>
-#include <core/app-template.hh>
-#include <core/sstring.hh>
-#include <core/thread.hh>
+#include <seastar/core/distributed.hh>
+#include <seastar/core/app-template.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/core/thread.hh>
 
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"

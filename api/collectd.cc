@@ -21,8 +21,8 @@
 
 #include "collectd.hh"
 #include "api/api-doc/collectd.json.hh"
-#include "core/scollectd.hh"
-#include "core/scollectd_api.hh"
+#include <seastar/core/scollectd.hh>
+#include <seastar/core/scollectd_api.hh>
 #include "endian.h"
 #include <boost/range/irange.hpp>
 #include <regex>

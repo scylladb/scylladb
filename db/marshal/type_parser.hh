@@ -43,7 +43,7 @@
 
 #include "types.hh"
 
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 
 namespace db {
 

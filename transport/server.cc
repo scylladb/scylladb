@@ -32,10 +32,10 @@
 #include "service/storage_service.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
-#include "core/future-util.hh"
-#include "core/reactor.hh"
+#include <seastar/core/future-util.hh>
+#include <seastar/core/reactor.hh>
 #include "utils/UUID.hh"
-#include "net/byteorder.hh"
+#include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/lazy.hh>

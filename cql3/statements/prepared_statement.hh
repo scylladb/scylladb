@@ -46,7 +46,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/cql_statement.hh"
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>

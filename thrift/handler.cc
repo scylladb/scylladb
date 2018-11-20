@@ -25,10 +25,10 @@
 #include <sys/param.h>
 // end thrift workaround
 #include "Cassandra.h"
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "database.hh"
-#include "core/sstring.hh"
-#include "core/print.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/print.hh>
 #include "frozen_mutation.hh"
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>

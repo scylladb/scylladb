@@ -47,7 +47,7 @@
 #include "cql3/functions/function.hh"
 #include "cql3/functions/abstract_function.hh"
 #include "exceptions/exceptions.hh"
-#include "core/print.hh"
+#include <seastar/core/print.hh>
 #include "cql3/cql3_type.hh"
 #include "cql3/selection/selector.hh"
 

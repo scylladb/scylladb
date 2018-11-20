@@ -67,7 +67,7 @@
 #include "release.hh"
 #include "log.hh"
 #include "serializer.hh"
-#include <core/enum.hh>
+#include <seastar/core/enum.hh>
 #include <seastar/net/inet_address.hh>
 #include <index/secondary_index.hh>
 #include "service/storage_proxy.hh"

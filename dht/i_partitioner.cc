@@ -20,7 +20,7 @@
  */
 
 #include "i_partitioner.hh"
-#include "core/reactor.hh"
+#include <seastar/core/reactor.hh>
 #include "murmur3_partitioner.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"

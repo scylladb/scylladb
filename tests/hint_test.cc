@@ -33,11 +33,11 @@
 #include "tests/mutation_source_test.hh"
 #include "tests/mutation_assertions.hh"
 
-#include "core/future-util.hh"
-#include "core/do_with.hh"
-#include "core/scollectd_api.hh"
-#include "core/file.hh"
-#include "core/reactor.hh"
+#include <seastar/core/future-util.hh>
+#include <seastar/core/do_with.hh>
+#include <seastar/core/scollectd_api.hh>
+#include <seastar/core/file.hh>
+#include <seastar/core/reactor.hh>
 #include "utils/UUID_gen.hh"
 #include "tmpdir.hh"
 #include "db/commitlog/commitlog.hh"

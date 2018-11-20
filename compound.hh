@@ -28,7 +28,7 @@
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "utils/serialization.hh"
-#include "util/backtrace.hh"
+#include <seastar/util/backtrace.hh>
 #include "unimplemented.hh"
 
 enum class allow_prefixes { no, yes };

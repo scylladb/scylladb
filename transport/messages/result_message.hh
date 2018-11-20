@@ -28,8 +28,8 @@
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
 
-#include "core/shared_ptr.hh"
-#include "core/sstring.hh"
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
 
 namespace cql_transport {
 

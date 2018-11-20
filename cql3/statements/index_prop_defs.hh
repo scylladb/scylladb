@@ -42,7 +42,7 @@
 #pragma once
 
 #include "property_definitions.hh"
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 
 #include <unordered_map>
 #include <experimental/optional>

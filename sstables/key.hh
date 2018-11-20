@@ -22,7 +22,7 @@
 #pragma once
 #include "bytes.hh"
 #include "schema.hh"
-#include "core/future.hh"
+#include <seastar/core/future.hh>
 #include "database_fwd.hh"
 #include "keys.hh"
 #include "compound_compat.hh"

@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "query-result.hh"
 
 namespace query {

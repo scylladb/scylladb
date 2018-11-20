@@ -39,7 +39,7 @@
 #pragma once
 
 #include "gms/inet_address.hh"
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 
 namespace streaming {
 

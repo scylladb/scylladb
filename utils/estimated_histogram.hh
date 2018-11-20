@@ -45,7 +45,7 @@
 #include <algorithm>
 #include <vector>
 #include <chrono>
-#include "core/metrics_types.hh"
+#include <seastar/core/metrics_types.hh>
 #include <seastar/core/print.hh>
 
 namespace utils {

@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include "exceptions/exceptions.hh"
 #include "database_fwd.hh"
 #include "term.hh"

@@ -28,7 +28,7 @@
 #include "database.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
-#include "core/thread.hh"
+#include <seastar/core/thread.hh>
 #include "sstables/index_reader.hh"
 #include "tests/test_services.hh"
 #include "tmpdir.hh"

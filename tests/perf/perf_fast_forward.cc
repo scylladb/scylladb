@@ -28,7 +28,7 @@
 #include <json/json.h>
 #include "tests/cql_test_env.hh"
 #include "tests/perf/perf.hh"
-#include "core/app-template.hh"
+#include <seastar/core/app-template.hh>
 #include "schema_builder.hh"
 #include "database.hh"
 #include "release.hh"

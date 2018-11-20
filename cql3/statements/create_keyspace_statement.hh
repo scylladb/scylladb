@@ -45,7 +45,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "transport/event.hh"
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 
 namespace cql3 {
 

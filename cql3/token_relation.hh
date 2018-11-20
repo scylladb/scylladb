@@ -42,7 +42,7 @@
 
 #include <vector>
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include "to_string.hh"
 
 #include "relation.hh"

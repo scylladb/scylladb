@@ -34,7 +34,7 @@
 #include "schema_builder.hh"
 #include "simple_schema.hh"
 #include "row_cache.hh"
-#include "core/thread.hh"
+#include <seastar/core/thread.hh>
 #include "memtable.hh"
 #include "partition_slice_builder.hh"
 #include "tests/memtable_snapshot_source.hh"

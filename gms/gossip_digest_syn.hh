@@ -38,7 +38,7 @@
 
 #pragma once
 
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "utils/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/chunked_vector.hh"

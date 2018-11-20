@@ -25,7 +25,7 @@
 #include <iostream>
 
 #include "tests/test-utils.hh"
-#include "core/future-util.hh"
+#include <seastar/core/future-util.hh>
 #include "db/config.hh"
 
 using namespace db;

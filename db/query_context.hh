@@ -21,8 +21,8 @@
 #pragma once
 
 #include <memory>
-#include "core/sharded.hh"
-#include "core/future.hh"
+#include <seastar/core/sharded.hh>
+#include <seastar/core/future.hh>
 #include "cql3/query_processor.hh"
 
 class database;

@@ -21,8 +21,8 @@
 
 #pragma once
 
-#include "core/sstring.hh"
-#include "core/print.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/print.hh>
 
 #include <json/json.h>
 

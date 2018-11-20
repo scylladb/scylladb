@@ -24,9 +24,9 @@
 #include <boost/range/iterator_range.hpp>
 
 #include "bytes.hh"
-#include "core/unaligned.hh"
+#include <seastar/core/unaligned.hh>
 #include "hashing.hh"
-#include "seastar/core/simple-stream.hh"
+#include <seastar/core/simple-stream.hh>
 /**
  * Utility for writing data into a buffer when its final size is not known up front.
  *

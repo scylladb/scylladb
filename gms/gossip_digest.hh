@@ -38,7 +38,7 @@
 
 #pragma once
 
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "utils/serialization.hh"
 #include "gms/inet_address.hh"
 

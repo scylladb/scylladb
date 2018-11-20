@@ -42,8 +42,8 @@
 #pragma once
 
 #include <memory>
-#include <core/future.hh>
-#include <core/sharded.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/sharded.hh>
 
 class database;
 

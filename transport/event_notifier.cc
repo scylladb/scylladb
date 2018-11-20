@@ -20,7 +20,7 @@
  */
 
 #include "transport/server.hh"
-#include "core/gate.hh"
+#include <seastar/core/gate.hh>
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "transport/response.hh"

@@ -20,8 +20,8 @@
  */
 
 
-#include <core/reactor.hh>
-#include <core/posix.hh>
+#include <seastar/core/reactor.hh>
+#include <seastar/core/posix.hh>
 #include <unistd.h>
 #include <fcntl.h>
 

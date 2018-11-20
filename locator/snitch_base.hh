@@ -42,9 +42,9 @@
 #include <vector>
 
 #include "gms/inet_address.hh"
-#include "core/shared_ptr.hh"
-#include "core/thread.hh"
-#include "core/distributed.hh"
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/thread.hh>
+#include <seastar/core/distributed.hh>
 #include "utils/class_registrator.hh"
 #include "log.hh"
 

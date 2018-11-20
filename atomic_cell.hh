@@ -26,7 +26,7 @@
 #include "tombstone.hh"
 #include "gc_clock.hh"
 #include "utils/managed_bytes.hh"
-#include "net/byteorder.hh"
+#include <seastar/net//byteorder.hh>
 #include <cstdint>
 #include <iosfwd>
 #include <seastar/util/gcc6-concepts.hh>

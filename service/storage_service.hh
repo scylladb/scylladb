@@ -45,13 +45,13 @@
 #include "locator/token_metadata.hh"
 #include "gms/gossiper.hh"
 #include "utils/UUID_gen.hh"
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "dht/i_partitioner.hh"
 #include "dht/token_range_endpoints.hh"
-#include "core/sleep.hh"
+#include <seastar/core/sleep.hh>
 #include "gms/application_state.hh"
 #include "db/system_distributed_keyspace.hh"
-#include "core/semaphore.hh"
+#include <seastar/core/semaphore.hh>
 #include "utils/fb_utilities.hh"
 #include "utils/serialized_action.hh"
 #include "database.hh"

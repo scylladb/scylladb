@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "core/print.hh"
+#include <seastar/core/print.hh>
 #include "db/query_context.hh"
 #include "db/system_keyspace.hh"
 #include "db/large_partition_handler.hh"

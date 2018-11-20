@@ -37,8 +37,8 @@
 
 #pragma once
 
-#include "core/sstring.hh"
-#include "core/shared_ptr.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/shared_ptr.hh>
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "streaming/stream_coordinator.hh"

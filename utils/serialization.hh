@@ -41,8 +41,8 @@
 #include <stdint.h>
 
 #include <seastar/util/gcc6-concepts.hh>
-#include "core/sstring.hh"
-#include "net/byteorder.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/net/byteorder.hh>
 #include "bytes.hh"
 #include <iosfwd>
 #include <iterator>

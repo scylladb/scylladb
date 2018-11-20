@@ -49,8 +49,8 @@
 #include <boost/range/join.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 
-#include "core/future-util.hh"
-#include "core/pipe.hh"
+#include <seastar/core/future-util.hh>
+#include <seastar/core/pipe.hh>
 #include <seastar/core/scheduling.hh>
 
 #include "sstables.hh"

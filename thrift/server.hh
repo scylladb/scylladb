@@ -22,8 +22,8 @@
 #ifndef APPS_SEASTAR_THRIFT_SERVER_HH_
 #define APPS_SEASTAR_THRIFT_SERVER_HH_
 
-#include "core/reactor.hh"
-#include "core/distributed.hh"
+#include <seastar/core/reactor.hh>
+#include <seastar/core/distributed.hh>
 #include "cql3/query_processor.hh"
 #include "timeout_config.hh"
 #include <seastar/core/gate.hh>

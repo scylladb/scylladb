@@ -40,7 +40,7 @@
 #pragma once
 
 #include "locator/production_snitch_base.hh"
-#include "http/http_response_parser.hh"
+#include <seastar/http/response_parser.hh>
 
 namespace locator {
 

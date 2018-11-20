@@ -49,19 +49,19 @@
 #include <unordered_set>
 #include <exception>
 
-#include <core/align.hh>
-#include <core/reactor.hh>
+#include <seastar/core/align.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/metrics.hh>
-#include <core/future-util.hh>
-#include <core/file.hh>
-#include <core/rwlock.hh>
-#include <core/gate.hh>
-#include <core/fstream.hh>
+#include <seastar/core/future-util.hh>
+#include <seastar/core/file.hh>
+#include <seastar/core/rwlock.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/fstream.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/core/chunked_fifo.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/sleep.hh>
-#include <net/byteorder.hh>
+#include <seastar/net/byteorder.hh>
 
 #include "seastarx.hh"
 

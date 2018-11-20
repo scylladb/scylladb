@@ -41,7 +41,7 @@
 #include "utils/UUID.hh"
 #include "streaming/stream_summary.hh"
 #include <memory>
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 
 namespace streaming {
 

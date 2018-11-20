@@ -20,7 +20,7 @@
  */
 
 #include "normalizing_reader.hh"
-#include "core/future-util.hh"
+#include <seastar/core/future-util.hh>
 
 normalizing_reader::normalizing_reader(flat_mutation_reader rd)
     : impl(rd.schema())

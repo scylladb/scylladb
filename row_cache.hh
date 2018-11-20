@@ -25,7 +25,7 @@
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
 
-#include "core/memory.hh"
+#include <seastar/core/memory.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/util/noncopyable_function.hh>
 

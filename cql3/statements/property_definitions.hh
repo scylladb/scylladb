@@ -42,8 +42,8 @@
 #pragma once
 
 #include "exceptions/exceptions.hh"
-#include "core/print.hh"
-#include "core/sstring.hh"
+#include <seastar/core/print.hh>
+#include <seastar/core/sstring.hh>
 
 #include <experimental/optional>
 #include <unordered_map>

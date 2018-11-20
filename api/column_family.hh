@@ -24,7 +24,7 @@
 #include "api.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "database.hh"
-#include "core/future-util.hh"
+#include <seastar/core/future-util.hh>
 #include <any>
 
 namespace api {

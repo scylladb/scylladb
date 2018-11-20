@@ -21,7 +21,7 @@
 
 #include "messaging_service.hh"
 #include "message/messaging_service.hh"
-#include "rpc/rpc_types.hh"
+#include <seastar/rpc/rpc_types.hh>
 #include "api/api-doc/messaging_service.json.hh"
 #include <iostream>
 #include <sstream>

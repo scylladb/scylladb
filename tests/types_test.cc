@@ -23,7 +23,7 @@
 #include <seastar/net/inet_address.hh>
 #include <utils/UUID_gen.hh>
 #include <boost/asio/ip/address_v4.hpp>
-#include <net/ip.hh>
+#include <seastar/net/ip.hh>
 #include <boost/multiprecision/cpp_int.hpp>
 #include "types.hh"
 #include "compound.hh"

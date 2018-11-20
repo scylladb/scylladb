@@ -28,7 +28,7 @@
 #include <boost/lexical_cast.hpp>
 
 #include "cql3/column_specification.hh"
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 #include "types.hh"
 #include "compound.hh"
 #include "gc_clock.hh"

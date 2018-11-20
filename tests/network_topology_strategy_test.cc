@@ -23,7 +23,7 @@
 #include "utils/fb_utilities.hh"
 #include "locator/network_topology_strategy.hh"
 #include "tests/test-utils.hh"
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "log.hh"
 #include <vector>
 #include <string>

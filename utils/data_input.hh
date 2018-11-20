@@ -23,7 +23,7 @@
 #define UTILS_DATA_INPUT_HH_
 
 #include "bytes.hh"
-#include "net/byteorder.hh"
+#include <seastar/net/byteorder.hh>
 
 class data_input {
 public:

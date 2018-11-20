@@ -20,7 +20,7 @@
  */
 
 #pragma once
-#include <core/sstring.hh>
+#include <seastar/core/sstring.hh>
 #include <boost/lexical_cast.hpp>
 #include "exceptions/exceptions.hh"
 #include "json.hh"

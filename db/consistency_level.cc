@@ -45,7 +45,7 @@
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include "exceptions/exceptions.hh"
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
 #include "schema.hh"
 #include "database.hh"
 #include "unimplemented.hh"

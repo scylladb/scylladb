@@ -19,9 +19,9 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "core/sstring.hh"
-#include "core/future-util.hh"
-#include "core/align.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/future-util.hh>
+#include <seastar/core/align.hh>
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "sstables/compress.hh"
@@ -33,8 +33,8 @@
 #include "sstables/leveled_manifest.hh"
 #include <memory>
 #include "sstable_test.hh"
-#include "core/seastar.hh"
-#include "core/do_with.hh"
+#include <seastar/core/seastar.hh>
+#include <seastar/core/do_with.hh>
 #include "sstables/compaction_manager.hh"
 #include "tmpdir.hh"
 #include "dht/i_partitioner.hh"

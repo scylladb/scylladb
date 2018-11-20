@@ -28,9 +28,9 @@
 #include "md5_hasher.hh"
 #include "xx_hasher.hh"
 
-#include "core/sstring.hh"
-#include "core/do_with.hh"
-#include "core/thread.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/do_with.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 
 #include "database.hh"

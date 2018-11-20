@@ -2,10 +2,10 @@
 #include <memory>
 #include <utility>
 
-#include "core/sstring.hh"
-#include "core/future-util.hh"
-#include "core/do_with.hh"
-#include "core/distributed.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/future-util.hh>
+#include <seastar/core/do_with.hh>
+#include <seastar/core/distributed.hh>
 #include "sstables/sstables.hh"
 #include "tests/test-utils.hh"
 #include "schema.hh"

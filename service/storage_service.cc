@@ -39,7 +39,7 @@
 
 #include "storage_service.hh"
 #include "dht/boot_strapper.hh"
-#include "core/distributed.hh"
+#include <seastar/core/distributed.hh>
 #include "locator/snitch_base.hh"
 #include "db/system_keyspace.hh"
 #include "utils/UUID.hh"

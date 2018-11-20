@@ -42,9 +42,9 @@
 
 #include <memory>
 
-#include "core/future.hh"
-#include "core/shared_ptr.hh"
-#include "core/stream.hh"
+#include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/stream.hh>
 #include "replay_position.hh"
 #include "commitlog_entry.hh"
 #include "db/timeout_clock.hh"

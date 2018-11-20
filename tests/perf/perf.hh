@@ -21,9 +21,9 @@
 
 #pragma once
 
-#include "core/print.hh"
-#include "core/future-util.hh"
-#include "core/distributed.hh"
+#include <seastar/core/print.hh>
+#include <seastar/core/future-util.hh>
+#include <seastar/core/distributed.hh>
 #include "seastarx.hh"
 
 #include <chrono>
