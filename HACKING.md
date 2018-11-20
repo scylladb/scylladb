@@ -166,6 +166,29 @@ On a development machine, one might run Scylla as
 $ SCYLLA_HOME=$HOME/scylla build/release/scylla --overprovisioned --developer-mode=yes
 ```
 
+To interact with scylla it is recommended to build our versions of
+cqlsh and nodetool. They are available at
+https://github.com/scylladb/scylla-tools-java and can be built with
+
+```bash
+$ ./install-dependencies.sh
+$ ant jar
+```
+
+cqlsh should work out of the box, but nodetool depends on a running
+scylla-jmx (https://github.com/scylladb/scylla-jmx). It can be build
+with
+
+```bash
+$ mvn package
+```
+
+and must be started with
+
+```bash
+$ ./scripts/scylla-jmx
+```
+
 ### Branches and tags
 
 Multiple release branches are maintained on the Git repository at https://github.com/scylladb/scylla. Release 1.5, for instance, is tracked on the `branch-1.5` branch.
