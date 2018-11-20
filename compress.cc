@@ -112,7 +112,7 @@ const sstring compression_parameters::CHUNK_LENGTH_KB = "chunk_length_kb";
 const sstring compression_parameters::CRC_CHECK_CHANCE = "crc_check_chance";
 
 compression_parameters::compression_parameters()
-    : compression_parameters(nullptr)
+    : compression_parameters(compressor::lz4)
 {}
 
 compression_parameters::~compression_parameters()
