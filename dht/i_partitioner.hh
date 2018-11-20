@@ -808,14 +808,11 @@ namespace std {
 template<>
 struct hash<dht::token> {
     size_t operator()(const dht::token& t) const {
-        size_t ret = 0;
         const auto& b = t._data;
-        if (b.size() <= sizeof(ret)) { // practically always
-            std::copy_n(b.data(), b.size(), reinterpret_cast<int8_t*>(&ret));
-        } else {
-            ret = hash_large_token(b);
+        if (b.size() == sizeof(size_t)) { // practically always
+            return read_le<size_t>(reinterpret_cast<const char*>(b.data()));
         }
-        return ret;
+        return hash_large_token(b);
     }
 private:
     size_t hash_large_token(const managed_bytes& b) const;
