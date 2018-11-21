@@ -794,7 +794,12 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
 template<typename Func>
 static future<> scan_for_hints_dirs(const sstring& hints_directory, Func&& f) {
     return lister::scan_dir(hints_directory, { directory_entry_type::directory }, [f = std::forward<Func>(f)] (lister::path dir, directory_entry de) {
-        return f(std::move(dir), std::move(de), std::stoi(de.name.c_str()));
+        try {
+            return f(std::move(dir), std::move(de), std::stoi(de.name.c_str()));
+        } catch (std::invalid_argument& ex) {
+            manager_logger.debug("Ignore invalid directory {}", de.name);
+            return make_ready_future<>();
+        }
     });
 }
 
