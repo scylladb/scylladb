@@ -1088,6 +1088,13 @@ public:
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
         }
+        if (column_info.schema_mismatch) {
+            throw malformed_sstable_exception(
+                    format("{} definition in serialization header does not match schema. Expected {} but got {}.",
+                        column_def.name(),
+                        column_def.type->name(),
+                        column_info.type->name()));
+        }
         if (column_def.is_multi_cell()) {
             auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
             auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
@@ -1120,9 +1127,18 @@ public:
         sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", this, column_id);
         if (column_id) {
             const column_definition& column_def = get_column_definition(column_id);
-            auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
-            auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(_cm));
-            _cells.push_back({column_def.id, atomic_cell_or_collection(std::move(ac))});
+            if (!_cm.cells.empty() || (_cm.tomb && _cm.tomb.timestamp > column_def.dropped_at())) {
+                if (column_info.schema_mismatch) {
+                    throw malformed_sstable_exception(
+                            format("{} definition in serialization header does not match schema. Expected {} but got {}.",
+                                column_def.name(),
+                                column_def.type->name(),
+                                column_info.type->name()));
+                }
+                auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
+                auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(_cm));
+                _cells.push_back({column_def.id, atomic_cell_or_collection(std::move(ac))});
+            }
             _cm.tomb = {};
             _cm.cells.clear();
         }
@@ -1140,6 +1156,13 @@ public:
         const column_definition& column_def = get_column_definition(column_id);
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
+        }
+        if (column_info.schema_mismatch) {
+            throw malformed_sstable_exception(
+                    format("{} definition in serialization header does not match schema. Expected {} but got {}.",
+                        column_def.name(),
+                        column_def.type->name(),
+                        column_info.type->name()));
         }
         auto ac = make_counter_cell(timestamp, value);
         _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
