@@ -791,14 +791,19 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
 }
 
+template<typename Func>
+static future<> scan_for_hints_dirs(const sstring& hints_directory, Func&& f) {
+    return lister::scan_dir(hints_directory, { directory_entry_type::directory }, [f = std::forward<Func>(f)] (lister::path dir, directory_entry de) {
+        return f(std::move(dir), std::move(de), std::stoi(de.name.c_str()));
+    });
+}
+
 // runs in seastar::async context
 manager::hints_segments_map manager::get_current_hints_segments(const sstring& hints_directory) {
     hints_segments_map current_hints_segments;
 
     // shards level
-    lister::scan_dir(hints_directory, { directory_entry_type::directory }, [&current_hints_segments] (lister::path dir, directory_entry de) {
-        unsigned shard_id = std::stoi(de.name.c_str());
-
+    scan_for_hints_dirs(hints_directory, [&current_hints_segments] (lister::path dir, directory_entry de, unsigned shard_id) {
         manager_logger.trace("shard_id = {}", shard_id);
         // IPs level
         return lister::scan_dir(dir / de.name.c_str(), { directory_entry_type::directory }, [&current_hints_segments, shard_id] (lister::path dir, directory_entry de) {
@@ -915,9 +920,7 @@ void manager::rebalance_segments_for(
 // runs in seastar::async context
 void manager::remove_irrelevant_shards_directories(const sstring& hints_directory) {
     // shards level
-    lister::scan_dir(hints_directory, { directory_entry_type::directory }, [] (lister::path dir, directory_entry de) {
-        unsigned shard_id = std::stoi(de.name.c_str());
-
+    scan_for_hints_dirs(hints_directory, [] (lister::path dir, directory_entry de, unsigned shard_id) {
         if (shard_id >= smp::count) {
             // IPs level
             return lister::scan_dir(dir / de.name.c_str(), { directory_entry_type::directory, directory_entry_type::regular }, lister::show_hidden::yes, [] (lister::path dir, directory_entry de) {
