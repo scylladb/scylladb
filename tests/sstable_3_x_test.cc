@@ -161,6 +161,7 @@ static thread_local const schema_ptr UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEM
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("s", int32_type, column_kind::static_column)
         .with_column("val", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
@@ -407,6 +408,7 @@ static thread_local const schema_ptr UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA =
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("st", int32_type, column_kind::static_column)
         .with_column("rc", utf8_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
@@ -649,6 +651,7 @@ static thread_local const schema_ptr UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE
         .with_column("ck2", int32_type, column_kind::clustering_key)
         .with_column("st", int32_type, column_kind::static_column)
         .with_column("rc", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_read) {
@@ -976,6 +979,7 @@ static thread_local const schema_ptr UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_R
         .with_column("ck2", int32_type, column_kind::clustering_key)
         .with_column("st", int32_type, column_kind::static_column)
         .with_column("rc", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
@@ -1178,6 +1182,7 @@ static thread_local const schema_ptr UNCOMPRESSED_STATIC_ROW_SCHEMA =
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("s", int32_type, column_kind::static_column)
         .with_column("val", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_static_row_read) {
@@ -1265,6 +1270,7 @@ static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA =
         .with_column("s_text", utf8_type, column_kind::static_column)
         .with_column("s_inet", inet_addr_type, column_kind::static_column)
         .with_column("val", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_static_row_read) {
@@ -1350,6 +1356,7 @@ static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_ONLY_PATH =
 static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_only_load) {
@@ -1406,6 +1413,7 @@ static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEM
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("val", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
@@ -1467,6 +1475,7 @@ static thread_local const schema_ptr UNCOMPRESSED_COUNTERS_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("val", counter_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 static thread_local const counter_id HOST_ID = counter_id(utils::UUID("59b82720-99b0-4033-885c-e94d62106a35"));
@@ -1579,6 +1588,7 @@ static thread_local const schema_ptr PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPE
         .with_column("timeuuid_val", timeuuid_type)
         .with_column("uuid_val", uuid_type)
         .with_column("text_val", utf8_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 static void test_partition_key_with_values_of_different_types_read(const sstring& path) {
@@ -1725,6 +1735,7 @@ static thread_local const schema_ptr UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA =
         .with_column("timeuuid_val", timeuuid_type)
         .with_column("uuid_val", uuid_type)
         .with_column("text_val", utf8_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_subset_of_columns_read) {
@@ -1950,6 +1961,7 @@ static thread_local const schema_ptr UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE
         .with_column("val62", int32_type)
         .with_column("val63", int32_type)
         .with_column("val64", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) {
@@ -2161,6 +2173,7 @@ static thread_local const schema_ptr UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_
         .with_column("val62", int32_type)
         .with_column("val63", int32_type)
         .with_column("val64", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
@@ -2263,6 +2276,7 @@ static thread_local const schema_ptr UNCOMPRESSED_DELETED_CELLS_SCHEMA =
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("val", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_deleted_cells_read) {
@@ -2344,6 +2358,7 @@ static thread_local const schema_ptr UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("val", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
@@ -2414,6 +2429,7 @@ static thread_local const schema_ptr UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEM
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck1", int32_type, column_kind::clustering_key)
         .with_column("ck2", int32_type, column_kind::clustering_key)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
@@ -2486,6 +2502,7 @@ static thread_local const schema_ptr UNCOMPRESSED_SIMPLE_SCHEMA =
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("val", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_toc) {
@@ -2616,6 +2633,7 @@ static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_CK_SCHEMA =
         .with_column("ck_uuid", uuid_type, column_kind::clustering_key)
         .with_column("ck_inet", inet_addr_type, column_kind::clustering_key)
         .with_column("val", int32_type)
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_ck_read) {
@@ -2710,6 +2728,7 @@ static thread_local const schema_ptr UNCOMPRESSED_COLLECTIONS_SCHEMA =
         .with_column("set_val", set_type_impl::get_instance(int32_type, true))
         .with_column("list_val", list_type_impl::get_instance(utf8_type, true))
         .with_column("map_val", map_type_impl::get_instance(int32_type, utf8_type, true))
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
@@ -2884,7 +2903,7 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
     builder.with_column("ck", utf8_type, column_kind::clustering_key);
     builder.with_column("rc1", utf8_type);
     builder.with_column("rc2", utf8_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -2952,7 +2971,7 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
     builder.with_column("pk", utf8_type, column_kind::partition_key);
     builder.with_column("ck", utf8_type, column_kind::clustering_key);
     builder.with_column("rc", utf8_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -3088,7 +3107,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     builder.with_column("ck", int32_type, column_kind::clustering_key);
     builder.with_column("st1", int32_type, column_kind::static_column);
     builder.with_column("st2", utf8_type, column_kind::static_column);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3116,7 +3135,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
     builder.with_column("e", utf8_type, column_kind::clustering_key);
     builder.with_column("f", int32_type);
     builder.with_column("g", utf8_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3145,7 +3164,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
     builder.with_column("d", utf8_type, column_kind::clustering_key);
     builder.with_column("e", int32_type);
     builder.with_column("f", utf8_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3172,7 +3191,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
     builder.with_column("ck", utf8_type, column_kind::clustering_key);
     builder.with_column("st", utf8_type, column_kind::static_column);
     builder.with_column("rc", utf8_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3217,7 +3236,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck", int32_type, column_kind::clustering_key);
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3249,7 +3268,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", utf8_type, column_kind::partition_key);
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3279,7 +3298,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3305,7 +3324,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck", int32_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3329,7 +3348,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("col", set_of_ints_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3359,7 +3378,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("col", set_of_ints_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3387,7 +3406,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
     builder.with_column("rc1", int32_type);
     builder.with_column("rc2", int32_type);
     builder.with_column("rc3", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3431,9 +3450,10 @@ static void test_write_many_partitions(sstring table_name, tombstone partition_t
         mt->apply(muts.back());
     }
 
-    bool compressed = cp != compression_parameters{};
+    bool compressed = cp.get_compressor() != nullptr;
+    std::cout << (compressed ? "compressed " : "uncompressed") << std::endl;
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name, compressed);
-
+    std::cout << "wrote and compared\n";
     boost::sort(muts, mutation_decorated_key_less_comparator());
     validate_read(s, tmp.path, muts);
 }
@@ -3443,7 +3463,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_live_partitions) {
     test_write_many_partitions(
             "many_live_partitions",
             tombstone{},
-            compression_parameters{});
+            compression_parameters::no_compression());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_deleted_partitions) {
@@ -3451,7 +3471,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_deleted_partitions) {
     test_write_many_partitions(
             "many_deleted_partitions",
             tombstone{write_timestamp, write_time_point},
-            compression_parameters{});
+            compression_parameters::no_compression());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_partitions_lz4) {
@@ -3488,7 +3508,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
     builder.with_column("rc1", int32_type);
     builder.with_column("rc2", int32_type);
     builder.with_column("rc3", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3524,7 +3544,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     for (auto idx: boost::irange(1, 65)) {
         builder.with_column(to_bytes(format("rc{}", idx)), int32_type);
     }
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3567,7 +3587,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
     builder.with_column("ck", utf8_type, column_kind::clustering_key);
     builder.with_column("rc1", counter_type);
     builder.with_column("rc2", counter_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3637,7 +3657,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     builder.with_column("varcharval", utf8_type);
     builder.with_column("varintval", varint_type);
     builder.with_column("durationval", duration_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3689,7 +3709,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
     builder.with_column("ck2", int32_type, column_kind::clustering_key);
     builder.with_column("ck3", utf8_type, column_kind::clustering_key);
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3717,7 +3737,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
         builder.with_column(to_bytes(format("ck{}", idx)), utf8_type, column_kind::clustering_key);
     }
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3751,7 +3771,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     builder.with_column("ck1", int32_type, column_kind::clustering_key);
     builder.with_column("ck2", int32_type, column_kind::clustering_key);
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::yes);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3780,7 +3800,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("rc", ut);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3808,7 +3828,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
     builder.with_column("rc", utf8_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3836,7 +3856,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
     builder.with_column("ck3", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3880,7 +3900,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
     builder.with_column("ck3", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3921,7 +3941,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     builder.with_column("pk", utf8_type, column_kind::partition_key);
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -3993,7 +4013,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
     builder.with_column("pk", utf8_type, column_kind::partition_key);
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -4027,7 +4047,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
     builder.with_column("ck3", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -4082,7 +4102,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto key = partition_key::from_deeply_exploded(*s, {0});
@@ -4119,7 +4139,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto key = partition_key::from_deeply_exploded(*s, {0});
@@ -4156,7 +4176,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_start_range_tombstones) {
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
 
@@ -4210,7 +4230,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto key = partition_key::from_deeply_exploded(*s, {0});
@@ -4257,7 +4277,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_range_tombstones) {
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
     builder.with_column("ck3", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
 
@@ -4313,7 +4333,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_empty_index) {
     sstring table_name = "empty_index";
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", utf8_type, column_kind::partition_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
@@ -4333,7 +4353,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_rows_only_index) {
     builder.with_column("ck", utf8_type, column_kind::clustering_key);
     builder.with_column("st", utf8_type, column_kind::static_column);
     builder.with_column("rc", utf8_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
@@ -4352,7 +4372,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstones_only_index) {
     builder.with_column("pk", utf8_type, column_kind::partition_key);
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
@@ -4379,7 +4399,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstone_boundaries_index) {
     builder.with_column("pk", utf8_type, column_kind::partition_key);
     builder.with_column("ck1", utf8_type, column_kind::clustering_key);
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
@@ -4393,7 +4413,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_table_empty_clustering_key) {
     schema_builder builder("sst3", "empty_clustering_key");
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("v", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     sstable_assertions sst(s, "tests/sstables/3.x/uncompressed/empty_clustering_key");
@@ -4427,6 +4447,7 @@ SEASTAR_THREAD_TEST_CASE(test_complex_column_zero_subcolumns_read) {
         .with_column("compacted_at", timestamp_type)
         .with_column("keyspace_name", utf8_type)
         .with_column("rows_merged", map_type_impl::get_instance(int32_type, long_type, true))
+        .set_compressor_params(compression_parameters::no_compression())
         .build();
 
     sstable_assertions sst(s, path);
@@ -4474,6 +4495,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("rc", int32_type)
+            .set_compressor_params(compression_parameters::no_compression())
             .build();
     sstable_assertions sst(s, path);
     sst.load();
@@ -4525,7 +4547,7 @@ SEASTAR_THREAD_TEST_CASE(test_dead_row_marker) {
     builder.with_column("ck", int32_type, column_kind::clustering_key);
     builder.with_column("st", int32_type, column_kind::static_column);
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -4559,7 +4581,7 @@ SEASTAR_THREAD_TEST_CASE(test_shadowable_deletion) {
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck", int32_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -4603,7 +4625,7 @@ SEASTAR_THREAD_TEST_CASE(test_regular_and_shadowable_deletion) {
     builder.with_column("v", int32_type, column_kind::partition_key);
     builder.with_column("p", int32_type, column_kind::clustering_key);
     builder.with_column("c", int32_type, column_kind::clustering_key);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto make_tombstone = [] (int64_t ts, int32_t tp) {
@@ -4645,7 +4667,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
     builder.with_column("st1", int32_type, column_kind::static_column);
     builder.with_column("st2", int32_type, column_kind::static_column);
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -4678,7 +4700,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     builder.with_column("rc4", set_of_ints_type);
     builder.with_column("rc5", int32_type);
     builder.with_column("rc6", set_of_ints_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -4720,7 +4742,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_col
     builder.with_column("st4", set_of_ints_type, column_kind::static_column);
     builder.with_column("st5", int32_type, column_kind::static_column);
     builder.with_column("st6", set_of_ints_type, column_kind::static_column);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -4755,7 +4777,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
     builder.with_column("ck", int32_type, column_kind::clustering_key);
     builder.with_column("st", int32_type, column_kind::static_column);
     builder.with_column("rc", int32_type);
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
