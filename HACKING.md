@@ -279,3 +279,8 @@ $ git remote add local /home/tsmith/src/seastar
 $ git remote update
 $ git checkout -t local/my_local_seastar_branch
 ```
+
+### Core dump debugging
+
+Slides:
+2018.11.20: https://www.slideshare.net/tomekgrabiec/scylla-core-dump-debugging-tools
