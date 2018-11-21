@@ -262,7 +262,7 @@ struct validation_metadata : public metadata_base<validation_metadata> {
 };
 
 struct compaction_metadata : public metadata_base<compaction_metadata> {
-    disk_array<uint32_t, uint32_t> ancestors;
+    disk_array<uint32_t, uint32_t> ancestors; // DEPRECATED, not available in sstable format mc.
     disk_array<uint32_t, uint8_t> cardinality;
 
     template <typename Describer>

@@ -304,8 +304,6 @@ public:
         _collector.add_ancestor(generation);
     }
 
-    std::unordered_set<uint64_t> ancestors() const;
-
     // Returns true iff this sstable contains data which belongs to many shards.
     bool is_shared() const {
         return _shared;
