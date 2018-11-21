@@ -102,7 +102,7 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
     return test_setup::do_with_tmp_directory([] (sstring tmpdir_path) {
         schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type)));
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -170,7 +170,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
 
         schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}, {"p2", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type)));
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -240,7 +240,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
     return test_setup::do_with_tmp_directory([] (sstring tmpdir_path) {
         schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}, {"c2", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type)));
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -311,7 +311,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
     return test_setup::do_with_tmp_directory([] (sstring tmpdir_path) {
         schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {{"s1", int32_type}}, utf8_type)));
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -385,7 +385,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
     return test_setup::do_with_tmp_directory([] (sstring tmpdir_path) {
         schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type)));
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -460,7 +460,7 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
     return test_setup::do_with_tmp_directory([] (sstring tmpdir_path) {
         schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type)));
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -698,7 +698,7 @@ static future<> test_digest_and_checksum(sstable_version_types version) {
     return test_setup::do_with_tmp_directory([version] (sstring tmpdir_path) {
         schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type)));
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -1274,7 +1274,7 @@ static future<std::vector<unsigned long>> compact_sstables(sstring tmpdir_path, 
     BOOST_REQUIRE(smp::count == 1);
     schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type)));
-    builder.set_compressor_params(compression_parameters());
+    builder.set_compressor_params(compression_parameters::no_compression());
     builder.set_min_compaction_threshold(4);
     auto s = builder.build(schema_builder::compact_storage::no);
 
@@ -1569,7 +1569,7 @@ SEASTAR_TEST_CASE(datafile_generation_40) {
             schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
                 {{"p1", utf8_type}}, {{"c1", reversed_type_impl::get_instance(utf8_type)}}, {{"r1", int32_type}}, {}, utf8_type
             )));
-            builder.set_compressor_params(compression_parameters());
+            builder.set_compressor_params(compression_parameters::no_compression());
             return builder.build(schema_builder::compact_storage::yes);
         }();
 
@@ -4554,6 +4554,7 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
         auto builder = schema_builder("tests", "test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", utf8_type);
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
         const column_definition& col = *s->get_column_definition("value");
 
@@ -4596,7 +4597,7 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
         auto builder = schema_builder("tests", "test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", utf8_type);
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
         const column_definition& col = *s->get_column_definition("value");
 
