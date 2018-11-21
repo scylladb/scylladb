@@ -193,7 +193,9 @@ const std::vector<column_definition>& v3_columns::all_columns() const {
 void schema::rebuild() {
     _partition_key_type = make_lw_shared<compound_type<>>(get_column_types(partition_key_columns()));
     _clustering_key_type = make_lw_shared<compound_prefix>(get_column_types(clustering_key_columns()));
-
+    _clustering_key_size = column_offset(column_kind::static_column) - column_offset(column_kind::clustering_key);
+    _regular_column_count = _raw._columns.size() - column_offset(column_kind::regular_column);
+    _static_column_count = column_offset(column_kind::regular_column) - column_offset(column_kind::static_column);
     _columns_by_name.clear();
 
     for (const column_definition& def : all_columns()) {
@@ -1139,21 +1141,6 @@ schema::columns_count(column_kind kind) const {
 column_count_type
 schema::partition_key_size() const {
     return column_offset(column_kind::clustering_key);
-}
-
-column_count_type
-schema::clustering_key_size() const {
-    return column_offset(column_kind::static_column) - column_offset(column_kind::clustering_key);
-}
-
-column_count_type
-schema::static_columns_count() const {
-    return column_offset(column_kind::regular_column) - column_offset(column_kind::static_column);
-}
-
-column_count_type
-schema::regular_columns_count() const {
-    return _raw._columns.size() - column_offset(column_kind::regular_column);
 }
 
 schema::const_iterator_range_type

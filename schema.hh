@@ -529,6 +529,9 @@ private:
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
     column_mapping _column_mapping;
     shared_ptr<query::partition_slice> _full_slice;
+    column_count_type _clustering_key_size;
+    column_count_type _regular_column_count;
+    column_count_type _static_column_count;
 
     extensions_map& extensions() {
         return _raw._extensions;
@@ -703,9 +706,9 @@ public:
     bool has_static_columns() const;
     column_count_type columns_count(column_kind kind) const;
     column_count_type partition_key_size() const;
-    column_count_type clustering_key_size() const;
-    column_count_type static_columns_count() const;
-    column_count_type regular_columns_count() const;
+    column_count_type clustering_key_size() const { return _clustering_key_size; }
+    column_count_type static_columns_count() const { return _static_column_count; }
+    column_count_type regular_columns_count() const { return _regular_column_count; }
     // Returns a range of column definitions
     const_iterator_range_type partition_key_columns() const;
     // Returns a range of column definitions
