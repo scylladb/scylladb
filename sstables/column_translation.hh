@@ -55,6 +55,7 @@ inline column_values_fixed_lengths get_clustering_values_fixed_lengths(const ser
 class column_translation {
 public:
     struct column_info {
+        data_type type;
         // Disengaged 'id' means the column is missing from the current schema
         std::optional<column_id> id;
         std::optional<uint32_t> value_length;
@@ -74,6 +75,7 @@ private:
             if (s.is_dense()) {
                 const column_definition& col = is_static ? *s.static_begin() : *s.regular_begin();
                 cols.push_back(column_info{
+                    col.type,
                     col.id,
                     col.type->value_length_if_fixed(),
                     col.is_multi_cell(),
@@ -100,6 +102,7 @@ private:
                         id = def->id;
                     }
                     cols.push_back(column_info{
+                        type,
                         id,
                         type->value_length_if_fixed(),
                         type->is_multi_cell(),
