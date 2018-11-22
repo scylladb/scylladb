@@ -3758,10 +3758,6 @@ const bool sstable::has_component(component_type f) const {
     return _recognized_components.count(f);
 }
 
-const sstring sstable::filename(component_type f) const {
-    return filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
-}
-
 std::vector<sstring> sstable::component_filenames() const {
     std::vector<sstring> res;
     for (auto c : sstable_version_constants::get_component_map(_version) | boost::adaptors::map_keys) {
@@ -3772,17 +3768,12 @@ std::vector<sstring> sstable::component_filenames() const {
     return res;
 }
 
-sstring sstable::toc_filename() const {
-    return filename(component_type::TOC);
-}
-
 bool sstable::is_staging() const {
     return boost::algorithm::ends_with(_dir, "staging");
 }
 
-const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
-                                format_types format, component_type component) {
-
+sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                          format_types format, component_type component) {
     static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
         { sstable::version_types::ka, [] (entry_descriptor d) {
             return d.ks + "-" + d.cf + "-" + _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-"
@@ -3801,8 +3792,8 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     return dir + "/" + strmap[version](entry_descriptor(dir, ks, cf, version, generation, format, component));
 }
 
-const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
-                                format_types format, sstring component) {
+sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                          format_types format, sstring component) {
     static std::unordered_map<version_types, const char*, enum_hash<version_types>> fmtmap = {
         { sstable::version_types::ka, "{0}-{1}-{2}-{3}-{5}" },
         { sstable::version_types::la, "{2}-{3}-{4}-{5}" },
@@ -3824,7 +3815,7 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
     return all;
 }
 
-future<> sstable::create_links(sstring dir, int64_t generation) const {
+future<> sstable::create_links(const sstring& dir, int64_t generation) const {
     // TemporaryTOC is always first, TOC is always last
     auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
     return sstable_write_io_check(::link_file, filename(component_type::TOC), dst).then([this, dir] {

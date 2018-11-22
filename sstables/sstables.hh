@@ -170,10 +170,10 @@ public:
     static component_type component_from_sstring(version_types version, sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
-    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
-                                  format_types format, component_type component);
-    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
-                                  format_types format, sstring component);
+    static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                            format_types format, component_type component);
+    static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                            format_types format, sstring component);
     // WARNING: it should only be called to remove components of a sstable with
     // a temporary TOC file.
     static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation,
@@ -348,13 +348,21 @@ public:
     // Return values are those of a trichotomic comparison.
     int compare_by_max_timestamp(const sstable& other) const;
 
-    const sstring get_filename() const {
+    sstring filename(component_type f) const {
+        return filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+    }
+
+    sstring get_filename() const {
         return filename(component_type::Data);
     }
+
+    sstring toc_filename() const {
+        return filename(component_type::TOC);
+    }
+
     const sstring& get_dir() const {
         return _dir;
     }
-    sstring toc_filename() const;
 
     bool is_staging() const;
 
@@ -364,9 +372,9 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    future<> create_links(sstring dir, int64_t generation) const;
+    future<> create_links(const sstring& dir, int64_t generation) const;
 
-    future<> create_links(sstring dir) const {
+    future<> create_links(const sstring& dir) const {
         return create_links(dir, _generation);
     }
 
@@ -479,7 +487,6 @@ private:
 
     const bool has_component(component_type f) const;
 
-    const sstring filename(component_type f) const;
     future<file> open_file(component_type, open_flags, file_open_options = {});
 
     template <component_type Type, typename T>
