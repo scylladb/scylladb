@@ -72,21 +72,13 @@ private:
                 bool is_static) {
             std::vector<column_info> cols;
             if (s.is_dense()) {
-                if (is_static) {
-                    cols.push_back(column_info{
-                        s.static_begin()->id,
-                        s.static_begin()->type->value_length_if_fixed(),
-                        s.static_begin()->is_multi_cell(),
-                        s.static_begin()->is_counter()
-                    });
-                } else {
-                    cols.push_back(column_info{
-                        s.regular_begin()->id,
-                        s.regular_begin()->type->value_length_if_fixed(),
-                        s.regular_begin()->is_multi_cell(),
-                        s.regular_begin()->is_counter()
-                    });
-                }
+                const column_definition& col = is_static ? *s.static_begin() : *s.regular_begin();
+                cols.push_back(column_info{
+                    col.id,
+                    col.type->value_length_if_fixed(),
+                    col.is_multi_cell(),
+                    col.is_counter()
+                });
             } else {
                 cols.reserve(src.size());
                 for (auto&& desc : src) {
