@@ -394,13 +394,3 @@ public:
         return !(*this == other);
     }
 };
-
-template<>
-struct appending_hash<bytes_ostream> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const bytes_ostream& b) const {
-        for (auto&& frag : b.fragments()) {
-            feed_hash(h, frag);
-        }
-    }
-};
