@@ -61,6 +61,7 @@ public:
         std::optional<uint32_t> value_length;
         bool is_collection;
         bool is_counter;
+        bool schema_mismatch;
     };
 
 private:
@@ -79,7 +80,8 @@ private:
                     col.id,
                     col.type->value_length_if_fixed(),
                     col.is_multi_cell(),
-                    col.is_counter()
+                    col.is_counter(),
+                    false
                 });
             } else {
                 cols.reserve(src.size());
@@ -88,6 +90,7 @@ private:
                     data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
                     const column_definition* def = s.get_column_definition(desc.name.value);
                     std::optional<column_id> id;
+                    bool schema_mismatch = false;
                     if (def) {
                         if (def->is_multi_cell() != type->is_multi_cell() || def->is_counter() != type->is_counter()) {
                             throw malformed_sstable_exception(format(
@@ -100,13 +103,17 @@ private:
                                     type->is_counter()));
                         }
                         id = def->id;
+                        schema_mismatch = def->is_multi_cell() != type->is_multi_cell() ||
+                                          def->is_counter() != type->is_counter() ||
+                                          !def->type->is_value_compatible_with(*type);
                     }
                     cols.push_back(column_info{
                         type,
                         id,
                         type->value_length_if_fixed(),
                         type->is_multi_cell(),
-                        type->is_counter()
+                        type->is_counter(),
+                        schema_mismatch
                     });
                 }
                 boost::range::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
