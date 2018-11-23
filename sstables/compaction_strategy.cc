@@ -66,6 +66,18 @@ namespace sstables {
 
 extern logging::logger clogger;
 
+void sstable_run::insert(shared_sstable sst) {
+    _all.insert(std::move(sst));
+}
+
+void sstable_run::erase(shared_sstable sst) {
+    _all.erase(sst);
+}
+
+uint64_t sstable_run::data_size() const {
+    return boost::accumulate(_all | boost::adaptors::transformed(std::mem_fn(&sstable::data_size)), uint64_t(0));
+}
+
 class incremental_selector_impl {
 public:
     virtual ~incremental_selector_impl() {}
@@ -91,7 +103,8 @@ sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s, l
 sstable_set::sstable_set(const sstable_set& x)
         : _impl(x._impl->clone())
         , _schema(x._schema)
-        , _all(make_lw_shared(sstable_list(*x._all))) {
+        , _all(make_lw_shared(sstable_list(*x._all)))
+        , _all_runs(x._all_runs) {
 }
 
 sstable_set::sstable_set(sstable_set&&) noexcept = default;
@@ -113,11 +126,25 @@ sstable_set::select(const dht::partition_range& range) const {
     return _impl->select(range);
 }
 
+std::vector<sstable_run>
+sstable_set::select(const std::vector<shared_sstable>& sstables) const {
+    auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
+    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (utils::UUID run_id) {
+        return _all_runs.at(run_id);
+    }));
+}
+
 void
 sstable_set::insert(shared_sstable sst) {
     _impl->insert(sst);
     try {
         _all->insert(sst);
+        try {
+            _all_runs[sst->run_identifier()].insert(sst);
+        } catch (...) {
+            _all->erase(sst);
+            throw;
+        }
     } catch (...) {
         _impl->erase(sst);
         throw;
@@ -128,6 +155,7 @@ void
 sstable_set::erase(shared_sstable sst) {
     _impl->erase(sst);
     _all->erase(sst);
+    _all_runs[sst->run_identifier()].erase(sst);
 }
 
 sstable_set::~sstable_set() = default;
