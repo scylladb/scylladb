@@ -1,27 +1,7 @@
 {
   "builders": [
     {
-      "type": "amazon-ebs",
       "access_key": "{{user `access_key`}}",
-      "secret_key": "{{user `secret_key`}}",
-      "subnet_id": "{{user `subnet_id`}}",
-      "security_group_id": "{{user `security_group_id`}}",
-      "region": "{{user `region`}}",
-      "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
-      "source_ami": "{{user `source_ami`}}",
-      "user_data_file": "user_data.txt",
-      "instance_type": "{{user `instance_type`}}",
-      "ssh_username": "{{user `ssh_username`}}",
-      "ssh_timeout": "5m",
-      "ami_name": "{{user `ami_prefix`}}scylla_{{isotime | clean_ami_name}}",
-      "enhanced_networking": true,
-      "launch_block_device_mappings": [
-        {
-          "device_name": "/dev/sda1",
-          "volume_size": 10,
-          "delete_on_termination": true
-        }
-      ],
       "ami_block_device_mappings": [
         {
           "device_name": "/dev/sdb",
@@ -55,35 +35,57 @@
           "device_name": "/dev/sdi",
           "virtual_name": "ephemeral7"
         }
-      ]
+      ],
+      "ami_name": "{{user `ami_prefix`}}scylla_{{isotime | clean_ami_name}}",
+      "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
+      "sriov_support": true,
+      "ena_support": true,
+      "instance_type": "{{user `instance_type`}}",
+      "launch_block_device_mappings": [
+        {
+          "delete_on_termination": true,
+          "device_name": "/dev/sda1",
+          "volume_size": 10
+        }
+      ],
+      "region": "{{user `region`}}",
+      "secret_key": "{{user `secret_key`}}",
+      "security_group_id": "{{user `security_group_id`}}",
+      "source_ami": "{{user `source_ami`}}",
+      "ssh_timeout": "5m",
+      "ssh_username": "{{user `ssh_username`}}",
+      "subnet_id": "{{user `subnet_id`}}",
+      "type": "amazon-ebs",
+      "user_data_file": "user_data.txt"
     }
   ],
   "provisioners": [
     {
-      "type": "file",
+      "destination": "/home/{{user `ssh_username`}}/",
       "source": "files/",
-      "destination": "/home/{{user `ssh_username`}}/"
+      "type": "file"
     },
     {
-      "type": "shell",
       "inline": [
-         "sudo yum install -y epel-release",
-         "sudo yum install -y python34",
-         "sudo /home/{{user `ssh_username`}}/scylla_install_ami {{ user `install_args` }}"
-       ]
+        "sudo yum install -y epel-release",
+        "sudo yum install -y python34",
+        "sudo /home/{{user `ssh_username`}}/scylla_install_ami {{ user `install_args` }}"
+      ],
+      "type": "shell"
     }
   ],
   "variables": {
     "access_key": "",
-    "secret_key": "",
-    "subnet_id": "",
-    "security_group_id": "",
-    "region": "",
-    "associate_public_ip_address": "",
-    "instance_type": "",
-    "install_args": "",
     "ami_prefix": "",
+    "associate_public_ip_address": "",
+    "install_args": "",
+    "instance_type": "",
+    "region": "",
+    "secret_key": "",
+    "security_group_id": "",
     "source_ami": "",
-    "ssh_username": ""
+    "ssh_username": "",
+    "subnet_id": ""
   }
 }
+
