@@ -99,7 +99,7 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-static future<file> open_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
+static future<file> open_sstable_component_file(const io_error_handler& error_handler, const sstring& name, open_flags flags,
         file_open_options options) {
     if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
         return open_integrity_checked_file_dma(name, flags, options).then([&error_handler] (auto f) {
@@ -109,21 +109,23 @@ static future<file> open_sstable_component_file(const io_error_handler& error_ha
     return open_checked_file_dma(error_handler, name, flags, options);
 }
 
-static future<file> open_sstable_component_file_non_checked(sstring name, open_flags flags, file_open_options options) {
+static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options) {
     if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
         return open_integrity_checked_file_dma(name, flags, options);
     }
     return open_file_dma(name, flags, options);
 }
 
-future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags, file_open_options options) {
+future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options) {
+    auto name = filename(f);
     return open_sstable_component_file(error_handler, name, flags, options).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
     });
 }
 
-future<file> sstable::new_sstable_component_file_non_checked(sstring name, open_flags flags, file_open_options options) {
+future<file> sstable::new_sstable_component_file_non_checked(component_type f, open_flags flags, file_open_options options) {
+    auto name = filename(f);
     return open_sstable_component_file_non_checked(name, flags, options).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
@@ -1070,7 +1072,7 @@ void sstable::write_toc(const io_priority_class& pc) {
     // If creation of temporary TOC failed, it implies that that boot failed to
     // delete a sstable with temporary for this column family, or there is a
     // sstable being created in parallel with the same generation.
-    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file f = new_sstable_component_file(_write_error_handler, component_type::TemporaryTOC, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     bool toc_exists = file_exists(filename(component_type::TOC)).get0();
     if (toc_exists) {
@@ -1131,7 +1133,7 @@ void sstable::write_crc(const checksum& c) {
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = new_sstable_component_file(_write_error_handler, file_path, oflags).get0();
+    file f = new_sstable_component_file(_write_error_handler, component_type::CRC, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -1146,7 +1148,7 @@ void sstable::write_digest(uint32_t full_checksum) {
     sstlog.debug("Writing Digest file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = new_sstable_component_file(_write_error_handler, file_path, oflags).get0();
+    auto f = new_sstable_component_file(_write_error_handler, component_type::Digest, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -1192,7 +1194,7 @@ template <component_type Type, typename T>
 void sstable::write_simple(const T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
-    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file f = new_sstable_component_file(_write_error_handler, Type, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1330,7 +1332,7 @@ void sstable::write_statistics(const io_priority_class& pc) {
 void sstable::rewrite_statistics(const io_priority_class& pc) {
     auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
-    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
+    file f = new_sstable_component_file(_write_error_handler, component_type::TemporaryStatistics, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1365,9 +1367,9 @@ future<> sstable::read_summary(const io_priority_class& pc) {
 future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) {
     if ((type != component_type::Data && type != component_type::Index)
                     || get_config().extensions().sstable_file_io_extensions().empty()) {
-        return new_sstable_component_file(_read_error_handler, filename(type), flags, opts);
+        return new_sstable_component_file(_read_error_handler, type, flags, opts);
     }
-    return new_sstable_component_file_non_checked(filename(type), flags, opts).then([this, type, flags](file f) {
+    return new_sstable_component_file_non_checked(type, flags, opts).then([this, type, flags](file f) {
         return do_with(std::move(f), [this, type, flags](file& f) {
             auto ext_range = get_config().extensions().sstable_file_io_extensions();
             return do_for_each(ext_range.begin(), ext_range.end(), [this, &f, type, flags](auto& ext) {
