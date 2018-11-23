@@ -34,6 +34,7 @@
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <unordered_set>
 #include <unordered_map>
+#include <experimental/filesystem>
 #include "types.hh"
 #include "clustering_key_filter.hh"
 #include <seastar/core/enum.hh>
@@ -70,6 +71,8 @@ class sstable_assertions;
 class row_consumer;
 
 namespace sstables {
+
+namespace fs = std::experimental::filesystem;
 
 extern logging::logger sstlog;
 class key;

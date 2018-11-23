@@ -46,7 +46,6 @@
 #include "memtable.hh"
 #include "range.hh"
 #include "downsampling.hh"
-#include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -4174,9 +4173,8 @@ sstable::~sstable() {
     _on_closed(*this);
 }
 
-sstring
-dirname(sstring fname) {
-    return boost::filesystem::canonical(std::string(fname)).parent_path().string();
+static inline sstring dirname(const sstring& fname) {
+    return fs::canonical(fs::path(fname)).parent_path().string();
 }
 
 future<>
