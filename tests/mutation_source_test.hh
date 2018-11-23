@@ -62,3 +62,6 @@ public:
 };
 
 bytes make_blob(size_t blob_size);
+
+void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mutation>&,
+                                               schema_ptr, const std::vector<mutation>&)>);

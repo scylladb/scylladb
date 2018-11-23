@@ -110,7 +110,7 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
             if (t_opt) {
                 modified = true;
                 // We need to update this column
-                cfm.with_altered_column_type(column.name(), *t_opt);
+                cfm.alter_column_type(column.name(), *t_opt);
             }
         }
         if (modified) {
