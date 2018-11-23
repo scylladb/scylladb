@@ -111,10 +111,14 @@ namespace sstables {
         }
     };
 
+    // Replaces old sstable(s) by new one(s) which contain all non-expired data.
+    using replacer_fn = std::function<void(std::vector<shared_sstable> removed, std::vector<shared_sstable> added)>;
+
     // Compact a list of N sstables into M sstables.
     // Returns info about the finished compaction, which includes vector to new sstables.
     //
     // creator is used to get a sstable object for a new sstable that will be written.
+    // replacer will replace old sstables by new ones in the column family.
     // max_sstable_size is a relaxed limit size for a sstable to be generated.
     // Example: It's okay for the size of a new sstable to go beyond max_sstable_size
     // when writing its last partition.
@@ -122,8 +126,8 @@ namespace sstables {
     // If cleanup is true, mutation that doesn't belong to current node will be
     // cleaned up, log messages will inform the user that compact_sstables runs for
     // cleaning operation, and compaction history will not be updated.
-    future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor,
-            column_family& cf, std::function<shared_sstable()> creator, bool cleanup = false);
+    future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf,
+        std::function<shared_sstable()> creator, replacer_fn replacer, bool cleanup = false);
 
     // Compacts a set of N shared sstables into M sstables. For every shard involved,
     // i.e. which owns any of the sstables, a new unshared sstable is created.

@@ -47,6 +47,11 @@ public:
         _cf->_sstables->insert(std::move(sstable));
     }
 
+    void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+            const std::vector<sstables::shared_sstable>& sstables_to_remove) {
+        _cf->rebuild_sstable_list(new_sstables, sstables_to_remove);
+    }
+
     static void update_sstables_known_generation(column_family& cf, unsigned generation) {
         cf.update_sstables_known_generation(generation);
     }
@@ -216,6 +221,10 @@ public:
         _sst->_shards = std::move(shards);
     }
 };
+
+inline auto replacer_fn_no_op() {
+    return [](std::vector<shared_sstable> removed, std::vector<shared_sstable> added) -> void {};
+}
 
 inline sstring get_test_dir(const sstring& name, const sstring& ks, const sstring& cf)
 {
