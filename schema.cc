@@ -713,7 +713,7 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, column_k
     return *this;
 }
 
-schema_builder& schema_builder::without_column(bytes name)
+schema_builder& schema_builder::remove_column(bytes name)
 {
     auto it = boost::range::find_if(_raw._columns, [&] (auto& column) {
         return column.name() == name;
@@ -738,7 +738,7 @@ schema_builder& schema_builder::without_column(sstring name, data_type type, api
     return *this;
 }
 
-schema_builder& schema_builder::with_column_rename(bytes from, bytes to)
+schema_builder& schema_builder::rename_column(bytes from, bytes to)
 {
     auto it = std::find_if(_raw._columns.begin(), _raw._columns.end(), [&] (auto& col) {
         return col.name() == from;
@@ -750,7 +750,7 @@ schema_builder& schema_builder::with_column_rename(bytes from, bytes to)
     return with_column(new_def);
 }
 
-schema_builder& schema_builder::with_altered_column_type(bytes name, data_type new_type)
+schema_builder& schema_builder::alter_column_type(bytes name, data_type new_type)
 {
     auto it = boost::find_if(_raw._columns, [&name] (auto& c) { return c.name() == name; });
     assert(it != _raw._columns.end());

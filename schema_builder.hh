@@ -240,11 +240,11 @@ public:
     schema_builder& with_column(const column_definition& c);
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column, column_view_virtual view_virtual = column_view_virtual::no);
     schema_builder& with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual view_virtual = column_view_virtual::no);
-    schema_builder& without_column(bytes name);
+    schema_builder& remove_column(bytes name);
     schema_builder& without_column(sstring name, api::timestamp_type timestamp);
     schema_builder& without_column(sstring name, data_type, api::timestamp_type timestamp);
-    schema_builder& with_column_rename(bytes from, bytes to);
-    schema_builder& with_altered_column_type(bytes name, data_type new_type);
+    schema_builder& rename_column(bytes from, bytes to);
+    schema_builder& alter_column_type(bytes name, data_type new_type);
 
     // Adds information about collection that existed in the past but the column
     // has since been removed. For adding colllections that are still alive

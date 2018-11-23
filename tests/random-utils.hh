@@ -29,7 +29,7 @@ namespace tests::random {
 
 namespace internal {
 
-std::random_device::result_type get_seed()
+inline std::random_device::result_type get_seed()
 {
     std::random_device rd;
     auto seed = rd();
@@ -39,7 +39,7 @@ std::random_device::result_type get_seed()
 
 }
 
-static std::default_random_engine gen(internal::get_seed());
+inline std::default_random_engine gen(internal::get_seed());
 
 template<typename T>
 T get_int() {
@@ -59,28 +59,28 @@ T get_int(T min, T max) {
     return dist(gen);
 }
 
-bool get_bool() {
+inline bool get_bool() {
     static std::bernoulli_distribution dist;
     return dist(gen);
 }
 
-bytes get_bytes(size_t n) {
+inline bytes get_bytes(size_t n) {
     bytes b(bytes::initialized_later(), n);
     boost::generate(b, [] { return get_int<bytes::value_type>(); });
     return b;
 }
 
-bytes get_bytes() {
+inline bytes get_bytes() {
     return get_bytes(get_int<unsigned>(128 * 1024));
 }
 
-sstring get_sstring(size_t n) {
+inline sstring get_sstring(size_t n) {
     sstring str(sstring::initialized_later(), n);
     boost::generate(str, [] { return get_int<sstring::value_type>('a', 'z'); });
     return str;
 }
 
-sstring get_sstring() {
+inline sstring get_sstring() {
     return get_sstring(get_int<unsigned>(1024));
 }
 

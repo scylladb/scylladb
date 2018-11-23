@@ -96,7 +96,7 @@ private:
                     std::optional<column_id> id;
                     if (def) {
                         if (def->is_multi_cell() != type->is_multi_cell() || def->is_counter() != type->is_counter()) {
-                            throw malformed_sstable_exception(sprint(
+                            throw malformed_sstable_exception(format(
                                     "{} definition in serialization header does not match schema. "
                                     "Schema collection = {}, counter = {}. Header collection = {}, counter = {}",
                                     def->name(),
