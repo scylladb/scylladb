@@ -113,6 +113,7 @@ struct sstable_writer_config {
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
     db::large_partition_handler* large_partition_handler;
+    utils::UUID run_identifier = utils::make_random_uuid();
 };
 
 static constexpr inline size_t default_sstable_buffer_size() {
@@ -497,7 +498,7 @@ private:
     void write_compression(const io_priority_class& pc);
 
     future<> read_scylla_metadata(const io_priority_class& pc);
-    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features);
+    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier);
 
     future<> read_filter(const io_priority_class& pc);
 
@@ -617,6 +618,10 @@ public:
 
     bool has_shadowable_tombstones() const {
         return has_scylla_component() && _components->scylla_metadata->has_feature(sstable_feature::ShadowableTombstones);
+    }
+
+    utils::UUID run_identifier() const {
+        return _components->scylla_metadata->get_run_identifier();
     }
 
     bool has_correct_max_deletion_time() const {

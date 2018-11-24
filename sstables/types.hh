@@ -37,6 +37,7 @@
 #include <type_traits>
 #include "version.hh"
 #include "encoding_stats.hh"
+#include "utils/UUID.hh"
 
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
@@ -477,6 +478,16 @@ enum class scylla_metadata_type : uint32_t {
     Sharding = 1,
     Features = 2,
     ExtensionAttributes = 3,
+    RunIdentifier = 4,
+};
+
+struct run_identifier {
+    // UUID is used for uniqueness across nodes, such that an imported sstable
+    // will not have its run identifier conflicted with the one of a local sstable.
+    utils::UUID id;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(id); }
 };
 
 struct scylla_metadata {
@@ -485,7 +496,8 @@ struct scylla_metadata {
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Features, sstable_enabled_features>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtensionAttributes, extension_attributes>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtensionAttributes, extension_attributes>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::RunIdentifier, run_identifier>
             > data;
 
     bool has_feature(sstable_feature f) const {
@@ -502,6 +514,10 @@ struct scylla_metadata {
             ext = data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();
         }
         return *ext;
+    }
+    utils::UUID get_run_identifier() const {
+        auto m = data.get<scylla_metadata_type::RunIdentifier, run_identifier>();
+        return m->id;
     }
 
     template <typename Describer>
