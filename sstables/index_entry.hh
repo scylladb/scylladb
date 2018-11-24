@@ -291,11 +291,9 @@ private:
                     // or have consumed all the blocks
                     continue;
                 }
-            default:
-                throw malformed_sstable_exception("unknown state");
             }
             break;
-        };
+        }
     }
 
     void process_state(temporary_buffer<char>& data, m_parser_context& ctx) {

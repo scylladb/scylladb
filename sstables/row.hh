@@ -513,8 +513,6 @@ private:
         case state::STOP_THEN_ATOM_START:
             _state = state::ATOM_START;
             return row_consumer::proceed::no;
-        default:
-            throw malformed_sstable_exception("unknown state");
         }
 
         return row_consumer::proceed::yes;
@@ -1301,8 +1299,6 @@ private:
             }
             _row_key.clear();
             goto flags_label;
-        default:
-            throw malformed_sstable_exception("unknown state");
         }
 
         return row_consumer::proceed::yes;

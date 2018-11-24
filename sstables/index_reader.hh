@@ -236,8 +236,6 @@ public:
             }
         }
             break;
-        default:
-            throw malformed_sstable_exception("unknown state");
         }
         return proceed::yes;
     }
