@@ -384,6 +384,7 @@ selectStatement returns [shared_ptr<raw::select_statement> expr]
         raw::select_statement::parameters::orderings_type orderings;
         bool allow_filtering = false;
         bool is_json = false;
+        bool bypass_cache = false;
     }
     : K_SELECT (
                 ( K_JSON { is_json = true; } )?
@@ -395,8 +396,9 @@ selectStatement returns [shared_ptr<raw::select_statement> expr]
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
+      ( K_BYPASS K_CACHE { bypass_cache = true; })?
       {
-          auto params = ::make_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, is_json);
+          auto params = ::make_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, is_json, bypass_cache);
           $expr = ::make_shared<raw::select_statement>(std::move(cf), std::move(params),
             std::move(sclause), std::move(wclause), std::move(limit));
       }
@@ -1717,6 +1719,8 @@ basic_unreserved_keyword returns [sstring str]
         | K_NON
         | K_DETERMINISTIC
         | K_JSON
+        | K_CACHE
+        | K_BYPASS
         ) { $str = $k.text; }
     ;
 
@@ -1858,6 +1862,9 @@ K_DEFAULT:     D E F A U L T;
 K_UNSET:       U N S E T;
 
 K_EMPTY:       E M P T Y;
+
+K_BYPASS:      B Y P A S S;
+K_CACHE:       C A C H E;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
