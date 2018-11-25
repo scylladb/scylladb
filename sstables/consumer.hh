@@ -250,29 +250,50 @@ protected:
         }
     }
 private:
+    // Reads bytes belonging to an integer of size len. Returns true
+    // if a full integer is now available.
+    bool process_int(temporary_buffer<char>& data, unsigned len) {
+        assert(_pos < len);
+        auto n = std::min((size_t)(len - _pos), data.size());
+        std::copy(data.begin(), data.begin() + n, _read_int.bytes + _pos);
+        data.trim_front(n);
+        _pos += n;
+        return _pos == len;
+    }
+
     // This is separated so that the compiler can inline "process_buffer". Because this chunk is too big,
     // it usually won't if this is part of the main function
     void do_process_buffer(temporary_buffer<char>& data) {
         // We're in the middle of reading a basic type, which crossed
         // an input buffer. Resume that read before continuing to
         // handle the current state:
-        if (_prestate == prestate::READING_UNSIGNED_VINT) {
+        switch (_prestate) {
+        case prestate::NONE:
+            // This is handled by process_buffer
+            __builtin_unreachable();
+            break;
+        case prestate::READING_UNSIGNED_VINT:
             if (read_unsigned_vint(data) == read_status::ready) {
                 _prestate = prestate::NONE;
             }
-        } else if (_prestate == prestate::READING_SIGNED_VINT) {
+            break;
+        case prestate::READING_SIGNED_VINT:
             if (read_signed_vint(data) == read_status::ready) {
                 _prestate = prestate::NONE;
             }
-        } else if (_prestate == prestate::READING_UNSIGNED_VINT_LENGTH_BYTES) {
+            break;
+        case prestate::READING_UNSIGNED_VINT_LENGTH_BYTES:
             if (read_unsigned_vint_length_bytes(data, *_read_bytes_where) == read_status::ready) {
                 _prestate = prestate::NONE;
             }
-        } else if (_prestate == prestate::READING_UNSIGNED_VINT_WITH_LEN) {
+            break;
+        case prestate::READING_UNSIGNED_VINT_WITH_LEN:
             read_vint_with_len<unsigned_vint>(data, _u64);
-        } else if (_prestate == prestate::READING_SIGNED_VINT_WITH_LEN) {
+            break;
+        case prestate::READING_SIGNED_VINT_WITH_LEN:
             read_vint_with_len<signed_vint>(data, _i64);
-        } else if (_prestate == prestate::READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN) {
+            break;
+        case prestate::READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN: {
             const auto n = std::min(_read_bytes.size() - _pos, data.size());
             std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
             data.trim_front(n);
@@ -284,7 +305,9 @@ private:
                     _prestate = prestate::NONE;
                 }
             }
-        } else if (_prestate == prestate::READING_BYTES) {
+            break;
+        }
+        case prestate::READING_BYTES: {
             auto n = std::min(_read_bytes.size() - _pos, data.size());
             std::copy(data.begin(), data.begin() + n,
                     _read_bytes.get_write() + _pos);
@@ -294,57 +317,40 @@ private:
                 *_read_bytes_where = std::move(_read_bytes);
                 _prestate = prestate::NONE;
             }
-        } else {
-            // in the middle of reading an integer
-            unsigned len;
-            switch (_prestate) {
-            case prestate::READING_U8:
-                len = sizeof(uint8_t);
-                break;
-            case prestate::READING_U16:
-            case prestate::READING_U16_BYTES:
-                len = sizeof(uint16_t);
-                break;
-            case prestate::READING_U32:
-                len = sizeof(uint32_t);
-                break;
-            case prestate::READING_U64:
-                len = sizeof(uint64_t);
-                break;
-            default:
-                throw sstables::malformed_sstable_exception("unknown prestate");
-            }
-            assert(_pos < len);
-            auto n = std::min((size_t)(len - _pos), data.size());
-            std::copy(data.begin(), data.begin() + n, _read_int.bytes + _pos);
-            data.trim_front(n);
-            _pos += n;
-            if (_pos == len) {
-                // done reading the integer, store it in _u8, _u16, _u32 or _u64:
-                switch (_prestate) {
-                case prestate::READING_U8:
-                    _u8 = _read_int.uint8;
-                    break;
-                case prestate::READING_U16:
-                    _u16 = net::ntoh(_read_int.uint16);
-                    break;
-                case prestate::READING_U32:
-                    _u32 = net::ntoh(_read_int.uint32);
-                    break;
-                case prestate::READING_U64:
-                    _u64 = net::ntoh(_read_int.uint64);
-                    break;
-                case prestate::READING_U16_BYTES:
-                    _u16 = net::ntoh(_read_int.uint16);
-                    _prestate = prestate::NONE;
-                    read_bytes(data, _u16, *_read_bytes_where);
-                    return;
-                default:
-                    throw sstables::malformed_sstable_exception(
-                            "unknown prestate");
-                }
+            break;
+        }
+        case prestate::READING_U8:
+            if (process_int(data, sizeof(uint8_t))) {
+                _u8 = _read_int.uint8;
                 _prestate = prestate::NONE;
             }
+            break;
+        case prestate::READING_U16:
+            if (process_int(data, sizeof(uint16_t))) {
+                _u16 = net::ntoh(_read_int.uint16);
+                _prestate = prestate::NONE;
+            }
+            break;
+        case prestate::READING_U16_BYTES:
+            if (process_int(data, sizeof(uint16_t))) {
+                _u16 = net::ntoh(_read_int.uint16);
+                _prestate = prestate::NONE;
+                read_bytes(data, _u16, *_read_bytes_where);
+                return;
+            }
+            break;
+        case prestate::READING_U32:
+            if (process_int(data, sizeof(uint32_t))) {
+                _u32 = net::ntoh(_read_int.uint32);
+                _prestate = prestate::NONE;
+            }
+            break;
+        case prestate::READING_U64:
+            if (process_int(data, sizeof(uint64_t))) {
+                _u64 = net::ntoh(_read_int.uint64);
+                _prestate = prestate::NONE;
+            }
+            break;
         }
     }
 
