@@ -3450,9 +3450,7 @@ static void test_write_many_partitions(sstring table_name, tombstone partition_t
     }
 
     bool compressed = cp.get_compressor() != nullptr;
-    std::cout << (compressed ? "compressed " : "uncompressed") << std::endl;
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name, compressed);
-    std::cout << "wrote and compared\n";
     boost::sort(muts, mutation_decorated_key_less_comparator());
     validate_read(s, tmp.path, muts);
 }
