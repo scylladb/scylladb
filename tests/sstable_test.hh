@@ -47,6 +47,11 @@ public:
         _cf->_sstables->insert(std::move(sstable));
     }
 
+    void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+            const std::vector<sstables::shared_sstable>& sstables_to_remove) {
+        _cf->rebuild_sstable_list(new_sstables, sstables_to_remove);
+    }
+
     static void update_sstables_known_generation(column_family& cf, unsigned generation) {
         cf.update_sstables_known_generation(generation);
     }
@@ -183,6 +188,7 @@ public:
         _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
+        _sst->_run_identifier = utils::make_random_uuid();
     }
 
     void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
@@ -193,6 +199,7 @@ public:
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
         _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
+        _sst->_run_identifier = utils::make_random_uuid();
     }
 
     void rewrite_toc_without_scylla_component() {
@@ -214,6 +221,10 @@ public:
         _sst->_shards = std::move(shards);
     }
 };
+
+inline auto replacer_fn_no_op() {
+    return [](std::vector<shared_sstable> removed, std::vector<shared_sstable> added) -> void {};
+}
 
 inline sstring get_test_dir(const sstring& name, const sstring& ks, const sstring& cf)
 {

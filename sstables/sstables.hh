@@ -61,6 +61,7 @@
 #include "db/large_partition_handler.hh"
 #include "column_translation.hh"
 #include "stats.hh"
+#include "utils/observable.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -113,6 +114,7 @@ struct sstable_writer_config {
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
     db::large_partition_handler* large_partition_handler;
+    utils::UUID run_identifier = utils::make_random_uuid();
 };
 
 static constexpr inline size_t default_sstable_buffer_size() {
@@ -387,6 +389,10 @@ public:
     }
     std::vector<sstring> component_filenames() const;
 
+    utils::observer<sstable&> add_on_closed_handler(std::function<void (sstable&)> on_closed_handler) noexcept {
+        return _on_closed.observe(on_closed_handler);
+    }
+
     template<typename Func, typename... Args>
     auto sstable_write_io_check(Func&& func, Args&&... args) const {
         return do_io_check(_write_error_handler, func, std::forward<Args>(args)...);
@@ -427,6 +433,8 @@ private:
     std::vector<unsigned> _shards;
     stdx::optional<dht::decorated_key> _first;
     stdx::optional<dht::decorated_key> _last;
+    utils::UUID _run_identifier;
+    utils::observable<sstable&> _on_closed;
 
     lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
     lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
@@ -497,7 +505,7 @@ private:
     void write_compression(const io_priority_class& pc);
 
     future<> read_scylla_metadata(const io_priority_class& pc);
-    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features);
+    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier);
 
     future<> read_filter(const io_priority_class& pc);
 
@@ -617,6 +625,10 @@ public:
 
     bool has_shadowable_tombstones() const {
         return has_scylla_component() && _components->scylla_metadata->has_feature(sstable_feature::ShadowableTombstones);
+    }
+
+    utils::UUID run_identifier() const {
+        return _run_identifier;
     }
 
     bool has_correct_max_deletion_time() const {

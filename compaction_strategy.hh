@@ -73,6 +73,9 @@ public:
     // Return if optimization to rule out sstables based on clustering key filter should be applied.
     bool use_clustering_key_filter() const;
 
+    // Return true if compaction strategy ignores sstables coming from partial runs.
+    bool ignore_partial_runs() const;
+
     // An estimation of number of compaction for strategy to be satisfied.
     int64_t estimated_pending_compactions(column_family& cf) const;
 
