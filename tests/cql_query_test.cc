@@ -27,6 +27,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <seastar/net/inet_address.hh>
+#include <seastar/core/metrics_api.hh>
 
 #include "tests/test-utils.hh"
 #include "tests/cql_test_env.hh"
@@ -3786,5 +3787,32 @@ SEASTAR_TEST_CASE(test_filtering) {
             });
         }
 
+    });
+}
+
+
+uint64_t
+run_and_examine_cache_stat_change(cql_test_env& e, uint64_t cache_tracker::stats::*metric, std::function<void (cql_test_env& e)> func) {
+    auto read_stat = [&] {
+        auto local_read_metric = [metric] (database& db) { return db.row_cache_tracker().get_stats().*metric; };
+        return e.db().map_reduce0(local_read_metric, uint64_t(0), std::plus<uint64_t>()).get0();
+    };
+    auto before = read_stat();
+    func(e);
+    auto after = read_stat();
+    return after - before;
+}
+
+SEASTAR_TEST_CASE(test_cache_bypass) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (k int PRIMARY KEY)").get();
+        auto with_cache = run_and_examine_cache_stat_change(e, &cache_tracker::stats::reads, [] (cql_test_env& e) {
+            e.execute_cql("SELECT * FROM t").get();
+        });
+        BOOST_REQUIRE(with_cache >= smp::count);  // scan may make multiple passes per shard
+        auto without_cache = run_and_examine_cache_stat_change(e, &cache_tracker::stats::reads, [] (cql_test_env& e) {
+            e.execute_cql("SELECT * FROM t BYPASS CACHE").get();
+        });
+        BOOST_REQUIRE_EQUAL(without_cache, 0);
     });
 }
