@@ -3042,13 +3042,14 @@ static sstring get_write_test_path(sstring table_name, bool compressed = false) 
     return format("tests/sstables/3.x/{}compressed/write_{}", compressed ? "" : "un", table_name);
 }
 
-static void compare_sstables(sstring result_path, sstring table_name, bool compressed = false) {
+// This method should not be called for compressed sstables because compression is not deterministic
+static void compare_sstables(sstring result_path, sstring table_name) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Digest,
                            component_type::Filter}) {
         auto orig_filename =
-                sstable::filename(get_write_test_path(table_name, compressed),
+                sstable::filename(get_write_test_path(table_name, false),
                                   "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         auto result_filename =
                 sstable::filename(result_path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
@@ -3074,7 +3075,7 @@ static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_share
 static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
                                          sstring table_name) {
     auto tmp = write_sstables(std::move(s), std::move(mt1), std::move(mt2));
-    compare_sstables(tmp.path, table_name, false);
+    compare_sstables(tmp.path, table_name);
     return tmp;
 }
 
@@ -3088,7 +3089,7 @@ static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt) {
 
 static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name) {
     auto tmp = write_sstables(std::move(s), std::move(mt));
-    compare_sstables(tmp.path, table_name, false);
+    compare_sstables(tmp.path, table_name);
     return tmp;
 }
 
