@@ -3038,8 +3038,8 @@ static void compare_files(sstring filename1, sstring filename2) {
     BOOST_CHECK_EQUAL_COLLECTIONS(b1, e1, b2, e2);
 }
 
-static sstring get_write_test_path(sstring table_name, bool compressed = false) {
-    return format("tests/sstables/3.x/{}compressed/write_{}", compressed ? "" : "un", table_name);
+static sstring get_write_test_path(sstring table_name) {
+    return format("tests/sstables/3.x/uncompressed/write_{}", table_name);
 }
 
 // This method should not be called for compressed sstables because compression is not deterministic
@@ -3049,7 +3049,7 @@ static void compare_sstables(sstring result_path, sstring table_name) {
                            component_type::Digest,
                            component_type::Filter}) {
         auto orig_filename =
-                sstable::filename(get_write_test_path(table_name, false),
+                sstable::filename(get_write_test_path(table_name),
                                   "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         auto result_filename =
                 sstable::filename(result_path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
