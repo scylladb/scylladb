@@ -1006,7 +1006,7 @@ class scylla_lsa(gdb.Command):
                   'Free segments:         {free_segments:>12}\n\n'
                   .format(er_goal=er_goal, er_max=er_max, free_segments=free_segments))
 
-        lsa_tracker = gdb.parse_and_eval('\'logalloc::tracker_instance\'._impl')['_M_t']['_M_head_impl']
+        lsa_tracker = std_unique_ptr(gdb.parse_and_eval('\'logalloc::tracker_instance\'._impl'))
         regions = lsa_tracker['_regions']
         region = regions['_M_impl']['_M_start']
         gdb.write('LSA regions:\n')
