@@ -29,6 +29,7 @@
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"
+#include "utils/top_k.hh"
 
 #include <vector>
 #include <set>
@@ -73,5 +74,80 @@ public:
     bool empty() const { return _listeners.empty(); }
 };
 
+
+struct toppartitons_item_key {
+    schema_ptr schema;
+    dht::decorated_key key;
+
+    toppartitons_item_key(const schema_ptr& schema, const dht::decorated_key& key) : schema(schema), key(key) {}
+    toppartitons_item_key(const toppartitons_item_key& key) noexcept : schema(key.schema), key(key.key) {}
+
+    struct hash {
+        size_t operator()(const toppartitons_item_key& k) const {
+            return std::hash<dht::token>()(k.key.token());
+        }
+    };
+
+    struct comp {
+        bool operator()(const toppartitons_item_key& k1, const toppartitons_item_key& k2) const {
+            return k1.schema == k2.schema && k1.key.equal(*k2.schema, k2.key);
+        }
+    };
+
+    explicit operator sstring() const;
+};
+
+class toppartitions_data_listener : public data_listener {
+    friend class toppartitions_query;
+
+    database& _db;
+    sstring _ks;
+    sstring _cf;
+
+public:
+    using top_k = utils::space_saving_top_k<toppartitons_item_key, toppartitons_item_key::hash, toppartitons_item_key::comp>;
+private:
+    top_k _top_k_read;
+    top_k _top_k_write;
+
+public:
+    toppartitions_data_listener(database& db, sstring ks, sstring cf);
+    ~toppartitions_data_listener();
+
+    virtual flat_mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
+            const query::partition_slice& slice, flat_mutation_reader&& rd) override;
+
+    virtual void on_write(const schema_ptr& s, const frozen_mutation& m) override;
+
+    future<> stop();
+};
+
+class toppartitions_query {
+    distributed<database>& _xdb;
+    sstring _ks;
+    sstring _cf;
+    std::chrono::milliseconds _duration;
+    size_t _list_size;
+    size_t _capacity;
+    sharded<toppartitions_data_listener> _query;
+
+public:
+    toppartitions_query(seastar::distributed<database>& xdb, sstring ks, sstring cf,
+        std::chrono::milliseconds duration, size_t list_size, size_t capacity);
+
+    struct results {
+        toppartitions_data_listener::top_k read;
+        toppartitions_data_listener::top_k write;
+
+        results(size_t capacity) : read(capacity), write(capacity) {}
+    };
+
+    std::chrono::milliseconds duration() const { return _duration; }
+    size_t list_size() const { return _list_size; }
+    size_t capacity() const { return _capacity; }
+
+    future<> scatter();
+    future<results> gather(unsigned results_size = 256);
+};
 
 } // namespace db
