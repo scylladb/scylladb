@@ -299,6 +299,27 @@ public:
         }
         return _targets.size() == 0;
     }
+    void timeout_cb() {
+        if (_cl_achieved || _cl == db::consistency_level::ANY) {
+            // we are here because either cl was achieved, but targets left in the handler are not
+            // responding, so a hint should be written for them, or cl == any in which case
+            // hints are counted towards consistency, so we need to write hints and count how much was written
+            auto hints = _proxy->hint_to_dead_endpoints(_mutation_holder, get_targets(), _type, get_trace_state());
+            signal(hints);
+            if (_cl == db::consistency_level::ANY && hints) {
+                slogger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
+            }
+            if (_cl_achieved) { // For CL=ANY this can still be false
+                for (auto&& ep : get_targets()) {
+                    ++stats().background_replica_writes_failed.get_ep_stat(ep);
+                }
+                stats().background_writes_failed += int(!_targets.empty());
+            }
+        }
+
+        on_timeout();
+        _proxy->remove_response_handler(_id);
+    }
     future<> wait() {
         return _ready.get_future();
     }
@@ -465,28 +486,7 @@ void storage_proxy::unthrottle() {
 
 storage_proxy::response_id_type storage_proxy::register_response_handler(shared_ptr<abstract_write_response_handler>&& h) {
     auto id = h->id();
-    auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
-        auto& e = _response_handlers.find(id)->second;
-        if (e.handler->_cl_achieved || e.handler->_cl == db::consistency_level::ANY) {
-            // we are here because either cl was achieved, but targets left in the handler are not
-            // responding, so a hint should be written for them, or cl == any in which case
-            // hints are counted towards consistency, so we need to write hints and count how much was written
-            auto hints = hint_to_dead_endpoints(e.handler->_mutation_holder, e.handler->get_targets(), e.handler->_type, e.handler->get_trace_state());
-            e.handler->signal(hints);
-            if (e.handler->_cl == db::consistency_level::ANY && hints) {
-                slogger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
-            }
-            if (e.handler->_cl_achieved) { // For CL=ANY this can still be false
-                for (auto&& ep : e.handler->get_targets()) {
-                    ++e.handler->stats().background_replica_writes_failed.get_ep_stat(ep);
-                }
-                e.handler->stats().background_writes_failed += int(!e.handler->get_targets().empty());
-            }
-        }
-
-        e.handler->on_timeout();
-        remove_response_handler(id);
-    }));
+    auto e = _response_handlers.emplace(id, rh_entry(std::move(h)));
     assert(e.second);
     return id;
 }
@@ -773,7 +773,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     _hints_resource_manager.register_manager(_hints_for_views_manager);
 }
 
-storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
+storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h) : handler(std::move(h)), expire_timer([this] { handler->timeout_cb(); }) {}
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
 storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) : id(x.id), p(x.p) { x.id = 0; };
