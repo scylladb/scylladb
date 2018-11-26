@@ -83,7 +83,7 @@ private:
         unsigned count = 0;
         unsigned error = 0;
 
-        counter(T item) : item(item) {}
+        counter(T item, unsigned count = 0, unsigned error = 0) : item(item), count(count), error(error) {}
     };
 
     using counter_ptr = lw_shared_ptr<counter>;
@@ -103,8 +103,8 @@ private:
             counters.push_back(ctr);
         }
 
-        bucket(T item, unsigned count) {
-            counters.push_back(make_lw_shared<counter>(item));
+        bucket(T item, unsigned count, unsigned error) {
+            counters.push_back(make_lw_shared<counter>(item, count, error));
             this->count = count;
         }
     };
@@ -132,13 +132,17 @@ public:
     bool valid() const { return _valid; }
 
     // returns true if item is a new one
-    bool append(T item, unsigned inc = 1) { return std::get<0>(append_return_all(std::move(item), inc)); }
+    bool append(T item, unsigned inc = 1, unsigned err = 0) {
+        return std::get<0>(append_return_all(std::move(item), inc, err));
+    }
 
     // returns optionally dropped item (due to capacity overflow)
-    std::optional<T> append_return_dropped(T item, unsigned inc = 1) { return std::get<1>(append_return_all(std::move(item), inc)); }
+    std::optional<T> append_return_dropped(T item, unsigned inc = 1, unsigned err = 0) {
+        return std::get<1>(append_return_all(std::move(item), inc, err));
+    }
 
     // returns whether an element is new and an optionally dropped item (due to capacity overflow)
-    std::tuple<bool, std::optional<T>> append_return_all(T item, unsigned inc = 1) {
+    std::tuple<bool, std::optional<T>> append_return_all(T item, unsigned inc = 1, unsigned err = 0) {
         if (!_valid) {
             return {false, std::optional<T>()};
         }
@@ -149,7 +153,7 @@ public:
             counters_iterator counter_it;
             if (is_new_item) {
                 if (size() < _capacity) {
-                    _buckets.emplace_front(bucket(item, 0)); // count set to 0, increment_counter() required to complete bucket construction
+                    _buckets.emplace_front(bucket(std::move(item), 0, err)); // inc added later via increment_counter
                     buckets_iterator new_bucket_it = _buckets.begin();
                     counter_it = new_bucket_it->counters.begin();
                     (*counter_it)->bucket_it = new_bucket_it;
@@ -161,7 +165,7 @@ public:
                     counter_ptr ctr = *counter_it;
                     _counters_map.erase(ctr->item);
                     dropped_item = std::exchange(ctr->item, std::move(item));
-                    ctr->error = min_bucket->count;
+                    ctr->error = min_bucket->count + err;
                 }
                 _counters_map[item] = std::move(counter_it);
             } else {
@@ -245,6 +249,12 @@ public:
             }
         }
         return list;
+    }
+
+    void append(const results& res) {
+        for (auto& r: res) {
+            append(r.item, r.count, r.error);
+        }
     }
 
     //-----------------------------------------------------------------------------------------
