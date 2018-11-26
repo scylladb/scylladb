@@ -27,6 +27,10 @@
 #include "utils/estimated_histogram.hh"
 #include <algorithm>
 
+#include "db/data_listeners.hh"
+
+extern logging::logger apilog;
+
 namespace api {
 using namespace httpd;
 
@@ -924,5 +928,45 @@ void set_column_family(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(container_to_vec(res));
         });
     });
+
+    cf::toppartitions.set(r, [&ctx] (std::unique_ptr<request> req) {
+        auto name_param = req->param["name"];
+        auto [ks, cf] = parse_fully_qualified_cf_name(name_param);
+
+        api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
+        api::req_param<unsigned> capacity(*req, "capacity", 256);
+        api::req_param<unsigned> list_size(*req, "list_size", 10);
+
+        apilog.info("toppartitions query: name={} duration={} list_size={} capacity={}",
+            name_param, duration.param, list_size.param, capacity.param);
+
+        return seastar::do_with(db::toppartitions_query(ctx.db, ks, cf, duration.value, list_size, capacity), [&ctx](auto& q) {
+            return q.scatter().then([&q] {
+                return sleep(q.duration()).then([&q] {
+                    return q.gather(q.capacity()).then([&q] (auto topk_results) {
+                        apilog.debug("toppartitions query: processing results");
+                        cf::toppartitions_query_results results;
+
+                        for (auto& d: topk_results.read.top(q.list_size())) {
+                            cf::toppartitions_record r;
+                            r.partition = sstring(d.item);
+                            r.count = d.count;
+                            r.error = d.error;
+                            results.read.push(r);
+                        }
+                        for (auto& d: topk_results.write.top(q.list_size())) {
+                            cf::toppartitions_record r;
+                            r.partition = sstring(d.item);
+                            r.count = d.count;
+                            r.error = d.error;
+                            results.write.push(r);
+                        }
+                        return make_ready_future<json::json_return_type>(results);
+                    });
+                });
+            });
+        });
+    });
+
 }
 }
