@@ -72,28 +72,29 @@ if __name__ == "__main__":
             else:
                 conf_dir = "/etc/scylla"
             cfg = yaml.load(open(os.path.join(conf_dir, "scylla.yaml")))
+            if not "data_file_directories" in cfg:
+                logging.error("No data directories found. Please check the configuration and run scylla_io_setup again.\n")
+                sys.exit(1)
             data_dirs = cfg["data_file_directories"]
-            if len(data_dirs) > 1:
-                logging.warn("%d data directories found. scylla_io_setup currently lacks support for it, and only %s will be evaluated",
-                             len(data_dirs), data_dirs[0])
 
-            data_dir = data_dirs[0]
-            if os.path.exists(data_dir) == False:
-                logging.error("%s is not found. please check the configuration and run scylla_io_setup again.\n", data_dir)
-                sys.exit(1)
-            if os.path.isdir(data_dir) == False:
-                logging.error("%s is not a directory. please check the configuration and run scylla_io_setup again.\n", data_dir)
-                sys.exit(1)
             iotune_args = []
+            for data_dir in data_dirs:
+                if os.path.exists(data_dir) == False:
+                    logging.error("%s was not found. Please check the configuration and run scylla_io_setup again.\n", data_dir)
+                    sys.exit(1)
+                if os.path.isdir(data_dir) == False:
+                    logging.error("%s is not a directory. Please check the configuration and run scylla_io_setup again.\n", data_dir)
+                    sys.exit(1)
+                blocktune.tune_fs(data_dir, '2')
+                iotune_args += [ "--evaluation-directory", data_dir ]
+
             if cpudata.cpuset():
                 iotune_args += [ "--cpuset", ",".join(map(str, cpudata.cpuset())) ]
             elif cpudata.smp():
                 iotune_args += [ "--smp", cpudata.smp() ]
 
-            blocktune.tune_fs(data_dir, '2')
             try:
                 subprocess.check_call(["iotune",
-                                       "--evaluation-directory", data_dir,
                                        "--format", "envfile",
                                        "--options-file", "/etc/scylla.d/io.conf",
                                        "--properties-file", "/etc/scylla.d/io_properties.yaml"] + iotune_args)
@@ -102,6 +103,6 @@ if __name__ == "__main__":
                               "This is a non-supported setup, and performance is expected to be very bad.\n"
                               "For better performance, placing your data on XFS-formatted directories is required.\n"
                               "To override this error, enable developer mode as follow:\n"
-                              "sudo /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1", data_dir)
+                              "sudo /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1", data_dirs)
                 sys.exit(1)
 
