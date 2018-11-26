@@ -356,6 +356,7 @@ scylla_tests = [
     'tests/auth_passwords_test',
     'tests/multishard_mutation_query_test',
     'tests/top_k_test',
+    'tests/data_listeners_test',
 ]
 
 perf_tests = [

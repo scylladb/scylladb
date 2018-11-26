@@ -82,6 +82,8 @@
 
 #include "db/timeout_clock.hh"
 
+#include "db/data_listeners.hh"
+
 using namespace std::chrono_literals;
 
 logging::logger dblog("database");
@@ -681,7 +683,12 @@ table::make_reader(schema_ptr s,
         readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     }
 
-    return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
+    auto comb_reader = make_combined_reader(s, std::move(readers), fwd, fwd_mr);
+    if (_config.data_listeners && !_config.data_listeners->empty()) {
+        return _config.data_listeners->on_read(s, range, slice, std::move(comb_reader));
+    } else {
+        return comb_reader;
+    }
 }
 
 sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<sstring> subdir) {
@@ -2201,6 +2208,7 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _querier_cache(dbcfg.available_memory * 0.04)
     , _large_partition_handler(std::make_unique<db::cql_table_large_partition_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024))
     , _result_memory_limiter(dbcfg.available_memory / 10)
+    , _data_listeners(std::make_unique<db::data_listeners>(*this))
 {
     local_schema_registry().init(*this); // TODO: we're never unbound.
     _compaction_manager->start();
@@ -2937,6 +2945,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.large_partition_handler = db.get_large_partition_handler();
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
+    cfg.data_listeners = &db.data_listeners();
 
     return cfg;
 }
@@ -3566,6 +3575,9 @@ void dirty_memory_manager::start_reclaiming() noexcept {
 
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     auto& cf = find_column_family(m.column_family_id());
+
+    data_listeners().on_write(m_schema, m);
+
     return cf.dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         try {
             auto& cf = find_column_family(m.column_family_id());

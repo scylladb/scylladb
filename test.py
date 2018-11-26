@@ -117,6 +117,7 @@ boost_tests = [
     'auth_passwords_test',
     'multishard_mutation_query_test',
     'top_k_test',
+    'data_listeners_test',
 ]
 
 other_tests = [
