@@ -210,7 +210,8 @@ protected:
         FAILURE,
     };
     error _error = error::NONE;
-    size_t _failed = 0;
+    size_t _failed = 0; // only failures that may impact consistency
+    size_t _all_failures = 0; // total amount of failures
     size_t _total_endpoints = 0;
     storage_proxy::write_stats& _stats;
 
@@ -311,7 +312,14 @@ public:
             slogger.warn("Receive outdated write failure from {}", from);
             return false;
         }
+        _all_failures += count;
         return failure(from, count);
+    }
+    void check_for_early_completion() {
+        if (_all_failures == _targets.size()) {
+            // leftover targets are all reported error, so nothing to wait for any longer
+            timeout_cb();
+        }
     }
     void timeout_cb() {
         if (_cl_achieved || _cl == db::consistency_level::ANY) {
@@ -515,6 +523,8 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
         tracing::trace(it->second.handler->get_trace_state(), "Got a response from /{}", from);
         if (it->second.handler->response(from)) {
             remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
+        } else {
+            it->second.handler->check_for_early_completion();
         }
     }
 }
@@ -525,6 +535,8 @@ void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms
         tracing::trace(it->second.handler->get_trace_state(), "Got {} failures from /{}", count, from);
         if (it->second.handler->failure_response(from, count)) {
             remove_response_handler(id);
+        } else {
+            it->second.handler->check_for_early_completion();
         }
     }
 }
