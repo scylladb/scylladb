@@ -1300,6 +1300,14 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
 // Runs inside seastar::async context
 void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as alive {}", addr);
+
+    // Do not mark a node with status shutdown as UP.
+    auto status = get_gossip_status(local_state);
+    if (status == sstring(versioned_value::SHUTDOWN)) {
+        logger.warn("Skip marking node {} with status = {} as UP", addr, status);
+        return;
+    }
+
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
 
@@ -1321,7 +1329,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     }
 
     if (!_in_shadow_round) {
-        logger.info("InetAddress {} is now UP, status = {}", addr, get_gossip_status(local_state));
+        logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
     _subscribers.for_each([addr, local_state] (auto& subscriber) {
