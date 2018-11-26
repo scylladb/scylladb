@@ -1462,7 +1462,9 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, bool cleanup
             _compaction_strategy.notify_completion(old_ssts, new_ssts);
             _compaction_manager.propagate_replacement(this, old_ssts, new_ssts);
             this->on_compaction_completion(new_ssts, old_ssts);
-            release_exhausted(old_ssts);
+            if (release_exhausted) {
+                release_exhausted(old_ssts);
+            }
         };
 
         return sstables::compact_sstables(std::move(descriptor), *this, create_sstable, replace_sstables, cleanup);
