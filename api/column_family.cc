@@ -34,7 +34,7 @@ using namespace std;
 using namespace json;
 namespace cf = httpd::column_family_json;
 
-const utils::UUID& get_uuid(const sstring& name, const database& db) {
+std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
     auto pos = name.find("%3A");
     size_t end;
     if (pos == sstring::npos) {
@@ -46,11 +46,15 @@ const utils::UUID& get_uuid(const sstring& name, const database& db) {
     } else {
         end = pos + 3;
     }
+    return std::make_tuple(name.substr(0, pos), name.substr(end));
+}
+
+const utils::UUID& get_uuid(const sstring& name, const database& db) {
+    auto [ks, cf] = parse_fully_qualified_cf_name(name);
     try {
-        return db.find_uuid(name.substr(0, pos), name.substr(end));
+        return db.find_uuid(ks, cf);
     } catch (std::out_of_range& e) {
-        throw bad_param_exception("Column family '" + name.substr(0, pos) + ":"
-                + name.substr(end) + "' not found");
+        throw bad_param_exception(format("Column family '{}:{}' not found", ks, cf));
     }
 }
 
