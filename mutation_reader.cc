@@ -70,8 +70,8 @@ class mutation_fragment_merger {
 
     const schema_ptr _schema;
     Producer _producer;
-    iterator _it;
-    iterator _end;
+    iterator _it{};
+    iterator _end{};
 
     future<> fetch(db::timeout_clock::time_point timeout) {
         if (!empty()) {
