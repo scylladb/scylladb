@@ -55,11 +55,13 @@ inline column_values_fixed_lengths get_clustering_values_fixed_lengths(const ser
 class column_translation {
 public:
     struct column_info {
+        data_type type;
         // Disengaged 'id' means the column is missing from the current schema
         std::optional<column_id> id;
         std::optional<uint32_t> value_length;
         bool is_collection;
         bool is_counter;
+        bool schema_mismatch;
     };
 
 private:
@@ -72,21 +74,15 @@ private:
                 bool is_static) {
             std::vector<column_info> cols;
             if (s.is_dense()) {
-                if (is_static) {
-                    cols.push_back(column_info{
-                        s.static_begin()->id,
-                        s.static_begin()->type->value_length_if_fixed(),
-                        s.static_begin()->is_multi_cell(),
-                        s.static_begin()->is_counter()
-                    });
-                } else {
-                    cols.push_back(column_info{
-                        s.regular_begin()->id,
-                        s.regular_begin()->type->value_length_if_fixed(),
-                        s.regular_begin()->is_multi_cell(),
-                        s.regular_begin()->is_counter()
-                    });
-                }
+                const column_definition& col = is_static ? *s.static_begin() : *s.regular_begin();
+                cols.push_back(column_info{
+                    col.type,
+                    col.id,
+                    col.type->value_length_if_fixed(),
+                    col.is_multi_cell(),
+                    col.is_counter(),
+                    false
+                });
             } else {
                 cols.reserve(src.size());
                 for (auto&& desc : src) {
@@ -94,24 +90,20 @@ private:
                     data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
                     const column_definition* def = s.get_column_definition(desc.name.value);
                     std::optional<column_id> id;
+                    bool schema_mismatch = false;
                     if (def) {
-                        if (def->is_multi_cell() != type->is_multi_cell() || def->is_counter() != type->is_counter()) {
-                            throw malformed_sstable_exception(format(
-                                    "{} definition in serialization header does not match schema. "
-                                    "Schema collection = {}, counter = {}. Header collection = {}, counter = {}",
-                                    def->name(),
-                                    def->is_multi_cell(),
-                                    def->is_counter(),
-                                    type->is_multi_cell(),
-                                    type->is_counter()));
-                        }
                         id = def->id;
+                        schema_mismatch = def->is_multi_cell() != type->is_multi_cell() ||
+                                          def->is_counter() != type->is_counter() ||
+                                          !def->type->is_value_compatible_with(*type);
                     }
                     cols.push_back(column_info{
+                        type,
                         id,
                         type->value_length_if_fixed(),
                         type->is_multi_cell(),
-                        type->is_counter()
+                        type->is_counter(),
+                        schema_mismatch
                     });
                 }
                 boost::range::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
