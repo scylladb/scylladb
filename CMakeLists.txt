@@ -138,4 +138,5 @@ target_include_directories(scylla PUBLIC
         ${SEASTAR_INCLUDE_DIRS}
         ${Boost_INCLUDE_DIRS}
         xxhash
+        libdeflate
         build/release/gen)

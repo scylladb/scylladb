@@ -9,3 +9,6 @@
 [submodule "xxHash"]
 	path = xxHash
 	url = ../xxHash
+[submodule "libdeflate"]
+	path = libdeflate
+	url = ../libdeflate

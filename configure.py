@@ -307,6 +307,7 @@ scylla_tests = [
     'tests/log_heap_test',
     'tests/managed_vector_test',
     'tests/crc_test',
+    'tests/libdeflate_test',
     'tests/flush_queue_test',
     'tests/dynamic_bitset_test',
     'tests/auth_test',
@@ -357,6 +358,7 @@ scylla_tests = [
 
 perf_tests = [
     'tests/perf/perf_mutation_readers',
+    'tests/perf/perf_checksum',
     'tests/perf/perf_mutation_fragment',
     'tests/perf/perf_idl',
 ]
@@ -777,6 +779,7 @@ pure_boost_tests = set([
     'tests/test-serialization',
     'tests/range_test',
     'tests/crc_test',
+    'tests/libdeflate_test',
     'tests/managed_vector_test',
     'tests/dynamic_bitset_test',
     'tests/idl_test',
@@ -1005,6 +1008,8 @@ seastar_ldflags = args.user_ldflags
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' % (seastar_ldflags),
                   '--c++-dialect=gnu++1z', '--optflags=%s' % (modes['release']['opt']), ]
 
+libdeflate_cflags = seastar_cflags
+
 status = subprocess.call([args.python, './configure.py'] + seastar_flags, cwd='seastar')
 
 if status != 0:
@@ -1176,6 +1181,9 @@ with open(buildfile, 'w') as f:
             if binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
+                objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
+                    'libdeflate/libdeflate.a'
+                ]])
                 if binary.startswith('tests/'):
                     local_libs = '$libs'
                     if binary not in tests_not_using_seastar_test_framework or binary in pure_boost_tests:
@@ -1266,6 +1274,10 @@ with open(buildfile, 'w') as f:
             ''').format(**locals()))
         f.write('build build/$mode/scylla-package.tar: package build/{mode}/scylla build/{mode}/iotune\n'.format(**locals()))
         f.write('    mode = {mode}\n'.format(**locals()))
+        f.write('rule libdeflate.{mode}\n'.format(**locals()))
+        f.write('    command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}"\n'.format(**locals()))
+        f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
+
     f.write('build {}: phony\n'.format(seastar_deps))
     f.write(textwrap.dedent('''\
         rule configure
