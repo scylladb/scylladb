@@ -526,17 +526,15 @@ public:
 
         // compute 32-bit checksum for compressed data.
         uint32_t per_chunk_checksum = ChecksumType::checksum(compressed.get(), len);
-        _full_checksum = ChecksumType::checksum_combine(_full_checksum, per_chunk_checksum, len);
+        _full_checksum = checksum_combine_or_feed<ChecksumType>(_full_checksum, per_chunk_checksum, compressed.get(), len);
 
         // write checksum into buffer after compressed data.
         write_be<uint32_t>(compressed.get_write() + len, per_chunk_checksum);
 
         if constexpr (mode == compressed_checksum_mode::checksum_all) {
             uint32_t be_per_chunk_checksum = cpu_to_be(per_chunk_checksum);
-            uint32_t digest_checksum = ChecksumType::checksum(
-                    reinterpret_cast<const char*>(&be_per_chunk_checksum),
-                    sizeof(be_per_chunk_checksum));
-            _full_checksum = ChecksumType::checksum_combine(_full_checksum, digest_checksum, sizeof(be_per_chunk_checksum));
+            _full_checksum = ChecksumType::checksum(_full_checksum,
+                reinterpret_cast<const char*>(&be_per_chunk_checksum), sizeof(be_per_chunk_checksum));
         }
 
         _compression_metadata->set_full_checksum(_full_checksum);
