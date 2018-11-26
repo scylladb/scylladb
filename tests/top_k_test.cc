@@ -64,7 +64,7 @@ BOOST_AUTO_TEST_CASE(test_top_k_straight_insertion) {
             top.append(i);
         }
     }
-    
+
     vector<unsigned> res = count(top.top(10));
     BOOST_REQUIRE_EQUAL(res, exp_results());
 }
@@ -87,7 +87,7 @@ BOOST_AUTO_TEST_CASE(test_top_k_interleaved_insertion) {
             }
         }
     } while (!all_0);
-    
+
     auto res{count(top.top(10))};
     BOOST_REQUIRE_EQUAL(res, exp_results());
 }
@@ -124,7 +124,7 @@ BOOST_AUTO_TEST_CASE(test_top_k_single_value) {
 struct bad_boy {
     unsigned n;
     bad_boy(unsigned n) : n(n) {}
-    
+
     bad_boy(const bad_boy& bb) {
         static unsigned x = 0;
         if (++x == 100) {
@@ -143,7 +143,7 @@ struct hash<bad_boy>
     size_t operator()(const bad_boy& x) const { return hash<unsigned>()(x.n); }
 };
 }
-    
+
 BOOST_AUTO_TEST_CASE(test_top_k_fail) {
     utils::space_saving_top_k<bad_boy> top(32);
 
