@@ -246,38 +246,39 @@ private:
 
     void process_state(temporary_buffer<char>& data, k_l_parser_context& ctx) {
         using state_k_l = typename k_l_parser_context::state;
+        // keep running in the loop until we either are out of data or have consumed all the blocks
         while (true) {
             switch (ctx.state) {
             case state_k_l::START_NAME_LENGTH:
                 if (this->read_16(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::START_NAME_BYTES;
-                    break;
+                    return;
                 }
             case state_k_l::START_NAME_BYTES:
                 if (this->read_bytes(data, this->_u16, ctx.start) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::END_NAME_LENGTH;
-                    break;
+                    return;
                 }
             case state_k_l::END_NAME_LENGTH:
                 if (this->read_16(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::END_NAME_BYTES;
-                    break;
+                    return;
                 }
             case state_k_l::END_NAME_BYTES:
                 if (this->read_bytes(data, this->_u16, ctx.end) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::OFFSET;
-                    break;
+                    return;
                 }
             case state_k_l::OFFSET:
                 if (this->read_64(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::WIDTH;
-                    break;
+                    return;
                 }
             case state_k_l::WIDTH:
                 ctx.offset = this->_u64;
                 if (this->read_64(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::ADD_BLOCK;
-                    break;
+                    return;
                 }
             case state_k_l::ADD_BLOCK:
                 ctx.width = this->_u64;
@@ -285,20 +286,16 @@ private:
                 --_num_blocks_left;
                 _pi_blocks.emplace_back(std::move(ctx.start), std::move(ctx.end), ctx.offset, ctx.width);
                 if (_num_blocks_left == 0) {
-                    break;
-                } else {
-                    // keep running in the loop until we either are out of data
-                    // or have consumed all the blocks
-                    continue;
+                    return;
                 }
             }
-            break;
         }
     }
 
     void process_state(temporary_buffer<char>& data, m_parser_context& ctx) {
         static constexpr size_t width_base = 65536;
         using state_m = typename m_parser_context::state;
+        // keep running in the loop until we either are out of data or have consumed all the blocks
         while (true) {
             switch (ctx.state) {
             case state_m::CLUSTERING_START:
@@ -309,7 +306,7 @@ private:
                 ctx.ck_blocks_header_offset = 0u;
                 if (read_8(data) != read_status::ready) {
                     ctx.state = state_m::CK_KIND;
-                    break;
+                    return;
                 }
             case state_m::CK_KIND:
                 ctx.kind = bound_kind_m{_u8};
@@ -336,7 +333,7 @@ private:
                 }
                 if (read_unsigned_vint(data) != read_status::ready) {
                     ctx.state = state_m::CK_BLOCK_HEADER;
-                    break;
+                    return;
                 }
             case state_m::CK_BLOCK_HEADER:
                 ctx.ck_blocks_header = _u64;
@@ -360,7 +357,7 @@ private:
                 }
                 if (status != read_status::ready) {
                     ctx.state = state_m::CK_BLOCK_END;
-                    break;
+                    return;
                 }
             }
             case state_m::CK_BLOCK_END:
@@ -379,20 +376,20 @@ private:
             case state_m::OFFSET:
                 if (read_unsigned_vint(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_m::WIDTH;
-                    break;
+                    return;
                 }
             case state_m::WIDTH:
                 ctx.offset = _u64;
                 if (read_signed_vint(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_m::END_OPEN_MARKER_FLAG;
-                    break;
+                    return;
                 }
             case state_m::END_OPEN_MARKER_FLAG:
                 assert(_i64 + width_base > 0);
                 ctx.width = (_i64 + width_base);
                 if (read_8(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_m::END_OPEN_MARKER_LOCAL_DELETION_TIME;
-                    break;
+                    return;
                 }
             case state_m::END_OPEN_MARKER_LOCAL_DELETION_TIME:
                 if (_u8 == 0) {
@@ -402,13 +399,13 @@ private:
                 ctx.end_open_marker.emplace();
                 if (read_32(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1;
-                    break;
+                    return;
                 }
             case state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1:
                 ctx.end_open_marker->local_deletion_time = _u32;
                 if (read_64(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2;
-                    break;
+                    return;
                 }
             case state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2:
                 ctx.end_open_marker->marked_for_delete_at = _u64;
@@ -423,14 +420,9 @@ private:
                 ctx.state = state_m::CLUSTERING_START;
                 --_num_blocks_left;
                 if (_num_blocks_left == 0) {
-                    break;
-                } else {
-                    // keep running in the loop until we either are out of data
-                    // or have consumed all the blocks
-                    continue;
+                    return;
                 }
             }
-            break;
         }
     }
 
