@@ -2737,7 +2737,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
     auto& ks = find_keyspace(schema->ks_name());
-    add_column_family(ks, schema, ks.make_column_family_config(*schema, get_config(), get_large_partition_handler()));
+    add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
     find_column_family(schema).get_index_manager().reload();
     return ks.make_directory_for_column_family(schema->cf_name(), schema->id());
 }
@@ -2909,8 +2909,10 @@ void keyspace::update_from(::lw_shared_ptr<keyspace_metadata> ksm) {
 }
 
 column_family::config
-keyspace::make_column_family_config(const schema& s, const db::config& db_config, db::large_partition_handler* lp_handler) const {
+keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
+    const db::config& db_config = db.get_config();
+
     for (auto& extra : _config.all_datadirs) {
         cfg.all_datadirs.push_back(column_family_directory(extra, s.cf_name(), s.id()));
     }
@@ -2933,7 +2935,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
     cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
-    cfg.large_partition_handler = lp_handler;
+    cfg.large_partition_handler = db.get_large_partition_handler();
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
 
     return cfg;

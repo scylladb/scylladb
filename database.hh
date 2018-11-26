@@ -875,7 +875,7 @@ public:
         return _index_manager;
     }
 
-    db::large_partition_handler* get_large_partition_handler() {
+    db::large_partition_handler* get_large_partition_handler() const {
         assert(_config.large_partition_handler);
         return _config.large_partition_handler;
     }
@@ -1112,7 +1112,7 @@ public:
      */
     locator::abstract_replication_strategy& get_replication_strategy();
     const locator::abstract_replication_strategy& get_replication_strategy() const;
-    column_family::config make_column_family_config(const schema& s, const db::config& db_config, db::large_partition_handler* lp_handler) const;
+    column_family::config make_column_family_config(const schema& s, const database& db) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_or_update_column_family(const schema_ptr& s) {
         _metadata->add_or_update_column_family(s);
@@ -1400,7 +1400,7 @@ public:
         return *_cfg;
     }
 
-    db::large_partition_handler* get_large_partition_handler() {
+    db::large_partition_handler* get_large_partition_handler() const {
         return _large_partition_handler.get();
     }
 

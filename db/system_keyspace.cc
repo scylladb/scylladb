@@ -1631,7 +1631,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
             db.add_keyspace(ks_name, std::move(_ks));
         }
         auto& ks = db.find_keyspace(ks_name);
-        auto cfg = ks.make_column_family_config(*table, db.get_config(), db.get_large_partition_handler());
+        auto cfg = ks.make_column_family_config(*table, db);
         if (maybe_write_in_user_memory(table, db)) {
             cfg.dirty_memory_manager = &db._dirty_memory_manager;
         } else {
