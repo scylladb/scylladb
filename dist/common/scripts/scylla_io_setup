@@ -77,6 +77,11 @@ if __name__ == "__main__":
                 sys.exit(1)
             data_dirs = cfg["data_file_directories"]
 
+            for t in [ "commitlog", "hints", "saved_caches" ]:
+                key = "%s_directory" % t
+                if key in cfg:
+                    data_dirs += [ cfg[key] ]
+
             iotune_args = []
             for data_dir in data_dirs:
                 if os.path.exists(data_dir) == False:
