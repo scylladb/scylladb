@@ -65,6 +65,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
+#include "utils/chunked_vector.hh"
 
 namespace utils {
 
@@ -224,7 +225,7 @@ public:
         unsigned error;
     };
 
-    using results = std::list<result>;
+    using results = chunked_vector<result>;
 
     results top(unsigned k) const
     {

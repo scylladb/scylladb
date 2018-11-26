@@ -125,14 +125,16 @@ struct bad_boy {
     unsigned n;
     bad_boy(unsigned n) : n(n) {}
 
-    bad_boy(const bad_boy& bb) {
-        static unsigned x = 0;
-        if (++x == 100) {
+    bad_boy(const bad_boy& bb) noexcept = default;
+
+    bool operator==(const bad_boy& x) const {
+        static unsigned zz = 0;
+        if (++zz == 100) {
             throw "explode";
         }
+        return n == x.n;
     }
 
-    bool operator==(const bad_boy& x) const { return n == x.n; }
     operator unsigned() const { return n; }
 };
 
