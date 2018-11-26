@@ -299,6 +299,20 @@ public:
         }
         return _targets.size() == 0;
     }
+    // return true if handler is no longer needed because
+    // CL cannot be reached
+    bool failure_response(gms::inet_address from, size_t count) {
+        auto it = _targets.find(from);
+        if (it == _targets.end()) {
+            // There is a little change we can get outdated reply
+            // if the coordinator was restarted after sending a request and
+            // getting reply back. The chance is low though since initial
+            // request id is initialized to server starting time
+            slogger.warn("Receive outdated write failure from {}", from);
+            return false;
+        }
+        return failure(from, count);
+    }
     void timeout_cb() {
         if (_cl_achieved || _cl == db::consistency_level::ANY) {
             // we are here because either cl was achieved, but targets left in the handler are not
@@ -509,8 +523,8 @@ void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second.handler->get_trace_state(), "Got {} failures from /{}", count, from);
-        if (it->second.handler->failure(from, count)) {
-            remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
+        if (it->second.handler->failure_response(from, count)) {
+            remove_response_handler(id);
         }
     }
 }
