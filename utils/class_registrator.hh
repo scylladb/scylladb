@@ -37,7 +37,7 @@ inline bool is_class_name_qualified(const sstring& class_name) {
 // BaseType is a base type of a type hierarchy that this registry will hold
 // Args... are parameters for object's constructor
 template<typename BaseType, typename... Args>
-class class_registry {
+class nonstatic_class_registry {
     template<typename T>
     struct result_for {
         typedef std::unique_ptr<T> type;
@@ -80,38 +80,41 @@ class class_registry {
 public:
     using result_type = typename result_for<BaseType>::type;
     using creator_type = std::function<result_type(Args...)>;
-
-    static void register_class(sstring name, creator_type creator);
+private:
+    std::unordered_map<sstring, creator_type> _classes;
+public:
+    void register_class(sstring name, creator_type creator);
     template<typename T>
-    static void register_class(sstring name);
-    static result_type create(const sstring& name, Args&&...);
+    void register_class(sstring name);
+    result_type create(const sstring& name, Args&&...);
 
-    static std::unordered_map<sstring, creator_type>& classes() {
-        static std::unordered_map<sstring, creator_type> _classes;
-
+    std::unordered_map<sstring, creator_type>& classes() {
+        return _classes;
+    }
+    const std::unordered_map<sstring, creator_type>& classes() const {
         return _classes;
     }
 
-    static sstring to_qualified_class_name(sstring class_name);
+    sstring to_qualified_class_name(sstring class_name) const;
 };
 
 template<typename BaseType, typename... Args>
-void class_registry<BaseType, Args...>::register_class(sstring name, typename class_registry<BaseType, Args...>::creator_type creator) {
+void nonstatic_class_registry<BaseType, Args...>::register_class(sstring name, typename nonstatic_class_registry<BaseType, Args...>::creator_type creator) {
     classes().emplace(name, std::move(creator));
 }
 
 template<typename BaseType, typename... Args>
 template<typename T>
-void class_registry<BaseType, Args...>::register_class(sstring name) {
+void nonstatic_class_registry<BaseType, Args...>::register_class(sstring name) {
     register_class(name, &result_for<BaseType>::template make<T>);
 }
 
 template<typename BaseType, typename... Args>
-sstring class_registry<BaseType, Args...>::to_qualified_class_name(sstring class_name) {
+sstring nonstatic_class_registry<BaseType, Args...>::to_qualified_class_name(sstring class_name) const {
     if (is_class_name_qualified(class_name)) {
         return class_name;
     } else {
-        const auto& classes{class_registry<BaseType, Args...>::classes()};
+        const auto& classes{nonstatic_class_registry<BaseType, Args...>::classes()};
 
         const auto it = boost::find_if(classes, [&class_name](const auto& registered_class) {
             // the fully qualified name contains the short name
@@ -121,6 +124,40 @@ sstring class_registry<BaseType, Args...>::to_qualified_class_name(sstring class
         return it == classes.end() ? class_name : it->first;
     }
 }
+
+// BaseType is a base type of a type hierarchy that this registry will hold
+// Args... are parameters for object's constructor
+template<typename BaseType, typename... Args>
+class class_registry {
+    using base_registry = nonstatic_class_registry<BaseType, Args...>;
+    static base_registry& registry() {
+        static base_registry the_registry;
+        return the_registry;
+    }
+public:
+    using result_type = typename base_registry::result_type;
+    using creator_type = std::function<result_type(Args...)>;
+public:
+    static void register_class(sstring name, creator_type creator) {
+        registry().register_class(std::move(name), std::move(creator));
+    }
+    template<typename T>
+    static void register_class(sstring name) {
+        registry().template register_class<T>(std::move(name));
+    }
+    template <typename... U>
+    static result_type create(const sstring& name, U&&... a) {
+        return registry().create(name, std::forward<U>(a)...);
+    }
+
+    static std::unordered_map<sstring, creator_type>& classes() {
+        return registry().classes();
+    }
+
+    static sstring to_qualified_class_name(sstring class_name) {
+        return registry().to_qualified_class_name(std::move(class_name));
+    }
+};
 
 template<typename BaseType, typename T, typename... Args>
 struct class_registrator {
@@ -133,7 +170,7 @@ struct class_registrator {
 };
 
 template<typename BaseType, typename... Args>
-typename class_registry<BaseType, Args...>::result_type class_registry<BaseType, Args...>::create(const sstring& name, Args&&... args) {
+typename nonstatic_class_registry<BaseType, Args...>::result_type nonstatic_class_registry<BaseType, Args...>::create(const sstring& name, Args&&... args) {
     auto it = classes().find(name);
     if (it == classes().end()) {
         throw no_such_class(sstring("unable to find class '") + name + sstring("'"));
