@@ -1065,13 +1065,14 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_column(std::optional<column_id> column_id,
+    virtual proceed consume_column(const column_translation::column_info& column_info,
                                    bytes_view cell_path,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
                                    gc_clock::duration ttl,
                                    gc_clock::time_point local_deletion_time,
                                    bool is_deleted) override {
+        const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_column(id={}, path={}, value={}, ts={}, ttl={}, del_time={}, deleted={})", this,
             column_id, cell_path, value, timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
         if (!column_id) {
@@ -1080,6 +1081,13 @@ public:
         const column_definition& column_def = get_column_definition(column_id);
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
+        }
+        if (column_info.schema_mismatch) {
+            throw malformed_sstable_exception(
+                    format("{} definition in serialization header does not match schema. Expected {} but got {}.",
+                        column_def.name(),
+                        column_def.type->name(),
+                        column_info.type->name()));
         }
         if (column_def.is_multi_cell()) {
             auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
@@ -1100,30 +1108,41 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_complex_column_start(std::optional<column_id> column_id,
+    virtual proceed consume_complex_column_start(const sstables::column_translation::column_info& column_info,
                                                  tombstone tomb) override {
-        sstlog.trace("mp_row_consumer_m {}: consume_complex_column_start({}, {})", this, column_id, tomb);
+        sstlog.trace("mp_row_consumer_m {}: consume_complex_column_start({}, {})", this, column_info.id, tomb);
         _cm.tomb = tomb;
         _cm.cells.clear();
         return proceed::yes;
     }
 
-    virtual proceed consume_complex_column_end(std::optional<column_id> column_id) override {
+    virtual proceed consume_complex_column_end(const sstables::column_translation::column_info& column_info) override {
+        const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", this, column_id);
         if (column_id) {
             const column_definition& column_def = get_column_definition(column_id);
-            auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
-            auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(_cm));
-            _cells.push_back({column_def.id, atomic_cell_or_collection(std::move(ac))});
+            if (!_cm.cells.empty() || (_cm.tomb && _cm.tomb.timestamp > column_def.dropped_at())) {
+                if (column_info.schema_mismatch) {
+                    throw malformed_sstable_exception(
+                            format("{} definition in serialization header does not match schema. Expected {} but got {}.",
+                                column_def.name(),
+                                column_def.type->name(),
+                                column_info.type->name()));
+                }
+                auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
+                auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(_cm));
+                _cells.push_back({column_def.id, atomic_cell_or_collection(std::move(ac))});
+            }
             _cm.tomb = {};
             _cm.cells.clear();
         }
         return proceed::yes;
     }
 
-    virtual proceed consume_counter_column(std::optional<column_id> column_id,
+    virtual proceed consume_counter_column(const column_translation::column_info& column_info,
                                            bytes_view value,
                                            api::timestamp_type timestamp) override {
+        const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", this, column_id, value, timestamp);
         if (!column_id) {
             return proceed::yes;
@@ -1131,6 +1150,13 @@ public:
         const column_definition& column_def = get_column_definition(column_id);
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
+        }
+        if (column_info.schema_mismatch) {
+            throw malformed_sstable_exception(
+                    format("{} definition in serialization header does not match schema. Expected {} but got {}.",
+                        column_def.name(),
+                        column_def.type->name(),
+                        column_info.type->name()));
         }
         auto ac = make_counter_cell(timestamp, value);
         _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});

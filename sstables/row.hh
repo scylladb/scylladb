@@ -167,7 +167,7 @@ public:
 
     virtual proceed consume_static_row_start() = 0;
 
-    virtual proceed consume_column(std::optional<column_id> column_id,
+    virtual proceed consume_column(const sstables::column_translation::column_info& column_info,
                                    bytes_view cell_path,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
@@ -175,13 +175,13 @@ public:
                                    gc_clock::time_point local_deletion_time,
                                    bool is_deleted) = 0;
 
-    virtual proceed consume_complex_column_start(std::optional<column_id> column_id,
+    virtual proceed consume_complex_column_start(const sstables::column_translation::column_info& column_info,
                                                  tombstone tomb) = 0;
 
-    virtual proceed consume_complex_column_end(std::optional<column_id> column_id) = 0;
+    virtual proceed consume_complex_column_end(const sstables::column_translation::column_info& column_info) = 0;
 
-    virtual proceed consume_counter_column(std::optional<column_id> column_id, bytes_view value,
-                                           api::timestamp_type timestamp) = 0;
+    virtual proceed consume_counter_column(const sstables::column_translation::column_info& column_info,
+                                           bytes_view value, api::timestamp_type timestamp) = 0;
 
     virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
                                             bound_kind kind,
@@ -696,8 +696,8 @@ private:
     }
     bool is_column_simple() { return !_columns.front().is_collection; }
     bool is_column_counter() { return _columns.front().is_counter; }
-    std::optional<column_id> get_column_id() {
-        return _columns.front().id;
+    const column_translation::column_info& get_column_info() {
+        return _columns.front();
     }
     std::optional<uint32_t> get_column_value_length() {
         return _columns.front().value_length;
@@ -1107,13 +1107,13 @@ private:
         column_end_label:
             _state = state::NEXT_COLUMN;
             if (is_column_counter() && !_column_flags.is_deleted()) {
-                if (_consumer.consume_counter_column(get_column_id(),
+                if (_consumer.consume_counter_column(get_column_info(),
                                                      to_bytes_view(_column_value),
                                                      _column_timestamp) == consumer_m::proceed::no) {
                     return consumer_m::proceed::no;
                 }
             } else {
-                if (_consumer.consume_column(get_column_id(),
+                if (_consumer.consume_column(get_column_info(),
                                              to_bytes_view(_cell_path),
                                              to_bytes_view(_column_value),
                                              _column_timestamp,
@@ -1127,9 +1127,9 @@ private:
             if (!is_column_simple()) {
                 --_subcolumns_to_read;
                 if (_subcolumns_to_read == 0) {
-                    auto id = get_column_id();
+                    const sstables::column_translation::column_info& column_info = get_column_info();
                     move_to_next_column();
-                    if (_consumer.consume_complex_column_end(std::move(id)) != consumer_m::proceed::yes) {
+                    if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
                         _state = state::COLUMN;
                         return consumer_m::proceed::no;
                     }
@@ -1193,7 +1193,7 @@ private:
             _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
         case state::COMPLEX_COLUMN_2:
         complex_column_2_label:
-            if (_consumer.consume_complex_column_start(get_column_id(), _complex_column_tombstone) == consumer_m::proceed::no) {
+            if (_consumer.consume_complex_column_start(get_column_info(), _complex_column_tombstone) == consumer_m::proceed::no) {
                 _state = state::COMPLEX_COLUMN_SIZE;
                 return consumer_m::proceed::no;
             }
@@ -1205,9 +1205,9 @@ private:
         case state::COMPLEX_COLUMN_SIZE_2:
             _subcolumns_to_read = _u64;
             if (_subcolumns_to_read == 0) {
-                auto id = get_column_id();
+                const sstables::column_translation::column_info& column_info = get_column_info();
                 move_to_next_column();
-                if (_consumer.consume_complex_column_end(std::move(id)) != consumer_m::proceed::yes) {
+                if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
                     _state = state::COLUMN;
                     return consumer_m::proceed::no;
                 }
