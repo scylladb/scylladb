@@ -22,8 +22,11 @@
 #pragma once
 
 #include <seastar/core/file.hh>
+#include <seastar/core/future.hh>
 #include <seastar/core/semaphore.hh>
 #include "db/timeout_clock.hh"
+
+using namespace seastar;
 
 /// Specific semaphore for controlling reader concurrency
 ///
