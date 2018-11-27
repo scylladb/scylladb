@@ -313,7 +313,9 @@ public:
             return false;
         }
         _all_failures += count;
-        return failure(from, count);
+        // we should not fail CL=ANY requests since they may succeed after
+        // writing hints
+        return _cl != db::consistency_level::ANY && failure(from, count);
     }
     void check_for_early_completion() {
         if (_all_failures == _targets.size()) {
