@@ -1673,7 +1673,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
 future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
-db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
+db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
         file_input_stream_options make_file_input_stream_options(seastar::io_priority_class read_io_prio_class) {
@@ -1685,6 +1685,7 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
         }
     public:
         file f;
+        descriptor d;
         stream<temporary_buffer<char>, replay_position> s;
         input_stream<char> fin;
         input_stream<char> r;
@@ -1699,8 +1700,8 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
         bool header = true;
         bool failed = false;
 
-        work(file f, seastar::io_priority_class read_io_prio_class, position_type o = 0)
-                : f(f), fin(make_file_input_stream(f, 0, make_file_input_stream_options(read_io_prio_class))), start_off(o) {
+        work(file f, descriptor din, seastar::io_priority_class read_io_prio_class, position_type o = 0)
+                : f(f), d(din), fin(make_file_input_stream(f, 0, make_file_input_stream_options(read_io_prio_class))), start_off(o) {
         }
         work(work&&) = default;
 
@@ -1751,6 +1752,11 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
                 if (magic == 0 && ver == 0 && id == 0 && checksum == 0) {
                     // let's assume this was an empty (pre-allocated)
                     // file. just skip it.
+                    return stop();
+                }
+                if (id != d.id) {
+                    // filename and id in file does not match.
+                    // assume not valid/recycled.
                     return stop();
                 }
 
@@ -1918,9 +1924,10 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
         return fut;
     });
 
-    return fut.then([off, next, read_io_prio_class] (file f) {
+    return fut.then([off, next, read_io_prio_class, pfx, filename] (file f) {
         f = make_checked_file(commit_error_handler, std::move(f));
-        auto w = make_lw_shared<work>(std::move(f), read_io_prio_class, off);
+        descriptor d(filename, pfx);
+        auto w = make_lw_shared<work>(std::move(f), d, read_io_prio_class, off);
         auto ret = w->s.listen(next);
 
         w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
