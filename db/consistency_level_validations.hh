@@ -42,17 +42,17 @@
 #pragma once
 
 #include "consistency_level_type.hh"
-#include "schema.hh"
-#include <seastar/core/sstring.hh>
+
+class schema;
 
 namespace db {
 
-void validate_for_read(const sstring& keyspace_name, consistency_level cl);
+void validate_for_read(consistency_level cl);
 
-void validate_for_write(const sstring& keyspace_name, consistency_level cl);
+void validate_for_write(consistency_level cl);
 
 bool is_serial_consistency(consistency_level cl);
 
-void validate_counter_for_write(schema_ptr s, consistency_level cl);
+void validate_counter_for_write(const schema& s, consistency_level cl);
 
 }

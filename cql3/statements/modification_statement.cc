@@ -285,7 +285,7 @@ modification_statement::read_required_rows(
     }
     auto cl = options.get_consistency();
     try {
-        validate_for_read(keyspace(), cl);
+        validate_for_read(cl);
     } catch (exceptions::invalid_request_exception& e) {
         throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
@@ -404,9 +404,9 @@ future<>
 modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     auto cl = options.get_consistency();
     if (is_counter()) {
-        db::validate_counter_for_write(s, cl);
+        db::validate_counter_for_write(*s, cl);
     } else {
-        db::validate_for_write(s->ks_name(), cl);
+        db::validate_for_write(cl);
     }
 
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();

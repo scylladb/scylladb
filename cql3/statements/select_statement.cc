@@ -286,7 +286,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
 
     auto cl = options.get_consistency();
 
-    validate_for_read(_schema->ks_name(), cl);
+    validate_for_read(cl);
 
     int32_t limit = get_limit(options);
     auto now = gc_clock::now();
@@ -787,7 +787,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
 
     auto cl = options.get_consistency();
 
-    validate_for_read(_schema->ks_name(), cl);
+    validate_for_read(cl);
 
     int32_t limit = get_limit(options);
     auto now = gc_clock::now();
