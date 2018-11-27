@@ -2893,25 +2893,31 @@ SEASTAR_TEST_CASE(test_counter_read) {
 
 SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {
     return test_setup::do_with_tmp_directory([] (sstring tmpdir_path) {
-        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
-        auto mt = make_lw_shared<memtable>(s);
-        int32_t last_expiry = 0;
+        return seastar::async([tmpdir_path] {
+            for (const auto version : all_sstable_versions) {
+                schema_builder builder(some_keyspace, some_column_family);
+                builder.with_column("p1", utf8_type, column_kind::partition_key);
+                builder.with_column("c1", utf8_type, column_kind::clustering_key);
+                builder.with_column("r1", utf8_type);
+                schema_ptr s = builder.build(schema_builder::compact_storage::no);
+                auto mt = make_lw_shared<memtable>(s);
+                int32_t last_expiry = 0;
 
-        for (auto i = 0; i < 10; i++) {
-            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
-            mutation m(s, key);
-            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
-            last_expiry = (gc_clock::now() + gc_clock::duration(3600 + i)).time_since_epoch().count();
-            m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(utf8_type, bytes("a"), 3600 + i, last_expiry));
-            mt->apply(std::move(m));
-        }
-        auto sst = make_sstable(s, tmpdir_path, 53, la, big);
-        return write_memtable_to_sstable_for_test(*mt, sst).then([s, sst, tmpdir_path] {
-            return reusable_sst(s, tmpdir_path, 53);
-        }).then([s, last_expiry] (auto sstp) mutable {
-            BOOST_REQUIRE(last_expiry == sstp->get_stats_metadata().max_local_deletion_time);
-        }).then([sst, mt, s] {});
+                for (auto i = 0; i < 10; i++) {
+                    auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
+                    mutation m(s, key);
+                    auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+                    last_expiry = (gc_clock::now() + gc_clock::duration(3600 + i)).time_since_epoch().count();
+                    m.set_clustered_cell(c_key, *s->get_column_definition("r1"),
+                                         make_atomic_cell(utf8_type, bytes("a"), 3600 + i, last_expiry));
+                    mt->apply(std::move(m));
+                }
+                auto sst = make_sstable(s, tmpdir_path, 53, version, big);
+                write_memtable_to_sstable_for_test(*mt, sst).get();
+                auto sstp = reusable_sst(s, tmpdir_path, 53, version).get0();
+                BOOST_REQUIRE(last_expiry == sstp->get_stats_metadata().max_local_deletion_time);
+            }
+        });
     });
 }
 
