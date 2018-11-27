@@ -68,9 +68,6 @@ namespace streaming {
 
 logging::logger sslog("stream_session");
 
-struct sstable_is_staging_tag { };
-using sstable_is_staging = bool_class<sstable_is_staging_tag>;
-
 /*
  * This reader takes a get_next_fragment generator that produces mutation_fragment_opt which is returned by
  * generating_reader.
