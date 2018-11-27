@@ -75,6 +75,8 @@
 #include "sstables/compaction_manager.hh"
 #include "sstables/compaction_backlog_manager.hh"
 #include "sstables/progress_monitor.hh"
+#include "auth/common.hh"
+#include "tracing/trace_keyspace_helper.hh"
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
@@ -175,6 +177,18 @@ static const std::unordered_set<sstring> system_keyspaces = {
 
 bool is_system_keyspace(const sstring& name) {
     return system_keyspaces.find(name) != system_keyspaces.end();
+}
+
+static const std::unordered_set<sstring> internal_keyspaces = {
+        db::system_distributed_keyspace::NAME,
+        db::system_keyspace::NAME,
+        db::schema_tables::NAME,
+        auth::meta::AUTH_KS,
+        tracing::trace_keyspace_helper::KEYSPACE_NAME
+};
+
+bool is_internal_keyspace(const sstring& name) {
+    return internal_keyspaces.find(name) != internal_keyspaces.end();
 }
 
 // Used for tests where the CF exists without a database object. We need to pass a valid
