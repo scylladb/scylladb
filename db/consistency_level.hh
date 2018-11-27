@@ -211,12 +211,4 @@ inline void assure_sufficient_live_nodes(
     }
 }
 
-void validate_for_read(const sstring& keyspace_name, consistency_level cl);
-
-void validate_for_write(const sstring& keyspace_name, consistency_level cl);
-
-bool is_serial_consistency(consistency_level cl);
-
-void validate_counter_for_write(schema_ptr s, consistency_level cl);
-
 }

@@ -40,6 +40,7 @@
  */
 
 #include "db/consistency_level.hh"
+#include "db/consistency_level_validations.hh"
 
 #include <boost/range/algorithm/stable_partition.hpp>
 #include <boost/range/algorithm/find.hpp>
@@ -295,7 +296,7 @@ is_sufficient_live_nodes(consistency_level cl,
     }
 }
 
-void validate_for_read(const sstring& keyspace_name, consistency_level cl) {
+void validate_for_read(consistency_level cl) {
     switch (cl) {
         case consistency_level::ANY:
             throw exceptions::invalid_request_exception("ANY ConsistencyLevel is only supported for writes");
@@ -306,7 +307,7 @@ void validate_for_read(const sstring& keyspace_name, consistency_level cl) {
     }
 }
 
-void validate_for_write(const sstring& keyspace_name, consistency_level cl) {
+void validate_for_write(consistency_level cl) {
     switch (cl) {
         case consistency_level::SERIAL:
         case consistency_level::LOCAL_SERIAL:
@@ -342,9 +343,9 @@ bool is_serial_consistency(consistency_level cl) {
     return cl == consistency_level::SERIAL || cl == consistency_level::LOCAL_SERIAL;
 }
 
-void validate_counter_for_write(schema_ptr s, consistency_level cl) {
+void validate_counter_for_write(const schema& s, consistency_level cl) {
     if (cl == consistency_level::ANY) {
-        throw exceptions::invalid_request_exception(format("Consistency level ANY is not yet supported for counter table {}", s->cf_name()));
+        throw exceptions::invalid_request_exception(format("Consistency level ANY is not yet supported for counter table {}", s.cf_name()));
     }
 
     if (is_serial_consistency(cl)) {

@@ -56,6 +56,7 @@
 #include "partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/timeout_clock.hh"
+#include "db/consistency_level_validations.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
@@ -285,7 +286,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
 
     auto cl = options.get_consistency();
 
-    validate_for_read(_schema->ks_name(), cl);
+    validate_for_read(cl);
 
     int32_t limit = get_limit(options);
     auto now = gc_clock::now();
@@ -786,7 +787,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
 
     auto cl = options.get_consistency();
 
-    validate_for_read(_schema->ks_name(), cl);
+    validate_for_read(cl);
 
     int32_t limit = get_limit(options);
     auto now = gc_clock::now();
