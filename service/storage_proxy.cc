@@ -210,7 +210,8 @@ protected:
         FAILURE,
     };
     error _error = error::NONE;
-    size_t _failed = 0;
+    size_t _failed = 0; // only failures that may impact consistency
+    size_t _all_failures = 0; // total amount of failures
     size_t _total_endpoints = 0;
     storage_proxy::write_stats& _stats;
 
@@ -298,6 +299,50 @@ public:
             slogger.warn("Receive outdated write ack from {}", from);
         }
         return _targets.size() == 0;
+    }
+    // return true if handler is no longer needed because
+    // CL cannot be reached
+    bool failure_response(gms::inet_address from, size_t count) {
+        auto it = _targets.find(from);
+        if (it == _targets.end()) {
+            // There is a little change we can get outdated reply
+            // if the coordinator was restarted after sending a request and
+            // getting reply back. The chance is low though since initial
+            // request id is initialized to server starting time
+            slogger.warn("Receive outdated write failure from {}", from);
+            return false;
+        }
+        _all_failures += count;
+        // we should not fail CL=ANY requests since they may succeed after
+        // writing hints
+        return _cl != db::consistency_level::ANY && failure(from, count);
+    }
+    void check_for_early_completion() {
+        if (_all_failures == _targets.size()) {
+            // leftover targets are all reported error, so nothing to wait for any longer
+            timeout_cb();
+        }
+    }
+    void timeout_cb() {
+        if (_cl_achieved || _cl == db::consistency_level::ANY) {
+            // we are here because either cl was achieved, but targets left in the handler are not
+            // responding, so a hint should be written for them, or cl == any in which case
+            // hints are counted towards consistency, so we need to write hints and count how much was written
+            auto hints = _proxy->hint_to_dead_endpoints(_mutation_holder, get_targets(), _type, get_trace_state());
+            signal(hints);
+            if (_cl == db::consistency_level::ANY && hints) {
+                slogger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
+            }
+            if (_cl_achieved) { // For CL=ANY this can still be false
+                for (auto&& ep : get_targets()) {
+                    ++stats().background_replica_writes_failed.get_ep_stat(ep);
+                }
+                stats().background_writes_failed += int(!_targets.empty());
+            }
+        }
+
+        on_timeout();
+        _proxy->remove_response_handler(_id);
     }
     future<> wait() {
         return _ready.get_future();
@@ -465,28 +510,7 @@ void storage_proxy::unthrottle() {
 
 storage_proxy::response_id_type storage_proxy::register_response_handler(shared_ptr<abstract_write_response_handler>&& h) {
     auto id = h->id();
-    auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
-        auto& e = _response_handlers.find(id)->second;
-        if (e.handler->_cl_achieved || e.handler->_cl == db::consistency_level::ANY) {
-            // we are here because either cl was achieved, but targets left in the handler are not
-            // responding, so a hint should be written for them, or cl == any in which case
-            // hints are counted towards consistency, so we need to write hints and count how much was written
-            auto hints = hint_to_dead_endpoints(e.handler->_mutation_holder, e.handler->get_targets(), e.handler->_type, e.handler->get_trace_state());
-            e.handler->signal(hints);
-            if (e.handler->_cl == db::consistency_level::ANY && hints) {
-                slogger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
-            }
-            if (e.handler->_cl_achieved) { // For CL=ANY this can still be false
-                for (auto&& ep : e.handler->get_targets()) {
-                    ++e.handler->stats().background_replica_writes_failed.get_ep_stat(ep);
-                }
-                e.handler->stats().background_writes_failed += int(!e.handler->get_targets().empty());
-            }
-        }
-
-        e.handler->on_timeout();
-        remove_response_handler(id);
-    }));
+    auto e = _response_handlers.emplace(id, rh_entry(std::move(h)));
     assert(e.second);
     return id;
 }
@@ -501,6 +525,8 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
         tracing::trace(it->second.handler->get_trace_state(), "Got a response from /{}", from);
         if (it->second.handler->response(from)) {
             remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
+        } else {
+            it->second.handler->check_for_early_completion();
         }
     }
 }
@@ -509,8 +535,10 @@ void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second.handler->get_trace_state(), "Got {} failures from /{}", count, from);
-        if (it->second.handler->failure(from, count)) {
-            remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
+        if (it->second.handler->failure_response(from, count)) {
+            remove_response_handler(id);
+        } else {
+            it->second.handler->check_for_early_completion();
         }
     }
 }
@@ -773,7 +801,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     _hints_resource_manager.register_manager(_hints_for_views_manager);
 }
 
-storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
+storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h) : handler(std::move(h)), expire_timer([this] { handler->timeout_cb(); }) {}
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
 storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) : id(x.id), p(x.p) { x.id = 0; };
