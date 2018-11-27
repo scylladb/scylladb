@@ -3464,47 +3464,49 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
 SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        auto s = schema_builder("ks", "cf")
-            .with_column("pk", utf8_type, column_kind::partition_key)
-            .with_column("ck1", utf8_type, column_kind::clustering_key)
-            .with_column("r1", int32_type)
-            .build();
-        column_family_for_tests cf(s);
-        auto tmp = make_lw_shared<tmpdir>();
-        auto mt = make_lw_shared<memtable>(s);
-        const column_definition& r1_col = *s->get_column_definition("r1");
+        for (const auto version : all_sstable_versions) {
+            auto s = schema_builder("ks", "cf")
+                      .with_column("pk", utf8_type, column_kind::partition_key)
+                      .with_column("ck1", utf8_type, column_kind::clustering_key)
+                      .with_column("r1", int32_type)
+                      .build();
+            column_family_for_tests cf(s);
+            auto tmp = make_lw_shared<tmpdir>();
+            auto mt = make_lw_shared<memtable>(s);
+            const column_definition &r1_col = *s->get_column_definition("r1");
 
-        for (auto j = 0; j < 8; j++) {
-            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(j))});
+            for (auto j = 0; j < 8; j++) {
+                auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(j))});
+                mutation m(s, key);
+                for (auto i = 100; i < 150; i++) {
+                    auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(j) + "ck" + to_sstring(i))});
+                    m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+                }
+                mt->apply(std::move(m));
+            }
+            auto sst = make_sstable(s, tmp->path, 1, version, big);
+            write_memtable_to_sstable_for_test(*mt, sst).get();
+            sst = reusable_sst(s, tmp->path, 1, version).get0();
+            check_min_max_column_names(sst, {"0ck100"}, {"7ck149"});
+
+            mt = make_lw_shared<memtable>(s);
+            auto key = partition_key::from_exploded(*s, {to_bytes("key9")});
             mutation m(s, key);
-            for (auto i = 100; i < 150; i++) {
-                auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(j) + "ck" + to_sstring(i))});
+            for (auto i = 101; i < 299; i++) {
+                auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(9) + "ck" + to_sstring(i))});
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
             }
             mt->apply(std::move(m));
-        }
-        auto sst = make_sstable(s, tmp->path, 1, la, big);
-        write_memtable_to_sstable_for_test(*mt, sst).get();
-        sst = reusable_sst(s, tmp->path, 1).get0();
-        check_min_max_column_names(sst, { "0ck100" }, { "7ck149" });
+            auto sst2 = make_sstable(s, tmp->path, 2, version, big);
+            write_memtable_to_sstable_for_test(*mt, sst2).get();
+            sst2 = reusable_sst(s, tmp->path, 2, version).get0();
+            check_min_max_column_names(sst2, {"9ck101"}, {"9ck298"});
 
-        mt = make_lw_shared<memtable>(s);
-        auto key = partition_key::from_exploded(*s, {to_bytes("key9")});
-        mutation m(s, key);
-        for (auto i = 101; i < 299; i++) {
-            auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(9) + "ck" + to_sstring(i))});
-            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+            auto creator = [s, tmp, version] { return sstables::make_sstable(s, tmp->path, 3, version, big); };
+            auto info = sstables::compact_sstables(sstables::compaction_descriptor({sst, sst2}), *cf, creator, replacer_fn_no_op()).get0();
+            BOOST_REQUIRE(info.new_sstables.size() == 1);
+            check_min_max_column_names(info.new_sstables.front(), {"0ck100"}, {"9ck298"});
         }
-        mt->apply(std::move(m));
-        auto sst2 = make_sstable(s, tmp->path, 2, la, big);
-        write_memtable_to_sstable_for_test(*mt, sst2).get();
-        sst2 = reusable_sst(s, tmp->path, 2).get0();
-        check_min_max_column_names(sst2, { "9ck101" }, { "9ck298" });
-
-        auto creator = [s, tmp] { return sstables::make_sstable(s, tmp->path, 3, la, big); };
-        auto info = sstables::compact_sstables(sstables::compaction_descriptor({ sst, sst2 }), *cf, creator, replacer_fn_no_op()).get0();
-        BOOST_REQUIRE(info.new_sstables.size() == 1);
-        check_min_max_column_names(info.new_sstables.front(), { "0ck100" }, { "9ck298" });
     });
 }
 
