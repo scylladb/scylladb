@@ -44,7 +44,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/restrictions/single_column_restriction.hh"
 #include "validation.hh"
-#include "db/consistency_level.hh"
+#include "db/consistency_level_validations.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "query-result-reader.hh"
 #include <boost/range/adaptor/transformed.hpp>

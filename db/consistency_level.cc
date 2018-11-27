@@ -40,6 +40,7 @@
  */
 
 #include "db/consistency_level.hh"
+#include "db/consistency_level_validations.hh"
 
 #include <boost/range/algorithm/stable_partition.hpp>
 #include <boost/range/algorithm/find.hpp>
