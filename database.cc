@@ -26,7 +26,6 @@
 #include <seastar/core/future-util.hh>
 #include "db/commitlog/commitlog_entry.hh"
 #include "db/system_keyspace.hh"
-#include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
 #include "to_string.hh"
