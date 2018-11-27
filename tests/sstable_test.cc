@@ -434,37 +434,6 @@ public:
     virtual void reset(indexable_element) override { }
 };
 
-SEASTAR_TEST_CASE(uncompressed_row_read_at_once) {
-    return reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([] (auto sstp) {
-        return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
-            return sstp->data_consume_rows_at_once(*uncompressed_schema(), c, 0, 95).then([sstp, &c] {
-                BOOST_REQUIRE(c.count_row_start == 1);
-                BOOST_REQUIRE(c.count_cell == 3);
-                BOOST_REQUIRE(c.count_deleted_cell == 0);
-                BOOST_REQUIRE(c.count_row_end == 1);
-                BOOST_REQUIRE(c.count_range_tombstone == 0);
-                return make_ready_future<>();
-            });
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(compressed_row_read_at_once) {
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return reusable_sst(std::move(s), "tests/sstables/compressed", 1).then([] (auto sstp) {
-        return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
-            return sstp->data_consume_rows_at_once(*uncompressed_schema(), c, 0, 95).then([sstp, &c] {
-                BOOST_REQUIRE(c.count_row_start == 1);
-                BOOST_REQUIRE(c.count_cell == 3);
-                BOOST_REQUIRE(c.count_deleted_cell == 0);
-                BOOST_REQUIRE(c.count_row_end == 1);
-                BOOST_REQUIRE(c.count_range_tombstone == 0);
-                return make_ready_future<>();
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
     return reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {

@@ -149,15 +149,6 @@ public:
 
     ~sstable();
 
-    // Read one or few rows at the given byte range from the data file,
-    // feeding them into the consumer. This function reads the entire given
-    // byte range at once into memory, so it should not be used for iterating
-    // over all the rows in the data file (see the next function for that.
-    // The function returns a future which completes after all the data has
-    // been fed into the consumer. The caller needs to ensure the "consumer"
-    // object lives until then (e.g., using the do_with() idiom).
-    future<> data_consume_rows_at_once(const schema& s, row_consumer& consumer, uint64_t pos, uint64_t end);
-
     // disk_read_range describes a byte ranges covering part of an sstable
     // row that we need to read from disk. Usually this is the whole byte
     // range covering a single sstable row, but in very large rows we might

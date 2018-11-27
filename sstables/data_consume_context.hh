@@ -63,12 +63,6 @@ data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext
 // and the time the returned future is completed, the object lives on.
 // Moreover, the sstable object used for the sstable::data_consume_rows()
 // call which created this data_consume_context, must also be kept alive.
-//
-// data_consume_rows() and data_consume_rows_at_once() both can read just a
-// single row or many rows. The difference is that data_consume_rows_at_once()
-// is optimized to reading one or few rows (reading it all into memory), while
-// data_consume_rows() uses a read buffer, so not all the rows need to fit
-// memory in the same time (they are delivered to the consumer one by one).
 template <typename DataConsumeRowsContext>
 GCC6_CONCEPT(
     requires ConsumeRowsContext<DataConsumeRowsContext>()
