@@ -906,6 +906,16 @@ class mp_row_consumer_m : public consumer_m {
         _opened_range_tombstone.reset();
     }
 
+    void check_schema_mismatch(const column_translation::column_info& column_info, const column_definition& column_def) {
+        if (column_info.schema_mismatch) {
+            throw malformed_sstable_exception(
+                    format("{} definition in serialization header does not match schema. Expected {} but got {}.",
+                        column_def.name(),
+                        column_def.type->name(),
+                        column_info.type->name()));
+        }
+    }
+
 public:
 
     /*
@@ -1082,13 +1092,7 @@ public:
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
         }
-        if (column_info.schema_mismatch) {
-            throw malformed_sstable_exception(
-                    format("{} definition in serialization header does not match schema. Expected {} but got {}.",
-                        column_def.name(),
-                        column_def.type->name(),
-                        column_info.type->name()));
-        }
+        check_schema_mismatch(column_info, column_def);
         if (column_def.is_multi_cell()) {
             auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
             auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
@@ -1122,13 +1126,7 @@ public:
         if (column_id) {
             const column_definition& column_def = get_column_definition(column_id);
             if (!_cm.cells.empty() || (_cm.tomb && _cm.tomb.timestamp > column_def.dropped_at())) {
-                if (column_info.schema_mismatch) {
-                    throw malformed_sstable_exception(
-                            format("{} definition in serialization header does not match schema. Expected {} but got {}.",
-                                column_def.name(),
-                                column_def.type->name(),
-                                column_info.type->name()));
-                }
+                check_schema_mismatch(column_info, column_def);
                 auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
                 auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(_cm));
                 _cells.push_back({column_def.id, atomic_cell_or_collection(std::move(ac))});
@@ -1151,13 +1149,7 @@ public:
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
         }
-        if (column_info.schema_mismatch) {
-            throw malformed_sstable_exception(
-                    format("{} definition in serialization header does not match schema. Expected {} but got {}.",
-                        column_def.name(),
-                        column_def.type->name(),
-                        column_info.type->name()));
-        }
+        check_schema_mismatch(column_info, column_def);
         auto ac = make_counter_cell(timestamp, value);
         _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
         return proceed::yes;
