@@ -3038,17 +3038,18 @@ static void compare_files(sstring filename1, sstring filename2) {
     BOOST_CHECK_EQUAL_COLLECTIONS(b1, e1, b2, e2);
 }
 
-static sstring get_write_test_path(sstring table_name, bool compressed = false) {
-    return format("tests/sstables/3.x/{}compressed/write_{}", compressed ? "" : "un", table_name);
+static sstring get_write_test_path(sstring table_name) {
+    return format("tests/sstables/3.x/uncompressed/write_{}", table_name);
 }
 
-static void compare_sstables(sstring result_path, sstring table_name, bool compressed = false) {
+// This method should not be called for compressed sstables because compression is not deterministic
+static void compare_sstables(sstring result_path, sstring table_name) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Digest,
                            component_type::Filter}) {
         auto orig_filename =
-                sstable::filename(get_write_test_path(table_name, compressed),
+                sstable::filename(get_write_test_path(table_name),
                                   "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         auto result_filename =
                 sstable::filename(result_path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
@@ -3056,10 +3057,7 @@ static void compare_sstables(sstring result_path, sstring table_name, bool compr
     }
 }
 
-// Can be useful if we want, e.g., to avoid range tombstones de-overlapping
-// that otherwise takes place for RTs put into one and the same memtable
-static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
-                                       sstring table_name, bool compressed = false) {
+static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2) {
     static db::nop_large_partition_handler nop_lp_handler;
     storage_service_for_tests ssft;
     tmpdir tmp;
@@ -3069,16 +3067,29 @@ static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> m
     sst->write_components(make_combined_reader(s,
         mt1->make_flat_reader(s),
         mt2->make_flat_reader(s)), 1, s, cfg, mt1->get_stats()).get();
-    compare_sstables(tmp.path, table_name, compressed);
     return tmp;
 }
 
-static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, bool compressed = false) {
+// Can be useful if we want, e.g., to avoid range tombstones de-overlapping
+// that otherwise takes place for RTs put into one and the same memtable
+static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
+                                         sstring table_name) {
+    auto tmp = write_sstables(std::move(s), std::move(mt1), std::move(mt2));
+    compare_sstables(tmp.path, table_name);
+    return tmp;
+}
+
+static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt) {
     storage_service_for_tests ssft;
     tmpdir tmp;
     auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
     write_memtable_to_sstable_for_test(*mt, sst).get();
-    compare_sstables(tmp.path, table_name, compressed);
+    return tmp;
+}
+
+static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name) {
+    auto tmp = write_sstables(std::move(s), std::move(mt));
+    compare_sstables(tmp.path, table_name);
     return tmp;
 }
 
@@ -3450,9 +3461,7 @@ static void test_write_many_partitions(sstring table_name, tombstone partition_t
     }
 
     bool compressed = cp.get_compressor() != nullptr;
-    std::cout << (compressed ? "compressed " : "uncompressed") << std::endl;
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name, compressed);
-    std::cout << "wrote and compared\n";
+    tmpdir tmp = compressed ? write_sstables(s, mt) : write_and_compare_sstables(s, mt, table_name);
     boost::sort(muts, mutation_decorated_key_less_comparator());
     validate_read(s, tmp.path, muts);
 }
