@@ -128,6 +128,8 @@ public:
         sync_mode mode = sync_mode::PERIODIC;
         std::string fname_prefix = descriptor::FILENAME_PREFIX;
 
+        bool reuse_segments = true;
+
         const db::extensions * extensions = nullptr;
     };
 

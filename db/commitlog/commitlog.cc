@@ -130,6 +130,7 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.commitlog_sync_period_in_ms = cfg.commitlog_sync_period_in_ms();
     c.mode = cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC;
     c.extensions = &cfg.extensions();
+    c.reuse_segments = cfg.commitlog_reuse_segments();
 
     return c;
 }
@@ -282,6 +283,11 @@ public:
     future<sseg_ptr> new_segment();
     future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout);
     future<sseg_ptr> allocate_segment(bool active);
+    future<sseg_ptr> allocate_segment_ex(const descriptor&, sstring filename, open_flags, bool active);
+
+    sstring filename(const descriptor& d) const {
+        return cfg.commit_log_location + "/" + d.filename();
+    }
 
     future<> clear();
     future<> sync_all_segments(bool shutdown = false);
@@ -333,10 +339,12 @@ public:
 private:
     future<> clear_reserve_segments();
 
+    future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0;
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
+    std::deque<sstring> _recycled_segments;
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
@@ -1207,20 +1215,16 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
     }
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
-    static const auto flags = open_flags::wo | open_flags::create;
-
-    descriptor d(next_id(), cfg.fname_prefix);
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(const descriptor& d, sstring filename, open_flags flags, bool active) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
-    auto filename = cfg.commit_log_location + "/" + d.filename();
-    auto fut = do_io_check(commit_error_handler, [&] {
+    auto fut = do_io_check(commit_error_handler, [=] {
         auto fut = open_file_dma(filename, flags, opt);
         if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
-            fut = fut.then([this, filename](file f) {
-                return do_with(std::move(f), [this, filename](file& f) {
+            fut = fut.then([this, filename, flags](file f) {
+                return do_with(std::move(f), [this, filename, flags](file& f) {
                     auto ext_range = cfg.extensions->commitlog_file_extensions();
-                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename](auto& ext) {
+                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename, flags](auto& ext) {
                         // note: we're potentially wrapping more than once. extension mechanism
                         // is responsible for order being sane.
                         return ext->wrap_file(filename, f, flags).then([&f](file of) {
@@ -1245,6 +1249,34 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             return make_ready_future<sseg_ptr>(s);
         });
     });
+}
+
+future<> db::commitlog::segment_manager::rename_file(sstring from, sstring to) const {
+    return do_io_check(commit_error_handler, [this, from = std::move(from), to = std::move(to)]() mutable {
+        return seastar::rename_file(std::move(from), std::move(to)).then([this] {
+            return seastar::sync_directory(cfg.commit_log_location);
+        });
+    });
+}
+
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
+    descriptor d(next_id(), cfg.fname_prefix);
+    auto dst = filename(d);
+
+    if (!_recycled_segments.empty()) {
+        auto src = std::move(_recycled_segments.front());
+        _recycled_segments.pop_front();
+        // Note: we have to do the rename here to ensure
+        // proper descriptor id order. If we renamed in the delete call
+        // that recycled the file we could potentially have
+        // out-of-order files. (Sort does not help).
+        clogger.debug("Using recycled segment file {} -> {}", src, dst);
+        return rename_file(std::move(src), dst).then([=] {
+            return allocate_segment_ex(d, dst, open_flags::wo, false);
+        });
+    }
+
+    return allocate_segment_ex(d, dst, open_flags::wo|open_flags::create, active);
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
@@ -1370,7 +1402,17 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
     while (!_reserve_segments.empty()) {
         _reserve_segments.pop();
     }
-    return do_pending_deletes();
+
+    auto re = std::exchange(_recycled_segments, {});
+    auto i = re.begin();
+    auto e = re.end();
+
+    return parallel_for_each(i, e, [this](const sstring& filename) {
+        clogger.debug("Deleting recycled segment file {}", filename);
+        return commit_io_check(&seastar::remove_file, filename);
+    }).finally([this, re = std::move(re)] {
+        return do_pending_deletes();
+    });
 }
 
 future<> db::commitlog::segment_manager::sync_all_segments(bool shutdown) {
@@ -1437,6 +1479,25 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
             });
         }
         return f.finally([&] {
+            // We allow reuse of the segment if the current disk size is less than shard max.
+            // We however don't know the exact size of this file (or the others on the recycle
+            // list, so assume they are max_size large.
+            auto usage = totals.total_size_on_disk + (1 + _recycled_segments.size()) * max_size;
+            if (!_shutdown && cfg.reuse_segments && usage < max_disk_size) {
+                descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
+                auto dst = this->filename(d);
+
+                clogger.debug("Recycling segment file {}", filename);
+                // must rename the file since we must ensure the
+                // data is not replayed. Changing the name will
+                // cause header ID to be invalid in the file -> ignored
+                return rename_file(filename, dst).then([=] {
+                    _recycled_segments.emplace_back(dst);
+                    return make_ready_future<>();
+                }).handle_exception([this, filename](auto&&) {
+                    return commit_io_check(&seastar::remove_file, filename);
+                });
+            }
             clogger.debug("Deleting segment file {}", filename);
             return commit_io_check(&seastar::remove_file, filename);
         }).handle_exception([&filename](auto ep) {
@@ -1447,12 +1508,13 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
     auto ftc = std::exchange(_files_to_close, {});
+    auto ftd = std::exchange(_files_to_delete, {});
     auto i = ftc.begin();
     auto e = ftc.end();
     return parallel_for_each(i, e, [](file & f) {
         return f.close();
-    }).then([this, ftc = std::move(ftc)] {
-        return delete_segments(boost::copy_range<std::vector<sstring>>(std::exchange(_files_to_delete, {}) | boost::adaptors::map_keys));
+    }).then([this, ftc = std::move(ftc), ftd = std::move(ftd)] {
+        return delete_segments(boost::copy_range<std::vector<sstring>>(ftd | boost::adaptors::map_keys));
     });
 }
 
