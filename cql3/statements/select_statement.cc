@@ -56,6 +56,7 @@
 #include "partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/timeout_clock.hh"
+#include "db/consistency_level.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
