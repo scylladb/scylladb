@@ -652,25 +652,22 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 nullptr,
                 db::no_timeout).get();
 
-        // Make a fake keyspace just to obtain the configuration and
-        // thus the concurrency semaphore.
-        const auto dummy_ks_metadata = keyspace_metadata("dummy_ks", "SimpleStrategy", {{"replication_factor", "1"}}, false);
-        auto cfg = db.make_keyspace_config(dummy_ks_metadata);
+        auto& semaphore = db.user_read_concurrency_sem();
 
         BOOST_REQUIRE_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 0);
 
         // Drain all resources of the semaphore
         std::vector<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> permits;
-        const auto resources = cfg.read_concurrency_semaphore->available_resources();
+        const auto resources = semaphore.available_resources();
         permits.reserve(resources.count);
         const auto per_permit_memory  = resources.memory / resources.count;
 
         for (int i = 0; i < resources.count; ++i) {
-            permits.emplace_back(cfg.read_concurrency_semaphore->wait_admission(per_permit_memory).get0());
+            permits.emplace_back(semaphore.wait_admission(per_permit_memory).get0());
         }
 
-        BOOST_REQUIRE_EQUAL(cfg.read_concurrency_semaphore->available_resources().count, 0);
-        BOOST_REQUIRE(cfg.read_concurrency_semaphore->available_resources().memory < per_permit_memory);
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources().count, 0);
+        BOOST_REQUIRE(semaphore.available_resources().memory < per_permit_memory);
 
         auto cmd2 = query::read_command(s->id(),
                 s->version(),
