@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 #
 # Copyright 2017 ScyllaDB
 #
@@ -121,7 +122,7 @@ def validate_and_fix(args):
                     print("{}.{} doesn't exist - skipping".format(ks, table_name))
                     continue
 
-                print "Adjusting {}.{}".format(ks, table_name)
+                print("Adjusting {}.{}".format(ks, table_name))
 
                 table_meta = ks_meta.tables[table_name]
                 for column_name, column_type in table_cols.items():
@@ -133,12 +134,12 @@ def validate_and_fix(args):
                     else:
                         try:
                             session.execute("ALTER TABLE {}.{} ADD {} {}".format(ks, table_name, column_name, column_type))
-                            print "{}.{}: added column '{}' of the type '{}'".format(ks, table_name, column_name, column_type)
+                            print("{}.{}: added column '{}' of the type '{}'".format(ks, table_name, column_name, column_type))
                         except Exception:
-                            print "ERROR: {}.{}: failed to add column '{}' with type '{}': {}".format(ks, table_name, column_name, column_type, sys.exc_info())
+                            print("ERROR: {}.{}: failed to add column '{}' with type '{}': {}".format(ks, table_name, column_name, column_type, sys.exc_info()))
                             res = False
     except Exception:
-        print "ERROR: {}".format(sys.exc_info())
+        print("ERROR: {}".format(sys.exc_info()))
         res = False
 
     return res
