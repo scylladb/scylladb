@@ -3387,7 +3387,7 @@ static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes
 }
 
 static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> exploded_pk, std::vector<std::vector<bytes>> exploded_cks,
-        std::vector<bytes> min_components, std::vector<bytes> max_components, bool remove = false) {
+        std::vector<bytes> min_components, std::vector<bytes> max_components, sstable_version_types version, bool remove = false) {
     auto mt = make_lw_shared<memtable>(s);
     auto insert_data = [&mt, &s] (std::vector<bytes>& exploded_pk, std::vector<bytes>&& exploded_ck) {
         const column_definition& r1_col = *s->get_column_definition("r1");
@@ -3421,56 +3421,62 @@ static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> explode
         }
     }
     auto tmp = make_lw_shared<tmpdir>();
-    auto sst = make_sstable(s, tmp->path, 1, la, big);
+    auto sst = make_sstable(s, tmp->path, 1, version, big);
     write_memtable_to_sstable_for_test(*mt, sst).get();
-    sst = reusable_sst(s, tmp->path, 1).get0();
+    sst = reusable_sst(s, tmp->path, 1, version).get0();
     check_min_max_column_names(sst, std::move(min_components), std::move(max_components));
 }
 
 SEASTAR_TEST_CASE(min_max_clustering_key_test) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        {
-            auto s = schema_builder("ks", "cf")
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("ck1", utf8_type, column_kind::clustering_key)
-                .with_column("ck2", utf8_type, column_kind::clustering_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, { { "a", "b" }, { "a", "c" } }, { "a", "b" }, { "a", "c" });
-        }
-        {
-            auto s = schema_builder("ks", "cf")
-                .with(schema_builder::compact_storage::yes)
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("ck1", utf8_type, column_kind::clustering_key)
-                .with_column("ck2", utf8_type, column_kind::clustering_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, { { "a", "b" }, { "a", "c" } }, { "a", "b" }, { "a", "c" });
-        }
-        {
-            auto s = schema_builder("ks", "cf")
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("ck1", utf8_type, column_kind::clustering_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, { { "a" }, { "z" } }, { "a" }, { "z" });
-        }
-        {
-            auto s = schema_builder("ks", "cf")
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("ck1", utf8_type, column_kind::clustering_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, { { "a" }, { "z" } }, { "a" }, { "z" }, true);
-        }
-        {
-            auto s = schema_builder("ks", "cf")
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, {}, {}, {});
+        for (auto version : all_sstable_versions) {
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("ck1", utf8_type, column_kind::clustering_key)
+                        .with_column("ck2", utf8_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {{"a", "b"},
+                                                          {"a", "c"}}, {"a", "b"}, {"a", "c"}, version);
+            }
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with(schema_builder::compact_storage::yes)
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("ck1", utf8_type, column_kind::clustering_key)
+                        .with_column("ck2", utf8_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {{"a", "b"},
+                                                          {"a", "c"}}, {"a", "b"}, {"a", "c"}, version);
+            }
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("ck1", utf8_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {{"a"},
+                                                          {"z"}}, {"a"}, {"z"}, version);
+            }
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("ck1", utf8_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {{"a"},
+                                                          {"z"}}, {"a"}, {"z"}, version, true);
+            }
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {}, {}, {}, version);
+            }
         }
     });
 }
