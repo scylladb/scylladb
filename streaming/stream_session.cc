@@ -68,9 +68,6 @@ namespace streaming {
 
 logging::logger sslog("stream_session");
 
-struct sstable_is_staging_tag { };
-using sstable_is_staging = bool_class<sstable_is_staging_tag>;
-
 /*
  * This reader takes a get_next_fragment generator that produces mutation_fragment_opt which is returned by
  * generating_reader.
@@ -143,6 +140,9 @@ static future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sy
 }
 
 static future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const table& t, stream_reason reason) {
+    if (is_internal_keyspace(t.schema()->ks_name())) {
+        return make_ready_future<bool>(false);
+    }
     if (reason == stream_reason::repair) {
         return make_ready_future<bool>(true);
     }
