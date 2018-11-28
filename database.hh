@@ -1428,6 +1428,12 @@ public:
     std::unordered_set<sstring> get_initial_tokens();
     std::experimental::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
+    reader_concurrency_semaphore& user_read_concurrency_sem() {
+        return _read_concurrency_sem;
+    }
+    reader_concurrency_semaphore& streaming_read_concurrency_sem() {
+        return _streaming_concurrency_sem;
+    }
     reader_concurrency_semaphore& system_keyspace_read_concurrency_sem() {
         return _system_read_concurrency_sem;
     }
