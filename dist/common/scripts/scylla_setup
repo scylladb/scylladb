@@ -114,8 +114,11 @@ if __name__ == '__main__':
         print('Requires root permission.')
         sys.exit(1)
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
-    parser.add_argument('--disks',
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--disks',
                         help='specify disks for RAID')
+    group.add_argument('--no-raid-setup', action='store_true', default=False,
+                        help='skip raid setup')
     parser.add_argument('--nic', default='eth0',
                         help='specify NIC')
     parser.add_argument('--ntp-domain',
@@ -141,8 +144,6 @@ if __name__ == '__main__':
                         help='skip bootparam setup')
     parser.add_argument('--no-ntp-setup', action='store_true', default=False,
                         help='skip ntp setup')
-    parser.add_argument('--no-raid-setup', action='store_true', default=False,
-                        help='skip raid setup')
     parser.add_argument('--no-coredump-setup', action='store_true', default=False,
                         help='skip coredump setup')
     parser.add_argument('--no-sysconfig-setup', action='store_true', default=False,
@@ -163,9 +164,6 @@ if __name__ == '__main__':
         interactive = True
 
     if not interactive:
-        if not args.no_raid_setup and not args.disks:
-            parser.print_help()
-            sys.exit(1)
         if not args.no_sysconfig_setup or (is_ec2() and not args.no_ec2_check):
             if not is_valid_nic(args.nic):
                 print('NIC {} doesn\'t exist.'.format(args.nic))
