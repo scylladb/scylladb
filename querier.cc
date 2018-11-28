@@ -216,16 +216,43 @@ static querier_cache::entries::iterator find_querier(querier_cache::entries& ent
     return it->pos();
 }
 
-querier_cache::querier_cache(size_t max_cache_size, std::chrono::seconds entry_ttl)
-    : _expiry_timer([this] { scan_cache_entries(); })
+querier_cache::querier_cache(reader_concurrency_semaphore& sem, size_t max_cache_size, std::chrono::seconds entry_ttl)
+    : _sem(sem)
+    , _expiry_timer([this] { scan_cache_entries(); })
     , _entry_ttl(entry_ttl)
     , _max_queriers_memory_usage(max_cache_size) {
     _expiry_timer.arm_periodic(entry_ttl / 2);
 }
 
+class querier_inactive_read : public reader_concurrency_semaphore::inactive_read {
+    querier_cache::entries& _entries;
+    querier_cache::entries::iterator _pos;
+    querier_cache::stats& _stats;
+
+public:
+    querier_inactive_read(querier_cache::entries& entries, querier_cache::entries::iterator pos, querier_cache::stats& stats)
+        : _entries(entries)
+        , _pos(pos)
+        , _stats(stats) {
+    }
+    virtual void evict() override {
+        _entries.erase(_pos);
+        ++_stats.resource_based_evictions;
+        --_stats.population;
+    }
+};
+
 template <typename Querier>
-static void insert_querier(querier_cache::entries& entries, querier_cache::index& index, querier_cache::stats& stats,
-        size_t max_queriers_memory_usage, utils::UUID key, Querier&& q, lowres_clock::time_point expires, tracing::trace_state_ptr trace_state) {
+static void insert_querier(
+        reader_concurrency_semaphore& sem,
+        querier_cache::entries& entries,
+        querier_cache::index& index,
+        querier_cache::stats& stats,
+        size_t max_queriers_memory_usage,
+        utils::UUID key,
+        Querier&& q,
+        lowres_clock::time_point expires,
+        tracing::trace_state_ptr trace_state) {
     // FIXME: see #3159
     // In reverse mode flat_mutation_reader drops any remaining rows of the
     // current partition when the page ends so it cannot be reused across
@@ -258,27 +285,30 @@ static void insert_querier(querier_cache::entries& entries, querier_cache::index
 
     auto& e = entries.emplace_back(key, std::move(q), expires);
     e.set_pos(--entries.end());
+    e.set_inactive_handle(sem.register_inactive_read(std::make_unique<querier_inactive_read>(entries, e.pos(), stats)));
     index.insert(e);
     ++stats.population;
 }
 
 void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
-    insert_querier(_entries, _data_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
+    insert_querier(_sem, _entries, _data_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
             std::move(trace_state));
 }
 
 void querier_cache::insert(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state) {
-    insert_querier(_entries, _mutation_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
+    insert_querier(_sem, _entries, _mutation_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
             std::move(trace_state));
 }
 
 void querier_cache::insert(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state) {
-    insert_querier(_entries, _shard_mutation_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
+    insert_querier(_sem, _entries, _shard_mutation_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
             std::move(trace_state));
 }
 
 template <typename Querier>
-static std::optional<Querier> lookup_querier(querier_cache::entries& entries,
+static std::optional<Querier> lookup_querier(
+        reader_concurrency_semaphore& sem,
+        querier_cache::entries& entries,
         querier_cache::index& index,
         querier_cache::stats& stats,
         utils::UUID key,
@@ -294,6 +324,7 @@ static std::optional<Querier> lookup_querier(querier_cache::entries& entries,
     }
 
     auto q = std::move(*it).template value<Querier>();
+    sem.unregister_inactive_read(it->get_inactive_handle());
     entries.erase(it);
     --stats.population;
 
@@ -313,7 +344,7 @@ std::optional<data_querier> querier_cache::lookup_data_querier(utils::UUID key,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<data_querier>(_entries, _data_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+    return lookup_querier<data_querier>(_sem, _entries, _data_querier_index, _stats, key, s, range, slice, std::move(trace_state));
 }
 
 std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UUID key,
@@ -321,7 +352,7 @@ std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UU
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<mutation_querier>(_entries, _mutation_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+    return lookup_querier<mutation_querier>(_sem, _entries, _mutation_querier_index, _stats, key, s, range, slice, std::move(trace_state));
 }
 
 std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(utils::UUID key,
@@ -329,7 +360,8 @@ std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_queri
         const dht::partition_range_vector& ranges,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<shard_mutation_querier>(_entries, _shard_mutation_querier_index, _stats, key, s, ranges, slice, std::move(trace_state));
+    return lookup_querier<shard_mutation_querier>(_sem, _entries, _shard_mutation_querier_index, _stats, key, s, ranges, slice,
+            std::move(trace_state));
 }
 
 void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {

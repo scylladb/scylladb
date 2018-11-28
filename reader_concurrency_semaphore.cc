@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/reactor.hh>
+
 #include "reader_concurrency_semaphore.hh"
 
 void reader_concurrency_semaphore::signal(const resources& r) {
@@ -31,14 +33,41 @@ void reader_concurrency_semaphore::signal(const resources& r) {
     }
 }
 
+reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(std::unique_ptr<inactive_read> ir) {
+    // Implies _inactive_reads.empty(), we don't queue new readers before
+    // evicting all inactive reads.
+    if (_wait_list.empty()) {
+        const auto [it, _] = _inactive_reads.emplace(_next_id++, std::move(ir));
+        (void)_;
+        return inactive_read_handle(it->first);
+    }
+
+    // The evicted reader will release its permit, hopefully allowing us to
+    // admit some readers from the _wait_list.
+    ir->evict();
+    return inactive_read_handle();
+}
+
+std::unique_ptr<reader_concurrency_semaphore::inactive_read> reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
+    if (auto it = _inactive_reads.find(irh._id); it != _inactive_reads.end()) {
+        auto ir = std::move(it->second);
+        _inactive_reads.erase(it);
+        return ir;
+    }
+    return {};
+}
+
 future<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> reader_concurrency_semaphore::wait_admission(size_t memory,
         db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         return make_exception_future<lw_shared_ptr<reader_permit>>(_make_queue_overloaded_exception());
     }
     auto r = resources(1, static_cast<ssize_t>(memory));
-    if (!may_proceed(r) && _evict_an_inactive_reader) {
-        while (_evict_an_inactive_reader() && !may_proceed(r));
+    auto it = _inactive_reads.begin();
+    while (!may_proceed(r) && it != _inactive_reads.end()) {
+        auto ir = std::move(it->second);
+        it = _inactive_reads.erase(it);
+        ir->evict();
     }
     if (may_proceed(r)) {
         _resources -= r;
