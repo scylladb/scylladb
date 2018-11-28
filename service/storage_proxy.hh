@@ -286,6 +286,8 @@ private:
     db::view::update_backlog get_view_update_backlog() const;
 
     void maybe_update_view_backlog_of(gms::inet_address, stdx::optional<db::view::update_backlog>);
+
+    db::view::update_backlog get_backlog_of(gms::inet_address) const;
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog);
     ~storage_proxy();
