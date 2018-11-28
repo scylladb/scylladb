@@ -1464,6 +1464,8 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
 
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy);
 
+bool is_internal_keyspace(const sstring& name);
+
 class distributed_loader {
 public:
     static void reshard(distributed<database>& db, sstring ks_name, sstring cf_name);
