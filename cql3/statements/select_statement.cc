@@ -383,8 +383,9 @@ select_statement::do_execute(service::storage_proxy& proxy,
     int32_t limit = get_limit(options);
     auto now = gc_clock::now();
 
+    const bool restrictions_need_filtering = _restrictions->need_filtering();
     ++_stats.reads;
-    _stats.filtered_reads += _restrictions->need_filtering();
+    _stats.filtered_reads += restrictions_need_filtering;
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
         make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, utils::UUID(), options.get_timestamp(state));
@@ -396,14 +397,15 @@ select_statement::do_execute(service::storage_proxy& proxy,
     // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
     // If we user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
     // Note that if there are some nodes in the cluster with a version less than 2.0, we can't use paging (CASSANDRA-6707).
-    auto aggregate = _selection->is_aggregate();
-    if (aggregate && page_size <= 0) {
+    const bool aggregate = _selection->is_aggregate();
+    const bool nonpaged_filtering = restrictions_need_filtering && page_size <= 0;
+    if (aggregate || nonpaged_filtering) {
         page_size = DEFAULT_COUNT_PAGE_SIZE;
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
-    if (!aggregate && (page_size <= 0
+    if (!aggregate && !restrictions_need_filtering && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
                     *command, key_ranges))) {
         return execute(proxy, command, std::move(key_ranges), state, options, now);
@@ -412,22 +414,25 @@ select_statement::do_execute(service::storage_proxy& proxy,
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = options.get_timeout_config().*get_timeout_config_selector();
     auto p = service::pager::query_pagers::pager(_schema, _selection,
-            state, options, command, std::move(key_ranges), _stats, _restrictions->need_filtering() ? _restrictions : nullptr);
+            state, options, command, std::move(key_ranges), _stats, restrictions_need_filtering ? _restrictions : nullptr);
 
-    if (aggregate) {
+    if (aggregate || nonpaged_filtering) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         options.get_cql_serialization_format()),
-                [this, p, page_size, now, timeout_duration](auto& builder) {
+                [this, p, page_size, now, timeout_duration, restrictions_need_filtering, limit](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
                             [p, &builder, page_size, now, timeout_duration] {
                                 auto timeout = db::timeout_clock::now() + timeout_duration;
                                 return p->fetch_page(builder, page_size, now, timeout);
                             }
-                    ).then([this, &builder] {
+                    ).then([this, &builder, restrictions_need_filtering, limit] {
                                 auto rs = builder.build();
+                                if (restrictions_need_filtering) {
+                                    rs->trim(limit);
+                                    _stats.filtered_rows_matched_total += rs->size();
+                                }
                                 update_stats_rows_read(rs->size());
-                                _stats.filtered_rows_matched_total += _restrictions->need_filtering() ? rs->size() : 0;
                                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
                             });
@@ -441,7 +446,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     auto timeout = db::timeout_clock::now() + timeout_duration;
-    if (_selection->is_trivial() && !_restrictions->need_filtering()) {
+    if (_selection->is_trivial() && !restrictions_need_filtering) {
         return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p, limit] (result_generator generator) {
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
@@ -460,14 +465,17 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     return p->fetch_page(page_size, now, timeout).then(
-            [this, p, &options, limit, now](std::unique_ptr<cql3::result_set> rs) {
+            [this, p, &options, limit, now, restrictions_need_filtering](std::unique_ptr<cql3::result_set> rs) {
 
                 if (!p->is_exhausted()) {
                     rs->get_metadata().set_paging_state(p->state());
                 }
 
+                if (restrictions_need_filtering) {
+                    rs->trim(limit);
+                    _stats.filtered_rows_matched_total += rs->size();
+                }
                 update_stats_rows_read(rs->size());
-                _stats.filtered_rows_matched_total += _restrictions->need_filtering() ? rs->size() : 0;
                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
             });
@@ -714,7 +722,8 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
                                   const query_options& options,
                                   gc_clock::time_point now)
 {
-    bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !_restrictions->need_filtering();
+    const bool restrictions_need_filtering = _restrictions->need_filtering();
+    const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !restrictions_need_filtering;
     if (fast_path) {
         return make_shared<cql_transport::messages::result_message::rows>(result(
             result_generator(_schema, std::move(results), std::move(cmd), _selection, _stats),
@@ -724,7 +733,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
 
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
-    if (_restrictions->need_filtering()) {
+    if (restrictions_need_filtering) {
         results->ensure_counts();
         _stats.filtered_rows_read_total += *results->row_count();
         query::result_view::consume(*results, cmd->slice,
@@ -743,9 +752,11 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
             rs->reverse();
         }
         rs->trim(cmd->row_limit);
+    } else if (restrictions_need_filtering) {
+        rs->trim(cmd->row_limit);
     }
     update_stats_rows_read(rs->size());
-    _stats.filtered_rows_matched_total += _restrictions->need_filtering() ? rs->size() : 0;
+    _stats.filtered_rows_matched_total += restrictions_need_filtering ? rs->size() : 0;
     return ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
 }
 

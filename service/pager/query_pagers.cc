@@ -55,7 +55,7 @@ struct noop_visitor {
     void accept_new_partition(const partition_key& key, uint32_t row_count) { }
     void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) { }
     void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) { }
-    void accept_partition_end(const query::result_row_view& static_row) { }
+    uint32_t accept_partition_end(const query::result_row_view& static_row) { return 0; }
 };
 
 static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
@@ -202,7 +202,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             }
         }
 
-        auto max_rows = std::min(_max, page_size);
+        auto max_rows = max_rows_to_fetch(page_size);
 
         // We always need PK so we can determine where to start next.
         _cmd->slice.options.set<query::partition_slice::option::send_partition_key>();
@@ -284,6 +284,10 @@ public:
                           std::move(qr.query_result), page_size, now);
         });
     }
+protected:
+    virtual uint32_t max_rows_to_fetch(uint32_t page_size) override {
+        return page_size;
+    }
 };
 
 template<typename Base>
@@ -291,6 +295,7 @@ class query_pager::query_result_visitor : public Base {
     using visitor = Base;
 public:
     uint32_t total_rows = 0;
+    uint32_t dropped_rows = 0;
     std::experimental::optional<partition_key> last_pkey;
     std::experimental::optional<clustering_key> last_ckey;
 
@@ -317,7 +322,7 @@ public:
         visitor::accept_new_row(static_row, row);
     }
     void accept_partition_end(const query::result_row_view& static_row) {
-        visitor::accept_partition_end(static_row);
+        dropped_rows += visitor::accept_partition_end(static_row);
     }
 };
 
@@ -348,9 +353,9 @@ public:
                 update_slice(*_last_pkey);
             }
 
-            row_count = v.total_rows;
+            row_count = v.total_rows - v.dropped_rows;
             _max = _max - row_count;
-            _exhausted = (v.total_rows < page_size && !results->is_short_read()) || _max == 0;
+            _exhausted = (v.total_rows < page_size && !results->is_short_read() && v.dropped_rows == 0) || _max == 0;
             _last_pkey = v.last_pkey;
             _last_ckey = v.last_ckey;
         } else {

@@ -151,6 +151,10 @@ protected:
     void handle_result(Visitor&& visitor,
                       const foreign_ptr<lw_shared_ptr<query::result>>& results,
                       uint32_t page_size, gc_clock::time_point now);
+
+    virtual uint32_t max_rows_to_fetch(uint32_t page_size) {
+        return std::min(_max, page_size);
+    }
 };
 
 }
