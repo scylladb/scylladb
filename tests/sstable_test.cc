@@ -51,48 +51,6 @@ bytes as_bytes(const sstring& s) {
     return { reinterpret_cast<const int8_t*>(s.begin()), s.size() };
 }
 
-
-static future<> broken_sst(sstring dir, unsigned long generation) {
-    // Using an empty schema for this function, which is only about loading
-    // a malformed component and checking that it fails.
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    auto sst = std::make_unique<sstable>(s, dir, generation, la, big);
-    auto fut = sst->load();
-    return std::move(fut).then_wrapped([sst = std::move(sst)] (future<> f) mutable {
-        try {
-            f.get();
-            BOOST_FAIL("expecting exception");
-        } catch (malformed_sstable_exception& e) {
-            // ok
-        }
-        return make_ready_future<>();
-    });
-}
-
-SEASTAR_TEST_CASE(empty_toc) {
-    return broken_sst("tests/sstables/badtoc", 1);
-}
-
-SEASTAR_TEST_CASE(alien_toc) {
-    return broken_sst("tests/sstables/badtoc", 2);
-}
-
-SEASTAR_TEST_CASE(truncated_toc) {
-    return broken_sst("tests/sstables/badtoc", 3);
-}
-
-SEASTAR_TEST_CASE(wrong_format_toc) {
-    return broken_sst("tests/sstables/badtoc", 4);
-}
-
-SEASTAR_TEST_CASE(compression_truncated) {
-    return broken_sst("tests/sstables/badcompression", 1);
-}
-
-SEASTAR_TEST_CASE(compression_bytes_flipped) {
-    return broken_sst("tests/sstables/badcompression", 2);
-}
-
 SEASTAR_TEST_CASE(uncompressed_data) {
     return working_sst(uncompressed_schema(), uncompressed_dir(), 1);
 }

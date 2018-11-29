@@ -281,6 +281,7 @@ scylla_tests = [
     'tests/mutation_query_test',
     'tests/row_cache_test',
     'tests/test-serialization',
+    'tests/broken_sstable_test',
     'tests/sstable_test',
     'tests/sstable_3_x_test',
     'tests/sstable_mutation_test',
