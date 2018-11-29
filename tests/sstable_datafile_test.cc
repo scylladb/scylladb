@@ -4037,43 +4037,45 @@ SEASTAR_TEST_CASE(sstable_resharding_strategy_tests) {
 SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        auto builder = schema_builder("tests", "tombstone_histogram_test")
-                .with_column("id", utf8_type, column_kind::partition_key)
-                .with_column("value", int32_type);
-        auto s = builder.build();
+        for (auto version : all_sstable_versions) {
+            auto builder = schema_builder("tests", "tombstone_histogram_test")
+                    .with_column("id", utf8_type, column_kind::partition_key)
+                    .with_column("value", int32_type);
+            auto s = builder.build();
 
-        auto tmp = make_lw_shared<tmpdir>();
-        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
-            return make_sstable(s, tmp->path, (*gen)++, la, big);
-        };
+            auto tmp = make_lw_shared<tmpdir>();
+            auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1), version]() mutable {
+                return make_sstable(s, tmp->path, (*gen)++, version, big);
+            };
 
-        auto next_timestamp = [] {
-            static thread_local api::timestamp_type next = 1;
-            return next++;
-        };
+            auto next_timestamp = [] {
+                static thread_local api::timestamp_type next = 1;
+                return next++;
+            };
 
-        auto make_delete = [&] (partition_key key) {
-            mutation m(s, key);
-            tombstone tomb(next_timestamp(), gc_clock::now());
-            m.partition().apply(tomb);
-            return m;
-        };
+            auto make_delete = [&](partition_key key) {
+                mutation m(s, key);
+                tombstone tomb(next_timestamp(), gc_clock::now());
+                m.partition().apply(tomb);
+                return m;
+            };
 
-        std::vector<mutation> mutations;
-        for (auto i = 0; i < sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE*2; i++) {
-            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
-            mutations.push_back(make_delete(key));
-            forward_jump_clocks(std::chrono::seconds(1));
+            std::vector<mutation> mutations;
+            for (auto i = 0; i < sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE * 2; i++) {
+                auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
+                mutations.push_back(make_delete(key));
+                forward_jump_clocks(std::chrono::seconds(1));
+            }
+            auto sst = make_sstable_containing(sst_gen, mutations);
+            auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
+            sst = reusable_sst(s, tmp->path, sst->generation(), version).get0();
+            auto histogram2 = sst->get_stats_metadata().estimated_tombstone_drop_time;
+
+            // check that histogram respected limit
+            BOOST_REQUIRE(histogram.bin.size() == TOMBSTONE_HISTOGRAM_BIN_SIZE);
+            // check that load procedure will properly load histogram from statistics component
+            BOOST_REQUIRE(histogram.bin == histogram2.bin);
         }
-        auto sst = make_sstable_containing(sst_gen, mutations);
-        auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
-        sst = reusable_sst(s, tmp->path, sst->generation()).get0();
-        auto histogram2 = sst->get_stats_metadata().estimated_tombstone_drop_time;
-
-        // check that histogram respected limit
-        BOOST_REQUIRE(histogram.bin.size() == TOMBSTONE_HISTOGRAM_BIN_SIZE);
-        // check that load procedure will properly load histogram from statistics component
-        BOOST_REQUIRE(histogram.bin == histogram2.bin);
     });
 }
 
