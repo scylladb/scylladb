@@ -164,10 +164,13 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
     return results;
 }
 
+using stateful_query = bool_class<class stateful>;
+
 static std::pair<std::vector<mutation>, size_t>
-read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, size_t page_size, const std::function<void(size_t)>& page_hook) {
+read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, size_t page_size, stateful_query is_stateful,
+        const std::function<void(size_t)>& page_hook) {
     const auto max_size = std::numeric_limits<uint64_t>::max();
-    const auto query_uuid = utils::make_random_uuid();
+    const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
     std::vector<mutation> results;
     auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), page_size, gc_clock::now(), stdx::nullopt, query::max_partitions,
             query_uuid, true);
@@ -188,7 +191,9 @@ read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, siz
     // Loop until a page turns up with less rows than the limit.
     while (nrows == page_size) {
         page_hook(npages);
-        BOOST_REQUIRE(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);
+        if (is_stateful) {
+            BOOST_REQUIRE(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);
+        }
 
         const auto& last_pkey = results.back().decorated_key();
         const auto& last_ckey = results.back().partition().clustered_rows().rbegin()->key();
@@ -259,8 +264,8 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
-        // Then do a paged range-query
-        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, [&] (size_t) {
+        // Then do a paged range-query, with reader caching
+        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t) {
             check_cache_population(env.db(), 1);
             BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
             BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0);
@@ -275,6 +280,13 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
         BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0);
 
         require_eventually_empty_caches(env.db());
+
+        // Then do a paged range-query, without reader caching
+        auto results3 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::no, [&] (size_t) {
+            check_cache_population(env.db(), 0);
+        }).first;
+
+        check_results_are_equal(results1, results3);
 
         return make_ready_future<>();
     }).get();
@@ -295,7 +307,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
         // Then do a paged range-query
-        auto [results2, npages] = read_all_partitions_with_paged_scan(env.db(), s, 4, [&] (size_t page) {
+        auto [results2, npages] = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
             check_cache_population(env.db(), 1);
 
             env.db().invoke_on(page % smp::count, [&] (database& db) {
@@ -334,7 +346,7 @@ SEASTAR_THREAD_TEST_CASE(test_range_tombstones) {
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
         // Then do a paged range-query
-        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, [&] (size_t page) {
+        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
             check_cache_population(env.db(), 1);
             BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
             BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0);
