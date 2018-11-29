@@ -77,10 +77,13 @@ if __name__ == "__main__":
                 sys.exit(1)
             data_dirs = cfg["data_file_directories"]
 
+            default_path = '/var/lib/scylla/'
             for t in [ "commitlog", "hints", "saved_caches" ]:
                 key = "%s_directory" % t
                 if key in cfg:
                     data_dirs += [ cfg[key] ]
+                elif os.path.isdir(default_path + key):
+                    data_dirs += [ default_path + key ]
 
             iotune_args = []
             for data_dir in data_dirs:
