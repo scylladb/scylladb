@@ -42,7 +42,6 @@
 
 using namespace std::chrono_literals;
 using namespace seastar;
-namespace fs=boost::filesystem;
 using int_range = nonwrapping_range<int>;
 
 reactor::io_stats s;

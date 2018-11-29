@@ -41,8 +41,8 @@ class storage_service;
 namespace db {
 namespace hints {
 
-future<dev_t> get_device_id(const lister::path& path);
-future<bool> is_mountpoint(const lister::path& path);
+future<dev_t> get_device_id(const fs::path& path);
+future<bool> is_mountpoint(const fs::path& path);
 
 using timer_clock_type = seastar::lowres_clock;
 
@@ -111,7 +111,7 @@ private:
     /// \param path directory to scan
     /// \param ep_name end point ID (as a string)
     /// \return future that resolves when scanning is complete
-    future<> scan_one_ep_dir(lister::path path, manager& shard_manager, ep_key_type ep_key);
+    future<> scan_one_ep_dir(fs::path path, manager& shard_manager, ep_key_type ep_key);
 };
 
 class resource_manager {

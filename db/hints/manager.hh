@@ -62,7 +62,7 @@ private:
     };
 
     // map: shard -> segments
-    using hints_ep_segments_map = std::unordered_map<unsigned, std::list<lister::path>>;
+    using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
     // map: IP -> map: shard -> segments
     using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
 
@@ -283,7 +283,7 @@ public:
             state::stopped>>;
 
         state_set _state;
-        const lister::path _hints_dir;
+        const fs::path _hints_dir;
         uint64_t _hints_in_progress = 0;
         sender _sender;
 
@@ -375,7 +375,7 @@ public:
             return _file_update_mutex;
         }
 
-        const lister::path& hints_dir() const noexcept {
+        const fs::path& hints_dir() const noexcept {
             return _hints_dir;
         }
 
@@ -426,7 +426,7 @@ public:
 
 private:
     state_set _state;
-    const lister::path _hints_dir;
+    const fs::path _hints_dir;
     dev_t _hints_dir_device_id = 0;
 
     node_to_hint_store_factory_type _store_factory;
@@ -519,7 +519,7 @@ public:
         return _ep_managers.size();
     }
 
-    const lister::path& hints_dir() const {
+    const fs::path& hints_dir() const {
         return _hints_dir;
     }
 
@@ -603,7 +603,7 @@ private:
             size_t segments_per_shard,
             const sstring& hints_directory,
             hints_ep_segments_map& ep_segments,
-            std::list<lister::path>& segments_to_move);
+            std::list<fs::path>& segments_to_move);
 
     /// \brief Rebalance all present hints segments.
     ///

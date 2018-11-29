@@ -29,9 +29,10 @@
 
 #include "seastarx.hh"
 
+namespace fs = std::experimental::filesystem;
+
 class lister final {
 public:
-    using path = std::experimental::filesystem::path;
     /**
      * Types of entries to list. If empty - list all present entries except for
      * hidden if not requested to.
@@ -49,8 +50,8 @@ public:
      * The first parameter of the callback represents a parent directory of
      * each entry defined by the second parameter.
      */
-    using walker_type = std::function<future<> (path, directory_entry)>;
-    using filter_type = std::function<bool (const path&, const directory_entry&)>;
+    using walker_type = std::function<future<> (fs::path, directory_entry)>;
+    using filter_type = std::function<bool (const fs::path&, const directory_entry&)>;
 
     struct show_hidden_tag {};
     using show_hidden = bool_class<show_hidden_tag>;
@@ -61,7 +62,7 @@ private:
     filter_type _filter;
     dir_entry_types _expected_type;
     subscription<directory_entry> _listing;
-    path _dir;
+    fs::path _dir;
     show_hidden _show_hidden;
 
 public:
@@ -76,41 +77,41 @@ public:
      *
      * @return A future that resolves when all entries processing is finished or an error occurs. In the later case an exceptional future is returened.
      */
-    static future<> scan_dir(path dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter);
+    static future<> scan_dir(fs::path dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter);
 
     /**
      * Overload of scan_dir() that uses a show_hidden::no when it's not given.
      */
-    static future<> scan_dir(path dir, dir_entry_types type, walker_type walker, filter_type filter) {
+    static future<> scan_dir(fs::path dir, dir_entry_types type, walker_type walker, filter_type filter) {
         return scan_dir(std::move(dir), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
     }
 
     /**
      * Overload of scan_dir() that uses a show_hidden::no and a filter that returns TRUE for every entry when they are not given.
      */
-    static future<> scan_dir(path dir, dir_entry_types type, walker_type walker) {
-        return scan_dir(std::move(dir), std::move(type), show_hidden::no, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
+    static future<> scan_dir(fs::path dir, dir_entry_types type, walker_type walker) {
+        return scan_dir(std::move(dir), std::move(type), show_hidden::no, std::move(walker), [] (const fs::path& parent_dir, const directory_entry& entry) { return true; });
     }
 
     /**
      * Overload of scan_dir() that uses a filter that returns TRUE for every entry when filter is not given.
      */
-    static future<> scan_dir(path dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
-        return scan_dir(std::move(dir), std::move(type), do_show_hidden, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
+    static future<> scan_dir(fs::path dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
+        return scan_dir(std::move(dir), std::move(type), do_show_hidden, std::move(walker), [] (const fs::path& parent_dir, const directory_entry& entry) { return true; });
     }
 
     /** Overloads accepting sstring as the first parameter */
     static future<> scan_dir(sstring dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter) {
-        return scan_dir(path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), std::move(filter));
+        return scan_dir(fs::path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), std::move(filter));
     }
     static future<> scan_dir(sstring dir, dir_entry_types type, walker_type walker, filter_type filter) {
-        return scan_dir(path(std::move(dir)), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
+        return scan_dir(fs::path(std::move(dir)), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
     }
     static future<> scan_dir(sstring dir, dir_entry_types type, walker_type walker) {
-        return scan_dir(path(std::move(dir)), std::move(type), show_hidden::no, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
+        return scan_dir(fs::path(std::move(dir)), std::move(type), show_hidden::no, std::move(walker), [] (const fs::path& parent_dir, const directory_entry& entry) { return true; });
     }
     static future<> scan_dir(sstring dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
-        return scan_dir(path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
+        return scan_dir(fs::path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), [] (const fs::path& parent_dir, const directory_entry& entry) { return true; });
     }
 
     /**
@@ -119,7 +120,7 @@ public:
      * @param dir Directory to remove.
      * @return A future that resolves when the operation is complete or an error occurs.
      */
-    static future<> rmdir(path dir);
+    static future<> rmdir(fs::path dir);
 
     /**
      * Constructor
@@ -131,7 +132,7 @@ public:
      * @param dir A seastar::path object for the directory to scan.
      * @param do_show_hidden if TRUE - scan hidden entries as well.
      */
-    lister(file f, dir_entry_types type, walker_type walker, filter_type filter, path dir, show_hidden do_show_hidden);
+    lister(file f, dir_entry_types type, walker_type walker, filter_type filter, fs::path dir, show_hidden do_show_hidden);
 
     /**
      * @return a future that resolves when the directory scanning is complete.
@@ -164,10 +165,10 @@ private:
     future<directory_entry> guarantee_type(directory_entry de);
 };
 
-static inline lister::path operator/(const lister::path& lhs, const char* rhs) {
-    return lhs / lister::path(rhs);
+static inline fs::path operator/(const fs::path& lhs, const char* rhs) {
+    return lhs / fs::path(rhs);
 }
 
-static inline lister::path operator/(const lister::path& lhs, const sstring& rhs) {
-    return lhs / lister::path(rhs);
+static inline fs::path operator/(const fs::path& lhs, const sstring& rhs) {
+    return lhs / fs::path(rhs);
 }

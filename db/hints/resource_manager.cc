@@ -34,7 +34,7 @@ namespace hints {
 
 static logging::logger resource_manager_logger("hints_resource_manager");
 
-future<dev_t> get_device_id(const lister::path& path) {
+future<dev_t> get_device_id(const fs::path& path) {
     return open_directory(path.native()).then([](file f) {
         return f.stat().then([f = std::move(f)](struct stat st) {
             return st.st_dev;
@@ -42,7 +42,7 @@ future<dev_t> get_device_id(const lister::path& path) {
     });
 }
 
-future<bool> is_mountpoint(const lister::path& path) {
+future<bool> is_mountpoint(const fs::path& path) {
     // Special case for '/', which is always a mount point
     if (path == path.parent_path()) {
         return make_ready_future<bool>(true);
@@ -90,8 +90,8 @@ future<> space_watchdog::stop() noexcept {
     return std::move(_started);
 }
 
-future<> space_watchdog::scan_one_ep_dir(lister::path path, manager& shard_manager, ep_key_type ep_key) {
-    return lister::scan_dir(path, { directory_entry_type::regular }, [this, ep_key, &shard_manager] (lister::path dir, directory_entry de) {
+future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, ep_key_type ep_key) {
+    return lister::scan_dir(path, { directory_entry_type::regular }, [this, ep_key, &shard_manager] (fs::path dir, directory_entry de) {
         // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
         if (_files_count == 1) {
             shard_manager.add_ep_with_pending_hints(ep_key);
@@ -127,7 +127,7 @@ void space_watchdog::on_timer() {
         _total_size = 0;
         for (manager& shard_manager : per_device_limits.managers) {
             shard_manager.clear_eps_with_pending_hints();
-            lister::scan_dir(shard_manager.hints_dir(), {directory_entry_type::directory}, [this, &shard_manager] (lister::path dir, directory_entry de) {
+            lister::scan_dir(shard_manager.hints_dir(), {directory_entry_type::directory}, [this, &shard_manager] (fs::path dir, directory_entry de) {
                 _files_count = 0;
                 // Let's scan per-end-point directories and enumerate hints files...
                 //
