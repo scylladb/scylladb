@@ -705,6 +705,7 @@ static void test_date_tiered_clustering_slicing(populate_fn populate) {
 
 static void test_dropped_column_handling(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    static constexpr api::timestamp_type write_timestamp = 1525385507816568;
     schema_ptr write_schema = schema_builder("ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
@@ -715,6 +716,7 @@ static void test_dropped_column_handling(populate_fn populate) {
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("val2", int32_type)
+        .without_column("val1", int32_type, write_timestamp + 1)
         .build();
     auto val2_cdef = read_schema->get_column_definition(to_bytes("val2"));
     auto to_ck = [write_schema] (int ck) {
@@ -725,7 +727,6 @@ static void test_dropped_column_handling(populate_fn populate) {
     auto dk = dht::global_partitioner().decorate_key(*write_schema, pk);
     mutation partition(write_schema, pk);
     auto add_row = [&partition, &to_ck, write_schema] (int ck, int v1, int v2) {
-        static constexpr api::timestamp_type write_timestamp = 1525385507816568;
         clustering_key ckey = to_ck(ck);
         partition.partition().apply_insert(*write_schema, ckey, write_timestamp);
         partition.set_cell(ckey, "val1", data_value{v1}, write_timestamp);
