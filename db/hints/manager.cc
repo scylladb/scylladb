@@ -49,7 +49,7 @@ const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::secon
 const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
 
 manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<database>& db)
-    : _hints_dir(boost::filesystem::path(hints_directory) / format("{:d}", engine().cpu_id()).c_str())
+    : _hints_dir(lister::path(hints_directory) / format("{:d}", engine().cpu_id()))
     , _hinted_dcs(hinted_dcs.begin(), hinted_dcs.end())
     , _local_snitch_ptr(locator::i_endpoint_snitch::get_local_snitch_ptr())
     , _max_hint_window_us(max_hint_window_ms * 1000)
@@ -300,7 +300,6 @@ bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const froze
 }
 
 future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
-    using namespace boost::filesystem;
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
     return futurize_apply([this] {

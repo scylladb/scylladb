@@ -29,9 +29,9 @@
 #include <seastar/core/future.hh>
 #include "seastarx.hh"
 #include <unordered_set>
-#include <boost/filesystem.hpp>
 #include <gms/gossiper.hh>
 #include "utils/small_vector.hh"
+#include "lister.hh"
 
 namespace service {
 class storage_proxy;
@@ -41,8 +41,8 @@ class storage_service;
 namespace db {
 namespace hints {
 
-future<dev_t> get_device_id(boost::filesystem::path path);
-future<bool> is_mountpoint(boost::filesystem::path path);
+future<dev_t> get_device_id(const lister::path& path);
+future<bool> is_mountpoint(const lister::path& path);
 
 using timer_clock_type = seastar::lowres_clock;
 
@@ -111,7 +111,7 @@ private:
     /// \param path directory to scan
     /// \param ep_name end point ID (as a string)
     /// \return future that resolves when scanning is complete
-    future<> scan_one_ep_dir(boost::filesystem::path path, manager& shard_manager, ep_key_type ep_key);
+    future<> scan_one_ep_dir(lister::path path, manager& shard_manager, ep_key_type ep_key);
 };
 
 class resource_manager {

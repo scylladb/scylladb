@@ -24,17 +24,17 @@
 #include "log.hh"
 #include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include "lister.hh"
 #include "disk-error-handler.hh"
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
+#include <boost/filesystem.hpp>
 
 namespace db {
 namespace hints {
 
 static logging::logger resource_manager_logger("hints_resource_manager");
 
-future<dev_t> get_device_id(boost::filesystem::path path) {
+future<dev_t> get_device_id(const lister::path& path) {
     return open_directory(path.native()).then([](file f) {
         return f.stat().then([f = std::move(f)](struct stat st) {
             return st.st_dev;
@@ -42,12 +42,12 @@ future<dev_t> get_device_id(boost::filesystem::path path) {
     });
 }
 
-future<bool> is_mountpoint(boost::filesystem::path path) {
+future<bool> is_mountpoint(const lister::path& path) {
     // Special case for '/', which is always a mount point
     if (path == path.parent_path()) {
         return make_ready_future<bool>(true);
     }
-    return when_all(get_device_id(path.native()), get_device_id(path.parent_path().native())).then([](std::tuple<future<dev_t>, future<dev_t>> ids) {
+    return when_all(get_device_id(path), get_device_id(path.parent_path())).then([](std::tuple<future<dev_t>, future<dev_t>> ids) {
         return std::get<0>(ids).get0() != std::get<1>(ids).get0();
     });
 }
@@ -90,7 +90,7 @@ future<> space_watchdog::stop() noexcept {
     return std::move(_started);
 }
 
-future<> space_watchdog::scan_one_ep_dir(boost::filesystem::path path, manager& shard_manager, ep_key_type ep_key) {
+future<> space_watchdog::scan_one_ep_dir(lister::path path, manager& shard_manager, ep_key_type ep_key) {
     return lister::scan_dir(path, { directory_entry_type::regular }, [this, ep_key, &shard_manager] (lister::path dir, directory_entry de) {
         // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
         if (_files_count == 1) {
@@ -138,10 +138,10 @@ void space_watchdog::on_timer() {
                 auto it = shard_manager.find_ep_manager(de.name);
                 if (it != shard_manager.ep_managers_end()) {
                     return with_lock(it->second.file_update_mutex(), [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)]() mutable {
-                        return scan_one_ep_dir(dir / ep_name.c_str(), shard_manager, ep_key_type(ep_name));
+                        return scan_one_ep_dir(dir / ep_name, shard_manager, ep_key_type(ep_name));
                     });
                 } else {
-                    return scan_one_ep_dir(dir / de.name.c_str(), shard_manager, ep_key_type(de.name));
+                    return scan_one_ep_dir(dir / de.name, shard_manager, ep_key_type(de.name));
                 }
             }).get();
         }

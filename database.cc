@@ -2090,7 +2090,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
 
                 if (verifier->count(entry.generation)) {
                     if (verifier->at(entry.generation).status == component_status::has_toc_file) {
-                        lister::path file_path(sstdir / de.name.c_str());
+                        lister::path file_path(sstdir / de.name);
                         if (entry.component == component_type::TOC) {
                             throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed", file_path.native());
                         } else if (entry.component == component_type::TemporaryTOC) {
@@ -3965,8 +3965,6 @@ const sstring& database::get_snitch_name() const {
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards
 // (as we have been doing for a lot of the other operations, like the snapshot itself).
 future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
-    namespace bf = boost::filesystem;
-
     std::vector<sstring> data_dirs = _cfg->data_file_directories();
     lw_shared_ptr<lister::dir_entry_types> dirs_only_entries_ptr = make_lw_shared<lister::dir_entry_types>({ directory_entry_type::directory });
     lw_shared_ptr<sstring> tag_ptr = make_lw_shared<sstring>(std::move(tag));
@@ -4002,18 +4000,18 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
         //
         return lister::scan_dir(parent_dir, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (lister::path parent_dir, directory_entry de) {
             // KS directory
-            return lister::scan_dir(parent_dir / de.name.c_str(), *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (lister::path parent_dir, directory_entry de) mutable {
+            return lister::scan_dir(parent_dir / de.name, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (lister::path parent_dir, directory_entry de) mutable {
                 // CF directory
-                return lister::scan_dir(parent_dir / de.name.c_str(), *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (lister::path parent_dir, directory_entry de) mutable {
+                return lister::scan_dir(parent_dir / de.name, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (lister::path parent_dir, directory_entry de) mutable {
                     // "snapshots" directory
-                    lister::path snapshots_dir(parent_dir / de.name.c_str());
+                    lister::path snapshots_dir(parent_dir / de.name);
                     if (tag_ptr->empty()) {
                         dblog.info("Removing {}", snapshots_dir.native());
                         // kill the whole "snapshots" subdirectory
                         return lister::rmdir(std::move(snapshots_dir));
                     } else {
                         return lister::scan_dir(std::move(snapshots_dir), *dirs_only_entries_ptr, [this, tag_ptr] (lister::path parent_dir, directory_entry de) {
-                            lister::path snapshot_dir(parent_dir / de.name.c_str());
+                            lister::path snapshot_dir(parent_dir / de.name);
                             dblog.info("Removing {}", snapshot_dir.native());
                             return lister::rmdir(std::move(snapshot_dir));
                         }, [tag_ptr] (const lister::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == *tag_ptr; });
@@ -4198,8 +4196,8 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
             lister::scan_dir(snapshots_dir,  { directory_entry_type::directory }, [this, datadir, &all_snapshots] (lister::path snapshots_dir, directory_entry de) {
                 auto snapshot_name = de.name;
                 all_snapshots.emplace(snapshot_name, snapshot_details());
-                return lister::scan_dir(snapshots_dir / snapshot_name.c_str(),  { directory_entry_type::regular }, [this, datadir, &all_snapshots, snapshot_name] (lister::path snapshot_dir, directory_entry de) {
-                    return io_check(file_size, (snapshot_dir / de.name.c_str()).native()).then([this, datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (auto size) {
+                return lister::scan_dir(snapshots_dir / lister::path(snapshot_name),  { directory_entry_type::regular }, [this, datadir, &all_snapshots, snapshot_name] (lister::path snapshot_dir, directory_entry de) {
+                    return io_check(file_size, (snapshot_dir / de.name).native()).then([this, datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (auto size) {
                         // The manifest is the only file expected to be in this directory not belonging to the SSTable.
                         // For it, we account the total size, but zero it for the true size calculation.
                         //
@@ -4211,7 +4209,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                         } else {
                             size = 0;
                         }
-                        return io_check(file_size, (lister::path(datadir) / name.c_str()).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
+                        return io_check(file_size, (lister::path(datadir) / name).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
                             try {
                                 // File exists in the main SSTable directory. Snapshots are not contributing to size
                                 fut.get0();

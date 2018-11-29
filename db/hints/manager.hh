@@ -283,7 +283,7 @@ public:
             state::stopped>>;
 
         state_set _state;
-        const boost::filesystem::path _hints_dir;
+        const lister::path _hints_dir;
         uint64_t _hints_in_progress = 0;
         sender _sender;
 
@@ -375,7 +375,7 @@ public:
             return _file_update_mutex;
         }
 
-        const boost::filesystem::path& hints_dir() const noexcept {
+        const lister::path& hints_dir() const noexcept {
             return _hints_dir;
         }
 
@@ -426,7 +426,7 @@ public:
 
 private:
     state_set _state;
-    const boost::filesystem::path _hints_dir;
+    const lister::path _hints_dir;
     dev_t _hints_dir_device_id = 0;
 
     node_to_hint_store_factory_type _store_factory;
@@ -519,7 +519,7 @@ public:
         return _ep_managers.size();
     }
 
-    const boost::filesystem::path& hints_dir() const {
+    const lister::path& hints_dir() const {
         return _hints_dir;
     }
 

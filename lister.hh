@@ -25,13 +25,13 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/enum.hh>
-#include <boost/filesystem.hpp>
+#include <experimental/filesystem>
 
 #include "seastarx.hh"
 
 class lister final {
 public:
-    using path = boost::filesystem::path;
+    using path = std::experimental::filesystem::path;
     /**
      * Types of entries to list. If empty - list all present entries except for
      * hidden if not requested to.
@@ -41,7 +41,7 @@ public:
      * This callback is going to be called for each entry in the given directory
      * that has the corresponding type and meets the filter demands.
      *
-     * First parameter is a boost::filesystem::path object for the base directory.
+     * First parameter is a path object for the base directory.
      *
      * Second parameter is a directory_entry object of the file for which this
      * callback is being called.
@@ -163,3 +163,11 @@ private:
      */
     future<directory_entry> guarantee_type(directory_entry de);
 };
+
+static inline lister::path operator/(const lister::path& lhs, const char* rhs) {
+    return lhs / lister::path(rhs);
+}
+
+static inline lister::path operator/(const lister::path& lhs, const sstring& rhs) {
+    return lhs / lister::path(rhs);
+}
