@@ -69,6 +69,12 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(zero_sized_histogram) {
+    broken_sst("tests/sstables/zero_sized_histogram", 5,
+               "Estimated histogram with zero size found. Can't continue! in sstable "
+               "tests/sstables/zero_sized_histogram/la-5-big-Statistics.db");
+}
+
 SEASTAR_THREAD_TEST_CASE(bad_column_name) {
     broken_sst("tests/sstables/bad_column_name", 58,
                "Found 3 clustering elements in column name. Was not expecting that! in sstable "

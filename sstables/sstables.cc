@@ -1183,6 +1183,8 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
                 throw malformed_sstable_exception(file_path + ": file not found");
             }
             throw;
+        } catch (malformed_sstable_exception &e) {
+            throw malformed_sstable_exception(e.what(), file_path);
         }
     });
 }
