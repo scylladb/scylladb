@@ -22,6 +22,7 @@
 
 #include "sstables/checksum_utils.hh"
 #include "tests/make_random_string.hh"
+#include "utils/gz/crc_combine.hh"
 
 #include <seastar/tests/perf/perf_tests.hh>
 
@@ -45,6 +46,11 @@ PERF_TEST_F(crc_test, perf_adler_combine) {
 PERF_TEST_F(crc_test, perf_zlib_crc32_combine) {
     perf_tests::do_not_optimize(
         zlib_crc32_checksummer::checksum_combine(sum1, sum2, data.size()));
+}
+
+PERF_TEST_F(crc_test, perf_fast_crc32_combine) {
+    perf_tests::do_not_optimize(
+        fast_crc32_combine(sum1, sum2, data.size()));
 }
 
 PERF_TEST_F(crc_test, perf_deflate_crc32_checksum) {
