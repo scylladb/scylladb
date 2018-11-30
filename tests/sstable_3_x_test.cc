@@ -3184,7 +3184,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // INSERT INTO composite_partition_key (a,b,c,d,e,f,g) values (1, 'hello', true, 2, 'dear', 3, 'world');
+    // INSERT INTO composite_partition_key (a,b,c,d,e,f,g) values (1, 'hello', true, 2, 'dear', 3, 'world') USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, { data_value{1}, data_value{"hello"}, data_value{true} });
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2, "dear" });
@@ -3194,7 +3194,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
