@@ -86,6 +86,10 @@ public:
         return _sst->read_rows_flat(_sst->_schema);
     }
 
+    const stats_metadata& get_stats_metadata() const {
+        return _sst->get_stats_metadata();
+    }
+
     flat_mutation_reader read_range_rows_flat(
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -3108,6 +3112,34 @@ static sstable_assertions validate_read(schema_ptr s, sstring path, std::vector<
 
 static constexpr api::timestamp_type write_timestamp = 1525385507816568;
 static constexpr gc_clock::time_point write_time_point = gc_clock::time_point{} + gc_clock::duration{1525385507};
+
+static void validate_stats_metadata(schema_ptr s, sstable_assertions written_sst, sstring table_name) {
+    auto orig_sst = sstables::make_sstable(s, get_write_test_path(table_name), 1, sstable_version_types::mc, big);
+    orig_sst->load().get();
+
+    const auto& orig_stats = orig_sst->get_stats_metadata();
+    const auto& written_stats = written_sst.get_stats_metadata();
+
+    auto check_estimated_histogram = [] (const utils::estimated_histogram& lhs, const utils::estimated_histogram& rhs) {
+        BOOST_REQUIRE(lhs.bucket_offsets == rhs.bucket_offsets);
+        BOOST_REQUIRE(lhs.buckets == rhs.buckets);
+        BOOST_REQUIRE(lhs._count == rhs._count);
+        BOOST_REQUIRE(lhs._sample_sum == rhs._sample_sum);
+    };
+
+    BOOST_REQUIRE_EQUAL(orig_stats.min_timestamp, written_stats.min_timestamp);
+    BOOST_REQUIRE_EQUAL(orig_stats.max_timestamp, written_stats.max_timestamp);
+    BOOST_REQUIRE_EQUAL(orig_stats.min_local_deletion_time, written_stats.min_local_deletion_time);
+    BOOST_REQUIRE_EQUAL(orig_stats.max_local_deletion_time, written_stats.max_local_deletion_time);
+    BOOST_REQUIRE_EQUAL(orig_stats.min_ttl, written_stats.min_ttl);
+    BOOST_REQUIRE_EQUAL(orig_stats.max_ttl, written_stats.max_ttl);
+    BOOST_REQUIRE(orig_stats.min_column_names.elements == written_stats.min_column_names.elements);
+    BOOST_REQUIRE(orig_stats.max_column_names.elements == written_stats.max_column_names.elements);
+    BOOST_REQUIRE_EQUAL(orig_stats.columns_count, written_stats.columns_count);
+    BOOST_REQUIRE_EQUAL(orig_stats.rows_count, written_stats.rows_count);
+    check_estimated_histogram(orig_stats.estimated_row_size, written_stats.estimated_row_size);
+    check_estimated_histogram(orig_stats.estimated_cells_count, written_stats.estimated_cells_count);
+}
 
 SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     auto abj = defer([] { await_background_jobs().get(); });
