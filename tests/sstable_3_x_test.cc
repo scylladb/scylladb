@@ -3155,7 +3155,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // INSERT INTO static_row (pk, st1, st2) values ('key1', 1135, 'hello');
+    // INSERT INTO static_row (pk, st1, st2) values ('key1', 1135, 'hello') USING TIMESTAMP 1525385507816568;
     auto key = make_dkey(s, {to_bytes("key1")});
     mutation mut{s, key};
     mut.set_static_cell("st1", data_value{1135}, write_timestamp);
@@ -3163,7 +3163,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
