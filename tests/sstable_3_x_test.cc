@@ -3271,13 +3271,14 @@ SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
     }
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut1, mut2});
+    auto written_sst = validate_read(s, tmp.path, {mut1, mut2});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
     auto abj = defer([] { await_background_jobs().get(); });
     sstring table_name = "ttled_row";
-    // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+    // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck", int32_type, column_kind::clustering_key);
