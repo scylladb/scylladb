@@ -1601,6 +1601,10 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
         return replicate(get_broadcast_address(), local_state).then([] {
             //notify snitches that Gossiper is about to start
             return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
+        }).then([this] {
+            return async([this] {
+                maybe_enable_features();
+            });
         }).then([this, generation] {
             logger.trace("gossip started with generation {}", generation);
             _enabled = true;
