@@ -25,6 +25,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
+#include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
 #include "service/storage_service.hh"
@@ -71,15 +72,17 @@ int main(int ac, char ** av) {
         auto vv = std::make_shared<gms::versioned_value::factory>();
         return async([&] {
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
+            sharded<gms::feature_service> feature_service;
+            feature_service.start().get();
             sharded<db::system_distributed_keyspace> sys_dist_ks;
-            service::init_storage_service(db, auth_service, sys_dist_ks).get();
+            service::init_storage_service(db, auth_service, sys_dist_ks, feature_service).get();
             netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();
             auto listen = server.listen_address();
             fmt::print("Messaging server listening on ip {} port {:d} ...\n", listen, port);
             gms::get_failure_detector().start().get();
-            gms::get_gossiper().start().get();
+            gms::get_gossiper().start(std::ref(feature_service)).get();
             std::set<gms::inet_address> seeds;
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 seeds.emplace(std::move(s));

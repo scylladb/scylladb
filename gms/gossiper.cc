@@ -44,6 +44,7 @@
 #include "gms/gossip_digest_ack2.hh"
 #include "gms/versioned_value.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 #include "gms/application_state.hh"
 #include "gms/failure_detector.hh"
 #include "gms/i_failure_detection_event_listener.hh"
@@ -126,7 +127,8 @@ public:
     void on_restart(inet_address, endpoint_state) override {}
 };
 
-gossiper::gossiper() {
+gossiper::gossiper(feature_service& features)
+        : _feature_service(features) {
     // Gossiper's stuff below runs only on CPU0
     if (engine().cpu_id() != 0) {
         return;
@@ -2153,14 +2155,26 @@ future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_add
     });
 }
 
-void gossiper::register_feature(feature* f) {
+feature_service::feature_service() = default;
+
+feature_service::~feature_service() = default;
+
+future<> feature_service::stop() {
+    return make_ready_future<>();
+}
+
+void feature_service::register_feature(feature* f) {
     _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
+}
+
+void gossiper::register_feature(feature* f) {
+    _feature_service.register_feature(f);
     if (check_features(get_local_gossiper().get_supported_features(), {f->name()})) {
         f->enable();
     }
 }
 
-void gossiper::unregister_feature(feature* f) {
+void feature_service::unregister_feature(feature* f) {
     auto&& fsit = _registered_features.find(f->name());
     if (fsit == _registered_features.end()) {
         return;
@@ -2172,50 +2186,53 @@ void gossiper::unregister_feature(feature* f) {
     }
 }
 
+void gossiper::unregister_feature(feature* f) {
+    _feature_service.unregister_feature(f);
+}
+
+
+void feature_service::enable(const sstring& name) {
+    if (auto it = _registered_features.find(name); it != _registered_features.end()) {
+        for (auto&& f : it->second) {
+            f->enable();
+        }
+    }
+}
+
 // Runs inside seastar::async context
 void gossiper::maybe_enable_features() {
-    if (_registered_features.empty()) {
-        _features_condvar.broadcast();
-        return;
-    }
-
     auto&& features = get_supported_features();
     container().invoke_on_all([&features] (gossiper& g) {
-        for (auto it = g._registered_features.begin(); it != g._registered_features.end();) {
-            if (features.find(it->first) != features.end()) {
-                for (auto&& f : it->second) {
-                    f->enable();
-                }
-            } else {
-                ++it;
-            }
+        for (auto&& name : features) {
+            g._feature_service.enable(name);
         }
         g._features_condvar.broadcast();
     }).get();
 }
 
-feature::feature(sstring name, bool enabled)
-        : _name(name)
+feature::feature(feature_service& service, sstring name, bool enabled)
+        : _service(&service)
+        , _name(name)
         , _enabled(enabled) {
-    get_local_gossiper().register_feature(this);
+    _service->register_feature(this);
     if (_enabled) {
         _pr.set_value();
     }
 }
 
 feature::~feature() {
-    auto& gossiper = get_gossiper();
-    if (gossiper.local_is_initialized()) {
-        gossiper.local().unregister_feature(this);
+    if (_service) {
+        _service->unregister_feature(this);
     }
 }
 
 feature& feature::operator=(feature&& other) {
-    get_local_gossiper().unregister_feature(this);
+    _service->unregister_feature(this);
+    _service = std::exchange(other._service, nullptr);
     _name = other._name;
     _enabled = other._enabled;
     _pr = std::move(other._pr);
-    get_local_gossiper().register_feature(this);
+    _service->register_feature(this);
     return *this;
 }
 

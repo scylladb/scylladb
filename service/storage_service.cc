@@ -124,8 +124,10 @@ int get_generation_number() {
     return generation_number;
 }
 
-storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks)
-        : _db(db)
+storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        gms::feature_service& feature_service)
+        : _feature_service(feature_service)
+        , _db(db)
         , _auth_service(auth_service)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
@@ -438,21 +440,21 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
 }
 
 void storage_service::register_features() {
-    _range_tombstones_feature = gms::feature(RANGE_TOMBSTONES_FEATURE);
-    _large_partitions_feature = gms::feature(LARGE_PARTITIONS_FEATURE);
-    _counters_feature = gms::feature(COUNTERS_FEATURE);
-    _digest_multipartition_read_feature = gms::feature(DIGEST_MULTIPARTITION_READ_FEATURE);
-    _correct_counter_order_feature = gms::feature(CORRECT_COUNTER_ORDER_FEATURE);
-    _schema_tables_v3 = gms::feature(SCHEMA_TABLES_V3);
-    _correct_non_compound_range_tombstones = gms::feature(CORRECT_NON_COMPOUND_RANGE_TOMBSTONES);
-    _write_failure_reply_feature = gms::feature(WRITE_FAILURE_REPLY_FEATURE);
-    _xxhash_feature = gms::feature(XXHASH_FEATURE);
-    _roles_feature = gms::feature(ROLES_FEATURE);
-    _la_sstable_feature = gms::feature(LA_SSTABLE_FEATURE);
-    _stream_with_rpc_stream_feature = gms::feature(STREAM_WITH_RPC_STREAM);
-    _mc_sstable_feature = gms::feature(MC_SSTABLE_FEATURE);
-    _materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);
-    _indexes_feature = gms::feature(INDEXES_FEATURE);
+    _range_tombstones_feature = gms::feature(_feature_service, RANGE_TOMBSTONES_FEATURE);
+    _large_partitions_feature = gms::feature(_feature_service, LARGE_PARTITIONS_FEATURE);
+    _counters_feature = gms::feature(_feature_service, COUNTERS_FEATURE);
+    _digest_multipartition_read_feature = gms::feature(_feature_service, DIGEST_MULTIPARTITION_READ_FEATURE);
+    _correct_counter_order_feature = gms::feature(_feature_service, CORRECT_COUNTER_ORDER_FEATURE);
+    _schema_tables_v3 = gms::feature(_feature_service, SCHEMA_TABLES_V3);
+    _correct_non_compound_range_tombstones = gms::feature(_feature_service, CORRECT_NON_COMPOUND_RANGE_TOMBSTONES);
+    _write_failure_reply_feature = gms::feature(_feature_service, WRITE_FAILURE_REPLY_FEATURE);
+    _xxhash_feature = gms::feature(_feature_service, XXHASH_FEATURE);
+    _roles_feature = gms::feature(_feature_service, ROLES_FEATURE);
+    _la_sstable_feature = gms::feature(_feature_service, LA_SSTABLE_FEATURE);
+    _stream_with_rpc_stream_feature = gms::feature(_feature_service, STREAM_WITH_RPC_STREAM);
+    _mc_sstable_feature = gms::feature(_feature_service, MC_SSTABLE_FEATURE);
+    _materialized_views_feature = gms::feature(_feature_service, MATERIALIZED_VIEWS_FEATURE);
+    _indexes_feature = gms::feature(_feature_service, INDEXES_FEATURE);
 }
 
 // Runs inside seastar::async context
@@ -3272,8 +3274,9 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
     });
 }
 
-future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
-    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks));
+future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<gms::feature_service>& feature_service) {
+    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(feature_service));
 }
 
 future<> deinit_storage_service() {

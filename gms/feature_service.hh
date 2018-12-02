@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 ScyllaDB
+ * Copyright (C) 2018 ScyllaDB
  */
 
 /*
@@ -21,41 +21,30 @@
 
 #pragma once
 
+#include <seastar/core/sstring.hh>
+#include <seastar/core/future.hh>
 #include <seastar/core/shared_future.hh>
+#include <unordered_map>
+#include <vector>
+#include "seastarx.hh"
 
 namespace gms {
 
-class feature_service;
+class feature;
 
 /**
  * A gossip feature tracks whether all the nodes the current one is
  * aware of support the specified feature.
- *
- * A feature should only be created once the gossiper is available.
  */
-class feature final {
-    feature_service* _service = nullptr;
-    sstring _name;
-    bool _enabled = false;
-    mutable shared_promise<> _pr;
-    friend class gossiper;
+class feature_service final {
+    std::unordered_map<sstring, std::vector<feature*>> _registered_features;
 public:
-    explicit feature(feature_service& service, sstring name, bool enabled = false);
-    feature() = default;
-    ~feature();
-    feature(const feature& other) = delete;
-    void enable();
-    feature& operator=(feature&& other);
-    const sstring& name() const {
-        return _name;
-    }
-    explicit operator bool() const {
-        return _enabled;
-    }
-    friend inline std::ostream& operator<<(std::ostream& os, const feature& f) {
-        return os << "{ gossip feature = " << f._name << " }";
-    }
-    future<> when_enabled() const { return _pr.get_shared_future(); }
+    feature_service();
+    ~feature_service();
+    future<> stop();
+    void register_feature(feature* f);
+    void unregister_feature(feature* f);
+    void enable(const sstring& name);
 };
 
 } // namespace gms

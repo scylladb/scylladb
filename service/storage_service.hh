@@ -71,6 +71,10 @@ namespace dht {
 class boot_strapper;
 }
 
+namespace gms {
+class feature_service;
+};
+
 namespace service {
 
 class load_broadcaster;
@@ -120,6 +124,7 @@ private:
     /* JMX notification serial number counter */
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
+    gms::feature_service& _feature_service;
     distributed<database>& _db;
     sharded<auth::service>& _auth_service;
     int _update_jobs{0};
@@ -139,7 +144,7 @@ private:
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
 public:
-    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&);
+    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, gms::feature_service& feature_service);
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -2279,7 +2284,8 @@ public:
     }
 };
 
-future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks);
+future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<gms::feature_service>& feature_service);
 future<> deinit_storage_service();
 
 }
