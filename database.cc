@@ -1718,9 +1718,9 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
     // to distribute evenly the resource usage among all shards.
 
     return db.invoke_on(column_family::calculate_shard_from_sstable_generation(comps.generation),
-            [&db, comps = std::move(comps), func = std::move(func), pc] (database& local) {
+            [&db, comps = std::move(comps), func = std::move(func), &pc] (database& local) {
 
-        return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func), pc] {
+        return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func), &pc] {
             auto& cf = local.find_column_family(comps.ks, comps.cf);
 
             auto f = sstables::sstable::load_shared_components(cf.schema(), comps.sstdir, comps.generation, comps.version, comps.format, pc);
