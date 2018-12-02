@@ -2154,10 +2154,9 @@ future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_add
 }
 
 void gossiper::register_feature(feature* f) {
+    _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
     if (check_features(get_local_gossiper().get_supported_features(), {f->name()})) {
         f->enable();
-    } else {
-        _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
     }
 }
 
@@ -2187,7 +2186,6 @@ void gossiper::maybe_enable_features() {
                 for (auto&& f : it->second) {
                     f->enable();
                 }
-                it = g._registered_features.erase(it);
             } else {
                 ++it;
             }
@@ -2199,32 +2197,25 @@ void gossiper::maybe_enable_features() {
 feature::feature(sstring name, bool enabled)
         : _name(name)
         , _enabled(enabled) {
-    if (!_enabled) {
-        get_local_gossiper().register_feature(this);
-    } else {
+    get_local_gossiper().register_feature(this);
+    if (_enabled) {
         _pr.set_value();
     }
 }
 
 feature::~feature() {
-    if (!_enabled) {
-        auto& gossiper = get_gossiper();
-        if (gossiper.local_is_initialized()) {
-            gossiper.local().unregister_feature(this);
-        }
+    auto& gossiper = get_gossiper();
+    if (gossiper.local_is_initialized()) {
+        gossiper.local().unregister_feature(this);
     }
 }
 
 feature& feature::operator=(feature&& other) {
-    if (!_enabled) {
-        get_local_gossiper().unregister_feature(this);
-    }
+    get_local_gossiper().unregister_feature(this);
     _name = other._name;
     _enabled = other._enabled;
     _pr = std::move(other._pr);
-    if (!_enabled) {
-        get_local_gossiper().register_feature(this);
-    }
+    get_local_gossiper().register_feature(this);
     return *this;
 }
 
