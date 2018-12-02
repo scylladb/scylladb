@@ -291,23 +291,7 @@ private:
     gms::feature _stream_with_rpc_stream_feature;
     gms::feature _mc_sstable_feature;
 public:
-    void enable_all_features() {
-        _range_tombstones_feature.enable();
-        _large_partitions_feature.enable();
-        _materialized_views_feature.enable();
-        _counters_feature.enable();
-        _indexes_feature.enable();
-        _digest_multipartition_read_feature.enable();
-        _correct_counter_order_feature.enable();
-        _schema_tables_v3.enable();
-        _correct_non_compound_range_tombstones.enable();
-        _write_failure_reply_feature.enable();
-        _xxhash_feature.enable();
-        _roles_feature.enable();
-        _la_sstable_feature.enable();
-        _stream_with_rpc_stream_feature.enable();
-        _mc_sstable_feature.enable();
-    }
+    void enable_all_features();
 
     void finish_bootstrapping() {
         _is_bootstrap_mode = false;
