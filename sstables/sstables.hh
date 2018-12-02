@@ -720,10 +720,6 @@ public:
         return _components->summary;
     }
 
-    // Return sstable key range as range<partition_key> reading only the summary component.
-    future<range<partition_key>>
-    get_sstable_key_range(const schema& s);
-
     const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
 
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here

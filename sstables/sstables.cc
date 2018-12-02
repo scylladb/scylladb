@@ -4248,15 +4248,6 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
     });
 }
 
-future<range<partition_key>>
-sstable::get_sstable_key_range(const schema& s) {
-    auto fut = read_summary(default_priority_class());
-    return std::move(fut).then([this, &s] () mutable {
-        this->set_first_and_last_keys();
-        return make_ready_future<range<partition_key>>(range<partition_key>::make(get_first_partition_key(), get_last_partition_key()));
-    });
-}
-
 /**
  * Returns a pair of positions [p1, p2) in the summary file corresponding to entries
  * covered by the specified range, or a disengaged optional if no such pair exists.
