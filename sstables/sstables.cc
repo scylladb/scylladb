@@ -1480,15 +1480,18 @@ void sstable::write_filter(const io_priority_class& pc) {
 // No need to set tunable priorities for it.
 future<> sstable::load(const io_priority_class& pc) {
     return read_toc().then([this, &pc] {
-        return seastar::when_all_succeed(
-                read_statistics(pc),
-                read_compression(pc),
-                read_scylla_metadata(pc),
-                read_filter(pc),
-                read_summary(pc)).then([this] {
-            validate_min_max_metadata();
-            validate_max_local_deletion_time();
-            return open_data();
+        // Read statistics ahead of others - if summary is missing
+        // we'll attempt to re-generate it and we need statistics for that
+        return read_statistics(pc).then([this, &pc] {
+            return seastar::when_all_succeed(
+                    read_compression(pc),
+                    read_scylla_metadata(pc),
+                    read_filter(pc),
+                    read_summary(pc)).then([this] {
+                validate_min_max_metadata();
+                validate_max_local_deletion_time();
+                return open_data();
+            });
         });
     });
 }

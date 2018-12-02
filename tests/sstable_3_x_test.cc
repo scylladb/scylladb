@@ -4804,3 +4804,18 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
     validate_read(s, tmp.path, {mut2, mut1}); // Mutations are re-ordered according to decorated_key order
 }
 
+SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    const sstring path = "tests/sstables/3.x/uncompressed/read_missing_summary";
+    const schema_ptr s =
+        schema_builder("test_ks", "test_table")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", utf8_type, column_kind::clustering_key)
+            .with_column("rc", utf8_type)
+            .set_compressor_params(compression_parameters::no_compression())
+            .build();
+
+    sstable_assertions sst(s, path);
+    sst.load();
+}
+
