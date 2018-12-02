@@ -3272,5 +3272,13 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
     });
 }
 
+future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks));
+}
+
+future<> deinit_storage_service() {
+    return service::get_storage_service().stop();
+}
+
 } // namespace service
 
