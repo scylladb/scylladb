@@ -69,20 +69,17 @@ int main(int ac, char ** av) {
         utils::fb_utilities::set_broadcast_address(listen);
         utils::fb_utilities::set_broadcast_rpc_address(listen);
         auto vv = std::make_shared<gms::versioned_value::factory>();
-        locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([&auth_service, &db] {
+        return async([&] {
+            locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             sharded<db::system_distributed_keyspace> sys_dist_ks;
-            return service::init_storage_service(db, auth_service, sys_dist_ks);
-        }).then([vv, listen, config] {
-            return netw::get_messaging_service().start(listen);
-        }).then([config] {
+            service::init_storage_service(db, auth_service, sys_dist_ks).get();
+            netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();
             auto listen = server.listen_address();
             fmt::print("Messaging server listening on ip {} port {:d} ...\n", listen, port);
-            return gms::get_failure_detector().start();
-        }).then([vv, config] {
-            return gms::get_gossiper().start();
-        }).then([vv, config] {
+            gms::get_failure_detector().start().get();
+            gms::get_gossiper().start().get();
             std::set<gms::inet_address> seeds;
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 seeds.emplace(std::move(s));
@@ -100,8 +97,7 @@ int main(int ac, char ** av) {
             using namespace std::chrono;
             auto now = high_resolution_clock::now().time_since_epoch();
             int generation_number = duration_cast<seconds>(now).count();
-            return gossiper.start_gossiping(generation_number, app_states);
-        }).then([vv] {
+            gossiper.start_gossiping(generation_number, app_states).get();
             return seastar::async([vv] {
                 static double load = 0.5;
                 for (;;) {
@@ -110,7 +106,7 @@ int main(int ac, char ** av) {
                     gms::get_local_gossiper().add_local_application_state(gms::application_state::LOAD, value).get();
                     sleep(std::chrono::seconds(1)).get();
                 }
-            });
+            }).get();
         });
     });
 }
