@@ -408,6 +408,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     uint64_t _file_pos = 0;
     uint64_t _flush_pos = 0;
     bool _closed = false;
+    bool _terminated = false;
 
     using buffer_type = segment_manager::buffer_type;
     using sseg_ptr = segment_manager::sseg_ptr;
@@ -556,7 +557,7 @@ public:
         // Note: this is not a marker for when sync was finished.
         // It is when it was initiated
         reset_sync_time();
-        return cycle(true);
+        return _closed ? cycle().then([](sseg_ptr s) { return s->flush(); }) : cycle(true);
     }
     // See class comment for info
     future<sseg_ptr> flush(uint64_t pos = 0) {
@@ -573,10 +574,22 @@ public:
         replay_position rp(_desc.id, position_type(pos));
 
         // Run like this to ensure flush ordering, and making flushes "waitable"
-        return _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me, rp] {
+        auto f = _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me, rp] {
             assert(_pending_ops.has_operation(rp));
             return do_flush(pos);
         });
+
+        if (_closed && !std::exchange(_terminated, true)) {
+            f = f.then([this](sseg_ptr s) {
+                clogger.trace("{} is closed but not terminated.", *this);
+                if (_buffer.empty()) {
+                    new_buffer(0);
+                }
+                return cycle(true, true);
+            });
+        }
+
+        return f;
     }
 
     future<sseg_ptr> do_flush(uint64_t pos) {
@@ -635,8 +648,8 @@ public:
      * Send any buffer contents to disk and get a new tmp buffer
      */
     // See class comment for info
-    future<sseg_ptr> cycle(bool flush_after = false) {
-        if (_buffer.empty()) {
+    future<sseg_ptr> cycle(bool flush_after = false, bool termination = false) {
+        if (_buffer.empty() && !termination) {
             return flush_after ? flush() : make_ready_future<sseg_ptr>(shared_from_this());
         }
 
@@ -670,20 +683,27 @@ public:
             header_size = descriptor_header_size;
         }
 
-        // write chunk header
-        crc32_nbo crc;
-        crc.process<int32_t>(_desc.id & 0xffffffff);
-        crc.process<int32_t>(_desc.id >> 32);
-        crc.process(uint32_t(off + header_size));
+        if (!termination) {
+            // write chunk header
+            crc32_nbo crc;
+            crc.process<int32_t>(_desc.id & 0xffffffff);
+            crc.process<int32_t>(_desc.id >> 32);
+            crc.process(uint32_t(off + header_size));
 
-        write(out, uint32_t(_file_pos));
-        write(out, crc.checksum());
+            write(out, uint32_t(_file_pos));
+            write(out, crc.checksum());
 
-        forget_schema_versions();
+            forget_schema_versions();
+
+            clogger.trace("Writing {} entries, {} k in {} -> {}", num, size, off, off + size);
+        } else {
+            assert(num == 0);
+            assert(_closed);
+            clogger.trace("Terminating {} at pos {}", *this, _file_pos);
+            write(out, uint64_t(0));
+        }
 
         replay_position rp(_desc.id, position_type(off));
-
-        clogger.trace("Writing {} entries, {} k in {} -> {}", num, size, off, off + size);
 
         // The write will be allowed to start now, but flush (below) must wait for not only this,
         // but all previous write/flush pairs.
