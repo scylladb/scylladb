@@ -20,12 +20,13 @@
  *
  */
 
+#include <iostream>
+
 #if defined(__x86_64__) || defined(__i386__)
 
 #include "utils/clmul.hh"
 #include "barett.hh"
 
-#include <iostream>
 #include <seastar/core/print.hh>
 
 int main() {
@@ -73,8 +74,14 @@ int main() {
 #else
 
 int main() {
-    std::cerr << "Not implemented for this arch!\n";
-    return 1;
+    std::cout << "/*\n"
+                 " * Generated with gen_crc_combine_table.cc\n"
+                 " * DO NOT EDIT!\n"
+                 " */\n"
+                 "\n"
+                 "/* Not implemented for this CPU architecture. */\n"
+                 "\n";
+    return 0;
 }
 
 #endif
