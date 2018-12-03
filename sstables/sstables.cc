@@ -46,7 +46,6 @@
 #include "memtable.hh"
 #include "range.hh"
 #include "downsampling.hh"
-#include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -99,7 +98,7 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-static future<file> open_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
+static future<file> open_sstable_component_file(const io_error_handler& error_handler, const sstring& name, open_flags flags,
         file_open_options options) {
     if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
         return open_integrity_checked_file_dma(name, flags, options).then([&error_handler] (auto f) {
@@ -109,25 +108,47 @@ static future<file> open_sstable_component_file(const io_error_handler& error_ha
     return open_checked_file_dma(error_handler, name, flags, options);
 }
 
-static future<file> open_sstable_component_file_non_checked(sstring name, open_flags flags, file_open_options options) {
+static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options) {
     if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
         return open_integrity_checked_file_dma(name, flags, options);
     }
     return open_file_dma(name, flags, options);
 }
 
-future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
-        file_open_options options = {}) {
-    return open_sstable_component_file(error_handler, name, flags, options).handle_exception([name] (auto ep) {
-        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
-        return make_exception_future<file>(ep);
+future<file> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name, file fd) {
+    return sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
+        sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
+        return make_exception_future<>(ep);
+    }).then([fd = std::move(fd)] {
+        return make_ready_future<file>(fd);
     });
 }
 
-future<file> new_sstable_component_file_non_checked(sstring name, open_flags flags, file_open_options options = {}) {
-    return open_sstable_component_file_non_checked(name, flags, options).handle_exception([name] (auto ep) {
+future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options) {
+    auto create_flags = open_flags::create | open_flags::exclusive;
+    if ((flags & create_flags) != create_flags) {
+        return open_sstable_component_file(error_handler, filename(f), flags, options);
+    }
+    auto name = _temp_dir ? temp_filename(f) : filename(f);
+    return open_sstable_component_file(error_handler, name, flags, options).handle_exception([this, name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
+    }).then([this, f, name = std::move(name)] (file fd) mutable {
+        return rename_new_sstable_component_file(name, filename(f), std::move(fd));
+    });
+}
+
+future<file> sstable::new_sstable_component_file_non_checked(component_type f, open_flags flags, file_open_options options) {
+    auto create_flags = open_flags::create | open_flags::exclusive;
+    if ((flags & create_flags) != create_flags) {
+        return open_sstable_component_file_non_checked(filename(f), flags, options);
+    }
+    auto name = _temp_dir ? temp_filename(f) : filename(f);
+    return open_sstable_component_file_non_checked(name, flags, options).handle_exception([this, name] (auto ep) {
+        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
+        return make_exception_future<file>(ep);
+    }).then([this, f, name = std::move(name)] (file fd) mutable {
+        return rename_new_sstable_component_file(name, filename(f), std::move(fd));
     });
 }
 
@@ -1063,6 +1084,7 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
 }
 
 void sstable::write_toc(const io_priority_class& pc) {
+    touch_temp_dir().get0();
     auto file_path = filename(component_type::TemporaryTOC);
 
     sstlog.debug("Writing TOC file {} ", file_path);
@@ -1071,7 +1093,7 @@ void sstable::write_toc(const io_priority_class& pc) {
     // If creation of temporary TOC failed, it implies that that boot failed to
     // delete a sstable with temporary for this column family, or there is a
     // sstable being created in parallel with the same generation.
-    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file f = new_sstable_component_file(_write_error_handler, component_type::TemporaryTOC, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     bool toc_exists = file_exists(filename(component_type::TOC)).get0();
     if (toc_exists) {
@@ -1108,51 +1130,55 @@ void sstable::write_toc(const io_priority_class& pc) {
 future<> sstable::seal_sstable() {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
-    return open_checked_directory(_write_error_handler, _dir).then([this] (file dir_f) {
-        // Guarantee that every component of this sstable reached the disk.
-        return sstable_write_io_check([&] { return dir_f.flush(); }).then([this] {
-            // Rename TOC because it's no longer temporary.
-            return sstable_write_io_check([&] {
-                return engine().rename_file(filename(component_type::TemporaryTOC), filename(component_type::TOC));
+    return remove_temp_dir().then([this] {
+        return open_checked_directory(_write_error_handler, _dir).then([this] (file dir_f) {
+            // Guarantee that every component of this sstable reached the disk.
+            return sstable_write_io_check([&] { return dir_f.flush(); }).then([this] {
+                // Rename TOC because it's no longer temporary.
+                return sstable_write_io_check([&] {
+                    return engine().rename_file(filename(component_type::TemporaryTOC), filename(component_type::TOC));
+                });
+            }).then([this, dir_f] () mutable {
+                // Guarantee that the changes above reached the disk.
+                return sstable_write_io_check([&] { return dir_f.flush(); });
+            }).then([this, dir_f] () mutable {
+                return sstable_write_io_check([&] { return dir_f.close(); });
+            }).then([this, dir_f] {
+                // If this point was reached, sstable should be safe in disk.
+                sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
             });
-        }).then([this, dir_f] () mutable {
-            // Guarantee that the changes above reached the disk.
-            return sstable_write_io_check([&] { return dir_f.flush(); });
-        }).then([this, dir_f] () mutable {
-            return sstable_write_io_check([&] { return dir_f.close(); });
-        }).then([this, dir_f] {
-            // If this point was reached, sstable should be safe in disk.
-            sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
         });
     });
 }
 
-void write_crc(sstable_version_types v, io_error_handler& error_handler, const sstring file_path, const checksum& c) {
+void sstable::write_crc(const checksum& c) {
+    auto file_path = filename(component_type::CRC);
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = new_sstable_component_file(error_handler, file_path, oflags).get0();
+    file f = new_sstable_component_file(_write_error_handler, component_type::CRC, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
     auto w = file_writer(std::move(f), std::move(options));
-    write(v, w, c);
+    write(get_version(), w, c);
     w.close().get();
 }
 
 // Digest file stores the full checksum of data file converted into a string.
-void write_digest(sstable_version_types v, io_error_handler& error_handler, const sstring file_path, uint32_t full_checksum) {
+void sstable::write_digest(uint32_t full_checksum) {
+    auto file_path = filename(component_type::Digest);
     sstlog.debug("Writing Digest file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = new_sstable_component_file(error_handler, file_path, oflags).get0();
+    auto f = new_sstable_component_file(_write_error_handler, component_type::Digest, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
     auto w = file_writer(std::move(f), std::move(options));
 
     auto digest = to_sstring<bytes>(full_checksum);
-    write(v, w, digest);
+    write(get_version(), w, digest);
     w.close().get();
 }
 
@@ -1191,7 +1217,7 @@ template <component_type Type, typename T>
 void sstable::write_simple(const T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
-    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file f = new_sstable_component_file(_write_error_handler, Type, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1329,7 +1355,7 @@ void sstable::write_statistics(const io_priority_class& pc) {
 void sstable::rewrite_statistics(const io_priority_class& pc) {
     auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
-    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
+    file f = new_sstable_component_file(_write_error_handler, component_type::TemporaryStatistics, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1364,9 +1390,9 @@ future<> sstable::read_summary(const io_priority_class& pc) {
 future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) {
     if ((type != component_type::Data && type != component_type::Index)
                     || get_config().extensions().sstable_file_io_extensions().empty()) {
-        return new_sstable_component_file(_read_error_handler, filename(type), flags, opts);
+        return new_sstable_component_file(_read_error_handler, type, flags, opts);
     }
-    return new_sstable_component_file_non_checked(filename(type), flags, opts).then([this, type, flags](file f) {
+    return new_sstable_component_file_non_checked(type, flags, opts).then([this, type, flags](file f) {
         return do_with(std::move(f), [this, type, flags](file& f) {
             auto ext_range = get_config().extensions().sstable_file_io_extensions();
             return do_for_each(ext_range.begin(), ext_range.end(), [this, &f, type, flags](auto& ext) {
@@ -2553,10 +2579,10 @@ void sstable_writer_k_l::finish_file_writer()
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<adler32_checksummed_file_writer*>(writer.get());
-        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
-        write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
+        _sst.write_digest(chksum_wr->full_checksum());
+        _sst.write_crc(chksum_wr->finalize_checksum());
     } else {
-        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.get_full_checksum());
+        _sst.write_digest(_sst._components->compression.get_full_checksum());
     }
 }
 
@@ -3017,14 +3043,10 @@ void sstable_writer_m::close_data_writer() {
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
-        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
-        write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
+        _sst.write_digest(chksum_wr->full_checksum());
+        _sst.write_crc(chksum_wr->finalize_checksum());
     } else {
-        write_digest(
-            _sst.get_version(),
-            _sst._write_error_handler,
-            _sst.filename(component_type::Digest),
-            _sst._components->compression.get_full_checksum());
+        _sst.write_digest(_sst._components->compression.get_full_checksum());
     }
 }
 
@@ -3761,8 +3783,31 @@ const bool sstable::has_component(component_type f) const {
     return _recognized_components.count(f);
 }
 
-const sstring sstable::filename(component_type f) const {
-    return filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+future<> sstable::touch_temp_dir() {
+    if (_temp_dir) {
+        return make_ready_future<>();
+    }
+    return do_with(get_temp_dir(), [this] (auto& temp_dir) {
+        sstlog.debug("Touching temp_dir={}", temp_dir);
+        return sstable_write_io_check(touch_directory, temp_dir).then([this, &temp_dir] {
+            _temp_dir = std::move(temp_dir);
+        });
+    });
+}
+
+future<> sstable::remove_temp_dir() {
+    if (!_temp_dir) {
+        return make_ready_future<>();
+    }
+    sstlog.debug("Removing temp_dir={}", _temp_dir);
+    return remove_file(*_temp_dir).then_wrapped([this] (future<> f) {
+        if (f.failed()) {
+            sstlog.error("Could not remove temporary directory: {}", f.get_exception());
+        } else {
+            _temp_dir.reset();
+        }
+        return f;
+    });
 }
 
 std::vector<sstring> sstable::component_filenames() const {
@@ -3775,17 +3820,12 @@ std::vector<sstring> sstable::component_filenames() const {
     return res;
 }
 
-sstring sstable::toc_filename() const {
-    return filename(component_type::TOC);
-}
-
 bool sstable::is_staging() const {
     return boost::algorithm::ends_with(_dir, "staging");
 }
 
-const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
-                                format_types format, component_type component) {
-
+sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                          format_types format, component_type component) {
     static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
         { sstable::version_types::ka, [] (entry_descriptor d) {
             return d.ks + "-" + d.cf + "-" + _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-"
@@ -3804,8 +3844,8 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     return dir + "/" + strmap[version](entry_descriptor(dir, ks, cf, version, generation, format, component));
 }
 
-const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
-                                format_types format, sstring component) {
+sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                          format_types format, sstring component) {
     static std::unordered_map<version_types, const char*, enum_hash<version_types>> fmtmap = {
         { sstable::version_types::ka, "{0}-{1}-{2}-{3}-{5}" },
         { sstable::version_types::la, "{2}-{3}-{4}-{5}" },
@@ -3827,7 +3867,7 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
     return all;
 }
 
-future<> sstable::create_links(sstring dir, int64_t generation) const {
+future<> sstable::create_links(const sstring& dir, int64_t generation) const {
     // TemporaryTOC is always first, TOC is always last
     auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
     return sstable_write_io_check(::link_file, filename(component_type::TOC), dst).then([this, dir] {
@@ -4133,9 +4173,8 @@ sstable::~sstable() {
     _on_closed(*this);
 }
 
-sstring
-dirname(sstring fname) {
-    return boost::filesystem::canonical(std::string(fname)).parent_path().string();
+static inline sstring dirname(const sstring& fname) {
+    return fs::canonical(fs::path(fname)).parent_path().string();
 }
 
 future<>

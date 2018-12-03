@@ -34,6 +34,7 @@
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <unordered_set>
 #include <unordered_map>
+#include <experimental/filesystem>
 #include "types.hh"
 #include "clustering_key_filter.hh"
 #include <seastar/core/enum.hh>
@@ -70,6 +71,8 @@ class sstable_assertions;
 class row_consumer;
 
 namespace sstables {
+
+namespace fs = std::experimental::filesystem;
 
 extern logging::logger sstlog;
 class key;
@@ -170,10 +173,10 @@ public:
     static component_type component_from_sstring(version_types version, sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
-    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
-                                  format_types format, component_type component);
-    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
-                                  format_types format, sstring component);
+    static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                            format_types format, component_type component);
+    static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                            format_types format, sstring component);
     // WARNING: it should only be called to remove components of a sstable with
     // a temporary TOC file.
     static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation,
@@ -348,13 +351,46 @@ public:
     // Return values are those of a trichotomic comparison.
     int compare_by_max_timestamp(const sstable& other) const;
 
-    const sstring get_filename() const {
+    sstring filename(const sstring& dir, component_type f) const {
+        return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+    }
+
+    sstring filename(component_type f) const {
+        return filename(get_dir(), f);
+    }
+
+    sstring temp_filename(component_type f) const {
+        return filename(get_temp_dir(), f);
+    }
+
+    sstring get_filename() const {
         return filename(component_type::Data);
     }
+
+    sstring toc_filename() const {
+        return filename(component_type::TOC);
+    }
+
+    static sstring sst_dir_basename(unsigned long gen) {
+        return fmt::format("{:016d}.sstable", gen);
+    }
+
+    static sstring temp_sst_dir(const sstring& dir, unsigned long gen) {
+        return dir + "/" + sst_dir_basename(gen);
+    }
+
+    static bool is_temp_dir(const sstring& dirpath)
+    {
+        return fs::canonical(fs::path(dirpath)).extension().string() == "sstable";
+    }
+
     const sstring& get_dir() const {
         return _dir;
     }
-    sstring toc_filename() const;
+
+    const sstring get_temp_dir() const {
+        return temp_sst_dir(_dir, _generation);
+    }
 
     bool is_staging() const;
 
@@ -364,9 +400,9 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    future<> create_links(sstring dir, int64_t generation) const;
+    future<> create_links(const sstring& dir, int64_t generation) const;
 
-    future<> create_links(sstring dir) const {
+    future<> create_links(const sstring& dir) const {
         return create_links(dir, _generation);
     }
 
@@ -462,6 +498,7 @@ private:
 
     schema_ptr _schema;
     sstring _dir;
+    std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
     unsigned long _generation = 0;
     version_types _version;
     format_types _format;
@@ -479,7 +516,6 @@ private:
 
     const bool has_component(component_type f) const;
 
-    const sstring filename(component_type f) const;
     future<file> open_file(component_type, open_flags, file_open_options = {});
 
     template <component_type Type, typename T>
@@ -487,6 +523,16 @@ private:
 
     template <component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
+
+    void write_crc(const checksum& c);
+    void write_digest(uint32_t full_checksum);
+
+    future<file> rename_new_sstable_component_file(sstring from_file, sstring to_file, file fd);
+    future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {});
+    future<file> new_sstable_component_file_non_checked(component_type f, open_flags flags, file_open_options options = {});
+
+    future<> touch_temp_dir();
+    future<> remove_temp_dir();
 
     void generate_toc(compressor_ptr c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);

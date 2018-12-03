@@ -6,7 +6,7 @@
 
 static seastar::logger llogger("lister");
 
-lister::lister(file f, dir_entry_types type, walker_type walker, filter_type filter, lister::path dir, lister::show_hidden do_show_hidden)
+lister::lister(file f, dir_entry_types type, walker_type walker, filter_type filter, fs::path dir, lister::show_hidden do_show_hidden)
         : _f(std::move(f))
         , _walker(std::move(walker))
         , _filter(std::move(filter))
@@ -53,17 +53,17 @@ future<directory_entry> lister::guarantee_type(directory_entry de) {
     }
 }
 
-future<> lister::scan_dir(lister::path dir, lister::dir_entry_types type, lister::show_hidden do_show_hidden, walker_type walker, filter_type filter) {
+future<> lister::scan_dir(fs::path dir, lister::dir_entry_types type, lister::show_hidden do_show_hidden, walker_type walker, filter_type filter) {
     return open_checked_directory(general_disk_error_handler, dir.native()).then([type = std::move(type), walker = std::move(walker), filter = std::move(filter), dir, do_show_hidden] (file f) {
             auto l = make_lw_shared<lister>(std::move(f), std::move(type), std::move(walker), std::move(filter), std::move(dir), do_show_hidden);
             return l->done().then([l] { });
     });
 }
 
-future<> lister::rmdir(lister::path dir) {
+future<> lister::rmdir(fs::path dir) {
     // first, kill the contents of the directory
-    return lister::scan_dir(dir, {}, show_hidden::yes, [] (lister::path parent_dir, directory_entry de) mutable {
-        lister::path current_entry_path(parent_dir / de.name.c_str());
+    return lister::scan_dir(dir, {}, show_hidden::yes, [] (fs::path parent_dir, directory_entry de) mutable {
+        fs::path current_entry_path(parent_dir / de.name.c_str());
 
         if (de.type.value() == directory_entry_type::directory) {
             return rmdir(std::move(current_entry_path));
