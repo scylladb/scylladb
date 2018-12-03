@@ -67,7 +67,7 @@ boost_tests = [
     'logalloc_test',
     'log_heap_test',
     'crc_test',
-    'libdeflate_test',
+    'checksum_utils_test',
     'flush_queue_test',
     'config_test',
     'dynamic_bitset_test',
