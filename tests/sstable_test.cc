@@ -301,14 +301,12 @@ SEASTAR_TEST_CASE(check_statistics_func) {
             statistics& sst1_s = sstables::test(sst1).get_statistics();
             statistics& sst2_s = sstables::test(sst2).get_statistics();
 
-            BOOST_REQUIRE(sst1_s.hash.map.size() == sst2_s.hash.map.size());
+            BOOST_REQUIRE(sst1_s.offsets.elements.size() == sst2_s.offsets.elements.size());
             BOOST_REQUIRE(sst1_s.contents.size() == sst2_s.contents.size());
 
-            return do_for_each(sst1_s.hash.map.begin(), sst1_s.hash.map.end(),
-                    [sst1, sst2, &sst1_s, &sst2_s] (auto val) {
-                BOOST_REQUIRE(val.second == sst2_s.hash.map[val.first]);
-                return make_ready_future<>();
-            });
+            for (auto&& e : boost::combine(sst1_s.offsets.elements, sst2_s.offsets.elements)) {
+                BOOST_REQUIRE(boost::get<0>(e).second ==  boost::get<1>(e).second);
+            }
             // TODO: compare the field contents from both sstables.
         });
     }).then([tmp] {});

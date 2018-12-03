@@ -528,6 +528,11 @@ future<> parse(sstable_version_types v, random_access_reader& in, Size& len, std
     });
 }
 
+template <typename First, typename Second>
+future<> parse(sstable_version_types v, random_access_reader& in, std::pair<First, Second>& p) {
+    return parse(v, in, p.first, p.second);
+}
+
 template <typename Size, typename Key, typename Value>
 future<> parse(sstable_version_types v, random_access_reader& in, disk_hash<Size, Key, Value>& h) {
     auto w = std::make_unique<Size>();
@@ -542,6 +547,11 @@ inline void write(sstable_version_types v, file_writer& out, const std::unordere
     for (auto& val: map) {
         write(v, out, val.first, val.second);
     };
+}
+
+template <typename First, typename Second>
+inline void write(sstable_version_types v, file_writer& out, const std::pair<First, Second>& val) {
+    write(v, out, val.first, val.second);
 }
 
 template <typename Size, typename Key, typename Value>
@@ -756,8 +766,11 @@ inline void write(sstable_version_types v, file_writer& out, const std::unique_p
 }
 
 future<> parse(sstable_version_types v, random_access_reader& in, statistics& s) {
-    return parse(v, in, s.hash).then([v, &in, &s] {
-        return do_for_each(s.hash.map.begin(), s.hash.map.end(), [v, &in, &s] (auto val) mutable {
+    return parse(v, in, s.offsets).then([v, &in, &s] {
+        // Old versions of Scylla do not respect the order.
+        // See https://github.com/scylladb/scylla/issues/3937
+        boost::sort(s.offsets.elements, [] (auto&& e1, auto&& e2) { return e1.first < e2.first; });
+        return do_for_each(s.offsets.elements.begin(), s.offsets.elements.end(), [v, &in, &s] (auto val) mutable {
             in.seek(val.second);
 
             switch (val.first) {
@@ -784,12 +797,9 @@ future<> parse(sstable_version_types v, random_access_reader& in, statistics& s)
 }
 
 inline void write(sstable_version_types v, file_writer& out, const statistics& s) {
-    write(v, out, s.hash);
-    auto types = boost::copy_range<std::vector<metadata_type>>(s.hash.map | boost::adaptors::map_keys);
-    // use same sort order as seal_statistics
-    boost::sort(types);
-    for (auto t : types) {
-        s.contents.at(t)->write(v, out);
+    write(v, out, s.offsets);
+    for (auto&& e : s.offsets.elements) {
+        s.contents.at(e.first)->write(v, out);
     }
 }
 
@@ -2067,12 +2077,13 @@ populate_statistics_offsets(sstable_version_types v, statistics& s) {
 
     // populate the hash with garbage so we can calculate its size
     for (auto t : types) {
-        s.hash.map[t] = -1;
+        s.offsets.elements.emplace_back(t, -1);
     }
 
-    auto offset = serialized_size(v, s.hash);
+    auto offset = serialized_size(v, s.offsets);
+    s.offsets.elements.clear();
     for (auto t : types) {
-        s.hash.map[t] = offset;
+        s.offsets.elements.emplace_back(t, offset);
         offset += s.contents[t]->serialized_size(v);
     }
 }

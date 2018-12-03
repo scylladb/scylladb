@@ -538,7 +538,7 @@ inline bool is_expired_liveness_ttl(uint32_t ttl) {
 }
 
 struct statistics {
-    disk_hash<uint32_t, metadata_type, uint32_t> hash;
+    disk_array<uint32_t, std::pair<metadata_type, uint32_t>> offsets; // ordered by metadata_type
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
 };
 
