@@ -309,7 +309,7 @@ scylla_tests = [
     'tests/log_heap_test',
     'tests/managed_vector_test',
     'tests/crc_test',
-    'tests/libdeflate_test',
+    'tests/checksum_utils_test',
     'tests/flush_queue_test',
     'tests/dynamic_bitset_test',
     'tests/auth_test',
@@ -367,6 +367,7 @@ perf_tests = [
 
 apps = [
     'scylla',
+    'utils/gz/gen_crc_combine_table',
 ]
 
 tests = scylla_tests + perf_tests
@@ -599,6 +600,7 @@ scylla_core = (['database.cc',
                 'utils/managed_bytes.cc',
                 'utils/exceptions.cc',
                 'utils/config_file.cc',
+                'utils/gz/crc_combine.cc',
                 'gms/version_generator.cc',
                 'gms/versioned_value.cc',
                 'gms/gossiper.cc',
@@ -781,7 +783,7 @@ pure_boost_tests = set([
     'tests/test-serialization',
     'tests/range_test',
     'tests/crc_test',
-    'tests/libdeflate_test',
+    'tests/checksum_utils_test',
     'tests/managed_vector_test',
     'tests/dynamic_bitset_test',
     'tests/idl_test',
@@ -856,6 +858,8 @@ deps['tests/perf/perf_fast_forward'] += ['release.cc']
 deps['tests/meta_test'] = ['tests/meta_test.cc']
 deps['tests/imr_test'] = ['tests/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/reusable_buffer_test'] = ['tests/reusable_buffer_test.cc']
+
+deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
@@ -1111,6 +1115,9 @@ with open(buildfile, 'w') as f:
             command = {ninja} -C $subdir $target
             restat = 1
             description = NINJA $out
+        rule run
+            command = $in > $out
+            description = GEN $out
         rule copy
             command = cp $in $out
             description = COPY $out
@@ -1182,10 +1189,14 @@ with open(buildfile, 'w') as f:
                     objs += dep.objects('$builddir/' + mode + '/gen')
             if binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
+            elif binary.endswith('gen_crc_combine_table'):
+                f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
                 objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
                     'libdeflate/libdeflate.a'
                 ]])
+                objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
+                compiles['$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o'] = '$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc'
                 if binary.startswith('tests/'):
                     local_libs = '$libs'
                     if binary not in tests_not_using_seastar_test_framework or binary in pure_boost_tests:
@@ -1227,6 +1238,8 @@ with open(buildfile, 'w') as f:
                     antlr3_grammars.add(src)
                 else:
                     raise Exception('No rule for ' + src)
+        f.write('build {}: run {}\n'.format('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc',
+                                            '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
         for obj in compiles:
             src = compiles[obj]
             gen_headers = list(ragels.keys())

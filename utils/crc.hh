@@ -34,23 +34,7 @@
 #include <zlib.h>
 #endif
 
-// Carry-less multiplication
-#if defined(__x86_64__) || defined(__i386__)
-#include <wmmintrin.h>
-static inline uint64_t clmul_u32(uint32_t p1, uint32_t p2)
-{
-    __m128i p = _mm_set_epi64x(p1, p2);
-    p = _mm_clmulepi64_si128(p, p, 0x01);
-    return _mm_extract_epi64(p, 0);
-}
-#elif defined(__aarch64__)
-#include <arm_neon.h>
-static inline uint64_t clmul_u32(uint32_t p1, uint32_t p2)
-{
-    return vmull_p64(p1, p2);
-}
-#endif
-
+#include "utils/clmul.hh"
 #include "utils/fragment_range.hh"
 
 namespace utils {
