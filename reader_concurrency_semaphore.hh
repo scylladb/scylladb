@@ -21,9 +21,13 @@
 
 #pragma once
 
-#include <core/file.hh>
-#include <core/semaphore.hh>
+#include <map>
+#include <seastar/core/file.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/semaphore.hh>
 #include "db/timeout_clock.hh"
+
+using namespace seastar;
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -109,13 +113,24 @@ public:
         }
     };
 
+    class inactive_read {
+    public:
+        virtual void evict() = 0;
+        virtual ~inactive_read() = default;
+    };
+
+    class inactive_read_handle {
+        uint64_t _id = 0;
+
+        friend class reader_concurrency_semaphore;
+
+        inactive_read_handle() = default;
+        explicit inactive_read_handle(uint64_t id)
+            : _id(id) {
+        }
+    };
+
 private:
-    static std::exception_ptr default_make_queue_overloaded_exception() {
-        return std::make_exception_ptr(std::runtime_error("restricted mutation reader queue overload"));
-    }
-
-    resources _resources;
-
     struct entry {
         promise<lw_shared_ptr<reader_permit>> pr;
         resources res;
@@ -126,11 +141,21 @@ private:
             e.pr.set_exception(semaphore_timed_out());
         }
     };
+
+private:
+    resources _resources;
+
     expiring_fifo<entry, expiry_handler, db::timeout_clock> _wait_list;
 
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
-    std::function<std::exception_ptr()> _make_queue_overloaded_exception = default_make_queue_overloaded_exception;
-    std::function<bool()> _evict_an_inactive_reader;
+    std::function<std::exception_ptr()> _make_queue_overloaded_exception;
+    uint64_t _next_id = 1;
+    std::map<uint64_t, std::unique_ptr<inactive_read>> _inactive_reads;
+
+private:
+    static std::exception_ptr default_make_queue_overloaded_exception() {
+        return std::make_exception_ptr(std::runtime_error("restricted mutation reader queue overload"));
+    }
 
     bool has_available_units(const resources& r) const {
         return bool(_resources) && _resources >= r;
@@ -153,12 +178,10 @@ public:
     reader_concurrency_semaphore(unsigned count,
             size_t memory,
             size_t max_queue_length = std::numeric_limits<size_t>::max(),
-            std::function<std::exception_ptr()> raise_queue_overloaded_exception = default_make_queue_overloaded_exception,
-            std::function<bool()> evict_an_inactive_reader = {})
+            std::function<std::exception_ptr()> raise_queue_overloaded_exception = default_make_queue_overloaded_exception)
         : _resources(count, memory)
         , _max_queue_length(max_queue_length)
-        , _make_queue_overloaded_exception(raise_queue_overloaded_exception)
-        , _evict_an_inactive_reader(std::move(evict_an_inactive_reader)) {
+        , _make_queue_overloaded_exception(raise_queue_overloaded_exception) {
     }
 
     reader_concurrency_semaphore(const reader_concurrency_semaphore&) = delete;
@@ -166,6 +189,29 @@ public:
 
     reader_concurrency_semaphore(reader_concurrency_semaphore&&) = delete;
     reader_concurrency_semaphore& operator=(reader_concurrency_semaphore&&) = delete;
+
+    /// Register an inactive read.
+    ///
+    /// The semaphore will evict this read when there is a shortage of
+    /// permits. This might be immediate, during this register call.
+    /// Clients can use the returned handle to unregister the read, when it
+    /// stops being inactive and hence evictable.
+    ///
+    /// An inactive read is an object implementing the `inactive_read`
+    /// interface.
+    /// The semaphore takes ownership of the created object and destroys it if
+    /// it is evicted.
+    inactive_read_handle register_inactive_read(std::unique_ptr<inactive_read> ir);
+
+    /// Unregister the previously registered inactive read.
+    ///
+    /// If the read was not evicted, the inactive read object, passed in to the
+    /// register call, will be returned. Otherwise a nullptr is returned.
+    std::unique_ptr<inactive_read> unregister_inactive_read(inactive_read_handle irh);
+
+    void clear_inactive_reads() {
+        _inactive_reads.clear();
+    }
 
     future<lw_shared_ptr<reader_permit>> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
 

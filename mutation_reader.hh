@@ -388,27 +388,81 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
         foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
-using remote_reader_factory = noncopyable_function<future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>(unsigned,
-        schema_ptr,
-        const dht::partition_range&,
-        const query::partition_slice&,
-        const io_priority_class&,
-        tracing::trace_state_ptr,
-        streamed_mutation::forwarding,
-        mutation_reader::forwarding)>;
+/// Reader lifecycle policy for the mulitshard combining reader.
+///
+/// This policy is expected to make sure any additional resource the readers
+/// might need is kept alive for the lifetime of the readers, not that
+/// of the multishard reader. This is a very important distinction. As
+/// destructors cannot return futures, the multishard reader will be
+/// destroyed before all it's shard readers could stop properly. Hence it
+/// is the duty of this policy to make sure all objects the shard readers
+/// depend on stay alive until they are properly destroyed on their home
+/// shards. Note that this also includes the passed in `range` and `slice`
+/// parameters because although client code is required to keep them alive as
+/// long as the top level reader lives, the shard readers might outlive the
+/// multishard reader itself.
+class reader_lifecycle_policy {
+public:
+    struct paused_or_stopped_reader {
+        // Null when the reader is paused.
+        foreign_ptr<std::unique_ptr<flat_mutation_reader>> remote_reader;
+        circular_buffer<mutation_fragment> unconsumed_fragments;
+        // Only set for paused readers.
+        bool has_pending_next_partition;
+    };
 
-struct stopped_foreign_reader {
-    foreign_ptr<std::unique_ptr<flat_mutation_reader>> remote_reader;
-    circular_buffer<mutation_fragment> unconsumed_fragments;
+public:
+    /// Create an appropriate reader on the specified shard.
+    ///
+    /// Will be called when the multishard reader visits a shard for the
+    /// first time. This method should also enter gates, take locks or
+    /// whatever is appropriate to make sure resources it is using on the
+    /// remote shard stay alive, during the lifetime of the created reader.
+    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> create_reader(
+            shard_id shard,
+            schema_ptr schema,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            mutation_reader::forwarding fwd_mr) = 0;
+
+    /// Wait on the shard reader to stop then destroy it.
+    ///
+    /// Will be called when the multishard reader is being destroyed. It will be
+    /// called for each of the shard readers. The future resolves when the
+    /// reader is stopped, that is it, finishes all background and/or pending
+    /// work.
+    /// This method is expected to do a proper cleanup, that is, leave any gates,
+    /// release any locks or whatever is appropriate for the shard reader.
+    ///
+    /// The multishard reader couldn't wait on any future returned from this
+    /// method (as it will be called from the destructor) so waiting on
+    /// all the readers being cleaned up is up to the implementation.
+    ///
+    /// This method will be called from a destructor so it cannot throw.
+    virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader) noexcept = 0;
+
+    /// Pause the reader.
+    ///
+    /// The purpose of pausing a reader is making it evictable while it is
+    /// otherwise inactive. This allows freeing up resources that are in-demand
+    /// by evicting these paused readers. Most notably, this allows freeing up
+    /// reader permits when the node is overloaded with reads.
+    virtual future<> pause(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) = 0;
+
+    /// Try to resume the reader.
+    ///
+    /// The pointer returned will be null when resuming fails. This can happen
+    /// if the reader was evicted while paused.
+    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume(shard_id shard) = 0;
 };
-using foreign_reader_dismantler = noncopyable_function<void(shard_id, future<stopped_foreign_reader>)>;
 
 /// Make a multishard_combining_reader.
 ///
 /// multishard_combining_reader takes care of reading a range from all shards
-/// that own a subrange in the range. Readers are created on-demand with the
-/// supplied reader_factory. This factory function is expected to create an
-/// appropriate reader on the specified shard and return a foreign_ptr to it.
+/// that own a subrange in the range. Shard reader are created on-demand, when
+/// the shard is visited for the first time.
 ///
 /// The read starts with a concurrency of one, that is the reader reads from a
 /// single shard at a time. The concurrency is exponentially increased (to a
@@ -421,19 +475,13 @@ using foreign_reader_dismantler = noncopyable_function<void(shard_id, future<sto
 /// For dense tables (where we rarely cross shards) we rely on the
 /// foreign_reader to issue sufficient read-aheads on its own to avoid blocking.
 ///
-/// Optionally a dismantler function can be passed to the multishard
-/// reader. When the multishard reader is destroyed it will invoke the
-/// dismantler functor for each of its foreign (shard) readers, passing a future
-/// to a `stopped_foreign_reader`. The future becomes available when the foreign
-/// reader has stopped, that is, it finished all of its in-progress read aheads
-/// and/or any pending `next_partition()` calls.
-flat_mutation_reader make_multishard_combining_reader(schema_ptr schema,
+/// The readers' life-cycles are managed through the supplied lifecycle policy.
+flat_mutation_reader make_multishard_combining_reader(
+        shared_ptr<reader_lifecycle_policy> lifecycle_policy,
+        const dht::i_partitioner& partitioner,
+        schema_ptr schema,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
-        const dht::i_partitioner& partitioner,
-        remote_reader_factory reader_factory,
         tracing::trace_state_ptr trace_state = nullptr,
-        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
-        foreign_reader_dismantler reader_dismantler = {});
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);

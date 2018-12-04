@@ -2182,9 +2182,6 @@ database::database(const db::config& cfg, database_config dbcfg)
         [this] {
             ++_stats->sstable_read_queue_overloaded;
             return std::make_exception_ptr(std::runtime_error("sstable inactive read queue overloaded"));
-        },
-        [this] {
-            return _querier_cache.evict_one();
         })
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
@@ -2196,7 +2193,7 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(*_cfg, dbcfg))
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _querier_cache(dbcfg.available_memory * 0.04)
+    , _querier_cache(_read_concurrency_sem, dbcfg.available_memory * 0.04)
     , _large_partition_handler(std::make_unique<db::cql_table_large_partition_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024))
     , _result_memory_limiter(dbcfg.available_memory / 10)
 {
@@ -2448,6 +2445,9 @@ database::setup_metrics() {
 }
 
 database::~database() {
+    _read_concurrency_sem.clear_inactive_reads();
+    _streaming_concurrency_sem.clear_inactive_reads();
+    _system_read_concurrency_sem.clear_inactive_reads();
 }
 
 void database::update_version(const utils::UUID& version) {
