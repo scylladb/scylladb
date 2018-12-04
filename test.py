@@ -109,6 +109,7 @@ boost_tests = [
     'querier_cache',
     'limiting_data_source_test',
     'sstable_test',
+    'broken_sstable_test',
     'sstable_3_x_test',
     'meta_test',
     'reusable_buffer_test',
