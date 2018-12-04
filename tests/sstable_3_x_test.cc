@@ -4538,6 +4538,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_dead_row_marker) {
+    api::timestamp_type ts = 1543494402386839;
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543494402};
     auto abj = defer([] { await_background_jobs().get(); });
     sstring table_name = "dead_row_marker";
     // CREATE TABLE dead_row_marker (pk int, ck int, st int static, rc int , PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
@@ -4553,17 +4555,17 @@ SEASTAR_THREAD_TEST_CASE(test_dead_row_marker) {
 
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
-    mut.set_static_cell("st", data_value{1135}, write_timestamp);
+    mut.set_static_cell("st", data_value{1135}, ts);
 
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
     auto& clustered_row = mut.partition().clustered_row(*s, ckey);
-    clustered_row.apply(row_marker{tombstone{write_timestamp, write_time_point}});
+    clustered_row.apply(row_marker{ts, gc_clock::duration{90} /* TTL */, tp});
 
-    mut.set_cell(ckey, "rc", data_value{777}, write_timestamp);
+    mut.set_cell(ckey, "rc", data_value{7777}, ts);
 
     mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    write_and_compare_sstables(s, mt, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_shadowable_deletion) {

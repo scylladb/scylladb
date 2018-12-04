@@ -651,6 +651,17 @@ static void test_range_queries(populate_fn populate) {
     test_slice(inclusive_token_range(128, partitions.size() - 1));
 }
 
+void test_all_data_is_read_back(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
+    for_each_mutation([&populate] (const mutation& m) mutable {
+        auto ms = populate(m.schema(), {m});
+        mutation copy(m);
+        copy.partition().compact_for_compaction(*copy.schema(), always_gc, gc_clock::now());
+        assert_that(ms.make_reader(m.schema())).produces_compacted(copy);
+    });
+}
+
 void test_mutation_reader_fragments_have_monotonic_positions(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
@@ -1105,6 +1116,7 @@ void run_mutation_reader_tests(populate_fn populate, streamed_mutation::forwardi
         test_streamed_mutation_forwarding_across_range_tombstones(populate);
         test_streamed_mutation_forwarding_guarantees(populate);
     }
+    test_all_data_is_read_back(populate);
     test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate);
     if (fwd_sm) {
         test_streamed_mutation_forwarding_is_consistent_with_slicing(populate);

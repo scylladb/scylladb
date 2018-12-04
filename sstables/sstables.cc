@@ -3139,10 +3139,9 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     bool use_row_timestamp = (properties.timestamp == cell.timestamp());
     bool is_row_expiring = properties.ttl.has_value();
     bool is_cell_expiring = cell.is_live_and_has_ttl();
-    bool is_expiring = is_row_expiring || is_cell_expiring;
-    bool use_row_ttl = is_row_expiring || (is_cell_expiring &&
-                       (properties.ttl == cell.ttl().count()) &&
-                       (properties.local_deletion_time == cell.expiry().time_since_epoch().count()));
+    bool use_row_ttl = is_row_expiring && is_cell_expiring &&
+                       properties.ttl == cell.ttl().count() &&
+                       properties.local_deletion_time == cell.deletion_time().time_since_epoch().count();
 
     cell_flags flags = cell_flags::none;
     if (!has_value) {
@@ -3150,7 +3149,7 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     }
     if (is_deleted) {
         flags |= cell_flags::is_deleted_mask;
-    } else if (is_expiring) {
+    } else if (is_cell_expiring) {
         flags |= cell_flags::is_expiring_mask;
     }
     if (use_row_timestamp) {
