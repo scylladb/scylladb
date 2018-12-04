@@ -87,11 +87,17 @@ future<> create_metadata_table_if_missing(
     return mm.announce_new_column_family(b.build(), false);
 }
 
-future<> wait_for_schema_agreement(::service::migration_manager& mm, const database& db) {
+future<> wait_for_schema_agreement(::service::migration_manager& mm, const database& db, seastar::abort_source& as) {
     static const auto pause = [] { return sleep(std::chrono::milliseconds(500)); };
 
-    return do_until([&db] { return db.get_version() != database::empty_version; }, pause).then([&mm] {
-        return do_until([&mm] { return mm.have_schema_agreement(); }, pause);
+    return do_until([&db, &as] {
+        as.check();
+        return db.get_version() != database::empty_version;
+    }, pause).then([&mm, &as] {
+        return do_until([&mm, &as] {
+            as.check();
+            return mm.have_schema_agreement();
+        }, pause);
     });
 }
 

@@ -160,7 +160,7 @@ future<> default_authorizer::start() {
                 _migration_manager).then([this] {
             _finished = do_after_system_ready(_as, [this] {
                 return async([this] {
-                    wait_for_schema_agreement(_migration_manager, _qp.db().local()).get0();
+                    wait_for_schema_agreement(_migration_manager, _qp.db().local(), _as).get0();
 
                     if (legacy_metadata_exists()) {
                         if (!any_granted().get0()) {
@@ -178,7 +178,7 @@ future<> default_authorizer::start() {
 
 future<> default_authorizer::stop() {
     _as.request_abort();
-    return _finished.handle_exception_type([](const sleep_aborted&) {});
+    return _finished.handle_exception_type([](const sleep_aborted&) {}).handle_exception_type([](const abort_requested_exception&) {});
 }
 
 future<permission_set>
