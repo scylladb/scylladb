@@ -225,7 +225,7 @@ future<> standard_role_manager::start() {
         return this->create_metadata_tables_if_missing().then([this] {
             _stopped = auth::do_after_system_ready(_as, [this] {
                 return seastar::async([this] {
-                    wait_for_schema_agreement(_migration_manager, _qp.db().local()).get0();
+                    wait_for_schema_agreement(_migration_manager, _qp.db().local(), _as).get0();
 
                     if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get0()) {
                         if (this->legacy_metadata_exists()) {
@@ -249,7 +249,7 @@ future<> standard_role_manager::start() {
 
 future<> standard_role_manager::stop() {
     _as.request_abort();
-    return _stopped.handle_exception_type([] (const sleep_aborted&) { });
+    return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
 }
 
 future<> standard_role_manager::create_or_replace(stdx::string_view role_name, const role_config& c) const {

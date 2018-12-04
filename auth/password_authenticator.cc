@@ -156,7 +156,7 @@ future<> password_authenticator::start() {
 
          _stopped = do_after_system_ready(_as, [this] {
              return async([this] {
-                 wait_for_schema_agreement(_migration_manager, _qp.db().local()).get0();
+                 wait_for_schema_agreement(_migration_manager, _qp.db().local(), _as).get0();
 
                  if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash).get0()) {
                      if (legacy_metadata_exists()) {
@@ -181,7 +181,7 @@ future<> password_authenticator::start() {
 
 future<> password_authenticator::stop() {
     _as.request_abort();
-    return _stopped.handle_exception_type([] (const sleep_aborted&) { });
+    return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});
 }
 
 db::consistency_level password_authenticator::consistency_for_user(stdx::string_view role_name) {
