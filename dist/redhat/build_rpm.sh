@@ -4,24 +4,18 @@ PRODUCT=scylla
 
 . /etc/os-release
 print_usage() {
-    echo "build_rpm.sh --rebuild-dep --jobs 2 --target centos7 --reloc-pkg build/release/scylla-package.tar.gz"
-    echo "  --jobs  specify number of jobs"
+    echo "build_rpm.sh --rebuild-dep --target centos7 --reloc-pkg build/release/scylla-package.tar.gz"
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
     echo "  --xtrace print command traces before executing command"
     echo "  --reloc-pkg specify relocatable package path"
     exit 1
 }
-RPM_JOBS_OPTS=
 DIST=false
 TARGET=
 RELOC_PKG=
 while [ $# -gt 0 ]; do
     case "$1" in
-        "--jobs")
-            RPM_JOBS_OPTS=(--define="_smp_mflags -j$2")
-            shift 2
-            ;;
         "--dist")
             DIST=true
             shift 1
@@ -122,7 +116,7 @@ mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 ln -fv $RELOC_PKG $RPMBUILD/SOURCES/
 pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST, \"product\": \"$PRODUCT\", \"$PRODUCT\": true, \"reloc_pkg\": \"$RELOC_PKG_BASENAME\", $MUSTACHE_DIST }" > $RPMBUILD/SPECS/scylla.spec
 if [ "$TARGET" = "centos7" ]; then
-    rpmbuild -ba --define "_topdir $RPMBUILD" --define "dist .el7" $RPM_JOBS_OPTS $RPMBUILD/SPECS/scylla.spec
+    rpmbuild -ba --define "_topdir $RPMBUILD" --define "dist .el7" $RPMBUILD/SPECS/scylla.spec
 else
-    rpmbuild -ba --define "_topdir $RPMBUILD" $RPM_JOBS_OPTS $RPMBUILD/SPECS/scylla.spec
+    rpmbuild -ba --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec
 fi

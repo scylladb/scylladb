@@ -4,26 +4,20 @@ PRODUCT=scylla
 
 . /etc/os-release
 print_usage() {
-    echo "build_deb.sh -target <codename> --dist --rebuild-dep --jobs 2 --reloc-pkg build/release/scylla-package.tar.gz"
+    echo "build_deb.sh -target <codename> --dist --rebuild-dep --reloc-pkg build/release/scylla-package.tar.gz"
     echo "  --dist  create a public distribution package"
-    echo "  --jobs  specify number of jobs"
     echo "  --reloc-pkg specify relocatable package path"
     exit 1
 }
 
 DIST="false"
 TARGET=stable
-DEB_BUILD_OPTIONS=
 RELOC_PKG=
 while [ $# -gt 0 ]; do
     case "$1" in
         "--dist")
             DIST="true"
             shift 1
-            ;;
-        "--jobs")
-            DEB_BUILD_OPTIONS="parallel=$2"
-            shift 2
             ;;
         "--reloc-pkg")
             RELOC_PKG=$2

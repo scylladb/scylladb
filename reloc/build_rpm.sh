@@ -2,8 +2,7 @@
 
 . /etc/os-release
 print_usage() {
-    echo "build_rpm.sh --rebuild-dep --jobs 2 --target centos7 --reloc-pkg build/release/scylla-package.tar.gz"
-    echo "  --jobs  specify number of jobs"
+    echo "build_rpm.sh --rebuild-dep --target centos7 --reloc-pkg build/release/scylla-package.tar.gz"
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
     echo "  --xtrace print command traces before executing command"
@@ -14,10 +13,6 @@ RELOC_PKG=$(readlink -f build/release/scylla-package.tar.gz)
 OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        "--jobs")
-            OPTS="$OPTS $1 $2"
-            shift 2
-            ;;
         "--dist")
             OPTS="$OPTS $1"
             shift 1

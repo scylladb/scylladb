@@ -2,9 +2,8 @@
 
 . /etc/os-release
 print_usage() {
-    echo "build_deb.sh -target <codename> --dist --rebuild-dep --jobs 2 --reloc-pkg build/release/scylla-package.tar.gz"
+    echo "build_deb.sh -target <codename> --dist --rebuild-dep --reloc-pkg build/release/scylla-package.tar.gz"
     echo "  --dist  create a public distribution package"
-    echo "  --jobs  specify number of jobs"
     echo "  --reloc-pkg specify relocatable package path"
     exit 1
 }
@@ -16,10 +15,6 @@ while [ $# -gt 0 ]; do
         "--dist")
             OPTS="$OPTS $1"
             shift 1
-            ;;
-        "--jobs")
-            OPTS="$OPTS $1 $2"
-            shift 2
             ;;
         "--reloc-pkg")
             OPTS="$OPTS $1 $(readlink -f $2)"
