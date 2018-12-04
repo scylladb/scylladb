@@ -137,6 +137,9 @@ public:
     const clustering_row_ranges& row_ranges(const schema&, const partition_key&) const;
     void set_range(const schema&, const partition_key&, clustering_row_ranges);
     void clear_range(const schema&, const partition_key&);
+    void clear_ranges() {
+        _specific_ranges = nullptr;
+    }
     // FIXME: possibly make this function return a const ref instead.
     clustering_row_ranges get_all_ranges() const;
 

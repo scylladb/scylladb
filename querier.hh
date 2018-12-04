@@ -291,9 +291,8 @@ public:
 /// Inserted queriers will have a TTL. When this expires the querier is
 /// evicted. This is to avoid excess and unnecessary resource usage due to
 /// abandoned queriers.
-/// Provides a way to evict readers one-by-one via `evict_one()`. This can be
-/// used by the concurrency-limiting code to evict cached readers to free up
-/// resources for admitting new ones.
+/// Registers cached readers with the reader concurrency semaphore, as inactive
+/// readers, so the latter can evict them if needed.
 /// Keeps the total memory consumption of cached queriers
 /// below max_queriers_memory_usage by evicting older entries upon inserting
 /// new ones if the the memory consupmtion would go above the limit.
@@ -327,6 +326,7 @@ public:
         const utils::UUID _key;
         const lowres_clock::time_point _expires;
         std::variant<data_querier, mutation_querier, shard_mutation_querier> _value;
+        std::optional<reader_concurrency_semaphore::inactive_read_handle> _handle;
 
     public:
         template <typename Querier>
@@ -342,6 +342,14 @@ public:
 
         void set_pos(std::list<entry>::iterator pos) {
             _pos = pos;
+        }
+
+        void set_inactive_handle(reader_concurrency_semaphore::inactive_read_handle handle) {
+            _handle = std::move(handle);
+        }
+
+        reader_concurrency_semaphore::inactive_read_handle get_inactive_handle() const {
+            return *_handle;
         }
 
         const utils::UUID& key() const {
@@ -391,6 +399,7 @@ public:
           boost::intrusive::constant_time_size<false>>;
 
 private:
+    reader_concurrency_semaphore& _sem;
     entries _entries;
     index _data_querier_index;
     index _mutation_querier_index;
@@ -403,7 +412,7 @@ private:
     void scan_cache_entries();
 
 public:
-    explicit querier_cache(size_t max_cache_size = 1'000'000, std::chrono::seconds entry_ttl = default_entry_ttl);
+    explicit querier_cache(reader_concurrency_semaphore& sem, size_t max_cache_size = 1'000'000, std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;
