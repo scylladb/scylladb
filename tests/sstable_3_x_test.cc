@@ -3440,7 +3440,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // UPDATE collection_incremental_update SET col = col + {2} WHERE pk = 1;
+    // UPDATE collection_incremental_update USING TIMESTAMP 1525385507816568 SET col = col + {2} WHERE pk = 1;
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
 
@@ -3451,7 +3451,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
