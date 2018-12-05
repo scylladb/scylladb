@@ -3093,7 +3093,7 @@ static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> m
     return tmp;
 }
 
-static void validate_read(schema_ptr s, sstring path, std::vector<mutation> mutations) {
+static sstable_assertions validate_read(schema_ptr s, sstring path, std::vector<mutation> mutations) {
     sstable_assertions sst(s, path);
     sst.load();
 
@@ -3103,6 +3103,7 @@ static void validate_read(schema_ptr s, sstring path, std::vector<mutation> muta
     }
 
     assertions.produces_end_of_stream();
+    return sst;
 }
 
 static constexpr api::timestamp_type write_timestamp = 1525385507816568;
