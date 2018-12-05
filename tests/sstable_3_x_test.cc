@@ -3728,7 +3728,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     // textAsBlob('great'), true, '2017-05-05',
     // 5.45, 36.6, 7.62, '192.168.0.110', -2147483648, 32767, '19:45:05.090',
     // '2015-05-01 09:30:54.234+0000', 50554d6e-29bb-11e5-b345-feff819cdc9f, 127,
-    // 01234567-0123-0123-0123-0123456789ab, 'привет', 123, 1h4m48s20ms);
+    // 01234567-0123-0123-0123-0123456789ab, 'привет', 123, 1h4m48s20ms) USING TIMESTAMP 1525385507816568;
     auto key = make_dkey(s, {to_bytes("key")});
     mutation mut{s, key};
     clustering_key ckey = clustering_key::make_empty();
@@ -3755,7 +3755,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
