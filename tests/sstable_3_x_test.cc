@@ -3382,15 +3382,17 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // DELETE FROM deleted_row WHERE pk=1 and ck=2;
+    // DELETE FROM deleted_row USING TIMESTAMP 1525385507816568 WHERE pk=1 and ck=2;
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543907978};
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
-    mut.partition().apply_delete(*s, ckey, tombstone{write_timestamp, write_time_point});
+    mut.partition().apply_delete(*s, ckey, tombstone{write_timestamp, tp});
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
