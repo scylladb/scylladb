@@ -3897,17 +3897,18 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // DELETE FROM simple_range_tombstone WHERE pk = 0 and ck1 = 'aaa';
+    // DELETE FROM simple_range_tombstone USING TIMESTAMP 1525385507816568 WHERE pk = 0 and ck1 = 'aaa';
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
-    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528142098};
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544042952};
     tombstone tomb{write_timestamp, tp};
     range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
     mut.partition().apply_delete(*s, std::move(rt));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 // Test the case when for RTs their adjacent bounds are written as boundary RT markers.
