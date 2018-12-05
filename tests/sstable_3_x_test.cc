@@ -3809,7 +3809,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
     // Clustering columns ckX are filled the following way:
     //    - <empty> for even X
     //    - "X" for odd X
-    // INSERT INTO large_clustering_key (pk, ck1, ck2, ck3, rc) VALUES (0, '1', '', '3',..., '', '35', 1);
+    // INSERT INTO large_clustering_key (pk, ck1, ..., ck35, rc) VALUES (0, '1', '', '3',..., '', '35', 1) USING TIMESTAMP 1525385507816568;
     std::vector<data_value> clustering_values;
     for (auto idx: boost::irange(1, 36)) {
         clustering_values.emplace_back((idx % 2 == 1) ? std::to_string(idx) : std::string{});
@@ -3820,7 +3820,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
 
     mt->apply(mut);
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
