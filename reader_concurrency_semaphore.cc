@@ -57,6 +57,16 @@ std::unique_ptr<reader_concurrency_semaphore::inactive_read> reader_concurrency_
     return {};
 }
 
+bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
+    if (_inactive_reads.empty()) {
+        return false;
+    }
+    auto it = _inactive_reads.begin();
+    it->second->evict();
+    _inactive_reads.erase(it);
+    return true;
+}
+
 future<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> reader_concurrency_semaphore::wait_admission(size_t memory,
         db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {

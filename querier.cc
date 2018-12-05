@@ -376,6 +376,7 @@ bool querier_cache::evict_one() {
 
     ++_stats.resource_based_evictions;
     --_stats.population;
+    _sem.unregister_inactive_read(_entries.front().get_inactive_handle());
     _entries.pop_front();
 
     return true;
@@ -387,6 +388,7 @@ void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
     while (it != end) {
         if (it->schema().id() == schema_id) {
             --_stats.population;
+            _sem.unregister_inactive_read(it->get_inactive_handle());
             it = _entries.erase(it);
         } else {
             ++it;

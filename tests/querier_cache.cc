@@ -184,6 +184,10 @@ public:
         return _s.schema();
     }
 
+    reader_concurrency_semaphore& get_semaphore() {
+        return _sem;
+    }
+
     dht::partition_range make_partition_range(bound begin, bound end) const {
         return dht::partition_range::make({_mutations.at(begin.value()).decorated_key(), begin.is_inclusive()},
                 {_mutations.at(end.value()).decorated_key(), end.is_inclusive()});
@@ -313,6 +317,11 @@ public:
 
         _cache.lookup_mutation_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, nullptr);
         BOOST_REQUIRE_EQUAL(_cache.get_stats().lookups, ++_expected_stats.lookups);
+        return *this;
+    }
+
+    test_querier_cache& evict_all_for_table() {
+        _cache.evict_all_for_table(get_schema()->id());
         return *this;
     }
 
@@ -704,4 +713,19 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 db::no_timeout).get();
         return make_ready_future<>();
     }, std::move(db_cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_evict_all_for_table) {
+    test_querier_cache t;
+
+    const auto entry = t.produce_first_page_and_save_mutation_querier();
+
+    t.evict_all_for_table();
+    t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+        .misses()
+        .no_drops()
+        .no_evictions();
+
+    // Check that the querier was removed from the semaphore too.
+    BOOST_CHECK(!t.get_semaphore().try_evict_one_inactive_read());
 }
