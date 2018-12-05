@@ -3288,24 +3288,26 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // INSERT INTO ttled_row (pk, ck, rc) VALUES ( 1, 2, 3) USING TTL 1135;
+    // INSERT INTO ttled_row (pk, ck, rc) VALUES ( 1, 2, 3) USING TTL 1135 AND TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543904331};
     gc_clock::duration ttl{1135};
 
     auto column_def = s->get_column_definition("rc");
     if (!column_def) {
         throw std::runtime_error("no column definition found");
     }
-    mut.partition().apply_insert(*s, ckey, write_timestamp, ttl, write_time_point + ttl);
+    mut.partition().apply_insert(*s, ckey, write_timestamp, ttl, tp + ttl);
     bytes value = column_def->type->decompose(data_value{3});
-    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, write_time_point + ttl, ttl);
+    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, tp + ttl, ttl);
     mut.set_clustered_cell(ckey, *column_def, std::move(cell));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
