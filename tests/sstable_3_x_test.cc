@@ -3777,14 +3777,15 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
 
-    // INSERT INTO empty_clustering_values (pk, ck1, ck2, ck3, rc) VALUES (0, '', 1, '', 2);
+    // INSERT INTO empty_clustering_values (pk, ck1, ck2, ck3, rc) VALUES (0, '', 1, '', 2) USING TIMESTAMP 1525385507816568;
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { "", 1, "" });
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "rc", data_value{2}, write_timestamp);
 
     mt->apply(mut);
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
