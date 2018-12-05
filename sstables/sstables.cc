@@ -3749,7 +3749,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         return do_with(std::move(index_file), [this, &pc] (file index_file) {
             return index_file.size().then([this, &pc, index_file] (auto index_size) {
                 // an upper bound. Surely to be less than this.
-                auto estimated_partitions = index_size / sizeof(uint64_t);
+                auto estimated_partitions = std::max<uint64_t>(index_size / sizeof(uint64_t), 1);
                 prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
 
                 file_input_stream_options options;
