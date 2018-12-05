@@ -644,7 +644,7 @@ void gossiper::run() {
                     if (!_live_endpoints_just_added.empty()) {
                         auto ep = _live_endpoints_just_added.front();
                         _live_endpoints_just_added.pop_front();
-                        logger.info("Favor newly added node {}", ep);
+                        logger.debug("Favor newly added node {}", ep);
                         live_nodes.insert(ep);
                     } else {
                         // Get a random live node
