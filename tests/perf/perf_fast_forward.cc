@@ -286,7 +286,7 @@ public:
     }
 };
 
-static const std::string output_dir {"perf_fast_forward_output/"};
+static std::string output_dir;
 
 std::string get_run_date_time() {
     using namespace boost::posix_time;
@@ -360,7 +360,7 @@ public:
         _test_count.clear();
         _root = Json::Value{Json::objectValue};
         _tg_properties = Json::Value{Json::objectValue};
-        _current_dir = output_dir + name + "/";
+        _current_dir = output_dir + "/" + name + "/";
         fs::create_directory(_current_dir);
         _tg_properties["name"] = name;
         _tg_properties["message"] = message;
@@ -1680,6 +1680,7 @@ int main(int argc, char** argv) {
         ("output-format", bpo::value<sstring>()->default_value("text"), "Output file for results. 'text' (default) or 'json'")
         ("test-case-duration", bpo::value<double>()->default_value(1), "Duration in seconds of a single test case (0 for a single run).")
         ("data-directory", bpo::value<sstring>()->default_value("./perf_large_partition_data"), "Data directory")
+        ("output-directory", bpo::value<sstring>()->default_value("./perf_fast_forward_output"), "Results output directory (for 'json')")
         ("sstable-format", bpo::value<std::string>()->default_value("mc"), "Sstable format version to use during population")
         ;
 
@@ -1709,6 +1710,8 @@ int main(int argc, char** argv) {
 
         sstring datadir = app.configuration()["data-directory"].as<sstring>();
         ::mkdir(datadir.c_str(), S_IRWXU);
+
+        output_dir = app.configuration()["output-directory"].as<sstring>();
 
         db_cfg.enable_cache(app.configuration().count("enable-cache"));
         db_cfg.enable_commitlog(false);
