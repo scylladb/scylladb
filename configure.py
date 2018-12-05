@@ -359,6 +359,7 @@ scylla_tests = [
     'tests/auth_passwords_test',
     'tests/multishard_mutation_query_test',
     'tests/top_k_test',
+    'tests/utf8_test',
 ]
 
 perf_tests = [
@@ -693,6 +694,7 @@ scylla_core = (['database.cc',
                 'multishard_writer.cc',
                 'multishard_mutation_query.cc',
                 'reader_concurrency_semaphore.cc',
+                'utils/utf8.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                )
 
@@ -860,6 +862,7 @@ deps['tests/perf/perf_fast_forward'] += ['release.cc']
 deps['tests/meta_test'] = ['tests/meta_test.cc']
 deps['tests/imr_test'] = ['tests/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/reusable_buffer_test'] = ['tests/reusable_buffer_test.cc']
+deps['tests/utf8_test'] = ['utils/utf8.cc', 'tests/utf8_test.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only

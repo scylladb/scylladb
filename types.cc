@@ -48,6 +48,7 @@
 #include <seastar/net/inet_address.hh>
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
+#include "utils/utf8.hh"
 #include "mutation_partition.hh"
 #include "json.hh"
 
@@ -339,10 +340,8 @@ struct string_type_impl : public concrete_type<sstring> {
                 throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
             }
         } else {
-            try {
-                boost::locale::conv::utf_to_utf<char>(v.begin(), v.end(), boost::locale::conv::stop);
-            } catch (const boost::locale::conv::conversion_error& ex) {
-                throw marshal_exception(ex.what());
+            if (!utils::utf8::validate(v)) {
+                 throw marshal_exception("Validation failed - non-UTF8 character in a UTF8 string");
             }
         }
     }
