@@ -3574,9 +3574,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
     api::timestamp_type ts = write_timestamp;
     mutation mut{s, key};
 
-    // INSERT INTO multiple_rows (pk, ck, rc1) VALUES (0, 1, 10);
-    // INSERT INTO multiple_rows (pk, ck, rc2) VALUES (0, 2, 20);
-    // INSERT INTO multiple_rows (pk, ck, rc3) VALUES (0, 3, 30);
+    // INSERT INTO multiple_rows (pk, ck, rc1) VALUES (0, 1, 10) USING TIMESTAMP 1525385507816568;
+    // INSERT INTO multiple_rows (pk, ck, rc2) VALUES (0, 2, 20) USING TIMESTAMP 1525385507816578;
+    // INSERT INTO multiple_rows (pk, ck, rc3) VALUES (0, 3, 30) USING TIMESTAMP 1525385507816588;
     for (auto i : boost::irange(1, 4)) {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, { i });
         mut.partition().apply_insert(*s, ckey, ts);
@@ -3586,7 +3586,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
 
     mt->apply(mut);
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 // Information on missing columns is serialized differently when the number of columns is > 64.
