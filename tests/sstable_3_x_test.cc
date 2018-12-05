@@ -3354,18 +3354,20 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // DELETE rc FROM deleted_column WHERE pk=1;
+    // DELETE rc FROM deleted_column USING TIMESTAMP 1525385507816568 WHERE pk=1;
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543905926};
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     auto column_def = s->get_column_definition("rc");
     if (!column_def) {
         throw std::runtime_error("no column definition found");
     }
-    mut.set_cell(clustering_key::make_empty(), *column_def, atomic_cell::make_dead(write_timestamp, write_time_point));
+    mut.set_cell(clustering_key::make_empty(), *column_def, atomic_cell::make_dead(write_timestamp, tp));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
