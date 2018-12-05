@@ -2200,7 +2200,6 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _result_memory_limiter(dbcfg.available_memory / 10)
 {
     local_schema_registry().init(*this); // TODO: we're never unbound.
-    _compaction_manager->start();
     setup_metrics();
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);

@@ -2392,13 +2392,6 @@ future<> storage_service::drain() {
     StorageProxy.instance.verifyNoHintsInProgress();
 #endif
 
-            ss.set_mode(mode::DRAINING, "flushing column families", false);
-            ss.flush_column_families();
-
-            db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
-                return bm.stop();
-            }).get();
-
             // Interrupt on going compaction and shutdown to prevent further compaction
             ss.db().invoke_on_all([] (auto& db) {
                 // FIXME: ongoing compaction tasks should be interrupted, not
@@ -2406,6 +2399,12 @@ future<> storage_service::drain() {
                 return db.get_compaction_manager().stop();
             }).get();
 
+            ss.set_mode(mode::DRAINING, "flushing column families", false);
+            ss.flush_column_families();
+
+            db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
+                return bm.stop();
+            }).get();
 #if 0
     // whilst we've flushed all the CFs, which will have recycled all completed segments, we want to ensure
     // there are no segments to replay, so we force the recycling of any remaining (should be at most one)

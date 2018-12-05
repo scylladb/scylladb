@@ -687,6 +687,11 @@ int main(int ac, char** av) {
                     cl->delete_segments(std::move(paths));
                 }
             }
+
+            db.invoke_on_all([&proxy] (database& db) {
+                db.get_compaction_manager().start();
+            }).get();
+
             // If the same sstable is shared by several shards, it cannot be
             // deleted until all shards decide to compact it. So we want to
             // start these compactions now. Note we start compacting only after
