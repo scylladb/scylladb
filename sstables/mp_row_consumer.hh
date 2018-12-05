@@ -916,6 +916,17 @@ class mp_row_consumer_m : public consumer_m {
         }
     }
 
+    void check_column_missing_in_current_schema(const column_translation::column_info& column_info,
+                                                api::timestamp_type timestamp) {
+        if (!column_info.id) {
+            sstring name = sstring(to_sstring_view(*column_info.name));
+            auto it = _schema->dropped_columns().find(name);
+            if (it == _schema->dropped_columns().end() || timestamp > it->second.timestamp) {
+                throw malformed_sstable_exception(format("Column {} missing in current schema.", name));
+            }
+        }
+    }
+
 public:
 
     /*
@@ -1085,6 +1096,7 @@ public:
         const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_column(id={}, path={}, value={}, ts={}, ttl={}, del_time={}, deleted={})", this,
             column_id, cell_path, value, timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
+        check_column_missing_in_current_schema(column_info, timestamp);
         if (!column_id) {
             return proceed::yes;
         }
@@ -1123,6 +1135,9 @@ public:
     virtual proceed consume_complex_column_end(const sstables::column_translation::column_info& column_info) override {
         const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", this, column_id);
+        if (_cm.tomb) {
+            check_column_missing_in_current_schema(column_info, _cm.tomb.timestamp);
+        }
         if (column_id) {
             const column_definition& column_def = get_column_definition(column_id);
             if (!_cm.cells.empty() || (_cm.tomb && _cm.tomb.timestamp > column_def.dropped_at())) {
@@ -1131,9 +1146,9 @@ public:
                 auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(_cm));
                 _cells.push_back({column_def.id, atomic_cell_or_collection(std::move(ac))});
             }
-            _cm.tomb = {};
-            _cm.cells.clear();
         }
+        _cm.tomb = {};
+        _cm.cells.clear();
         return proceed::yes;
     }
 
@@ -1142,6 +1157,7 @@ public:
                                            api::timestamp_type timestamp) override {
         const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", this, column_id, value, timestamp);
+        check_column_missing_in_current_schema(column_info, timestamp);
         if (!column_id) {
             return proceed::yes;
         }
