@@ -467,41 +467,52 @@ public:
 
 class output_manager {
 private:
-    std::unique_ptr<output_writer> _writer;
+    std::vector<std::unique_ptr<output_writer>> _writers;
     output_items _param_names;
     output_items _stats_names;
 public:
 
     output_manager(sstring oformat) {
+        _writers.push_back(std::make_unique<text_output_writer>());
         if (oformat == "text") {
-            _writer = std::make_unique<text_output_writer>();
+            // already used
         } else if (oformat == "json") {
-            _writer = std::make_unique<json_output_writer>();
+            _writers.push_back(std::make_unique<json_output_writer>());
         } else {
             throw std::runtime_error(format("Unsupported output format: {}", oformat));
         }
     }
 
     void add_test_group(const test_group& group, const dataset& ds, bool running) {
-        _writer->write_test_group(group, ds, running);
+        for (auto&& w : _writers) {
+            w->write_test_group(group, ds, running);
+        }
     }
 
     void add_dataset_population(const dataset& ds) {
-        _writer->write_dataset_population(ds);
+        for (auto&& w : _writers) {
+            w->write_dataset_population(ds);
+        }
     }
 
     void set_test_param_names(output_items param_names, output_items stats_names) {
         _param_names = std::move(param_names);
         _stats_names = std::move(stats_names);
-        _writer->write_test_names(_param_names, _stats_names);
+        for (auto&& w : _writers) {
+            w->write_test_names(_param_names, _stats_names);
+        }
     }
 
     void add_test_values(const sstring_vec& params, const stats_values& stats) {
-        _writer->write_test_values(params, stats, _param_names, _stats_names);
+        for (auto&& w : _writers) {
+            w->write_test_values(params, stats, _param_names, _stats_names);
+        }
     }
 
     void add_test_static_param(sstring name, sstring description) {
-        _writer->write_test_static_param(name, description);
+        for (auto&& w : _writers) {
+            w->write_test_static_param(name, description);
+        }
     }
 };
 
