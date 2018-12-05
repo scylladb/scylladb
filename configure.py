@@ -367,7 +367,6 @@ perf_tests = [
 
 apps = [
     'scylla',
-    'utils/gz/gen_crc_combine_table',
 ]
 
 tests = scylla_tests + perf_tests
@@ -859,8 +858,6 @@ deps['tests/meta_test'] = ['tests/meta_test.cc']
 deps['tests/imr_test'] = ['tests/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/reusable_buffer_test'] = ['tests/reusable_buffer_test.cc']
 
-deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
-
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
     '-Wno-maybe-uninitialized',  # false positives on gcc 5
@@ -1189,14 +1186,11 @@ with open(buildfile, 'w') as f:
                     objs += dep.objects('$builddir/' + mode + '/gen')
             if binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
-            elif binary.endswith('gen_crc_combine_table'):
-                f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
                 objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
                     'libdeflate/libdeflate.a'
                 ]])
                 objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
-                compiles['$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o'] = '$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc'
                 if binary.startswith('tests/'):
                     local_libs = '$libs'
                     if binary not in tests_not_using_seastar_test_framework or binary in pure_boost_tests:
@@ -1238,8 +1232,12 @@ with open(buildfile, 'w') as f:
                     antlr3_grammars.add(src)
                 else:
                     raise Exception('No rule for ' + src)
+        compiles['$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o'] = '$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc'
+        compiles['$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'] = 'utils/gz/gen_crc_combine_table.cc'
         f.write('build {}: run {}\n'.format('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc',
                                             '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
+        f.write('build {}: link.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
+                                                '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'))
         for obj in compiles:
             src = compiles[obj]
             gen_headers = list(ragels.keys())
