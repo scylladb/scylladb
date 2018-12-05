@@ -3611,7 +3611,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     api::timestamp_type ts = write_timestamp;
     mutation mut{s, key};
 
-    // INSERT INTO missing_columns_large_set (pk, ck, rc1, ..., rc62) VALUES (0, 0, 1, ..., 62);
+    // INSERT INTO missing_columns_large_set (pk, ck, rc1, ..., rc62) VALUES (0, 0, 1, ..., 62) USING TIMESTAMP 1525385507816568;
     // For missing columns, the missing ones will be written as majority are present.
     {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {0});
@@ -3622,7 +3622,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     }
     ts += 10;
 
-    // INSERT INTO missing_columns_large_set (pk, ck, rc63, rc64) VALUES (0, 1, 63, 64);
+    // INSERT INTO missing_columns_large_set (pk, ck, rc63, rc64) VALUES (0, 1, 63, 64) USING TIMESTAMP 1525385507816578;
     // For missing columns, the present ones will be written as majority are missing.
     {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {1});
@@ -3633,7 +3633,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
