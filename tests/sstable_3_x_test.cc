@@ -3322,22 +3322,24 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // UPDATE ttled_column USING TTL 1135 SET rc = 1 WHERE pk='key';
+    // UPDATE ttled_column USING TTL 1135 AND TIMESTAMP 1525385507816568 SET rc = 1 WHERE pk='key';
     auto key = make_dkey(s, {to_bytes("key")});
     mutation mut{s, key};
 
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543887389};
     gc_clock::duration ttl{1135};
     auto column_def = s->get_column_definition("rc");
     if (!column_def) {
         throw std::runtime_error("no column definition found");
     }
     bytes value = column_def->type->decompose(data_value{1});
-    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, write_time_point + ttl, ttl);
+    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, tp + ttl, ttl);
     mut.set_clustered_cell(clustering_key::make_empty(), *column_def, std::move(cell));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
