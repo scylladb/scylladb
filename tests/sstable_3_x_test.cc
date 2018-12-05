@@ -3470,9 +3470,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     api::timestamp_type ts = write_timestamp;
-    // INSERT INTO multiple_partitions (pk, rc1) VALUES (1, 10);
-    // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20);
-    // INSERT INTO multiple_partitions (pk, rc3) VALUES (3, 30);
+    // INSERT INTO multiple_partitions (pk, rc1) VALUES (1, 10) USING TIMESTAMP 1525385507816568;
+    // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20) USING TIMESTAMP 1525385507816578;
+    // INSERT INTO multiple_partitions (pk, rc3) VALUES (3, 30) USING TIMESTAMP 1525385507816588;
     std::vector<mutation> muts;
     for (auto i : boost::irange(1, 4)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
@@ -3486,7 +3486,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
     }
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, muts);
+    auto written_sst = validate_read(s, tmp.path, muts);
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 static void test_write_many_partitions(sstring table_name, tombstone partition_tomb, compression_parameters cp) {
