@@ -209,6 +209,12 @@ public:
     /// register call, will be returned. Otherwise a nullptr is returned.
     std::unique_ptr<inactive_read> unregister_inactive_read(inactive_read_handle irh);
 
+    /// Try to evict an inactive read.
+    ///
+    /// Return true if an inactive read was evicted and false otherwise
+    /// (if there was no reader to evict).
+    bool try_evict_one_inactive_read();
+
     void clear_inactive_reads() {
         _inactive_reads.clear();
     }
