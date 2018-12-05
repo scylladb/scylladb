@@ -3879,7 +3879,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
