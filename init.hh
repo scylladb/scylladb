@@ -28,16 +28,21 @@
 #include "db/system_distributed_keyspace.hh"
 #include "database.hh"
 #include "log.hh"
+#include "seastarx.hh"
 
 namespace db {
 class extensions;
+}
+
+namespace gms {
+class feature_service;
 }
 
 extern logging::logger startlog;
 
 class bad_configuration_error : public std::exception {};
 
-void init_storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&);
+void init_storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<gms::feature_service>&);
 
 struct init_scheduling_config {
     scheduling_group streaming;
@@ -45,7 +50,8 @@ struct init_scheduling_config {
     scheduling_group gossip;
 };
 
-void init_ms_fd_gossiper(sstring listen_address
+void init_ms_fd_gossiper(sharded<gms::feature_service>& features
+                , sstring listen_address
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
                 , bool tcp_nodelay_inter_dc
