@@ -3538,9 +3538,13 @@ void sstable_writer_m::write_clustered(const rt_marker& marker, uint64_t prev_ro
     write(sstable_version_types::mc, *_data_writer, row_flags::is_marker);
     write_clustering_prefix(*_data_writer, marker.kind, _schema, marker.clustering);
     auto write_marker_body = [this, &marker] (file_writer& writer) {
-        write_delta_deletion_time(writer, to_deletion_time(marker.tomb));
+        auto dt = to_deletion_time(marker.tomb);
+        write_delta_deletion_time(writer, dt);
+        update_deletion_time_stats(dt);
         if (marker.boundary_tomb) {
-            write_delta_deletion_time(writer, to_deletion_time(*marker.boundary_tomb));
+            auto dt_boundary = to_deletion_time(*marker.boundary_tomb);
+            write_delta_deletion_time(writer, dt_boundary);
+            update_deletion_time_stats(dt_boundary);
         }
     };
 
@@ -3550,7 +3554,11 @@ void sstable_writer_m::write_clustered(const rt_marker& marker, uint64_t prev_ro
     write_vint(*_data_writer, prev_row_size);
 
     write_marker_body(*_data_writer);
-};
+    if (_schema.clustering_key_size()) {
+        column_name_helper::min_max_components(_schema, _sst.get_metadata_collector().min_column_names(),
+            _sst.get_metadata_collector().max_column_names(), marker.clustering.components());
+    }
+}
 
 void sstable_writer_m::consume(rt_marker&& marker) {
     write_clustered(marker);
