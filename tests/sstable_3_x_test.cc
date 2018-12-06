@@ -4019,7 +4019,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
 
     // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157078};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544077922};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
                            clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
@@ -4036,7 +4036,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
 
     // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816588 WHERE pk = 'key' AND ck1 = 'bbb' AND ck2 <= 'ccc';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157101};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544077944};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, to_bytes("bbb")),
                            clustering_key_prefix::from_deeply_exploded(*s, {"bbb", "ccc"}), tomb};
@@ -4053,7 +4053,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
 
     // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816608 WHERE pk = 'key' AND ck1 = 'ddd' AND ck2 >= 'eee';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157186};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544077980};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_deeply_exploded(*s, {"ddd", "eee"}),
                            clustering_key_prefix::from_single_value(*s, to_bytes("ddd")), tomb};
@@ -4061,7 +4061,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     }
     ts += 10;
 
-    // INSERT INTO mixed_rows_and_range_tombstones (pk, ck1, ck2) VALUES ('key', 'bbb', 'ccc') USING TIMESTAMP 1525385507816618;
+    // INSERT INTO mixed_rows_and_range_tombstones (pk, ck1, ck2) VALUES ('key', 'ddd', 'eee') USING TIMESTAMP 1525385507816618;
     {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"ddd", "eee"});
         mut.partition().apply_insert(*s, ckey, ts);
@@ -4069,7 +4069,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
