@@ -198,6 +198,8 @@ class Thrift(object):
 def default_target_arch():
     if platform.machine() in ['i386', 'i686', 'x86_64']:
         return 'nehalem'
+    elif platform.machine() == 'aarch64':
+        return 'armv8-a+crc+crypto'
     else:
         return ''
 
