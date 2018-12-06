@@ -61,7 +61,7 @@ enum class application_state {
     CACHE_HITRATES,
     SCHEMA_TABLES_VERSION,
     // pad to allow adding new states to existing cluster
-    X4,
+    RPC_READY,
     X5,
     X6,
     X7,
