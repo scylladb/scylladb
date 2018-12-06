@@ -1,4 +1,5 @@
-#!/usr/bin/python2
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 #
 # Copyright (C) 2016 ScyllaDB
 #
@@ -19,17 +20,13 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
-from __future__ import print_function
 
 import argparse
 import json
-import urllib
-import urllib2
-import requests
-import ConfigParser
 import os
 import sys
 import subprocess
+import configparser
 import uuid
 import re
 import glob
@@ -40,36 +37,45 @@ quiet = False
 # Temporary url for the review
 version_url = "https://i6a5h9l1kl.execute-api.us-east-1.amazonaws.com/prod/check_version"
 
+
 def trace(*vals):
     print(''.join(vals))
+
 
 def traceln(*vals):
     trace(*(vals + ('\n',)))
 
+
 def help(args):
     parser.print_help()
 
+
 def sh_command(*args):
     p = subprocess.Popen(args, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
+                         stderr=subprocess.PIPE)
     out, err = p.communicate()
     if err:
         raise Exception(err)
     return out
 
+
 def get_json_from_url(path):
     data = sh_command("curl", "-s", "-X", "GET", path)
     return json.loads(data)
 
+
 def get_api(path):
     return get_json_from_url("http://" + api_address + path)
+
 
 def version_compare(a, b):
     return parse_version(a) < parse_version(b)
 
+
 def create_uuid_file(fl):
     with open(args.uuid_file, 'w') as myfile:
         myfile.write(str(uuid.uuid1()) + "\n")
+
 
 def sanitize_version(version):
     """
@@ -81,6 +87,7 @@ def sanitize_version(version):
     else:
         return version
 
+
 def get_repo_file(dir):
     files = glob.glob(dir)
     files.sort(key=os.path.getmtime, reverse=True)
@@ -91,6 +98,7 @@ def get_repo_file(dir):
                 if match:
                     return match.group(2), match.group(1)
     return None, None
+
 
 def check_version(ar):
     if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
@@ -117,7 +125,7 @@ def check_version(ar):
         versions = get_json_from_url(version_url + params)
         latest_version = versions["version"]
         latest_patch_version = versions["latest_patch_version"]
-    except:
+    except Exception:
         traceln("Unable to retrieve version information")
         return
 
@@ -131,6 +139,7 @@ def check_version(ar):
             traceln("You current Scylla release is ", current_version, " the latest minor release is ", latest_version, " go to http://www.scylladb.com for upgrade instructions")
     elif version_compare(current_version, latest_patch_version):
             traceln("You current Scylla release is ", current_version, " while the latest patch release is ", latest_patch_version, ", update for the latest bug fixes and improvements")
+
 
 parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
 parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Quiet mode')
@@ -158,7 +167,7 @@ if args.config != "":
     if not os.path.isfile(args.config):
         traceln("Config file ", args.config, " is missing, terminating")
         sys.exit(0)
-    config = ConfigParser.SafeConfigParser()
+    config = configparser.SafeConfigParser()
     config.read(args.config)
 uid = None
 if args.uuid != "":
