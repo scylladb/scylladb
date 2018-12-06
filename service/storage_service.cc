@@ -1149,16 +1149,7 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_dead", endpoint);
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
-        netw::get_local_messaging_service().remove_rpc_client(netw::msg_addr{endpoint, 0});
-        for (auto&& subscriber : ss._lifecycle_subscribers) {
-            try {
-                subscriber->on_down(endpoint);
-            } catch (...) {
-                slogger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
-            }
-        }
-    }).get();
+    notify_down(endpoint);
 }
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
@@ -3276,6 +3267,19 @@ future<> deinit_storage_service() {
 
 future<> storage_service::set_cql_ready(bool ready) {
     return gms::get_local_gossiper().add_local_application_state(application_state::RPC_READY, value_factory.cql_ready(ready));
+}
+
+void storage_service::notify_down(inet_address endpoint) {
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        netw::get_local_messaging_service().remove_rpc_client(netw::msg_addr{endpoint, 0});
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            try {
+                subscriber->on_down(endpoint);
+            } catch (...) {
+                slogger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
+            }
+        }
+    }).get();
 }
 
 } // namespace service

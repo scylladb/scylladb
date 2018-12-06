@@ -2283,6 +2283,8 @@ public:
     }
 private:
     future<> set_cql_ready(bool ready);
+private:
+    void notify_down(inet_address endpoint);
 };
 
 future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
