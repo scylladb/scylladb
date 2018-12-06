@@ -3932,7 +3932,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
 
     // DELETE FROM adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821291};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544056877};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
                            clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
@@ -3942,7 +3942,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
 
     // DELETE FROM adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821308};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544056893};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}),
                            clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
@@ -3951,7 +3951,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 // Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
