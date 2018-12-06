@@ -3289,6 +3289,9 @@ void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker
         write_expiring_liveness_info(expired_liveness_ttl, marker.deletion_time().time_since_epoch().count());
     } else if (marker.is_expiring()) {
         write_expiring_liveness_info(marker.ttl().count(), marker.expiry().time_since_epoch().count());
+    } else {
+        _c_stats.update_ttl(0);
+        _c_stats.update_local_deletion_time(std::numeric_limits<int32_t>::max());
     }
 }
 
