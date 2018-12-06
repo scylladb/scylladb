@@ -3307,5 +3307,14 @@ void storage_service::notify_joined(inet_address endpoint)
     slogger.debug("Notify node {} has joined the cluster", endpoint);
 }
 
+void storage_service::notify_cql_change(inet_address endpoint, bool ready)
+{
+    if (ready) {
+        notify_up(endpoint);
+    } else {
+        notify_down(endpoint);
+    }
+}
+
 } // namespace service
 
