@@ -378,7 +378,7 @@ public:
                 BOOST_REQUIRE(!inside_partition);
                 auto& dk = mfo->as_partition_start().key();
                 if (previous_partition && !previous_partition->as_partition_start().key().less_compare(*_reader.schema(), dk)) {
-                    BOOST_FAIL(format("previous partition had greater key: prev={}, current={}",
+                    BOOST_FAIL(format("previous partition had greater or equal key: prev={}, current={}",
                                       mutation_fragment::printer(*_reader.schema(), *previous_partition), mutation_fragment::printer(*_reader.schema(), *mfo)));
                 }
                 previous_partition = std::move(mfo);
@@ -390,7 +390,7 @@ public:
             } else {
                 BOOST_REQUIRE(inside_partition);
                 if (previous_fragment) {
-                    if (!less(previous_fragment->position(), mfo->position())) {
+                    if (less(mfo->position(), previous_fragment->position())) {
                         BOOST_FAIL(format("previous fragment has greater position: prev={}, current={}",
                                           mutation_fragment::printer(*_reader.schema(), *previous_fragment), mutation_fragment::printer(*_reader.schema(), *mfo)));
                     }
