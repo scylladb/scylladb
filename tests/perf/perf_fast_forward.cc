@@ -1060,8 +1060,9 @@ public:
     }
     void add(test_result_vector rs) {
         if (results.empty()) {
-            results.emplace_back(std::move(rs));
-        } else {
+            results.resize(rs.size());
+        }
+        {
             assert(rs.size() == results.size());
             for (auto j = 0u; j < rs.size(); j++) {
                 results[j].emplace_back(rs[j]);
