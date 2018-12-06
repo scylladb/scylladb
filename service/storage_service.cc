@@ -3274,5 +3274,9 @@ future<> deinit_storage_service() {
     return service::get_storage_service().stop();
 }
 
+future<> storage_service::set_cql_ready(bool ready) {
+    return gms::get_local_gossiper().add_local_application_state(application_state::RPC_READY, value_factory.cql_ready(ready));
+}
+
 } // namespace service
 

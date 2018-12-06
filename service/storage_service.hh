@@ -2281,6 +2281,8 @@ public:
     bool cluster_supports_mc_sstable() const {
         return bool(_mc_sstable_feature);
     }
+private:
+    future<> set_cql_ready(bool ready);
 };
 
 future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
