@@ -71,6 +71,10 @@ namespace dht {
 class boot_strapper;
 }
 
+namespace gms {
+class feature_service;
+};
+
 namespace service {
 
 class load_broadcaster;
@@ -120,6 +124,7 @@ private:
     /* JMX notification serial number counter */
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
+    gms::feature_service& _feature_service;
     distributed<database>& _db;
     sharded<auth::service>& _auth_service;
     int _update_jobs{0};
@@ -139,7 +144,7 @@ private:
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
 public:
-    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&);
+    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, gms::feature_service& feature_service);
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -291,23 +296,7 @@ private:
     gms::feature _stream_with_rpc_stream_feature;
     gms::feature _mc_sstable_feature;
 public:
-    void enable_all_features() {
-        _range_tombstones_feature.enable();
-        _large_partitions_feature.enable();
-        _materialized_views_feature.enable();
-        _counters_feature.enable();
-        _indexes_feature.enable();
-        _digest_multipartition_read_feature.enable();
-        _correct_counter_order_feature.enable();
-        _schema_tables_v3.enable();
-        _correct_non_compound_range_tombstones.enable();
-        _write_failure_reply_feature.enable();
-        _xxhash_feature.enable();
-        _roles_feature.enable();
-        _la_sstable_feature.enable();
-        _stream_with_rpc_stream_feature.enable();
-        _mc_sstable_feature.enable();
-    }
+    void enable_all_features();
 
     void finish_bootstrapping() {
         _is_bootstrap_mode = false;
@@ -465,7 +454,6 @@ public:
 private:
     bool should_bootstrap();
     void prepare_to_join(std::vector<inet_address> loaded_endpoints, bind_messaging_port do_bind = bind_messaging_port::yes);
-    void register_features();
     void join_token_ring(int delay);
 public:
     future<> join_ring();
@@ -2303,12 +2291,8 @@ private:
     void notify_cql_change(inet_address endpoint, bool ready);
 };
 
-inline future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
-    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks));
-}
-
-inline future<> deinit_storage_service() {
-    return service::get_storage_service().stop();
-}
+future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<gms::feature_service>& feature_service);
+future<> deinit_storage_service();
 
 }

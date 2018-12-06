@@ -47,6 +47,7 @@
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 #include "service/storage_service.hh"
 #include "auth/service.hh"
 #include "db/system_keyspace.hh"
@@ -62,8 +63,8 @@ future<> await_background_jobs_on_all_shards();
 
 static const sstring testing_superuser = "tester";
 
-static future<> tst_init_ms_fd_gossiper(db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
-    return gms::get_failure_detector().start().then([seed_provider, cluster_name] {
+static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
+    return gms::get_failure_detector().start().then([seed_provider, cluster_name, &features] () mutable {
         // Init gossiper
         std::set<gms::inet_address> seeds;
         if (seed_provider.parameters.count("seeds") > 0) {
@@ -78,7 +79,7 @@ static future<> tst_init_ms_fd_gossiper(db::seed_provider_type seed_provider, ss
         if (seeds.empty()) {
             seeds.emplace(gms::inet_address("127.0.0.1"));
         }
-        return gms::get_gossiper().start().then([seeds, cluster_name] {
+        return gms::get_gossiper().start(std::ref(features)).then([seeds, cluster_name] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
             gossiper.set_cluster_name(cluster_name);
@@ -92,6 +93,7 @@ public:
     static const char* ks_name;
     static std::atomic<bool> active;
 private:
+    shared_ptr<sharded<gms::feature_service>> _feature_service;
     ::shared_ptr<distributed<database>> _db;
     ::shared_ptr<sharded<auth::service>> _auth_service;
     ::shared_ptr<sharded<db::view::view_builder>> _view_builder;
@@ -121,11 +123,13 @@ private:
     }
 public:
     single_node_cql_env(
+            shared_ptr<sharded<gms::feature_service>> feature_service,
             ::shared_ptr<distributed<database>> db,
             ::shared_ptr<sharded<auth::service>> auth_service,
             ::shared_ptr<sharded<db::view::view_builder>> view_builder,
             ::shared_ptr<sharded<db::view::view_update_from_staging_generator>> view_update_generator)
-            : _db(db)
+            : _feature_service(std::move(_feature_service))
+            , _db(db)
             , _auth_service(std::move(auth_service))
             , _view_builder(std::move(view_builder))
             , _view_update_generator(std::move(view_update_generator))
@@ -343,8 +347,12 @@ public:
             auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
+            auto feature_service = make_shared<sharded<gms::feature_service>>();
+            feature_service->start().get();
+            auto stop_feature_service = defer([&] { feature_service->stop().get(); });
+
             auto& ss = service::get_storage_service();
-            ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks)).get();
+            ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*feature_service)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
@@ -359,7 +367,7 @@ public:
             }).get();
 
             // FIXME: split
-            tst_init_ms_fd_gossiper(db::config::seed_provider_type()).get();
+            tst_init_ms_fd_gossiper(*feature_service, db::config::seed_provider_type()).get();
             auto stop_ms_fd_gossiper = defer([] {
                 gms::get_gossiper().stop().get();
                 gms::get_failure_detector().stop().get();
@@ -441,7 +449,7 @@ public:
             auto stop_view_update_generator = defer([view_update_generator] {
                 view_update_generator->stop().get();
             });
-            single_node_cql_env env(db, auth_service, view_builder, view_update_generator);
+            single_node_cql_env env(feature_service, db, auth_service, view_builder, view_update_generator);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
@@ -478,6 +486,7 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func) {
 }
 
 class storage_service_for_tests::impl {
+    sharded<gms::feature_service> _feature_service;
     distributed<database> _db;
     sharded<auth::service> _auth_service;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
@@ -485,8 +494,9 @@ public:
     impl() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
+        _feature_service.start().get();
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false).get();
-        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service), std::ref(_sys_dist_ks)).get();
+        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_feature_service)).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
@@ -495,6 +505,7 @@ public:
         service::get_storage_service().stop().get();
         netw::get_messaging_service().stop().get();
         _db.stop().get();
+        _feature_service.stop().get();
     }
 };
 
