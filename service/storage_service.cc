@@ -3304,6 +3304,7 @@ void storage_service::notify_joined(inet_address endpoint)
             }
         }
     }).get();
+    slogger.debug("Notify node {} has joined the cluster", endpoint);
 }
 
 } // namespace service
