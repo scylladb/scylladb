@@ -3280,6 +3280,7 @@ void storage_service::notify_down(inet_address endpoint) {
             }
         }
     }).get();
+    slogger.debug("Notify node {} has been down", endpoint);
 }
 
 } // namespace service
