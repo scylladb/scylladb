@@ -3294,6 +3294,7 @@ void storage_service::notify_up(inet_address endpoint)
             }
         }
     }).get();
+    slogger.debug("Notify node {} has been up", endpoint);
 }
 
 } // namespace service
