@@ -402,22 +402,26 @@ public:
     }
 
     flat_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
+        BOOST_TEST_MESSAGE(format("Fast forward to partition range: {}", pr));
         _pr = pr;
         _reader.fast_forward_to(_pr, db::no_timeout).get();
         return *this;
     }
 
     flat_reader_assertions& next_partition() {
+        BOOST_TEST_MESSAGE("Skip to next partition");
         _reader.next_partition();
         return *this;
     }
 
     flat_reader_assertions& fast_forward_to(position_range pr) {
+        BOOST_TEST_MESSAGE(format("Fast forward to clustering range: {}", pr));
         _reader.fast_forward_to(std::move(pr), db::no_timeout).get();
         return *this;
     }
 
     flat_reader_assertions& fast_forward_to(const clustering_key& ck1, const clustering_key& ck2) {
+        BOOST_TEST_MESSAGE(format("Fast forward to clustering range: [{}, {})", ck1, ck2));
         return fast_forward_to(position_range{
             position_in_partition(position_in_partition::clustering_row_tag_t(), ck1),
             position_in_partition(position_in_partition::clustering_row_tag_t(), ck2)
