@@ -1351,8 +1351,8 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
             _end_of_stream = true;
         } else {
             move_to_next_shard();
-            reader.pause();
         }
+        reader.pause();
         return make_ready_future<>();
     } else if (reader.is_read_ahead_in_progress()) {
         return reader.fill_buffer(timeout);
