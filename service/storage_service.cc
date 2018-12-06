@@ -3284,7 +3284,7 @@ void storage_service::notify_left(inet_address endpoint) {
             }
         }
     }).get();
-    slogger.info("Node {} has left the cluster", endpoint);
+    slogger.debug("Notify node {} has left the cluster", endpoint);
 }
 
 } // namespace service
