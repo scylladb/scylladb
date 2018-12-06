@@ -238,8 +238,9 @@ future<> for_each_sstable_version(AsyncAction action) {
     return seastar::do_for_each(all_sstable_versions, std::move(action));
 }
 
-inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
-    auto sst = sstables::make_sstable(std::move(schema), dir, generation, la, big);
+inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir,
+        unsigned long generation, sstable_version_types version = la) {
+    auto sst = sstables::make_sstable(std::move(schema), dir, generation, version, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {
         return make_ready_future<sstable_ptr>(std::move(sst));
