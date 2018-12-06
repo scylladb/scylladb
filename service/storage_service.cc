@@ -1119,6 +1119,9 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
                 get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
                     slogger.warn("Failed to pull schema from {}: {}", endpoint, ep);
                 });
+            } else if (state == application_state::RPC_READY) {
+                slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
+                notify_cql_change(endpoint, ep_state->is_cql_ready());
             }
         }
     }
