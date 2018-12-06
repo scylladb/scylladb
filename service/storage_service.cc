@@ -3291,6 +3291,10 @@ void storage_service::notify_up(inet_address endpoint)
 
 void storage_service::notify_joined(inet_address endpoint)
 {
+    if (!gms::get_local_gossiper().is_normal(endpoint)) {
+        return;
+    }
+
     get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
         for (auto&& subscriber : ss._lifecycle_subscribers) {
             try {
