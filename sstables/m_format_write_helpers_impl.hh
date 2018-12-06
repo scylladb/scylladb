@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma once
+
 #include <functional>
 #include <boost/iterator/iterator_facade.hpp>
 #include <boost/container/static_vector.hpp>
