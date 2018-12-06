@@ -2866,6 +2866,12 @@ private:
     void maybe_add_pi_block();
     void add_pi_block();
 
+    void update_deletion_time_stats(deletion_time dt) {
+        _c_stats.update_timestamp(dt.marked_for_delete_at);
+        _c_stats.update_local_deletion_time(dt.local_deletion_time);
+        _c_stats.tombstone_histogram.update(dt.local_deletion_time);
+    }
+
     uint64_t get_data_offset() const {
         if (_sst.has_component(component_type::CompressionInfo)) {
             // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
@@ -3172,9 +3178,7 @@ void sstable_writer_m::consume(tombstone t) {
     write(_sst.get_version(), *_data_writer, dt);
     _partition_header_length += (_data_writer->offset() - current_pos);
     if (t) {
-        _c_stats.tombstone_histogram.update(dt.local_deletion_time);
-        _c_stats.update_local_deletion_time(dt.local_deletion_time);
-        _c_stats.update_timestamp(dt.marked_for_delete_at);
+        update_deletion_time_stats(dt);
     }
 
     _pi_write_m.tomb = t;
@@ -3341,9 +3345,8 @@ void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const 
 void sstable_writer_m::write_row_body(file_writer& writer, const clustering_row& row, bool has_complex_deletion) {
     write_liveness_info(writer, row.marker());
     auto write_tombstone_and_update_stats = [this, &writer] (const tombstone& t) {
-         auto dt = to_deletion_time(t);
-        _c_stats.update_timestamp(dt.marked_for_delete_at);
-        _c_stats.update_local_deletion_time(dt.local_deletion_time);
+        auto dt = to_deletion_time(t);
+        update_deletion_time_stats(dt);
         write_delta_deletion_time(writer, dt);
     };
     if (row.tomb().regular()) {

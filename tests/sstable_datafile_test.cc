@@ -2893,25 +2893,31 @@ SEASTAR_TEST_CASE(test_counter_read) {
 
 SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {
     return test_setup::do_with_tmp_directory([] (sstring tmpdir_path) {
-        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
-        auto mt = make_lw_shared<memtable>(s);
-        int32_t last_expiry = 0;
+        return seastar::async([tmpdir_path] {
+            for (const auto version : all_sstable_versions) {
+                schema_builder builder(some_keyspace, some_column_family);
+                builder.with_column("p1", utf8_type, column_kind::partition_key);
+                builder.with_column("c1", utf8_type, column_kind::clustering_key);
+                builder.with_column("r1", utf8_type);
+                schema_ptr s = builder.build(schema_builder::compact_storage::no);
+                auto mt = make_lw_shared<memtable>(s);
+                int32_t last_expiry = 0;
 
-        for (auto i = 0; i < 10; i++) {
-            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
-            mutation m(s, key);
-            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
-            last_expiry = (gc_clock::now() + gc_clock::duration(3600 + i)).time_since_epoch().count();
-            m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(utf8_type, bytes("a"), 3600 + i, last_expiry));
-            mt->apply(std::move(m));
-        }
-        auto sst = make_sstable(s, tmpdir_path, 53, la, big);
-        return write_memtable_to_sstable_for_test(*mt, sst).then([s, sst, tmpdir_path] {
-            return reusable_sst(s, tmpdir_path, 53);
-        }).then([s, last_expiry] (auto sstp) mutable {
-            BOOST_REQUIRE(last_expiry == sstp->get_stats_metadata().max_local_deletion_time);
-        }).then([sst, mt, s] {});
+                for (auto i = 0; i < 10; i++) {
+                    auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
+                    mutation m(s, key);
+                    auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+                    last_expiry = (gc_clock::now() + gc_clock::duration(3600 + i)).time_since_epoch().count();
+                    m.set_clustered_cell(c_key, *s->get_column_definition("r1"),
+                                         make_atomic_cell(utf8_type, bytes("a"), 3600 + i, last_expiry));
+                    mt->apply(std::move(m));
+                }
+                auto sst = make_sstable(s, tmpdir_path, 53, version, big);
+                write_memtable_to_sstable_for_test(*mt, sst).get();
+                auto sstp = reusable_sst(s, tmpdir_path, 53, version).get0();
+                BOOST_REQUIRE(last_expiry == sstp->get_stats_metadata().max_local_deletion_time);
+            }
+        });
     });
 }
 
@@ -2921,45 +2927,53 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
     // Compact them and expect that maximum deletion time is that of column with TTL 100.
     return test_setup::do_with_tmp_directory([] (sstring tmpdir_path) {
         return seastar::async([tmpdir_path] {
-            auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-                {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
-            column_family_for_tests cf(s);
-            auto mt = make_lw_shared<memtable>(s);
-            auto now = gc_clock::now();
-            int32_t last_expiry = 0;
-            auto add_row = [&now, &mt, &s, &last_expiry] (mutation& m, bytes column_name, uint32_t ttl) {
-                auto c_key = clustering_key::from_exploded(*s, {column_name});
-                last_expiry = (now + gc_clock::duration(ttl)).time_since_epoch().count();
-                m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(utf8_type, bytes(""), ttl, last_expiry));
+            for (auto version : all_sstable_versions) {
+                schema_builder builder(some_keyspace, some_column_family);
+                builder.with_column("p1", utf8_type, column_kind::partition_key);
+                builder.with_column("c1", utf8_type, column_kind::clustering_key);
+                builder.with_column("r1", utf8_type);
+                schema_ptr s = builder.build(schema_builder::compact_storage::no);
+                column_family_for_tests cf(s);
+                auto mt = make_lw_shared<memtable>(s);
+                auto now = gc_clock::now();
+                int32_t last_expiry = 0;
+                auto add_row = [&now, &mt, &s, &last_expiry](mutation &m, bytes column_name, uint32_t ttl) {
+                    auto c_key = clustering_key::from_exploded(*s, {column_name});
+                    last_expiry = (now + gc_clock::duration(ttl)).time_since_epoch().count();
+                    m.set_clustered_cell(c_key, *s->get_column_definition("r1"),
+                                         make_atomic_cell(utf8_type, bytes(""), ttl, last_expiry));
+                    mt->apply(std::move(m));
+                };
+                auto get_usable_sst = [s, tmpdir_path, version](memtable &mt, int64_t gen) -> future<sstable_ptr> {
+                    auto sst = make_sstable(s, tmpdir_path, gen, version, big);
+                    return write_memtable_to_sstable_for_test(mt, sst).then([sst, gen, s, tmpdir_path, version] {
+                        return reusable_sst(s, tmpdir_path, gen, version);
+                    });
+                };
+
+                mutation m(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
+                for (auto i = 0; i < 5; i++) {
+                    add_row(m, to_bytes("deletecolumn" + to_sstring(i)), 100);
+                }
+                add_row(m, to_bytes("todelete"), 1000);
+                auto sst1 = get_usable_sst(*mt, 54).get0();
+                BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
+
+                mt = make_lw_shared<memtable>(s);
+                m = mutation(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
+                tombstone tomb(api::new_timestamp(), now);
+                m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
                 mt->apply(std::move(m));
-            };
-            auto get_usable_sst = [s, tmpdir_path] (memtable& mt, int64_t gen) -> future<sstable_ptr> {
-                auto sst = make_sstable(s, tmpdir_path, gen, la, big);
-                return write_memtable_to_sstable_for_test(mt, sst).then([sst, gen, s, tmpdir_path] {
-                    return reusable_sst(s, tmpdir_path, gen);
-                });
-            };
+                auto sst2 = get_usable_sst(*mt, 55).get0();
+                BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
 
-            mutation m(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
-            for (auto i = 0; i < 5; i++) {
-                add_row(m, to_bytes("deletecolumn" + to_sstring(i)), 100);
+                auto creator = [s, tmpdir_path, version] { return sstables::make_sstable(s, tmpdir_path, 56, version, big); };
+                auto info = sstables::compact_sstables(sstables::compaction_descriptor({sst1, sst2}), *cf,
+                                                       creator, replacer_fn_no_op()).get0();
+                BOOST_REQUIRE(info.new_sstables.size() == 1);
+                BOOST_REQUIRE(((now + gc_clock::duration(100)).time_since_epoch().count()) ==
+                              info.new_sstables.front()->get_stats_metadata().max_local_deletion_time);
             }
-            add_row(m, to_bytes("todelete"), 1000);
-            auto sst1 = get_usable_sst(*mt, 54).get0();
-            BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
-
-            mt = make_lw_shared<memtable>(s);
-            m = mutation(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
-            tombstone tomb(api::new_timestamp(), now);
-            m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
-            mt->apply(std::move(m));
-            auto sst2 = get_usable_sst(*mt, 55).get0();
-            BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
-
-            auto creator = [s, tmpdir_path] { return sstables::make_sstable(s, tmpdir_path, 56, la, big); };
-            auto info = sstables::compact_sstables(sstables::compaction_descriptor({ sst1, sst2 }), *cf, creator, replacer_fn_no_op()).get0();
-            BOOST_REQUIRE(info.new_sstables.size() == 1);
-            BOOST_REQUIRE(((now + gc_clock::duration(100)).time_since_epoch().count()) == info.new_sstables.front()->get_stats_metadata().max_local_deletion_time);
         });
     });
 }
@@ -3373,7 +3387,7 @@ static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes
 }
 
 static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> exploded_pk, std::vector<std::vector<bytes>> exploded_cks,
-        std::vector<bytes> min_components, std::vector<bytes> max_components, bool remove = false) {
+        std::vector<bytes> min_components, std::vector<bytes> max_components, sstable_version_types version, bool remove = false) {
     auto mt = make_lw_shared<memtable>(s);
     auto insert_data = [&mt, &s] (std::vector<bytes>& exploded_pk, std::vector<bytes>&& exploded_ck) {
         const column_definition& r1_col = *s->get_column_definition("r1");
@@ -3407,56 +3421,62 @@ static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> explode
         }
     }
     auto tmp = make_lw_shared<tmpdir>();
-    auto sst = make_sstable(s, tmp->path, 1, la, big);
+    auto sst = make_sstable(s, tmp->path, 1, version, big);
     write_memtable_to_sstable_for_test(*mt, sst).get();
-    sst = reusable_sst(s, tmp->path, 1).get0();
+    sst = reusable_sst(s, tmp->path, 1, version).get0();
     check_min_max_column_names(sst, std::move(min_components), std::move(max_components));
 }
 
 SEASTAR_TEST_CASE(min_max_clustering_key_test) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        {
-            auto s = schema_builder("ks", "cf")
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("ck1", utf8_type, column_kind::clustering_key)
-                .with_column("ck2", utf8_type, column_kind::clustering_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, { { "a", "b" }, { "a", "c" } }, { "a", "b" }, { "a", "c" });
-        }
-        {
-            auto s = schema_builder("ks", "cf")
-                .with(schema_builder::compact_storage::yes)
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("ck1", utf8_type, column_kind::clustering_key)
-                .with_column("ck2", utf8_type, column_kind::clustering_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, { { "a", "b" }, { "a", "c" } }, { "a", "b" }, { "a", "c" });
-        }
-        {
-            auto s = schema_builder("ks", "cf")
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("ck1", utf8_type, column_kind::clustering_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, { { "a" }, { "z" } }, { "a" }, { "z" });
-        }
-        {
-            auto s = schema_builder("ks", "cf")
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("ck1", utf8_type, column_kind::clustering_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, { { "a" }, { "z" } }, { "a" }, { "z" }, true);
-        }
-        {
-            auto s = schema_builder("ks", "cf")
-                .with_column("pk", utf8_type, column_kind::partition_key)
-                .with_column("r1", int32_type)
-                .build();
-            test_min_max_clustering_key(s, { "key1" }, {}, {}, {});
+        for (auto version : all_sstable_versions) {
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("ck1", utf8_type, column_kind::clustering_key)
+                        .with_column("ck2", utf8_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {{"a", "b"},
+                                                          {"a", "c"}}, {"a", "b"}, {"a", "c"}, version);
+            }
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with(schema_builder::compact_storage::yes)
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("ck1", utf8_type, column_kind::clustering_key)
+                        .with_column("ck2", utf8_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {{"a", "b"},
+                                                          {"a", "c"}}, {"a", "b"}, {"a", "c"}, version);
+            }
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("ck1", utf8_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {{"a"},
+                                                          {"z"}}, {"a"}, {"z"}, version);
+            }
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("ck1", utf8_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {{"a"},
+                                                          {"z"}}, {"a"}, {"z"}, version, true);
+            }
+            {
+                auto s = schema_builder("ks", "cf")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("r1", int32_type)
+                        .build();
+                test_min_max_clustering_key(s, {"key1"}, {}, {}, {}, version);
+            }
         }
     });
 }
@@ -3464,139 +3484,145 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
 SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        auto s = schema_builder("ks", "cf")
-            .with_column("pk", utf8_type, column_kind::partition_key)
-            .with_column("ck1", utf8_type, column_kind::clustering_key)
-            .with_column("r1", int32_type)
-            .build();
-        column_family_for_tests cf(s);
-        auto tmp = make_lw_shared<tmpdir>();
-        auto mt = make_lw_shared<memtable>(s);
-        const column_definition& r1_col = *s->get_column_definition("r1");
+        for (const auto version : all_sstable_versions) {
+            auto s = schema_builder("ks", "cf")
+                      .with_column("pk", utf8_type, column_kind::partition_key)
+                      .with_column("ck1", utf8_type, column_kind::clustering_key)
+                      .with_column("r1", int32_type)
+                      .build();
+            column_family_for_tests cf(s);
+            auto tmp = make_lw_shared<tmpdir>();
+            auto mt = make_lw_shared<memtable>(s);
+            const column_definition &r1_col = *s->get_column_definition("r1");
 
-        for (auto j = 0; j < 8; j++) {
-            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(j))});
+            for (auto j = 0; j < 8; j++) {
+                auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(j))});
+                mutation m(s, key);
+                for (auto i = 100; i < 150; i++) {
+                    auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(j) + "ck" + to_sstring(i))});
+                    m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+                }
+                mt->apply(std::move(m));
+            }
+            auto sst = make_sstable(s, tmp->path, 1, version, big);
+            write_memtable_to_sstable_for_test(*mt, sst).get();
+            sst = reusable_sst(s, tmp->path, 1, version).get0();
+            check_min_max_column_names(sst, {"0ck100"}, {"7ck149"});
+
+            mt = make_lw_shared<memtable>(s);
+            auto key = partition_key::from_exploded(*s, {to_bytes("key9")});
             mutation m(s, key);
-            for (auto i = 100; i < 150; i++) {
-                auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(j) + "ck" + to_sstring(i))});
+            for (auto i = 101; i < 299; i++) {
+                auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(9) + "ck" + to_sstring(i))});
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
             }
             mt->apply(std::move(m));
-        }
-        auto sst = make_sstable(s, tmp->path, 1, la, big);
-        write_memtable_to_sstable_for_test(*mt, sst).get();
-        sst = reusable_sst(s, tmp->path, 1).get0();
-        check_min_max_column_names(sst, { "0ck100" }, { "7ck149" });
+            auto sst2 = make_sstable(s, tmp->path, 2, version, big);
+            write_memtable_to_sstable_for_test(*mt, sst2).get();
+            sst2 = reusable_sst(s, tmp->path, 2, version).get0();
+            check_min_max_column_names(sst2, {"9ck101"}, {"9ck298"});
 
-        mt = make_lw_shared<memtable>(s);
-        auto key = partition_key::from_exploded(*s, {to_bytes("key9")});
-        mutation m(s, key);
-        for (auto i = 101; i < 299; i++) {
-            auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(9) + "ck" + to_sstring(i))});
-            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+            auto creator = [s, tmp, version] { return sstables::make_sstable(s, tmp->path, 3, version, big); };
+            auto info = sstables::compact_sstables(sstables::compaction_descriptor({sst, sst2}), *cf, creator, replacer_fn_no_op()).get0();
+            BOOST_REQUIRE(info.new_sstables.size() == 1);
+            check_min_max_column_names(info.new_sstables.front(), {"0ck100"}, {"9ck298"});
         }
-        mt->apply(std::move(m));
-        auto sst2 = make_sstable(s, tmp->path, 2, la, big);
-        write_memtable_to_sstable_for_test(*mt, sst2).get();
-        sst2 = reusable_sst(s, tmp->path, 2).get0();
-        check_min_max_column_names(sst2, { "9ck101" }, { "9ck298" });
-
-        auto creator = [s, tmp] { return sstables::make_sstable(s, tmp->path, 3, la, big); };
-        auto info = sstables::compact_sstables(sstables::compaction_descriptor({ sst, sst2 }), *cf, creator, replacer_fn_no_op()).get0();
-        BOOST_REQUIRE(info.new_sstables.size() == 1);
-        check_min_max_column_names(info.new_sstables.front(), { "0ck100" }, { "9ck298" });
     });
 }
 
 SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        auto s = schema_builder("ks", "cf")
-            .with_column("pk", utf8_type, column_kind::partition_key)
-            .with_column("ck1", utf8_type, column_kind::clustering_key)
-            .with_column("r1", int32_type)
-            .build();
-        auto tmp = make_lw_shared<tmpdir>();
-        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-        auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
-        const column_definition& r1_col = *s->get_column_definition("r1");
+        for (const auto version : all_sstable_versions) {
+            auto s = schema_builder("ks", "cf")
+                    .with_column("pk", utf8_type, column_kind::partition_key)
+                    .with_column("ck1", utf8_type, column_kind::clustering_key)
+                    .with_column("r1", int32_type)
+                    .build();
+            auto tmp = make_lw_shared<tmpdir>();
+            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
+            const column_definition& r1_col = *s->get_column_definition("r1");
 
-        {
-            auto mt = make_lw_shared<memtable>(s);
-            mutation m(s, key);
-            tombstone tomb(api::new_timestamp(), gc_clock::now());
-            m.partition().apply_delete(*s, c_key, tomb);
-            mt->apply(std::move(m));
-            auto sst = make_sstable(s, tmp->path, 1, la, big);
-            write_memtable_to_sstable_for_test(*mt, sst).get();
-            sst = reusable_sst(s, tmp->path, 1).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
-        }
+            {
+                auto mt = make_lw_shared<memtable>(s);
+                mutation m(s, key);
+                tombstone tomb(api::new_timestamp(), gc_clock::now());
+                m.partition().apply_delete(*s, c_key, tomb);
+                mt->apply(std::move(m));
+                auto sst = make_sstable(s, tmp->path, 1, version, big);
+                write_memtable_to_sstable_for_test(*mt, sst).get();
+                sst = reusable_sst(s, tmp->path, 1, version).get0();
+                sstables::sstlog.warn("Version {}", (int)version);
+                BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+            }
 
-        {
-            auto mt = make_lw_shared<memtable>(s);
-            mutation m(s, key);
-            m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
-            mt->apply(std::move(m));
-            auto sst = make_sstable(s, tmp->path, 2, la, big);
-            write_memtable_to_sstable_for_test(*mt, sst).get();
-            sst = reusable_sst(s, tmp->path, 2).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
-        }
+            {
+                auto mt = make_lw_shared<memtable>(s);
+                mutation m(s, key);
+                m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
+                mt->apply(std::move(m));
+                auto sst = make_sstable(s, tmp->path, 2, version, big);
+                write_memtable_to_sstable_for_test(*mt, sst).get();
+                sst = reusable_sst(s, tmp->path, 2, version).get0();
+                BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+            }
 
-        {
-            auto mt = make_lw_shared<memtable>(s);
-            mutation m(s, key);
-            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
-            mt->apply(std::move(m));
-            auto sst = make_sstable(s, tmp->path, 3, la, big);
-            write_memtable_to_sstable_for_test(*mt, sst).get();
-            sst = reusable_sst(s, tmp->path, 3).get0();
-            BOOST_REQUIRE(!sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
-        }
+            {
+                auto mt = make_lw_shared<memtable>(s);
+                mutation m(s, key);
+                m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+                mt->apply(std::move(m));
+                auto sst = make_sstable(s, tmp->path, 3, version, big);
+                write_memtable_to_sstable_for_test(*mt, sst).get();
+                sst = reusable_sst(s, tmp->path, 3, version).get0();
+                BOOST_REQUIRE(!sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+            }
 
-        {
-            auto mt = make_lw_shared<memtable>(s);
+            {
+                auto mt = make_lw_shared<memtable>(s);
 
-            mutation m(s, key);
-            tombstone tomb(api::new_timestamp(), gc_clock::now());
-            m.partition().apply_delete(*s, c_key, tomb);
-            mt->apply(std::move(m));
+                mutation m(s, key);
+                tombstone tomb(api::new_timestamp(), gc_clock::now());
+                m.partition().apply_delete(*s, c_key, tomb);
+                mt->apply(std::move(m));
 
-            auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
-            mutation m2(s, key2);
-            m2.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
-            mt->apply(std::move(m2));
+                auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
+                mutation m2(s, key2);
+                m2.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+                mt->apply(std::move(m2));
 
-            auto sst = make_sstable(s, tmp->path, 4, la, big);
-            write_memtable_to_sstable_for_test(*mt, sst).get();
-            sst = reusable_sst(s, tmp->path, 4).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
-        }
+                auto sst = make_sstable(s, tmp->path, 4, version, big);
+                write_memtable_to_sstable_for_test(*mt, sst).get();
+                sst = reusable_sst(s, tmp->path, 4, version).get0();
+                BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+            }
 
-        {
-            auto mt = make_lw_shared<memtable>(s);
-            mutation m(s, key);
-            tombstone tomb(api::new_timestamp(), gc_clock::now());
-            m.partition().apply(tomb);
-            mt->apply(std::move(m));
-            auto sst = make_sstable(s, tmp->path, 5, la, big);
-            write_memtable_to_sstable_for_test(*mt, sst).get();
-            sst = reusable_sst(s, tmp->path, 5).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
-        }
+            {
+                auto mt = make_lw_shared<memtable>(s);
+                mutation m(s, key);
+                tombstone tomb(api::new_timestamp(), gc_clock::now());
+                m.partition().apply(tomb);
+                mt->apply(std::move(m));
+                auto sst = make_sstable(s, tmp->path, 5, version, big);
+                write_memtable_to_sstable_for_test(*mt, sst).get();
+                sst = reusable_sst(s, tmp->path, 5, version).get0();
+                BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+            }
 
-        {
-            auto mt = make_lw_shared<memtable>(s);
-            mutation m(s, key);
-            tombstone tomb(api::new_timestamp(), gc_clock::now());
-            range_tombstone rt(clustering_key_prefix::from_single_value(*s, bytes("a")), clustering_key_prefix::from_single_value(*s, bytes("a")), tomb);
-            m.partition().apply_delete(*s, std::move(rt));
-            mt->apply(std::move(m));
-            auto sst = make_sstable(s, tmp->path, 6, la, big);
-            write_memtable_to_sstable_for_test(*mt, sst).get();
-            sst = reusable_sst(s, tmp->path, 6).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+            {
+                auto mt = make_lw_shared<memtable>(s);
+                mutation m(s, key);
+                tombstone tomb(api::new_timestamp(), gc_clock::now());
+                range_tombstone rt(clustering_key_prefix::from_single_value(*s, bytes(
+                "a")), clustering_key_prefix::from_single_value(*s, bytes("a")), tomb);
+                m.partition().apply_delete(*s, std::move(rt));
+                mt->apply(std::move(m));
+                auto sst = make_sstable(s, tmp->path, 6, version, big);
+                write_memtable_to_sstable_for_test(*mt, sst).get();
+                sst = reusable_sst(s, tmp->path, 6, version).get0();
+                BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+            }
         }
     });
 }
@@ -4011,43 +4037,45 @@ SEASTAR_TEST_CASE(sstable_resharding_strategy_tests) {
 SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        auto builder = schema_builder("tests", "tombstone_histogram_test")
-                .with_column("id", utf8_type, column_kind::partition_key)
-                .with_column("value", int32_type);
-        auto s = builder.build();
+        for (auto version : all_sstable_versions) {
+            auto builder = schema_builder("tests", "tombstone_histogram_test")
+                    .with_column("id", utf8_type, column_kind::partition_key)
+                    .with_column("value", int32_type);
+            auto s = builder.build();
 
-        auto tmp = make_lw_shared<tmpdir>();
-        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
-            return make_sstable(s, tmp->path, (*gen)++, la, big);
-        };
+            auto tmp = make_lw_shared<tmpdir>();
+            auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1), version]() mutable {
+                return make_sstable(s, tmp->path, (*gen)++, version, big);
+            };
 
-        auto next_timestamp = [] {
-            static thread_local api::timestamp_type next = 1;
-            return next++;
-        };
+            auto next_timestamp = [] {
+                static thread_local api::timestamp_type next = 1;
+                return next++;
+            };
 
-        auto make_delete = [&] (partition_key key) {
-            mutation m(s, key);
-            tombstone tomb(next_timestamp(), gc_clock::now());
-            m.partition().apply(tomb);
-            return m;
-        };
+            auto make_delete = [&](partition_key key) {
+                mutation m(s, key);
+                tombstone tomb(next_timestamp(), gc_clock::now());
+                m.partition().apply(tomb);
+                return m;
+            };
 
-        std::vector<mutation> mutations;
-        for (auto i = 0; i < sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE*2; i++) {
-            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
-            mutations.push_back(make_delete(key));
-            forward_jump_clocks(std::chrono::seconds(1));
+            std::vector<mutation> mutations;
+            for (auto i = 0; i < sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE * 2; i++) {
+                auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
+                mutations.push_back(make_delete(key));
+                forward_jump_clocks(std::chrono::seconds(1));
+            }
+            auto sst = make_sstable_containing(sst_gen, mutations);
+            auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
+            sst = reusable_sst(s, tmp->path, sst->generation(), version).get0();
+            auto histogram2 = sst->get_stats_metadata().estimated_tombstone_drop_time;
+
+            // check that histogram respected limit
+            BOOST_REQUIRE(histogram.bin.size() == TOMBSTONE_HISTOGRAM_BIN_SIZE);
+            // check that load procedure will properly load histogram from statistics component
+            BOOST_REQUIRE(histogram.bin == histogram2.bin);
         }
-        auto sst = make_sstable_containing(sst_gen, mutations);
-        auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
-        sst = reusable_sst(s, tmp->path, sst->generation()).get0();
-        auto histogram2 = sst->get_stats_metadata().estimated_tombstone_drop_time;
-
-        // check that histogram respected limit
-        BOOST_REQUIRE(histogram.bin.size() == TOMBSTONE_HISTOGRAM_BIN_SIZE);
-        // check that load procedure will properly load histogram from statistics component
-        BOOST_REQUIRE(histogram.bin == histogram2.bin);
     });
 }
 
@@ -4695,33 +4723,35 @@ SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
     BOOST_REQUIRE(smp::count == 1);
     return seastar::async([] {
         storage_service_for_tests ssft;
-        cell_locker_stats cl_stats;
+        for (auto version : all_sstable_versions) {
+            cell_locker_stats cl_stats;
 
-        auto s = schema_builder("tests", "ts_correcness_test")
-                .with_column("id", utf8_type, column_kind::partition_key)
-                .with_column("value", int32_type).build();
+            auto s = schema_builder("tests", "ts_correcness_test")
+                    .with_column("id", utf8_type, column_kind::partition_key)
+                    .with_column("value", int32_type).build();
 
-        auto tmp = make_lw_shared<tmpdir>();
-        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
-            return make_sstable(s, tmp->path, (*gen)++, la, big);
-        };
+            auto tmp = make_lw_shared<tmpdir>();
+            auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1), version]() mutable {
+                return make_sstable(s, tmp->path, (*gen)++, version, big);
+            };
 
-        auto make_insert = [&] (partition_key key, api::timestamp_type ts) {
-            mutation m(s, key);
-            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts);
-            return m;
-        };
+            auto make_insert = [&](partition_key key, api::timestamp_type ts) {
+                mutation m(s, key);
+                m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts);
+                return m;
+            };
 
-        auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
-        auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
+            auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
+            auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
 
-        auto mut1 = make_insert(alpha, -50);
-        auto mut2 = make_insert(beta, 5);
+            auto mut1 = make_insert(alpha, -50);
+            auto mut2 = make_insert(beta, 5);
 
-        auto sst = make_sstable_containing(sst_gen, {mut1, mut2});
+            auto sst = make_sstable_containing(sst_gen, {mut1, mut2});
 
-        BOOST_REQUIRE(sst->get_stats_metadata().min_timestamp == -50);
-        BOOST_REQUIRE(sst->get_stats_metadata().max_timestamp == 5);
+            BOOST_REQUIRE(sst->get_stats_metadata().min_timestamp == -50);
+            BOOST_REQUIRE(sst->get_stats_metadata().max_timestamp == 5);
+        }
     });
 }
 
