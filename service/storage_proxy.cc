@@ -137,6 +137,7 @@ public:
     const schema_ptr& schema() {
         return _schema;
     }
+    virtual void release_mutation() = 0;
 };
 
 // different mutation for each destination (for read repairs)
@@ -162,6 +163,11 @@ public:
     virtual bool is_shared() override {
         return false;
     }
+    virtual void release_mutation() override {
+        for (auto&& m : _mutations) {
+            m.second.release();
+        }
+    }
     dht::token& token() {
         return _token;
     }
@@ -183,6 +189,9 @@ public:
     }
     virtual bool is_shared() override {
         return true;
+    }
+    virtual void release_mutation() override {
+        _mutation.release();
     }
 };
 
@@ -334,6 +343,7 @@ public:
     }
     void on_released() {
         _expire_timer.cancel();
+        _mutation_holder->release_mutation();
     }
     void timeout_cb() {
         if (_cl_achieved || _cl == db::consistency_level::ANY) {
