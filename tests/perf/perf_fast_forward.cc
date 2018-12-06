@@ -1016,7 +1016,6 @@ bool cache_enabled;
 bool new_test_case = false;
 double test_case_duration = 0.;
 table_config cfg;
-int_range live_range;
 
 std::unique_ptr<output_manager> output_mgr;
 
@@ -1128,6 +1127,7 @@ void run_test_case(std::function<test_result()> fn) {
 
 void test_large_partition_single_key_slice(column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
+    int_range live_range = int_range({0}, {n_rows - 1});
 
     output_mgr->set_test_param_names({{"", "{:<2}"}, {"range", "{:<14}"}}, test_result::stats_names());
     struct first {
