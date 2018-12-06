@@ -46,10 +46,7 @@ struct my_mp_row_consumer_reader : public mp_row_consumer_reader {
     }
 };
 
-static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
-    // Using an empty schema for this function, which is only about loading
-    // a malformed component and checking that it fails.
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstring msg) {
     try {
         sstable_ptr sstp = std::get<0>(reusable_sst(s, dir, generation).get());
         auto r = std::make_unique<my_mp_row_consumer_reader>(s);
@@ -67,6 +64,25 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
     } catch (malformed_sstable_exception& e) {
         BOOST_REQUIRE_EQUAL(sstring(e.what()), msg);
     }
+}
+
+static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
+    // Using an empty schema for this function, which is only about loading
+    // a malformed component and checking that it fails.
+    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    return broken_sst(dir, generation, s, msg);
+}
+
+SEASTAR_THREAD_TEST_CASE(static_with_clustering) {
+    schema_ptr s =
+        schema_builder("test_foo_bar_zed_baz_ks", "test_foo_bar_zed_baz_table")
+            .with_column("test_foo_bar_zed_baz_key", utf8_type, column_kind::partition_key)
+            .with_column("test_foo_bar_zed_baz_val", utf8_type, column_kind::clustering_key)
+            .with_column("test_foo_bar_zed_baz_static", utf8_type, column_kind::static_column)
+            .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/static_with_clustering", 58, s,
+        "Static row has clustering key information. I didn't expect that! in sstable "
+        "tests/sstables/static_with_clustering/la-58-big-Data.db");
 }
 
 SEASTAR_THREAD_TEST_CASE(zero_sized_histogram) {
