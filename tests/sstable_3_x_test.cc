@@ -3977,7 +3977,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
 
     // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 > 'aaa' AND ck1 < 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528144611};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544059668};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb, bound_kind::excl_start,
                            clustering_key_prefix::from_single_value(*s, bytes("bbb")), bound_kind::excl_end};
@@ -3985,9 +3985,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
     }
     ts += 10;
 
-    // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 > 'bbb' AND ck1 < 'ccc';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528144623};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544059678};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("bbb")), tomb, bound_kind::excl_start,
                            clustering_key_prefix::from_single_value(*s, bytes("ccc")), bound_kind::excl_end};
@@ -3996,7 +3996,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
