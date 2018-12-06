@@ -510,7 +510,7 @@ void storage_proxy::unthrottle() {
 
 storage_proxy::response_id_type storage_proxy::register_response_handler(shared_ptr<abstract_write_response_handler>&& h) {
     auto id = h->id();
-    auto e = _response_handlers.emplace(id, rh_entry(std::move(h)));
+    auto e = _response_handlers.emplace(id, std::move(h));
     assert(e.second);
     return id;
 }

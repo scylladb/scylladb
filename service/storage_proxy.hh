@@ -84,6 +84,7 @@ private:
         ::shared_ptr<abstract_write_response_handler> handler;
         timer<clock_type> expire_timer;
         rh_entry(::shared_ptr<abstract_write_response_handler>&& h);
+        rh_entry(rh_entry&&) = delete;
     };
 
     using response_id_type = uint64_t;
