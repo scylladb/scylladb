@@ -919,15 +919,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         db::system_keyspace::update_local_tokens(std::unordered_set<dht::token>(), local_tokens_to_remove).discard_result().get();
     }
 
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
-        for (auto&& subscriber : ss._lifecycle_subscribers) {
-            try {
-                subscriber->on_join_cluster(endpoint);
-            } catch (...) {
-                slogger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
-            }
-        }
-    }).get();
+    notify_joined(endpoint);
 
     update_pending_ranges().get();
     if (slogger.is_enabled(logging::log_level::debug)) {
@@ -3295,6 +3287,19 @@ void storage_service::notify_up(inet_address endpoint)
         }
     }).get();
     slogger.debug("Notify node {} has been up", endpoint);
+}
+
+void storage_service::notify_joined(inet_address endpoint)
+{
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            try {
+                subscriber->on_join_cluster(endpoint);
+            } catch (...) {
+                slogger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
+            }
+        }
+    }).get();
 }
 
 } // namespace service
