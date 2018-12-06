@@ -43,20 +43,23 @@ public:
 
     virtual ~file_writer() = default;
     file_writer(file_writer&&) = default;
-
-    future<> write(const char* buf, size_t n) {
+    // Must be called in a seastar thread.
+    void write(const char* buf, size_t n) {
         _offset.offset += n;
-        return _out.write(buf, n);
+        _out.write(buf, n).get();
     }
-    future<> write(const bytes& s) {
+    // Must be called in a seastar thread.
+    void write(const bytes& s) {
         _offset.offset += s.size();
-        return _out.write(s);
+        _out.write(s).get();
     }
-    future<> flush() {
-        return _out.flush();
+    // Must be called in a seastar thread.
+    void flush() {
+        _out.flush().get();
     }
-    future<> close() {
-        return _out.close();
+    // Must be called in a seastar thread.
+    void close() {
+        _out.close().get();
     }
     uint64_t offset() const {
         return _offset.offset;
@@ -110,8 +113,8 @@ serialized_size(sstable_version_types v, const T& object) {
     uint64_t size = 0;
     auto writer = file_writer(make_sizing_output_stream(size));
     write(v, writer, object);
-    writer.flush().get();
-    writer.close().get();
+    writer.flush();
+    writer.close();
     return size;
 }
 
