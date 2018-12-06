@@ -1077,15 +1077,7 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
 #if 0
         HintedHandOffManager.instance.scheduleHintDelivery(endpoint, true);
 #endif
-        get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
-            for (auto&& subscriber : ss._lifecycle_subscribers) {
-                try {
-                    subscriber->on_up(endpoint);
-                } catch (...) {
-                    slogger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
-                }
-            }
-        }).get();
+        notify_up(endpoint);
     }
 }
 
@@ -3285,6 +3277,19 @@ void storage_service::notify_left(inet_address endpoint) {
         }
     }).get();
     slogger.debug("Notify node {} has left the cluster", endpoint);
+}
+
+void storage_service::notify_up(inet_address endpoint)
+{
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            try {
+                subscriber->on_up(endpoint);
+            } catch (...) {
+                slogger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
+            }
+        }
+    }).get();
 }
 
 } // namespace service
