@@ -4180,7 +4180,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
 
     // DELETE FROM range_tombstone_same_start_with_row USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 >= 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529099073};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544085558};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_deeply_exploded(*s, {"aaa", "bbb"}),
                            clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
@@ -4197,7 +4197,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
