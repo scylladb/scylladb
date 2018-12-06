@@ -73,6 +73,18 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
     return broken_sst(dir, generation, s, msg);
 }
 
+SEASTAR_THREAD_TEST_CASE(static_mismatch) {
+    schema_ptr s =
+        schema_builder("test_foo_bar_zed_baz_ks", "test_foo_bar_zed_baz_table")
+            .with_column("test_foo_bar_zed_baz_key", utf8_type, column_kind::partition_key)
+            .with_column("test_foo_bar_zed_baz_val", utf8_type, column_kind::clustering_key)
+            .with_column("test_foo_bar_zed_baz_static", utf8_type, column_kind::regular_column)
+            .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/static_column", 58, s,
+        "Mismatch between static cell and non-static column definition in sstable "
+        "tests/sstables/static_column/la-58-big-Data.db");
+}
+
 SEASTAR_THREAD_TEST_CASE(static_with_clustering) {
     schema_ptr s =
         schema_builder("test_foo_bar_zed_baz_ks", "test_foo_bar_zed_baz_table")
