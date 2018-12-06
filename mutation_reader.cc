@@ -1309,7 +1309,12 @@ void multishard_combining_reader::shard_reader::read_ahead(db::timeout_clock::ti
         if (state->stopped) {
             return make_ready_future<>();
         }
-        return do_fill_buffer(timeout);
+        return do_fill_buffer(timeout).then([this, state = std::move(state)] {
+            // Read ahead is still in the background, so pause the reader.
+            if (!state->stopped && _read_ahead) {
+                pause();
+            }
+        });
     }));
 }
 
