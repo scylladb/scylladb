@@ -86,6 +86,10 @@ public:
         return _sst->read_rows_flat(_sst->_schema);
     }
 
+    const stats_metadata& get_stats_metadata() const {
+        return _sst->get_stats_metadata();
+    }
+
     flat_mutation_reader read_range_rows_flat(
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -3082,7 +3086,7 @@ static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> m
     return tmp;
 }
 
-static void validate_read(schema_ptr s, sstring path, std::vector<mutation> mutations) {
+static sstable_assertions validate_read(schema_ptr s, sstring path, std::vector<mutation> mutations) {
     sstable_assertions sst(s, path);
     sst.load();
 
@@ -3092,10 +3096,39 @@ static void validate_read(schema_ptr s, sstring path, std::vector<mutation> muta
     }
 
     assertions.produces_end_of_stream();
+    return sst;
 }
 
 static constexpr api::timestamp_type write_timestamp = 1525385507816568;
 static constexpr gc_clock::time_point write_time_point = gc_clock::time_point{} + gc_clock::duration{1525385507};
+
+static void validate_stats_metadata(schema_ptr s, sstable_assertions written_sst, sstring table_name) {
+    auto orig_sst = sstables::make_sstable(s, get_write_test_path(table_name), 1, sstable_version_types::mc, big);
+    orig_sst->load().get();
+
+    const auto& orig_stats = orig_sst->get_stats_metadata();
+    const auto& written_stats = written_sst.get_stats_metadata();
+
+    auto check_estimated_histogram = [] (const utils::estimated_histogram& lhs, const utils::estimated_histogram& rhs) {
+        BOOST_REQUIRE(lhs.bucket_offsets == rhs.bucket_offsets);
+        BOOST_REQUIRE(lhs.buckets == rhs.buckets);
+        BOOST_REQUIRE(lhs._count == rhs._count);
+        BOOST_REQUIRE(lhs._sample_sum == rhs._sample_sum);
+    };
+
+    BOOST_REQUIRE_EQUAL(orig_stats.min_timestamp, written_stats.min_timestamp);
+    BOOST_REQUIRE_EQUAL(orig_stats.max_timestamp, written_stats.max_timestamp);
+    BOOST_REQUIRE_EQUAL(orig_stats.min_local_deletion_time, written_stats.min_local_deletion_time);
+    BOOST_REQUIRE_EQUAL(orig_stats.max_local_deletion_time, written_stats.max_local_deletion_time);
+    BOOST_REQUIRE_EQUAL(orig_stats.min_ttl, written_stats.min_ttl);
+    BOOST_REQUIRE_EQUAL(orig_stats.max_ttl, written_stats.max_ttl);
+    BOOST_REQUIRE(orig_stats.min_column_names.elements == written_stats.min_column_names.elements);
+    BOOST_REQUIRE(orig_stats.max_column_names.elements == written_stats.max_column_names.elements);
+    BOOST_REQUIRE_EQUAL(orig_stats.columns_count, written_stats.columns_count);
+    BOOST_REQUIRE_EQUAL(orig_stats.rows_count, written_stats.rows_count);
+    check_estimated_histogram(orig_stats.estimated_row_size, written_stats.estimated_row_size);
+    check_estimated_histogram(orig_stats.estimated_cells_count, written_stats.estimated_cells_count);
+}
 
 SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     auto abj = defer([] { await_background_jobs().get(); });
@@ -3111,7 +3144,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // INSERT INTO static_row (pk, st1, st2) values ('key1', 1135, 'hello');
+    // INSERT INTO static_row (pk, st1, st2) values ('key1', 1135, 'hello') USING TIMESTAMP 1525385507816568;
     auto key = make_dkey(s, {to_bytes("key1")});
     mutation mut{s, key};
     mut.set_static_cell("st1", data_value{1135}, write_timestamp);
@@ -3119,7 +3152,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
@@ -3139,7 +3173,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // INSERT INTO composite_partition_key (a,b,c,d,e,f,g) values (1, 'hello', true, 2, 'dear', 3, 'world');
+    // INSERT INTO composite_partition_key (a,b,c,d,e,f,g) values (1, 'hello', true, 2, 'dear', 3, 'world') USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, { data_value{1}, data_value{"hello"}, data_value{true} });
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2, "dear" });
@@ -3149,7 +3183,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
@@ -3168,7 +3203,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // INSERT INTO composite_clustering_key (a,b,c,d,e,f) values (1, 'hello', 2, 'dear', 3, 'world');
+    // INSERT INTO composite_clustering_key (a,b,c,d,e,f) values (1, 'hello', 2, 'dear', 3, 'world') USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { "hello", 2, "dear" });
@@ -3178,7 +3213,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
@@ -3224,13 +3260,14 @@ SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
     }
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut1, mut2});
+    auto written_sst = validate_read(s, tmp.path, {mut1, mut2});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
     auto abj = defer([] { await_background_jobs().get(); });
     sstring table_name = "ttled_row";
-    // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+    // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck", int32_type, column_kind::clustering_key);
@@ -3240,24 +3277,26 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // INSERT INTO ttled_row (pk, ck, rc) VALUES ( 1, 2, 3) USING TTL 1135;
+    // INSERT INTO ttled_row (pk, ck, rc) VALUES ( 1, 2, 3) USING TTL 1135 AND TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543904331};
     gc_clock::duration ttl{1135};
 
     auto column_def = s->get_column_definition("rc");
     if (!column_def) {
         throw std::runtime_error("no column definition found");
     }
-    mut.partition().apply_insert(*s, ckey, write_timestamp, ttl, write_time_point + ttl);
+    mut.partition().apply_insert(*s, ckey, write_timestamp, ttl, tp + ttl);
     bytes value = column_def->type->decompose(data_value{3});
-    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, write_time_point + ttl, ttl);
+    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, tp + ttl, ttl);
     mut.set_clustered_cell(ckey, *column_def, std::move(cell));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
@@ -3272,22 +3311,24 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // UPDATE ttled_column USING TTL 1135 SET rc = 1 WHERE pk='key';
+    // UPDATE ttled_column USING TTL 1135 AND TIMESTAMP 1525385507816568 SET rc = 1 WHERE pk='key';
     auto key = make_dkey(s, {to_bytes("key")});
     mutation mut{s, key};
 
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543887389};
     gc_clock::duration ttl{1135};
     auto column_def = s->get_column_definition("rc");
     if (!column_def) {
         throw std::runtime_error("no column definition found");
     }
     bytes value = column_def->type->decompose(data_value{1});
-    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, write_time_point + ttl, ttl);
+    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, tp + ttl, ttl);
     mut.set_clustered_cell(clustering_key::make_empty(), *column_def, std::move(cell));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
@@ -3302,18 +3343,20 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // DELETE rc FROM deleted_column WHERE pk=1;
+    // DELETE rc FROM deleted_column USING TIMESTAMP 1525385507816568 WHERE pk=1;
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543905926};
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     auto column_def = s->get_column_definition("rc");
     if (!column_def) {
         throw std::runtime_error("no column definition found");
     }
-    mut.set_cell(clustering_key::make_empty(), *column_def, atomic_cell::make_dead(write_timestamp, write_time_point));
+    mut.set_cell(clustering_key::make_empty(), *column_def, atomic_cell::make_dead(write_timestamp, tp));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
@@ -3328,15 +3371,17 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // DELETE FROM deleted_row WHERE pk=1 and ck=2;
+    // DELETE FROM deleted_row USING TIMESTAMP 1525385507816568 WHERE pk=1 and ck=2;
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543907978};
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
-    mut.partition().apply_delete(*s, ckey, tombstone{write_timestamp, write_time_point});
+    mut.partition().apply_delete(*s, ckey, tombstone{write_timestamp, tp});
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
@@ -3352,13 +3397,14 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // INSERT INTO collection_wide_update (pk, col) VALUES (1, {2, 3});
+    // INSERT INTO collection_wide_update (pk, col) VALUES (1, {2, 3}) USING TIMESTAMP 1525385507816568;
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543908589};
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
 
     mut.partition().apply_insert(*s, clustering_key::make_empty(), write_timestamp);
     set_type_impl::mutation set_values;
-    set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
+    set_values.tomb = tombstone {write_timestamp - 1, tp};
     set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
     set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
 
@@ -3366,7 +3412,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
@@ -3382,7 +3429,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // UPDATE collection_incremental_update SET col = col + {2} WHERE pk = 1;
+    // UPDATE collection_incremental_update USING TIMESTAMP 1525385507816568 SET col = col + {2} WHERE pk = 1;
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
 
@@ -3393,7 +3440,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
@@ -3411,9 +3459,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     api::timestamp_type ts = write_timestamp;
-    // INSERT INTO multiple_partitions (pk, rc1) VALUES (1, 10);
-    // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20);
-    // INSERT INTO multiple_partitions (pk, rc3) VALUES (3, 30);
+    // INSERT INTO multiple_partitions (pk, rc1) VALUES (1, 10) USING TIMESTAMP 1525385507816568;
+    // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20) USING TIMESTAMP 1525385507816578;
+    // INSERT INTO multiple_partitions (pk, rc3) VALUES (3, 30) USING TIMESTAMP 1525385507816588;
     std::vector<mutation> muts;
     for (auto i : boost::irange(1, 4)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
@@ -3427,7 +3475,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
     }
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, muts);
+    auto written_sst = validate_read(s, tmp.path, muts);
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 static void test_write_many_partitions(sstring table_name, tombstone partition_tomb, compression_parameters cp) {
@@ -3516,9 +3565,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
     api::timestamp_type ts = write_timestamp;
     mutation mut{s, key};
 
-    // INSERT INTO multiple_rows (pk, ck, rc1) VALUES (0, 1, 10);
-    // INSERT INTO multiple_rows (pk, ck, rc2) VALUES (0, 2, 20);
-    // INSERT INTO multiple_rows (pk, ck, rc3) VALUES (0, 3, 30);
+    // INSERT INTO multiple_rows (pk, ck, rc1) VALUES (0, 1, 10) USING TIMESTAMP 1525385507816568;
+    // INSERT INTO multiple_rows (pk, ck, rc2) VALUES (0, 2, 20) USING TIMESTAMP 1525385507816578;
+    // INSERT INTO multiple_rows (pk, ck, rc3) VALUES (0, 3, 30) USING TIMESTAMP 1525385507816588;
     for (auto i : boost::irange(1, 4)) {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, { i });
         mut.partition().apply_insert(*s, ckey, ts);
@@ -3528,7 +3577,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
 
     mt->apply(mut);
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 // Information on missing columns is serialized differently when the number of columns is > 64.
@@ -3552,7 +3602,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     api::timestamp_type ts = write_timestamp;
     mutation mut{s, key};
 
-    // INSERT INTO missing_columns_large_set (pk, ck, rc1, ..., rc62) VALUES (0, 0, 1, ..., 62);
+    // INSERT INTO missing_columns_large_set (pk, ck, rc1, ..., rc62) VALUES (0, 0, 1, ..., 62) USING TIMESTAMP 1525385507816568;
     // For missing columns, the missing ones will be written as majority are present.
     {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {0});
@@ -3563,7 +3613,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     }
     ts += 10;
 
-    // INSERT INTO missing_columns_large_set (pk, ck, rc63, rc64) VALUES (0, 1, 63, 64);
+    // INSERT INTO missing_columns_large_set (pk, ck, rc63, rc64) VALUES (0, 1, 63, 64) USING TIMESTAMP 1525385507816578;
     // For missing columns, the present ones will be written as majority are missing.
     {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {1});
@@ -3574,7 +3624,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
@@ -3668,7 +3719,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     // textAsBlob('great'), true, '2017-05-05',
     // 5.45, 36.6, 7.62, '192.168.0.110', -2147483648, 32767, '19:45:05.090',
     // '2015-05-01 09:30:54.234+0000', 50554d6e-29bb-11e5-b345-feff819cdc9f, 127,
-    // 01234567-0123-0123-0123-0123456789ab, 'привет', 123, 1h4m48s20ms);
+    // 01234567-0123-0123-0123-0123456789ab, 'привет', 123, 1h4m48s20ms) USING TIMESTAMP 1525385507816568;
     auto key = make_dkey(s, {to_bytes("key")});
     mutation mut{s, key};
     clustering_key ckey = clustering_key::make_empty();
@@ -3695,7 +3746,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
@@ -3716,14 +3768,15 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
 
-    // INSERT INTO empty_clustering_values (pk, ck1, ck2, ck3, rc) VALUES (0, '', 1, '', 2);
+    // INSERT INTO empty_clustering_values (pk, ck1, ck2, ck3, rc) VALUES (0, '', 1, '', 2) USING TIMESTAMP 1525385507816568;
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { "", 1, "" });
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "rc", data_value{2}, write_timestamp);
 
     mt->apply(mut);
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
@@ -3747,7 +3800,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
     // Clustering columns ckX are filled the following way:
     //    - <empty> for even X
     //    - "X" for odd X
-    // INSERT INTO large_clustering_key (pk, ck1, ck2, ck3, rc) VALUES (0, '1', '', '3',..., '', '35', 1);
+    // INSERT INTO large_clustering_key (pk, ck1, ..., ck35, rc) VALUES (0, '1', '', '3',..., '', '35', 1) USING TIMESTAMP 1525385507816568;
     std::vector<data_value> clustering_values;
     for (auto idx: boost::irange(1, 36)) {
         clustering_values.emplace_back((idx % 2 == 1) ? std::to_string(idx) : std::string{});
@@ -3758,7 +3811,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
 
     mt->apply(mut);
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
@@ -3778,13 +3832,14 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     auto key = partition_key::from_deeply_exploded(*s, {1});
     mutation mut{s, key};
 
-    // INSERT INTO compact_table (pk, ck1, rc) VALUES (1, 1, 1);
+    // INSERT INTO compact_table (pk, ck1, rc) VALUES (1, 1, 1) USING TIMESTAMP 1525385507816568;
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
     mut.set_cell(ckey, "rc", data_value{1}, write_timestamp);
 
     mt->apply(mut);
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
@@ -3815,7 +3870,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
@@ -3832,17 +3888,18 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
-    // DELETE FROM simple_range_tombstone WHERE pk = 0 and ck1 = 'aaa';
+    // DELETE FROM simple_range_tombstone USING TIMESTAMP 1525385507816568 WHERE pk = 0 and ck1 = 'aaa';
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
-    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528142098};
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544042952};
     tombstone tomb{write_timestamp, tp};
     range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
     mut.partition().apply_delete(*s, std::move(rt));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 // Test the case when for RTs their adjacent bounds are written as boundary RT markers.
@@ -3866,7 +3923,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
 
     // DELETE FROM adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821291};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544056877};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
                            clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
@@ -3876,7 +3933,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
 
     // DELETE FROM adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821308};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544056893};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}),
                            clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
@@ -3885,7 +3942,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 // Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
@@ -3910,7 +3968,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
 
     // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 > 'aaa' AND ck1 < 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528144611};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544059668};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb, bound_kind::excl_start,
                            clustering_key_prefix::from_single_value(*s, bytes("bbb")), bound_kind::excl_end};
@@ -3918,9 +3976,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
     }
     ts += 10;
 
-    // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 > 'bbb' AND ck1 < 'ccc';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528144623};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544059678};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("bbb")), tomb, bound_kind::excl_start,
                            clustering_key_prefix::from_single_value(*s, bytes("ccc")), bound_kind::excl_end};
@@ -3929,7 +3987,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
@@ -3951,7 +4010,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
 
     // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157078};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544077922};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
                            clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
@@ -3968,7 +4027,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
 
     // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816588 WHERE pk = 'key' AND ck1 = 'bbb' AND ck2 <= 'ccc';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157101};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544077944};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, to_bytes("bbb")),
                            clustering_key_prefix::from_deeply_exploded(*s, {"bbb", "ccc"}), tomb};
@@ -3985,7 +4044,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
 
     // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816608 WHERE pk = 'key' AND ck1 = 'ddd' AND ck2 >= 'eee';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157186};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544077980};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_deeply_exploded(*s, {"ddd", "eee"}),
                            clustering_key_prefix::from_single_value(*s, to_bytes("ddd")), tomb};
@@ -3993,7 +4052,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     }
     ts += 10;
 
-    // INSERT INTO mixed_rows_and_range_tombstones (pk, ck1, ck2) VALUES ('key', 'bbb', 'ccc') USING TIMESTAMP 1525385507816618;
+    // INSERT INTO mixed_rows_and_range_tombstones (pk, ck1, ck2) VALUES ('key', 'ddd', 'eee') USING TIMESTAMP 1525385507816618;
     {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"ddd", "eee"});
         mut.partition().apply_insert(*s, ckey, ts);
@@ -4001,7 +4060,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
@@ -4057,7 +4117,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
 
     // DELETE FROM adjacent_range_tombstones_with_rows USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529007036};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544081412};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
                            clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
@@ -4074,7 +4134,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
 
     // DELETE FROM adjacent_range_tombstones_with_rows USING TIMESTAMP 1525385507816588 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529007103};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544081449};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}),
                            clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
@@ -4090,7 +4150,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path, {mut});
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
@@ -4110,7 +4171,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
 
     // DELETE FROM range_tombstone_same_start_with_row USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 >= 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529099073};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544085558};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_deeply_exploded(*s, {"aaa", "bbb"}),
                            clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
@@ -4127,7 +4188,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
@@ -4147,7 +4210,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
 
     // DELETE FROM range_tombstone_same_end_with_row  USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 <= 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529099073};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544091863};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
                            clustering_key_prefix::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
@@ -4164,7 +4227,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_overlapped_start_range_tombstones) {
@@ -4238,7 +4303,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
 
     // DELETE FROM two_non_adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 < 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529535128};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544094668};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
                            bound_kind::incl_start,
@@ -4248,9 +4313,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
     }
     ts += 10;
 
-    // DELETE FROM range_tombstone_same_end_with_row  USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 <= 'bbb';
+    // DELETE FROM two_non_adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 > 'bbb';
     {
-        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529535139};
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1544094676};
         tombstone tomb{ts, tp};
         range_tombstone rt{clustering_key_prefix::from_deeply_exploded(*s, {"aaa", "bbb"}),
                            bound_kind::excl_start,
@@ -4262,7 +4327,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    auto written_sst = validate_read(s, tmp.path, {mut});
+    validate_stats_metadata(s, written_sst, table_name);
 }
 
 // The resulting files are supposed to be identical to the files
