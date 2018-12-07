@@ -240,9 +240,10 @@ parse(sstable_version_types v, random_access_reader& in, T& i) {
     });
 }
 
-template <typename T>
+template <typename T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
 inline typename std::enable_if_t<std::is_integral<T>::value, void>
-write(sstable_version_types v, file_writer& out, T i) {
+write(sstable_version_types v, W& out, T i) {
     auto *nr = reinterpret_cast<const net::packed<T> *>(&i);
     i = net::hton(*nr);
     auto p = reinterpret_cast<const char*>(&i);
@@ -255,9 +256,10 @@ parse(sstable_version_types v, random_access_reader& in, T& i) {
     return parse(v, in, reinterpret_cast<typename std::underlying_type<T>::type&>(i));
 }
 
-template <typename T>
+template <typename T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
 inline typename std::enable_if_t<std::is_enum<T>::value, void>
-write(sstable_version_types v, file_writer& out, T i) {
+write(sstable_version_types v, W& out, T i) {
     write(v, out, static_cast<typename std::underlying_type<T>::type>(i));
 }
 
@@ -265,7 +267,9 @@ future<> parse(sstable_version_types v, random_access_reader& in, bool& i) {
     return parse(v, in, reinterpret_cast<uint8_t&>(i));
 }
 
-inline void write(sstable_version_types v, file_writer& out, bool i) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, bool i) {
     write(v, out, static_cast<uint8_t>(i));
 }
 
@@ -307,11 +311,15 @@ future<> parse(sstable_version_types, random_access_reader& in, T& len, bytes& s
     });
 }
 
-inline void write(sstable_version_types v, file_writer& out, const bytes& s) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, const bytes& s) {
     out.write(s);
 }
 
-inline void write(sstable_version_types v, file_writer& out, bytes_view s) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, bytes_view s) {
     out.write(reinterpret_cast<const char*>(s.data()), s.size());
 }
 
@@ -329,8 +337,9 @@ future<> parse(sstable_version_types v, random_access_reader& in, First& first, 
     });
 }
 
-template<typename First, typename... Rest>
-inline void write(sstable_version_types v, file_writer& out, const First& first, Rest&&... rest) {
+template<typename W, typename First, typename... Rest>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, const First& first, Rest&&... rest) {
     write(v, out, first);
     write(v, out, std::forward<Rest>(rest)...);
 }
@@ -344,8 +353,9 @@ parse(sstable_version_types v, random_access_reader& in, T& t) {
     });
 }
 
-template <class T>
-inline void write(sstable_version_types v, file_writer& out, const vint<T>& t) {
+template <class T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, const vint<T>& t) {
     write_vint(out, t.value);
 }
 
@@ -366,9 +376,10 @@ inline void write(sstable_version_types v, file_writer& out, const utils::UUID& 
     out.write(uuid.serialize());
 }
 
-template <class T>
+template <class T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
 inline typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
-write(sstable_version_types v, file_writer& out, const T& t) {
+write(sstable_version_types v, W& out, const T& t) {
     // describe_type() is not const correct, so cheat here:
     const_cast<T&>(t).describe_type(v, [v, &out] (auto&&... what) -> void {
         write(v, out, std::forward<decltype(what)>(what)...);
@@ -1785,7 +1796,9 @@ void sstable::maybe_flush_pi_block(file_writer& out,
     }
 }
 
-void write_cell_value(file_writer& out, const abstract_type& type, bytes_view value) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_cell_value(W& out, const abstract_type& type, bytes_view value) {
     if (!value.empty()) {
         if (type.value_length_if_fixed()) {
             write(sstable_version_types::mc, out, value);
@@ -1796,7 +1809,9 @@ void write_cell_value(file_writer& out, const abstract_type& type, bytes_view va
     }
 }
 
-void write_cell_value(file_writer& out, const abstract_type& type, atomic_cell_value_view value) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_cell_value(W& out, const abstract_type& type, atomic_cell_value_view value) {
     if (!value.empty()) {
         if (!type.value_length_if_fixed()) {
             write_vint(out, value.size_bytes());
@@ -1811,8 +1826,9 @@ static inline void update_cell_stats(column_stats& c_stats, api::timestamp_type 
     c_stats.cells_count++;
 }
 
-template <typename WriteLengthFunc>
-static void write_counter_value(counter_cell_view ccv, file_writer& out, sstable_version_types v, WriteLengthFunc&& write_len_func) {
+template <typename WriteLengthFunc, typename W>
+GCC6_CONCEPT(requires Writer<W>())
+static void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v, WriteLengthFunc&& write_len_func) {
     auto shard_count = ccv.shard_count();
     static constexpr auto header_entry_size = sizeof(int16_t);
     static constexpr auto counter_shard_size = 32u; // counter_id: 16 + clock: 8 + value: 8
@@ -3496,7 +3512,9 @@ stop_iteration sstable_writer_m::consume(clustering_row&& cr) {
 }
 
 // Write clustering prefix along with its bound kind and, if not full, its size
-static void write_clustering_prefix(file_writer& writer, bound_kind_m kind,
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+static void write_clustering_prefix(W& writer, bound_kind_m kind,
         const schema& s, const clustering_key_prefix& clustering) {
     assert(kind != bound_kind_m::static_clustering);
     write(sstable_version_types::mc, writer, kind);
