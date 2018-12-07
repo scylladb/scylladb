@@ -116,13 +116,19 @@ private:
     // Makes room for a contiguous region of given size.
     // The region is accounted for as already written.
     // size must not be zero.
+    [[gnu::always_inline]]
     value_type* alloc(size_type size) {
-        if (size <= current_space_left()) {
+        if (__builtin_expect(size <= current_space_left(), true)) {
             auto ret = _current->data + _current->offset;
             _current->offset += size;
             _size += size;
             return ret;
         } else {
+            return alloc_new(size);
+        }
+    }
+    [[gnu::noinline]]
+    value_type* alloc_new(size_type size) {
             auto alloc_size = next_alloc_size(size);
             auto space = malloc(alloc_size);
             if (!space) {
@@ -140,7 +146,6 @@ private:
             }
             _size += size;
             return _current->data;
-        };
     }
 public:
     explicit bytes_ostream(size_t initial_chunk_size) noexcept
@@ -204,18 +209,20 @@ public:
         return place_holder<T>{alloc(sizeof(T))};
     }
 
+    [[gnu::always_inline]]
     value_type* write_place_holder(size_type size) {
         return alloc(size);
     }
 
     // Writes given sequence of bytes
+    [[gnu::always_inline]]
     inline void write(bytes_view v) {
         if (v.empty()) {
             return;
         }
 
         auto this_size = std::min(v.size(), size_t(current_space_left()));
-        if (this_size) {
+        if (__builtin_expect(this_size, true)) {
             memcpy(_current->data + _current->offset, v.begin(), this_size);
             _current->offset += this_size;
             _size += this_size;
@@ -224,11 +231,12 @@ public:
 
         while (!v.empty()) {
             auto this_size = std::min(v.size(), size_t(max_chunk_size()));
-            std::copy_n(v.begin(), this_size, alloc(this_size));
+            std::copy_n(v.begin(), this_size, alloc_new(this_size));
             v.remove_prefix(this_size);
         }
     }
 
+    [[gnu::always_inline]]
     void write(const char* ptr, size_t size) {
         write(bytes_view(reinterpret_cast<const signed char*>(ptr), size));
     }
