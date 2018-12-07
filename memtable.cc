@@ -561,7 +561,7 @@ memtable::make_flat_reader(schema_ptr s,
                       tracing::trace_state_ptr trace_state_ptr,
                       streamed_mutation::forwarding fwd,
                       mutation_reader::forwarding fwd_mr) {
-    if (query::is_single_partition(range)) {
+    if (query::is_single_partition(range) && !fwd_mr) {
         const query::ring_position& pos = range.start()->value();
         auto snp = _read_section(*this, [&] () -> partition_snapshot_ptr {
             managed_bytes::linearization_context_guard lcg;
