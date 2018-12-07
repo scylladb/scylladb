@@ -57,12 +57,12 @@ private:
         value_type data[0];
         void operator delete(void* ptr) { free(ptr); }
     };
-    // FIXME: consider increasing chunk size as the buffer grows
-    static constexpr size_type chunk_size{512};
+    static constexpr size_type default_chunk_size{512};
 private:
     std::unique_ptr<chunk> _begin;
     chunk* _current;
     size_type _size;
+    size_type _initial_chunk_size = default_chunk_size;
 public:
     class fragment_iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
         chunk* _current = nullptr;
@@ -102,13 +102,13 @@ private:
     }
     // Figure out next chunk size.
     //   - must be enough for data_size
-    //   - must be at least chunk_size
+    //   - must be at least _initial_chunk_size
     //   - try to double each time to prevent too many allocations
     //   - do not exceed max_chunk_size
     size_type next_alloc_size(size_t data_size) const {
         auto next_size = _current
                 ? _current->size * 2
-                : chunk_size;
+                : _initial_chunk_size;
         next_size = std::min(next_size, max_chunk_size());
         // FIXME: check for overflow?
         return std::max<size_type>(next_size, data_size + sizeof(chunk));
@@ -143,16 +143,20 @@ private:
         };
     }
 public:
-    bytes_ostream() noexcept
+    explicit bytes_ostream(size_t initial_chunk_size) noexcept
         : _begin()
         , _current(nullptr)
         , _size(0)
+        , _initial_chunk_size(initial_chunk_size)
     { }
+
+    bytes_ostream() noexcept : bytes_ostream(default_chunk_size) {}
 
     bytes_ostream(bytes_ostream&& o) noexcept
         : _begin(std::move(o._begin))
         , _current(o._current)
         , _size(o._size)
+        , _initial_chunk_size(o._initial_chunk_size)
     {
         o._current = nullptr;
         o._size = 0;
@@ -162,6 +166,7 @@ public:
         : _begin()
         , _current(nullptr)
         , _size(0)
+        , _initial_chunk_size(o._initial_chunk_size)
     {
         append(o);
     }
