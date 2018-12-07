@@ -1699,7 +1699,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     };
 
                     auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), delay, evict_paused_readers);
-                    return make_multishard_combining_reader(std::move(lifecycle_policy), *partitioner, s, range, slice, pc, trace_state, fwd_mr);
+                    auto mr = make_multishard_combining_reader(std::move(lifecycle_policy), *partitioner, s, range, slice, pc, trace_state, fwd_mr);
+                    if (fwd_sm == streamed_mutation::forwarding::yes) {
+                        return make_forwardable(std::move(mr));
+                    }
+                    return mr;
                 });
             };
         };
