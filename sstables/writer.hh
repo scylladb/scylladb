@@ -49,9 +49,9 @@ public:
         _out.write(buf, n).get();
     }
     // Must be called in a seastar thread.
-    void write(const bytes& s) {
+    void write(bytes_view s) {
         _offset.offset += s.size();
-        _out.write(s).get();
+        _out.write(reinterpret_cast<const char*>(s.begin()), s.size()).get();
     }
     // Must be called in a seastar thread.
     void flush() {
