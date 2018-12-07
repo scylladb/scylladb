@@ -398,4 +398,19 @@ public:
     bool operator!=(const bytes_ostream& other) const {
         return !(*this == other);
     }
+
+    // Makes this instance empty.
+    //
+    // The first buffer is not deallocated, so callers may rely on the
+    // fact that if they write less than the initial chunk size between
+    // the clear() calls then writes will not involve any memory allocations,
+    // except for the first write made on this instance.
+    void clear() {
+        if (_begin) {
+            _begin->offset = 0;
+            _size = 0;
+            _current = _begin.get();
+            _begin->next.reset();
+        }
+    }
 };
