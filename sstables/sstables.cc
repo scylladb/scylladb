@@ -3566,12 +3566,16 @@ void sstable_writer_m::write_clustered(const rt_marker& marker, uint64_t prev_ro
         }
     };
 
-    uint64_t marker_body_size = calculate_write_size(write_marker_body) + unsigned_vint::serialized_size(prev_row_size);
+    write_marker_body(_tmp_writer);
+    _tmp_writer.flush();
+
+    uint64_t marker_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(prev_row_size);
 
     write_vint(*_data_writer, marker_body_size);
     write_vint(*_data_writer, prev_row_size);
 
-    write_marker_body(*_data_writer);
+    flush_tmp_bufs();
+
     if (_schema.clustering_key_size()) {
         column_name_helper::min_max_components(_schema, _sst.get_metadata_collector().min_column_names(),
             _sst.get_metadata_collector().max_column_names(), marker.clustering.components());
