@@ -768,10 +768,10 @@ row_cache::make_reader(schema_ptr s,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
-    auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, fwd, fwd_mr);
+    auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, streamed_mutation::forwarding::no, fwd_mr);
 
     if (!ctx->is_range_query()) {
-        return _read_section(_tracker.region(), [&] {
+        auto mr = _read_section(_tracker.region(), [&] {
             return with_linearized_managed_bytes([&] {
                 cache_entry::compare cmp(_schema);
                 auto&& pos = ctx->range().start()->value();
@@ -789,9 +789,20 @@ row_cache::make_reader(schema_ptr s,
                 }
             });
         });
+
+        if (fwd == streamed_mutation::forwarding::yes) {
+            return make_forwardable(std::move(mr));
+        } else {
+            return mr;
+        }
     }
 
-    return make_scanning_reader(range, std::move(ctx));
+    auto mr = make_scanning_reader(range, std::move(ctx));
+    if (fwd == streamed_mutation::forwarding::yes) {
+        return make_forwardable(std::move(mr));
+    } else {
+        return mr;
+    }
 }
 
 
