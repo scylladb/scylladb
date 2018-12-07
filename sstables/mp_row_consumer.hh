@@ -242,12 +242,9 @@ private:
     std::experimental::optional<collection_mutation> _pending_collection = {};
 
     collection_mutation& pending_collection(const column_definition *cdef) {
+        assert(cdef->is_multi_cell() && "frozen set should behave like a cell\n");
         if (!_pending_collection || _pending_collection->is_new_collection(cdef)) {
             flush_pending_collection(*_schema);
-
-            if (!cdef->is_multi_cell()) {
-                throw malformed_sstable_exception("frozen set should behave like a cell\n");
-            }
             _pending_collection = collection_mutation(cdef);
         }
         return *_pending_collection;
