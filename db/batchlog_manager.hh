@@ -52,7 +52,15 @@
 #include "gms/inet_address.hh"
 #include "db_clock.hh"
 
+#include <chrono>
+#include <limits>
+
 namespace db {
+
+struct batchlog_manager_config {
+    std::chrono::duration<double> write_request_timeout;
+    uint64_t replay_rate = std::numeric_limits<uint64_t>::max();
+};
 
 class batchlog_manager {
 private:
@@ -69,6 +77,8 @@ private:
 
     size_t _total_batches_replayed = 0;
     cql3::query_processor& _qp;
+    db_clock::duration _write_request_timeout;
+    uint64_t _replay_rate;
     timer<clock_type> _timer;
     semaphore _sem{1};
     seastar::gate _gate;
@@ -82,7 +92,7 @@ public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
     // shard qp (which is what you feed here).
-    batchlog_manager(cql3::query_processor&);
+    batchlog_manager(cql3::query_processor&, batchlog_manager_config config);
 
     future<> start();
     future<> stop();
