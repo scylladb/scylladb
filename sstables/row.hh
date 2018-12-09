@@ -724,10 +724,10 @@ private:
         return _ck_column_value_fix_lengths.front();
     }
     bool is_block_empty() {
-        return (_ck_blocks_header & (1u << (2 * _ck_blocks_header_offset))) != 0;
+        return (_ck_blocks_header & (uint64_t(1) << (2 * _ck_blocks_header_offset))) != 0;
     }
     bool is_block_null() {
-        return (_ck_blocks_header & (1u << (2 * _ck_blocks_header_offset + 1))) != 0;
+        return (_ck_blocks_header & (uint64_t(1) << (2 * _ck_blocks_header_offset + 1))) != 0;
     }
     bool should_read_block_header() {
         return _ck_blocks_header_offset == 0u;

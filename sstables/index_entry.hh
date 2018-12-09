@@ -203,11 +203,11 @@ private:
         } state = state::CLUSTERING_START;
 
         bool is_block_empty() {
-            return (ck_blocks_header & (1u << (2 * ck_blocks_header_offset))) != 0;
+            return (ck_blocks_header & (uint64_t(1) << (2 * ck_blocks_header_offset))) != 0;
         }
 
         bool is_block_null() {
-            return (ck_blocks_header & (1u << (2 * ck_blocks_header_offset + 1))) != 0;
+            return (ck_blocks_header & (uint64_t(1) << (2 * ck_blocks_header_offset + 1))) != 0;
         }
 
         bool no_more_ck_blocks() { return ck_range.empty(); }
