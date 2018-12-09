@@ -59,6 +59,7 @@
 #include "schema_registry.hh"
 #include "commitlog_entry.hh"
 #include "service/priority_manager.hh"
+#include "db/config.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 

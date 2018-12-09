@@ -55,7 +55,6 @@
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics.hh>
 #include "frozen_mutation.hh"
-#include "db/config.hh"
 #include "storage_proxy_stats.hh"
 
 namespace compat {

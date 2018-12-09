@@ -24,7 +24,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
 #include "auth/service.hh"
-#include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "database.hh"
 #include "log.hh"
@@ -32,6 +31,7 @@
 
 namespace db {
 class extensions;
+class seed_provider_type;
 }
 
 namespace gms {

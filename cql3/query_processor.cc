@@ -50,6 +50,7 @@
 #include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/util.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 

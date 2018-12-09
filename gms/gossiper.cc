@@ -60,6 +60,7 @@
 #include <seastar/util/defer.hh>
 #include <chrono>
 #include "dht/i_partitioner.hh"
+#include "db/config.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
 

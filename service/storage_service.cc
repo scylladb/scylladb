@@ -74,6 +74,7 @@
 #include "supervisor.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
+#include "db/config.hh"
 #include <seastar/core/metrics.hh>
 
 using token = dht::token;

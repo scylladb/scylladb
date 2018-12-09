@@ -41,6 +41,7 @@
 #include "dht/range_streamer.hh"
 #include "gms/failure_detector.hh"
 #include "log.hh"
+#include "db/config.hh"
 
 static logging::logger blogger("boot_strapper");
 

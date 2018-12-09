@@ -23,6 +23,7 @@
 #include "service/priority_manager.hh"
 #include "tests/simple_schema.hh"
 #include "tests/cql_test_env.hh"
+#include "db/config.hh"
 
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
