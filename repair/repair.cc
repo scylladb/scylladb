@@ -27,7 +27,6 @@
 #include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
-#include "db/config.hh"
 #include "service/storage_service.hh"
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
