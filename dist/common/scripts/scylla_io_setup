@@ -96,6 +96,12 @@ if __name__ == "__main__":
                 if os.path.isdir(data_dir) == False:
                     logging.error("%s is not a directory. Please check the configuration and run scylla_io_setup again.\n", data_dir)
                     sys.exit(1)
+                st = os.statvfs(data_dir)
+                avail = st.f_bavail * st.f_frsize
+                rec = 10000000000
+                if avail < rec:
+                    logging.error("Filesystem at %s has only %d bytes free that is less than recommended 10 GiB. Please free up space and run scylla_io_setup again.\n", data_dir, avail)
+                    sys.exit(1)
                 blocktune.tune_fs(data_dir, '2')
                 iotune_args += [ "--evaluation-directory", data_dir ]
 
