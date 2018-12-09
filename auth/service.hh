@@ -41,10 +41,6 @@ namespace cql3 {
 class query_processor;
 }
 
-namespace db {
-class config;
-}
-
 namespace service {
 class migration_manager;
 class migration_listener;
@@ -55,8 +51,6 @@ namespace auth {
 class role_or_anonymous;
 
 struct service_config final {
-    static service_config from_db_config(const db::config&);
-
     sstring authorizer_java_name;
     sstring authenticator_java_name;
     sstring role_manager_java_name;
