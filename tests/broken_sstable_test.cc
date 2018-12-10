@@ -19,47 +19,28 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <boost/test/unit_test.hpp>
-
-#include "sstables/data_consume_context.hh"
-#include "sstables/mp_row_consumer.hh"
 #include "tests/test-utils.hh"
 #include "sstable_test.hh"
 
 using namespace sstables;
 
-struct my_mp_row_consumer_reader : public mp_row_consumer_reader {
-    my_mp_row_consumer_reader(schema_ptr s) : mp_row_consumer_reader(std::move(s)) {}
-    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
-        BOOST_FAIL("unexpected");
-        abort();
-    }
-    virtual void next_partition() override { BOOST_FAIL("unexpected"); }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) {
-        BOOST_FAIL("unexpected");
-        abort();
-    }
-    virtual void on_end_of_stream() override { BOOST_FAIL("unexpected"); }
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) {
-        BOOST_FAIL("unexpected");
-        abort();
-    }
+namespace {
+struct my_consumer {
+    stop_iteration consume(static_row sr) { return stop_iteration::no; }
+    stop_iteration consume(clustering_row cr) { return stop_iteration::no; }
+    stop_iteration consume(range_tombstone rt) { return stop_iteration::no; }
+    stop_iteration consume(tombstone tomb) { return stop_iteration::no; }
+    void consume_end_of_stream() {}
+    void consume_new_partition(const dht::decorated_key& dk) {}
+    stop_iteration consume_end_of_partition() { return stop_iteration::no; }
 };
+}
 
 static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstring msg) {
     try {
         sstable_ptr sstp = std::get<0>(reusable_sst(s, dir, generation).get());
-        auto r = std::make_unique<my_mp_row_consumer_reader>(s);
-        auto c = std::make_unique<mp_row_consumer_k_l>(r.get(), s, default_priority_class(),
-                                                       no_resource_tracking(),
-                                                       streamed_mutation::forwarding::no, sstp);
-        auto ctx = data_consume_rows<data_consume_rows_context>(*s, sstp, *c);
-        auto fut = repeat([&ctx] {
-            return ctx.read().then([&ctx] {
-                return ctx.eof() ? stop_iteration::yes : stop_iteration::no;
-            });
-        });
-        fut.get();
+        auto r = sstp->read_rows_flat(s);
+        r.consume(my_consumer{}, db::no_timeout).get();
         BOOST_FAIL("expecting exception");
     } catch (malformed_sstable_exception& e) {
         BOOST_REQUIRE_EQUAL(sstring(e.what()), msg);
