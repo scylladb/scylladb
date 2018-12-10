@@ -51,6 +51,8 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 
+using namespace std::chrono_literals;
+
 namespace sstables {
 
 future<> await_background_jobs_on_all_shards();
@@ -385,7 +387,10 @@ public:
             qp.start(std::ref(proxy), std::ref(*db), qp_mcfg).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
-            bm.start(std::ref(qp)).get();
+            db::batchlog_manager_config bmcfg;
+            bmcfg.replay_rate = 100000000;
+            bmcfg.write_request_timeout = 2s;
+            bm.start(std::ref(qp), bmcfg).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
 
             distributed_loader::init_system_keyspace(*db).get();

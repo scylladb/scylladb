@@ -53,6 +53,7 @@
 #include "auth/service.hh"
 #include "schema_builder.hh"
 #include "service/storage_service.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 

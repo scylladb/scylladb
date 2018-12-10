@@ -638,7 +638,11 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");
-            db::get_batchlog_manager().start(std::ref(qp)).get();
+            db::batchlog_manager_config bm_cfg;
+            bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
+            bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
+
+            db::get_batchlog_manager().start(std::ref(qp), bm_cfg).get();
             // #293 - do not stop anything
             // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
             sstables::init_metrics().get();

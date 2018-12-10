@@ -74,6 +74,8 @@
 #include "supervisor.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
+#include "db/config.hh"
+#include "auth/common.hh"
 #include <seastar/core/metrics.hh>
 
 using token = dht::token;
@@ -452,6 +454,28 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
 #endif
 }
 
+static auth::permissions_cache_config permissions_cache_config_from_db_config(const db::config& dc) {
+    auth::permissions_cache_config c;
+    c.max_entries = dc.permissions_cache_max_entries();
+    c.validity_period = std::chrono::milliseconds(dc.permissions_validity_in_ms());
+    c.update_period = std::chrono::milliseconds(dc.permissions_update_interval_in_ms());
+
+    return c;
+}
+
+static auth::service_config auth_service_config_from_db_config(const db::config& dc) {
+    const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, dc.authorizer());
+    const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, dc.authenticator());
+    const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, dc.role_manager());
+
+    auth::service_config c;
+    c.authorizer_java_name = qualified_authorizer_name;
+    c.authenticator_java_name = qualified_authenticator_name;
+    c.role_manager_java_name = qualified_role_manager_name;
+
+    return c;
+}
+
 // Runs inside seastar::async context
 void storage_service::join_token_ring(int delay) {
     // This function only gets called on shard 0, but we want to set _joined
@@ -629,10 +653,10 @@ void storage_service::join_token_ring(int delay) {
         }
 
         _auth_service.start(
-                auth::permissions_cache_config::from_db_config(_db.local().get_config()),
+                permissions_cache_config_from_db_config(_db.local().get_config()),
                 std::ref(cql3::get_query_processor()),
                 std::ref(service::get_migration_manager()),
-                auth::service_config::from_db_config(_db.local().get_config())).get();
+                auth_service_config_from_db_config(_db.local().get_config())).get();
 
         _auth_service.invoke_on_all(&auth::service::start).get();
 
@@ -662,10 +686,10 @@ future<> storage_service::join_ring() {
                 }
 
                 ss._auth_service.start(
-                        auth::permissions_cache_config::from_db_config(ss._db.local().get_config()),
+                        permissions_cache_config_from_db_config(ss._db.local().get_config()),
                         std::ref(cql3::get_query_processor()),
                         std::ref(service::get_migration_manager()),
-                        auth::service_config::from_db_config(ss._db.local().get_config())).get();
+                        auth_service_config_from_db_config(ss._db.local().get_config())).get();
 
                ss._auth_service.invoke_on_all(&auth::service::start).get();
             }

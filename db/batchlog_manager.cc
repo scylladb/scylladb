@@ -57,7 +57,6 @@
 #include "db_clock.hh"
 #include "database.hh"
 #include "unimplemented.hh"
-#include "db/config.hh"
 #include "gms/failure_detector.hh"
 #include "service/storage_service.hh"
 #include "schema_registry.hh"
@@ -75,8 +74,10 @@ static logging::logger blogger("batchlog_manager");
 const uint32_t db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
 
-db::batchlog_manager::batchlog_manager(cql3::query_processor& qp)
-        : _qp(qp) {
+db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, batchlog_manager_config config)
+        : _qp(qp)
+        , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
+        , _replay_rate(config.replay_rate) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("batchlog_manager", {
@@ -171,7 +172,7 @@ mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<muta
 
 db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     // enough time for the actual write + BM removal mutation
-    return db_clock::duration(_qp.db().local().get_config().write_request_timeout_in_ms()) * 2;
+    return _write_request_timeout * 2;
 }
 
 future<> db::batchlog_manager::replay_all_failed_batches() {
@@ -179,8 +180,8 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
-    auto throttle_in_kb = _qp.db().local().get_config().batchlog_replay_throttle_in_kb() / service::get_storage_service().local().get_token_metadata().get_all_endpoints().size();
-    auto limiter = make_lw_shared<utils::rate_limiter>(throttle_in_kb * 1000);
+    auto throttle = _replay_rate / service::get_storage_service().local().get_token_metadata().get_all_endpoints().size();
+    auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
     auto batch = [this, limiter](const cql3::untyped_result_set::row& row) {
         auto written_at = row.get_as<db_clock::time_point>("written_at");

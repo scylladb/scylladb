@@ -53,6 +53,7 @@
 #include <boost/range/adaptor/indirected.hpp>
 #include "query-result-reader.hh"
 #include "thrift/server.hh"
+#include "db/config.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;

@@ -68,6 +68,7 @@
 #include "unimplemented.hh"
 #include "vint-serialization.hh"
 #include "db/large_partition_handler.hh"
+#include "db/config.hh"
 #include "sstables/random_access_reader.hh"
 #include "utils/UUID_gen.hh"
 #include <boost/algorithm/string/predicate.hpp>

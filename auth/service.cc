@@ -36,7 +36,6 @@
 #include "auth/standard_role_manager.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
-#include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
@@ -103,19 +102,6 @@ static future<> validate_role_exists(const service& ser, stdx::string_view role_
             throw nonexistant_role(role_name);
         }
     });
-}
-
-service_config service_config::from_db_config(const db::config& dc) {
-    const qualified_name qualified_authorizer_name(meta::AUTH_PACKAGE_NAME, dc.authorizer());
-    const qualified_name qualified_authenticator_name(meta::AUTH_PACKAGE_NAME, dc.authenticator());
-    const qualified_name qualified_role_manager_name(meta::AUTH_PACKAGE_NAME, dc.role_manager());
-
-    service_config c;
-    c.authorizer_java_name = qualified_authorizer_name;
-    c.authenticator_java_name = qualified_authenticator_name;
-    c.role_manager_java_name = qualified_role_manager_name;
-
-    return c;
 }
 
 service::service(

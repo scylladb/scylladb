@@ -59,8 +59,6 @@ namespace auth {
 class service;
 
 struct permissions_cache_config final {
-    static permissions_cache_config from_db_config(const db::config&);
-
     std::size_t max_entries;
     std::chrono::milliseconds validity_period;
     std::chrono::milliseconds update_period;

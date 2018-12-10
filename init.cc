@@ -28,6 +28,7 @@
 #include "gms/inet_address.hh"
 #include "gms/feature_service.hh"
 #include "seastarx.hh"
+#include "db/config.hh"
 
 logging::logger startlog("init");
 

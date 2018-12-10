@@ -45,7 +45,6 @@
 #include "auth/default_authorizer.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/permission.hh"
-#include "db/config.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {
