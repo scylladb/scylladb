@@ -279,6 +279,9 @@ public:
             "Total space used for commitlogs. If the used space goes above this value, Scylla rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"  \
             "Related information: Configuring memtable throughput"  \
     )                                                   \
+    val(commitlog_reuse_segments, bool, true, Used,     \
+            "Whether or not to re-use commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n"  \
+    )                                                   \
     /* Compaction settings */   \
     /* Related information: Configuring compaction */   \
     val(compaction_preheat_key_cache, bool, true, Unused,                \

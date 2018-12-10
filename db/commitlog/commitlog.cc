@@ -130,6 +130,7 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.commitlog_sync_period_in_ms = cfg.commitlog_sync_period_in_ms();
     c.mode = cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC;
     c.extensions = &cfg.extensions();
+    c.reuse_segments = cfg.commitlog_reuse_segments();
 
     return c;
 }
@@ -282,6 +283,11 @@ public:
     future<sseg_ptr> new_segment();
     future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout);
     future<sseg_ptr> allocate_segment(bool active);
+    future<sseg_ptr> allocate_segment_ex(const descriptor&, sstring filename, open_flags, bool active);
+
+    sstring filename(const descriptor& d) const {
+        return cfg.commit_log_location + "/" + d.filename();
+    }
 
     future<> clear();
     future<> sync_all_segments(bool shutdown = false);
@@ -333,10 +339,12 @@ public:
 private:
     future<> clear_reserve_segments();
 
+    future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0;
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
+    std::deque<sstring> _recycled_segments;
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
@@ -408,6 +416,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     uint64_t _file_pos = 0;
     uint64_t _flush_pos = 0;
     bool _closed = false;
+    bool _terminated = false;
 
     using buffer_type = segment_manager::buffer_type;
     using sseg_ptr = segment_manager::sseg_ptr;
@@ -556,7 +565,7 @@ public:
         // Note: this is not a marker for when sync was finished.
         // It is when it was initiated
         reset_sync_time();
-        return cycle(true);
+        return _closed ? cycle().then([](sseg_ptr s) { return s->flush(); }) : cycle(true);
     }
     // See class comment for info
     future<sseg_ptr> flush(uint64_t pos = 0) {
@@ -573,10 +582,22 @@ public:
         replay_position rp(_desc.id, position_type(pos));
 
         // Run like this to ensure flush ordering, and making flushes "waitable"
-        return _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me, rp] {
+        auto f = _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me, rp] {
             assert(_pending_ops.has_operation(rp));
             return do_flush(pos);
         });
+
+        if (_closed && !std::exchange(_terminated, true)) {
+            f = f.then([this](sseg_ptr s) {
+                clogger.trace("{} is closed but not terminated.", *this);
+                if (_buffer.empty()) {
+                    new_buffer(0);
+                }
+                return cycle(true, true);
+            });
+        }
+
+        return f;
     }
 
     future<sseg_ptr> do_flush(uint64_t pos) {
@@ -635,8 +656,8 @@ public:
      * Send any buffer contents to disk and get a new tmp buffer
      */
     // See class comment for info
-    future<sseg_ptr> cycle(bool flush_after = false) {
-        if (_buffer.empty()) {
+    future<sseg_ptr> cycle(bool flush_after = false, bool termination = false) {
+        if (_buffer.empty() && !termination) {
             return flush_after ? flush() : make_ready_future<sseg_ptr>(shared_from_this());
         }
 
@@ -670,20 +691,27 @@ public:
             header_size = descriptor_header_size;
         }
 
-        // write chunk header
-        crc32_nbo crc;
-        crc.process<int32_t>(_desc.id & 0xffffffff);
-        crc.process<int32_t>(_desc.id >> 32);
-        crc.process(uint32_t(off + header_size));
+        if (!termination) {
+            // write chunk header
+            crc32_nbo crc;
+            crc.process<int32_t>(_desc.id & 0xffffffff);
+            crc.process<int32_t>(_desc.id >> 32);
+            crc.process(uint32_t(off + header_size));
 
-        write(out, uint32_t(_file_pos));
-        write(out, crc.checksum());
+            write(out, uint32_t(_file_pos));
+            write(out, crc.checksum());
 
-        forget_schema_versions();
+            forget_schema_versions();
+
+            clogger.trace("Writing {} entries, {} k in {} -> {}", num, size, off, off + size);
+        } else {
+            assert(num == 0);
+            assert(_closed);
+            clogger.trace("Terminating {} at pos {}", *this, _file_pos);
+            write(out, uint64_t(0));
+        }
 
         replay_position rp(_desc.id, position_type(off));
-
-        clogger.trace("Writing {} entries, {} k in {} -> {}", num, size, off, off + size);
 
         // The write will be allowed to start now, but flush (below) must wait for not only this,
         // but all previous write/flush pairs.
@@ -1187,20 +1215,16 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
     }
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
-    static const auto flags = open_flags::wo | open_flags::create;
-
-    descriptor d(next_id(), cfg.fname_prefix);
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(const descriptor& d, sstring filename, open_flags flags, bool active) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
-    auto filename = cfg.commit_log_location + "/" + d.filename();
-    auto fut = do_io_check(commit_error_handler, [&] {
+    auto fut = do_io_check(commit_error_handler, [=] {
         auto fut = open_file_dma(filename, flags, opt);
         if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
-            fut = fut.then([this, filename](file f) {
-                return do_with(std::move(f), [this, filename](file& f) {
+            fut = fut.then([this, filename, flags](file f) {
+                return do_with(std::move(f), [this, filename, flags](file& f) {
                     auto ext_range = cfg.extensions->commitlog_file_extensions();
-                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename](auto& ext) {
+                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename, flags](auto& ext) {
                         // note: we're potentially wrapping more than once. extension mechanism
                         // is responsible for order being sane.
                         return ext->wrap_file(filename, f, flags).then([&f](file of) {
@@ -1225,6 +1249,34 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             return make_ready_future<sseg_ptr>(s);
         });
     });
+}
+
+future<> db::commitlog::segment_manager::rename_file(sstring from, sstring to) const {
+    return do_io_check(commit_error_handler, [this, from = std::move(from), to = std::move(to)]() mutable {
+        return seastar::rename_file(std::move(from), std::move(to)).then([this] {
+            return seastar::sync_directory(cfg.commit_log_location);
+        });
+    });
+}
+
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
+    descriptor d(next_id(), cfg.fname_prefix);
+    auto dst = filename(d);
+
+    if (!_recycled_segments.empty()) {
+        auto src = std::move(_recycled_segments.front());
+        _recycled_segments.pop_front();
+        // Note: we have to do the rename here to ensure
+        // proper descriptor id order. If we renamed in the delete call
+        // that recycled the file we could potentially have
+        // out-of-order files. (Sort does not help).
+        clogger.debug("Using recycled segment file {} -> {}", src, dst);
+        return rename_file(std::move(src), dst).then([=] {
+            return allocate_segment_ex(d, dst, open_flags::wo, false);
+        });
+    }
+
+    return allocate_segment_ex(d, dst, open_flags::wo|open_flags::create, active);
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
@@ -1350,7 +1402,17 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
     while (!_reserve_segments.empty()) {
         _reserve_segments.pop();
     }
-    return do_pending_deletes();
+
+    auto re = std::exchange(_recycled_segments, {});
+    auto i = re.begin();
+    auto e = re.end();
+
+    return parallel_for_each(i, e, [this](const sstring& filename) {
+        clogger.debug("Deleting recycled segment file {}", filename);
+        return commit_io_check(&seastar::remove_file, filename);
+    }).finally([this, re = std::move(re)] {
+        return do_pending_deletes();
+    });
 }
 
 future<> db::commitlog::segment_manager::sync_all_segments(bool shutdown) {
@@ -1417,6 +1479,25 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
             });
         }
         return f.finally([&] {
+            // We allow reuse of the segment if the current disk size is less than shard max.
+            // We however don't know the exact size of this file (or the others on the recycle
+            // list, so assume they are max_size large.
+            auto usage = totals.total_size_on_disk + (1 + _recycled_segments.size()) * max_size;
+            if (!_shutdown && cfg.reuse_segments && usage < max_disk_size) {
+                descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
+                auto dst = this->filename(d);
+
+                clogger.debug("Recycling segment file {}", filename);
+                // must rename the file since we must ensure the
+                // data is not replayed. Changing the name will
+                // cause header ID to be invalid in the file -> ignored
+                return rename_file(filename, dst).then([=] {
+                    _recycled_segments.emplace_back(dst);
+                    return make_ready_future<>();
+                }).handle_exception([this, filename](auto&&) {
+                    return commit_io_check(&seastar::remove_file, filename);
+                });
+            }
             clogger.debug("Deleting segment file {}", filename);
             return commit_io_check(&seastar::remove_file, filename);
         }).handle_exception([&filename](auto ep) {
@@ -1427,12 +1508,13 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
     auto ftc = std::exchange(_files_to_close, {});
+    auto ftd = std::exchange(_files_to_delete, {});
     auto i = ftc.begin();
     auto e = ftc.end();
     return parallel_for_each(i, e, [](file & f) {
         return f.close();
-    }).then([this, ftc = std::move(ftc)] {
-        return delete_segments(boost::copy_range<std::vector<sstring>>(std::exchange(_files_to_delete, {}) | boost::adaptors::map_keys));
+    }).then([this, ftc = std::move(ftc), ftd = std::move(ftd)] {
+        return delete_segments(boost::copy_range<std::vector<sstring>>(ftd | boost::adaptors::map_keys));
     });
 }
 
@@ -1673,7 +1755,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
 future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
-db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
+db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
         file_input_stream_options make_file_input_stream_options(seastar::io_priority_class read_io_prio_class) {
@@ -1685,6 +1767,7 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
         }
     public:
         file f;
+        descriptor d;
         stream<temporary_buffer<char>, replay_position> s;
         input_stream<char> fin;
         input_stream<char> r;
@@ -1699,8 +1782,8 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
         bool header = true;
         bool failed = false;
 
-        work(file f, seastar::io_priority_class read_io_prio_class, position_type o = 0)
-                : f(f), fin(make_file_input_stream(f, 0, make_file_input_stream_options(read_io_prio_class))), start_off(o) {
+        work(file f, descriptor din, seastar::io_priority_class read_io_prio_class, position_type o = 0)
+                : f(f), d(din), fin(make_file_input_stream(f, 0, make_file_input_stream_options(read_io_prio_class))), start_off(o) {
         }
         work(work&&) = default;
 
@@ -1751,6 +1834,11 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
                 if (magic == 0 && ver == 0 && id == 0 && checksum == 0) {
                     // let's assume this was an empty (pre-allocated)
                     // file. just skip it.
+                    return stop();
+                }
+                if (id != d.id) {
+                    // filename and id in file does not match.
+                    // assume not valid/recycled.
                     return stop();
                 }
 
@@ -1918,9 +2006,10 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
         return fut;
     });
 
-    return fut.then([off, next, read_io_prio_class] (file f) {
+    return fut.then([off, next, read_io_prio_class, pfx, filename] (file f) {
         f = make_checked_file(commit_error_handler, std::move(f));
-        auto w = make_lw_shared<work>(std::move(f), read_io_prio_class, off);
+        descriptor d(filename, pfx);
+        auto w = make_lw_shared<work>(std::move(f), d, read_io_prio_class, off);
         auto ret = w->s.listen(next);
 
         w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {

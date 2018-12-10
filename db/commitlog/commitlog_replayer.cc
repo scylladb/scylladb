@@ -224,7 +224,7 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
     auto s = make_lw_shared<stats>();
     auto& exts = _qp.local().db().local().get_config().extensions();
 
-    return db::commitlog::read_log_file(file, service::get_local_commitlog_priority(),
+    return db::commitlog::read_log_file(file, fname_prefix, service::get_local_commitlog_priority(),
             std::bind(&impl::process, this, s.get(), std::placeholders::_1,
                     std::placeholders::_2), p, &exts).then([](auto s) {
         auto f = s->done();
