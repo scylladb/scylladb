@@ -45,9 +45,11 @@
 #include <functional>
 #include <map>
 #include <variant>
+#include <vector>
 
 #include <boost/any.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include <seastar/core/sstring.hh>
 
 #include "stdx.hh"
@@ -84,15 +86,23 @@ public:
      * Returns iterable range of registered sstable IO extensions (see sstable.hh#sstable_file_io_extension)
      * For any sstables wanting to call these on file open...
      */
-    auto sstable_file_io_extensions() const {
-        return _sstable_file_io_extensions | boost::adaptors::map_values;
+    std::vector<sstables::file_io_extension*> sstable_file_io_extensions() const {
+        using etype = sstables::file_io_extension;
+        return boost::copy_range<std::vector<etype*>>(
+                _sstable_file_io_extensions
+                | boost::adaptors::map_values
+                | boost::adaptors::transformed(std::mem_fn(&std::unique_ptr<etype>::get)));
     }
     /**
      * Returns iterable range of registered commitlog IO extensions (see commitlog_extensions.hh#commitlog_file_extension)
      * For any commitlogs wanting to call these on file open or descriptor scan...
      */
-    auto commitlog_file_extensions() const {
-        return _commitlog_file_extensions | boost::adaptors::map_values;
+    std::vector<db::commitlog_file_extension*> commitlog_file_extensions() const {
+        using etype = db::commitlog_file_extension;
+        return boost::copy_range<std::vector<etype*>>(
+                _commitlog_file_extensions
+                | boost::adaptors::map_values
+                | boost::adaptors::transformed(std::mem_fn(&std::unique_ptr<etype>::get)));
     }
 
     /**
