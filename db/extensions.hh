@@ -52,7 +52,6 @@
 
 #include "stdx.hh"
 #include "bytes.hh"
-#include "cql3/statements/property_definitions.hh"
 #include "schema.hh"
 
 class schema_extension;
@@ -69,7 +68,7 @@ public:
     extensions();
     ~extensions();
 
-    using map_type = cql3::statements::property_definitions::map_type;
+    using map_type = std::map<sstring, sstring>;
     using schema_ext_config = std::variant<sstring, map_type, bytes>;
     using schema_ext_create_func = std::function<seastar::shared_ptr<schema_extension>(schema_ext_config)>;
     using sstable_file_io_extension = std::unique_ptr<sstables::file_io_extension>;
