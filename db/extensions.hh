@@ -47,14 +47,16 @@
 #include <variant>
 #include <vector>
 
-#include <boost/any.hpp>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/shared_ptr.hh>
 
 #include "stdx.hh"
 #include "bytes.hh"
-#include "schema.hh"
 
 class schema_extension;
+class schema;
+
+using schema_ptr = lw_shared_ptr<const schema>;
 
 namespace sstables {
 class file_io_extension;
