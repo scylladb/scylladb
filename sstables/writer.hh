@@ -293,11 +293,11 @@ inline void write(sstable_version_types v, file_writer& out, bytes_ostream s) {
 }
 
 
-template<typename W, typename First, typename... Rest>
+template<typename W, typename First, typename Second, typename... Rest>
 GCC6_CONCEPT(requires Writer<W>())
-inline void write(sstable_version_types v, W& out, const First& first, Rest&&... rest) {
+inline void write(sstable_version_types v, W& out, const First& first, const Second& second, Rest&&... rest) {
     write(v, out, first);
-    write(v, out, std::forward<Rest>(rest)...);
+    write(v, out, second, std::forward<Rest>(rest)...);
 }
 
 template <class T, typename W>
