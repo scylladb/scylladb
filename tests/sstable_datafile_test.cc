@@ -4888,3 +4888,47 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        cell_locker_stats cl_stats;
+
+        auto s = schema_builder("tests", "compaction_strategy_aware_major_compaction_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type).build();
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_sstable(s, tmp->path, (*gen)++, la, big);
+        };
+        auto make_insert = [&] (partition_key key) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::timestamp_type(0));
+            return m;
+        };
+
+        auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
+        auto sst = make_sstable_containing(sst_gen, {make_insert(alpha)});
+        sst->set_sstable_level(2);
+        auto sst2 = make_sstable_containing(sst_gen, {make_insert(alpha)});
+        sst2->set_sstable_level(3);
+        auto candidates = std::vector<sstables::shared_sstable>({ sst, sst2 });
+
+        column_family_for_tests cf;
+
+        {
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, cf.schema()->compaction_strategy_options());
+            auto descriptor = cs.get_major_compaction_job(*cf, candidates);
+            BOOST_REQUIRE(descriptor.sstables.size() == candidates.size());
+            BOOST_REQUIRE(uint32_t(descriptor.level) == sst2->get_sstable_level());
+        }
+
+        {
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, cf.schema()->compaction_strategy_options());
+            auto descriptor = cs.get_major_compaction_job(*cf, candidates);
+            BOOST_REQUIRE(descriptor.sstables.size() == candidates.size());
+            BOOST_REQUIRE(descriptor.level == 0);
+        }
+    });
+}

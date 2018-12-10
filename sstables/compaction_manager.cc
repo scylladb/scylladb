@@ -260,17 +260,16 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
 
             // candidates are sstables that aren't being operated on by other compaction types.
             // those are eligible for major compaction.
-            // FIXME: we need to make major compaction compaction strategy aware. For example,
-            // leveled strategy may want to promote the merged sstables of a level N.
-            auto sstables = get_candidates(*cf);
-            auto compacting = compacting_sstable_registration(this, sstables);
+            sstables::compaction_strategy cs = cf->get_compaction_strategy();
+            sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(*cf, get_candidates(*cf));
+            auto compacting = compacting_sstable_registration(this, descriptor.sstables);
 
             cmlog.info0("User initiated compaction started on behalf of {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
             compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
-            return do_with(std::move(user_initiated), [this, cf, sstables = std::move(sstables)] (compaction_backlog_tracker& bt) mutable {
+            return do_with(std::move(user_initiated), [this, cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
                 register_backlog_tracker(bt);
-                return with_scheduling_group(_scheduling_group, [this, cf, sstables = std::move(sstables)] () mutable {
-                    return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables)));
+                return with_scheduling_group(_scheduling_group, [this, cf, descriptor = std::move(descriptor)] () mutable {
+                    return cf->compact_sstables(std::move(descriptor));
                 });
             }).then([compacting = std::move(compacting)] {});
         });

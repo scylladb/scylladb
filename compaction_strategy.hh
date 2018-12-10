@@ -61,6 +61,8 @@ public:
     // Return a list of sstables to be compacted after applying the strategy.
     compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<shared_sstable> candidates);
 
+    compaction_descriptor get_major_compaction_job(column_family& cf, std::vector<shared_sstable> candidates);
+
     std::vector<resharding_descriptor> get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates);
 
     // Some strategies may look at the compacted and resulting sstables to
