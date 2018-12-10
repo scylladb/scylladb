@@ -36,7 +36,7 @@
 uint32_t fast_crc32_combine(uint32_t crc, uint32_t crc2, ssize_t len2);
 
 static constexpr bool fast_crc32_combine_optimized() {
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
     return true;
 #else
     return false;

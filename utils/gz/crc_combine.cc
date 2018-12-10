@@ -55,7 +55,7 @@
 using u32 = uint32_t;
 using u64 = uint64_t;
 
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
 
 #include "barett.hh"
 
