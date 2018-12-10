@@ -100,7 +100,7 @@ if __name__ == "__main__":
                 avail = st.f_bavail * st.f_frsize
                 rec = 10000000000
                 if avail < rec:
-                    logging.error("Filesystem at %s has only %d bytes free that is less than recommended 10 GiB. Please free up space and run scylla_io_setup again.\n", data_dir, avail)
+                    logging.error("Filesystem at %s has only %d bytes available; that is less than the recommended 10 GB. Please free up space and run scylla_io_setup again.\n", data_dir, avail)
                     sys.exit(1)
                 blocktune.tune_fs(data_dir, '2')
                 iotune_args += [ "--evaluation-directory", data_dir ]
