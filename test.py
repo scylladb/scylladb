@@ -122,6 +122,7 @@ boost_tests = [
     'multishard_mutation_query_test',
     'top_k_test',
     'utf8_test',
+    'small_vector_test',
 ]
 
 other_tests = [

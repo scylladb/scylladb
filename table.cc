@@ -88,7 +88,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     // We read the whole set of regular columns in case the update now causes a base row to pass
     // a view's filters, and a view happens to include columns that have no value in this update.
     // Also, one of those columns can determine the lifetime of the base row, if it has a TTL.
-    auto columns = boost::copy_range<std::vector<column_id>>(
+    auto columns = boost::copy_range<query::column_id_vector>(
             base->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
     query::partition_slice::option_set opts;
     opts.set(query::partition_slice::option::send_partition_key);

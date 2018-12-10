@@ -43,7 +43,7 @@ partition_slice_builder::build() {
         ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
     }
 
-    std::vector<column_id> static_columns;
+    query::column_id_vector static_columns;
     if (_static_columns) {
         static_columns = std::move(*_static_columns);
     } else {
@@ -51,7 +51,7 @@ partition_slice_builder::build() {
             _schema.static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
     }
 
-    std::vector<column_id> regular_columns;
+    query::column_id_vector regular_columns;
     if (_regular_columns) {
         regular_columns = std::move(*_regular_columns);
     } else {
@@ -90,14 +90,14 @@ partition_slice_builder::with_ranges(std::vector<query::clustering_range> ranges
 
 partition_slice_builder&
 partition_slice_builder::with_no_regular_columns() {
-    _regular_columns = std::vector<column_id>();
+    _regular_columns = query::column_id_vector();
     return *this;
 }
 
 partition_slice_builder&
 partition_slice_builder::with_regular_column(bytes name) {
     if (!_regular_columns) {
-        _regular_columns = std::vector<column_id>();
+        _regular_columns = query::column_id_vector();
     }
 
     const column_definition* def = _schema.get_column_definition(name);
@@ -113,14 +113,14 @@ partition_slice_builder::with_regular_column(bytes name) {
 
 partition_slice_builder&
 partition_slice_builder::with_no_static_columns() {
-    _static_columns = std::vector<column_id>();
+    _static_columns = query::column_id_vector();
     return *this;
 }
 
 partition_slice_builder&
 partition_slice_builder::with_static_column(bytes name) {
     if (!_static_columns) {
-        _static_columns = std::vector<column_id>();
+        _static_columns = query::column_id_vector();
     }
 
     const column_definition* def = _schema.get_column_definition(name);

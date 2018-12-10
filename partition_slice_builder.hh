@@ -37,8 +37,8 @@
 // be selected (unless restricted).
 //
 class partition_slice_builder {
-    std::experimental::optional<std::vector<column_id>> _regular_columns;
-    std::experimental::optional<std::vector<column_id>> _static_columns;
+    std::experimental::optional<query::column_id_vector> _regular_columns;
+    std::experimental::optional<query::column_id_vector> _static_columns;
     std::experimental::optional<std::vector<query::clustering_range>> _row_ranges;
     const schema& _schema;
     query::partition_slice::option_set _options;

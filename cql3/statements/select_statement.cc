@@ -194,8 +194,8 @@ const sstring& select_statement::column_family() const {
 query::partition_slice
 select_statement::make_partition_slice(const query_options& options)
 {
-    std::vector<column_id> static_columns;
-    std::vector<column_id> regular_columns;
+    query::column_id_vector static_columns;
+    query::column_id_vector regular_columns;
 
     if (_selection->contains_static_columns()) {
         static_columns.reserve(_selection->get_column_count());

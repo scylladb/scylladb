@@ -295,11 +295,9 @@ modification_statement::read_required_rows(
     };
 
     // FIXME: we read all collection columns, but could be enhanced just to read the list(s) being RMWed
-    std::vector<column_id> static_cols;
-    boost::range::push_back(static_cols, s->static_columns()
+    auto static_cols = boost::copy_range<query::column_id_vector>(s->static_columns()
         | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
-    std::vector<column_id> regular_cols;
-    boost::range::push_back(regular_cols, s->regular_columns()
+    auto regular_cols = boost::copy_range<query::column_id_vector>(s->regular_columns()
         | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
     query::partition_slice ps(
             *ranges,

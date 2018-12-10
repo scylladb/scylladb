@@ -24,6 +24,7 @@
 #include "serializer.hh"
 #include <seastar/util/bool_class.hh>
 #include <boost/range/algorithm/for_each.hpp>
+#include "utils/small_vector.hh"
 
 namespace ser {
 
@@ -90,6 +91,20 @@ struct container_traits<std::vector<T>> {
         }
     };
     void resize(std::vector<T>& c, size_t size) {
+        c.resize(size);
+    }
+};
+
+template<typename T, size_t N>
+struct container_traits<utils::small_vector<T, N>> {
+    struct back_emplacer {
+        utils::small_vector<T, N>& c;
+        back_emplacer(utils::small_vector<T, N>& c_) : c(c_) {}
+        void operator()(T&& v) {
+            c.emplace_back(std::move(v));
+        }
+    };
+    void resize(utils::small_vector<T, N>& c, size_t size) {
         c.resize(size);
     }
 };
@@ -165,49 +180,47 @@ static inline void skip_array(Input& in, size_t sz) {
     deserialize_array_helper<can_serialize_fast<T>(), T>::skip(in, sz);
 }
 
-template<typename T>
-struct serializer<std::vector<T>> {
+namespace idl::serializers::internal {
+
+template<typename Vector>
+struct vector_serializer {
+    using value_type = typename Vector::value_type;
     template<typename Input>
-    static std::vector<T> read(Input& in) {
+    static Vector read(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
-        std::vector<T> v;
+        Vector v;
         v.reserve(sz);
-        deserialize_array<T>(in, v, sz);
+        deserialize_array<value_type>(in, v, sz);
         return v;
     }
     template<typename Output>
-    static void write(Output& out, const std::vector<T>& v) {
+    static void write(Output& out, const Vector& v) {
         safe_serialize_as_uint32(out, v.size());
-        serialize_array<T>(out, v);
+        serialize_array<value_type>(out, v);
     }
     template<typename Input>
     static void skip(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
-        skip_array<T>(in, sz);
+        skip_array<value_type>(in, sz);
     }
 };
 
+}
+
 template<typename T>
-struct serializer<utils::chunked_vector<T>> {
-    template<typename Input>
-    static utils::chunked_vector<T> read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
-        utils::chunked_vector<T> v;
-        v.reserve(sz);
-        deserialize_array<T>(in, v, sz);
-        return v;
-    }
-    template<typename Output>
-    static void write(Output& out, const utils::chunked_vector<T>& v) {
-        safe_serialize_as_uint32(out, v.size());
-        serialize_array<T>(out, v);
-    }
-    template<typename Input>
-    static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
-        skip_array<T>(in, sz);
-    }
-};
+struct serializer<std::vector<T>>
+    : idl::serializers::internal::vector_serializer<std::vector<T>>
+{ };
+
+template<typename T>
+struct serializer<utils::chunked_vector<T>>
+    : idl::serializers::internal::vector_serializer<utils::chunked_vector<T>>
+{ };
+
+template<typename T, size_t N>
+struct serializer<utils::small_vector<T, N>>
+    : idl::serializers::internal::vector_serializer<utils::small_vector<T, N>>
+{ };
 
 template<typename T, typename Ratio>
 struct serializer<std::chrono::duration<T, Ratio>> {

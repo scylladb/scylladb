@@ -32,8 +32,8 @@ class specific_ranges {
 
 class partition_slice {
     std::vector<nonwrapping_range<clustering_key_prefix>> default_row_ranges();
-    std::vector<uint32_t> static_columns;
-    std::vector<uint32_t> regular_columns;
+    utils::small_vector<uint32_t, 8> static_columns;
+    utils::small_vector<uint32_t, 8> regular_columns;
     query::partition_slice::option_set options;
     std::unique_ptr<query::specific_ranges> get_specific_ranges();
     cql_serialization_format cql_format();
