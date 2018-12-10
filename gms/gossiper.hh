@@ -550,6 +550,7 @@ public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
     bool is_normal(const inet_address& endpoint) const;
+    bool is_cql_ready(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
     void mark_as_shutdown(const inet_address& endpoint);
     void force_newer_generation();

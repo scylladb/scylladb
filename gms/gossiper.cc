@@ -1195,6 +1195,25 @@ bool gossiper::uses_host_id(inet_address endpoint) {
             get_application_state_ptr(endpoint, application_state::NET_VERSION);
 }
 
+bool gossiper::is_cql_ready(const inet_address& endpoint) const {
+    // Note:
+    // - New scylla node always send application_state::RPC_READY = false when
+    // the node boots and send application_state::RPC_READY = true when cql
+    // server is up
+    // - Old scylla node that does not support the application_state::RPC_READY
+    // never has application_state::RPC_READY in the endpoint_state, we can
+    // only think their cql server is up, so we return true here if
+    // application_state::RPC_READY is not present
+    auto* eps = get_endpoint_state_for_endpoint_ptr(endpoint);
+    if (!eps) {
+        logger.debug("Node {} does not have RPC_READY application_state, return is_cql_ready=true", endpoint);
+        return true;
+    }
+    auto ready = eps->is_cql_ready();
+    logger.debug("Node {}: is_cql_ready={}",  endpoint, ready);
+    return ready;
+}
+
 utils::UUID gossiper::get_host_id(inet_address endpoint) {
     if (!uses_host_id(endpoint)) {
         throw std::runtime_error(format("Host {} does not use new-style tokens!", endpoint));

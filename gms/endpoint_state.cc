@@ -61,4 +61,16 @@ std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
     return os;
 }
 
+bool endpoint_state::is_cql_ready() const {
+    auto* app_state = get_application_state_ptr(application_state::RPC_READY);
+    if (!app_state) {
+        return false;
+    }
+    try {
+        return boost::lexical_cast<int>(app_state->value);
+    } catch (...) {
+        return false;
+    }
+}
+
 }
