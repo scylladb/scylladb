@@ -2293,6 +2293,14 @@ public:
     bool cluster_supports_mc_sstable() const {
         return bool(_mc_sstable_feature);
     }
+private:
+    future<> set_cql_ready(bool ready);
+private:
+    void notify_down(inet_address endpoint);
+    void notify_left(inet_address endpoint);
+    void notify_up(inet_address endpoint);
+    void notify_joined(inet_address endpoint);
+    void notify_cql_change(inet_address endpoint, bool ready);
 };
 
 inline future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {

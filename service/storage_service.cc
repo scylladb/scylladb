@@ -393,6 +393,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     app_states.emplace(gms::application_state::SUPPORTED_FEATURES, value_factory.supported_features(features));
     app_states.emplace(gms::application_state::CACHE_HITRATES, value_factory.cache_hitrates(""));
     app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
+    app_states.emplace(gms::application_state::RPC_READY, value_factory.cql_ready(false));
     slogger.info("Starting up server gossip");
 
     auto& gossiper = gms::get_local_gossiper();
@@ -905,15 +906,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         db::system_keyspace::update_local_tokens(std::unordered_set<dht::token>(), local_tokens_to_remove).discard_result().get();
     }
 
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
-        for (auto&& subscriber : ss._lifecycle_subscribers) {
-            try {
-                subscriber->on_join_cluster(endpoint);
-            } catch (...) {
-                slogger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
-            }
-        }
-    }).get();
+    notify_joined(endpoint);
 
     update_pending_ranges().get();
     if (slogger.is_enabled(logging::log_level::debug)) {
@@ -1063,15 +1056,7 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
 #if 0
         HintedHandOffManager.instance.scheduleHintDelivery(endpoint, true);
 #endif
-        get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
-            for (auto&& subscriber : ss._lifecycle_subscribers) {
-                try {
-                    subscriber->on_up(endpoint);
-                } catch (...) {
-                    slogger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
-                }
-            }
-        }).get();
+        notify_up(endpoint);
     }
 }
 
@@ -1121,6 +1106,9 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
                 get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
                     slogger.warn("Failed to pull schema from {}: {}", endpoint, ep);
                 });
+            } else if (state == application_state::RPC_READY) {
+                slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
+                notify_cql_change(endpoint, ep_state->is_cql_ready());
             }
         }
     }
@@ -1135,16 +1123,7 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_dead", endpoint);
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
-        netw::get_local_messaging_service().remove_rpc_client(netw::msg_addr{endpoint, 0});
-        for (auto&& subscriber : ss._lifecycle_subscribers) {
-            try {
-                subscriber->on_down(endpoint);
-            } catch (...) {
-                slogger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
-            }
-        }
-    }).get();
+    notify_down(endpoint);
 }
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
@@ -2156,6 +2135,8 @@ future<> storage_service::start_native_transport() {
 
                 });
             });
+        }).then([&ss] {
+            return ss.set_cql_ready(true);
         });
     });
 }
@@ -2166,8 +2147,10 @@ future<> storage_service::do_stop_native_transport() {
     if (cserver) {
         // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
         // Note: We must capture cserver so that it will not be freed before cserver->stop
-        return cserver->stop().then([cserver] {
-            slogger.info("CQL server stopped");
+        return set_cql_ready(false).then([cserver] {
+            return cserver->stop().then([cserver] {
+                slogger.info("CQL server stopped");
+            });
         });
     }
     return make_ready_future<>();
@@ -2650,16 +2633,7 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     _token_metadata.remove_endpoint(endpoint);
     _token_metadata.remove_bootstrap_tokens(tokens);
 
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
-        for (auto&& subscriber : ss._lifecycle_subscribers) {
-            try {
-                subscriber->on_leave_cluster(endpoint);
-            } catch (...) {
-                slogger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
-            }
-        }
-    }).get();
-    slogger.info("Node {} has left the cluster", endpoint);
+    notify_left(endpoint);
 
     update_pending_ranges().get();
 }
@@ -3250,6 +3224,82 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
                     return std::pair(p.first.to_sstring(), std::move(s));
                 }));
     });
+}
+
+future<> storage_service::set_cql_ready(bool ready) {
+    return gms::get_local_gossiper().add_local_application_state(application_state::RPC_READY, value_factory.cql_ready(ready));
+}
+
+void storage_service::notify_down(inet_address endpoint) {
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        netw::get_local_messaging_service().remove_rpc_client(netw::msg_addr{endpoint, 0});
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            try {
+                subscriber->on_down(endpoint);
+            } catch (...) {
+                slogger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
+            }
+        }
+    }).get();
+    slogger.debug("Notify node {} has been down", endpoint);
+}
+
+void storage_service::notify_left(inet_address endpoint) {
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            try {
+                subscriber->on_leave_cluster(endpoint);
+            } catch (...) {
+                slogger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
+            }
+        }
+    }).get();
+    slogger.debug("Notify node {} has left the cluster", endpoint);
+}
+
+void storage_service::notify_up(inet_address endpoint)
+{
+    auto& gossiper = gms::get_local_gossiper();
+    if (!gossiper.is_cql_ready(endpoint) || !gossiper.is_alive(endpoint)) {
+        return;
+    }
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            try {
+                subscriber->on_up(endpoint);
+            } catch (...) {
+                slogger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
+            }
+        }
+    }).get();
+    slogger.debug("Notify node {} has been up", endpoint);
+}
+
+void storage_service::notify_joined(inet_address endpoint)
+{
+    if (!gms::get_local_gossiper().is_normal(endpoint)) {
+        return;
+    }
+
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            try {
+                subscriber->on_join_cluster(endpoint);
+            } catch (...) {
+                slogger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
+            }
+        }
+    }).get();
+    slogger.debug("Notify node {} has joined the cluster", endpoint);
+}
+
+void storage_service::notify_cql_change(inet_address endpoint, bool ready)
+{
+    if (ready) {
+        notify_up(endpoint);
+    } else {
+        notify_down(endpoint);
+    }
 }
 
 } // namespace service
