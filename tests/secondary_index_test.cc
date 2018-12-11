@@ -571,3 +571,34 @@ SEASTAR_TEST_CASE(test_secondary_index_collections) {
         });
     });
 }
+
+// Test for issue #3977 - we do not support SASI, nor any other types of
+// custom index implementations, so "create custom index" commands should
+// fail, rather than be silently ignored. Also check that various improper
+// combination of parameters related to custom indexes are rejected as well.
+SEASTAR_TEST_CASE(test_secondary_index_create_custom_index) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p int primary key, a int)").get();
+        // Creating an index on column a works, obviously.
+        e.execute_cql("create index on cf (a)").get();
+        // The following is legal syntax on Cassandra, to create a SASI index.
+        // However, we don't support SASI, so this should fail. Not be silently
+        // ignored as it was before #3977 was fixed.
+        assert_that_failed(e.execute_cql("create custom index on cf (a) using 'org.apache.cassandra.index.sasi.SASIIndex'"));
+        // Even if we ever support SASI (and the above check should be
+        // changed to expect success), we'll never support a custom index
+        // class with the following ridiculous name, so the following should
+        // continue to fail.
+        assert_that_failed(e.execute_cql("create custom index on cf (a) using 'a.ridiculous.name'"));
+        // It's a syntax error to try to create a "custom index" without
+        // specifying a class name in "USING". We expect exception:
+        // "exceptions::invalid_request_exception: CUSTOM index requires
+        // specifying the index class"
+        assert_that_failed(e.execute_cql("create custom index on cf (a)"));
+        // It's also a syntax error to try to specify a "USING" without
+        // specifying CUSTOM. We expect the exception:
+        // "exceptions::invalid_request_exception: Cannot specify index class
+        // for a non-CUSTOM index"
+        assert_that_failed(e.execute_cql("create index on cf (a) using 'org.apache.cassandra.index.sasi.SASIIndex'"));
+    });
+}
