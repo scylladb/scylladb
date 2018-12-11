@@ -51,6 +51,303 @@ static api::timestamp_type new_timestamp() {
     return ts++;
 }
 
+namespace {
+
+// Helper class for testing mutation_reader::fast_forward_to(dht::partition_range).
+class partition_range_walker {
+    std::vector<dht::partition_range> _ranges;
+    size_t _current_position = 0;
+private:
+    const dht::partition_range& current_range() const { return _ranges[_current_position]; }
+public:
+    explicit partition_range_walker(std::vector<dht::partition_range> ranges) : _ranges(ranges) { }
+    const dht::partition_range& initial_range() const { return _ranges[0]; }
+    void fast_forward_if_needed(flat_reader_assertions& mr, const mutation& expected, bool verify_eos = true) {
+        while (!current_range().contains(expected.decorated_key(), dht::ring_position_comparator(*expected.schema()))) {
+            _current_position++;
+            assert(_current_position < _ranges.size());
+            if (verify_eos) {
+                mr.produces_end_of_stream();
+            }
+            mr.fast_forward_to(current_range());
+        }
+    }
+};
+
+}
+
+static void test_slicing_and_fast_forwarding(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
+    simple_schema s;
+
+    const sstring value = "v";
+    constexpr unsigned ckey_count = 4;
+
+    auto dkeys = s.make_pkeys(128);
+    auto dkeys_pos = 0;
+    std::vector<mutation> mutations;
+
+    {   // All clustered rows and a static row, range tombstones covering each row
+        auto m = mutation(s.schema(), dkeys.at(dkeys_pos++));
+        s.add_static_row(m, value);
+        for (auto ckey = 0u; ckey < ckey_count; ckey++) {
+            s.delete_range(m, query::clustering_range::make({s.make_ckey(ckey)}, {s.make_ckey(ckey + 1), false}));
+        }
+        for (auto ckey = 0u; ckey < ckey_count; ckey++) {
+            s.add_row(m, s.make_ckey(ckey), value);
+        }
+        mutations.emplace_back(std::move(m));
+    }
+
+    {   // All clustered rows and a static row, a range tombstone covering all rows
+        auto m = mutation(s.schema(), dkeys.at(dkeys_pos++));
+        s.add_static_row(m, value);
+        s.delete_range(m, query::clustering_range::make({s.make_ckey(0)},{s.make_ckey(ckey_count)}));
+        for (auto ckey = 0u; ckey < ckey_count; ckey++) {
+            s.add_row(m, s.make_ckey(ckey), value);
+        }
+        mutations.emplace_back(std::move(m));
+    }
+
+    {   // All clustered rows and a static row, range tombstones disjoint with rows
+        auto m = mutation(s.schema(), dkeys.at(dkeys_pos++));
+        s.add_static_row(m, value);
+        for (auto ckey = 0u; ckey < ckey_count; ckey++) {
+            s.delete_range(m, query::clustering_range::make({s.make_ckey(ckey), false}, {s.make_ckey(ckey + 1), false}));
+        }
+        for (auto ckey = 0u; ckey < ckey_count; ckey++) {
+            s.add_row(m, s.make_ckey(ckey), value);
+        }
+        mutations.emplace_back(std::move(m));
+    }
+
+    {   // All clustered rows but no static row and no range tombstones
+        auto m = mutation(s.schema(), dkeys.at(dkeys_pos++));
+        s.add_static_row(m, value);
+        for (auto ckey = 0u; ckey < ckey_count; ckey++) {
+            s.add_row(m, s.make_ckey(ckey), value);
+        }
+        mutations.emplace_back(std::move(m));
+    }
+
+    {   // Just a static row
+        auto m = mutation(s.schema(), dkeys.at(dkeys_pos++));
+        s.add_static_row(m, value);
+        mutations.emplace_back(std::move(m));
+    }
+
+    {   // Every other clustered row and a static row
+        auto m = mutation(s.schema(), dkeys.at(dkeys_pos++));
+        s.add_static_row(m, value);
+        for (auto ckey = 0u; ckey < ckey_count; ckey += 2) {
+            s.add_row(m, s.make_ckey(ckey), value);
+        }
+        mutations.emplace_back(std::move(m));
+    }
+
+    {   // Every other clustered row but no static row
+        auto m = mutation(s.schema(), dkeys.at(dkeys_pos++));
+        s.add_static_row(m, value);
+        for (auto ckey = 0u; ckey < ckey_count; ckey += 2) {
+            s.add_row(m, s.make_ckey(ckey), value);
+        }
+        mutations.emplace_back(std::move(m));
+    }
+
+    mutation_source ms = populate(s.schema(), mutations);
+
+    auto test_ckey = [&] (std::vector<dht::partition_range> pranges, std::vector<mutation> mutations, mutation_reader::forwarding fwd_mr) {
+        for (auto range_size = 1u; range_size <= ckey_count + 1; range_size++) {
+            for (auto start = 0u; start <= ckey_count; start++) {
+                auto range = range_size == 1
+                    ? query::clustering_range::make_singular(s.make_ckey(start))
+                    : query::clustering_range::make({s.make_ckey(start)}, {s.make_ckey(start + range_size), false});
+
+                BOOST_TEST_MESSAGE(format("Clustering key range {}", range));
+
+                auto test_common = [&] (const query::partition_slice& slice) {
+                    BOOST_TEST_MESSAGE("Read whole partitions at once");
+                    auto pranges_walker = partition_range_walker(pranges);
+                    auto mr = ms.make_reader(s.schema(), pranges_walker.initial_range(), slice,
+                                             default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
+                    auto actual = assert_that(std::move(mr));
+                    for (auto& expected : mutations) {
+                        pranges_walker.fast_forward_if_needed(actual, expected);
+                        actual.produces_partition_start(expected.decorated_key());
+                        if (!expected.partition().static_row().empty()) {
+                            actual.produces_static_row();
+                        }
+                        auto start_position = position_in_partition(position_in_partition::after_static_row_tag_t());
+                        for (auto current = start; current < start + range_size; current++) {
+                            auto ck = s.make_ckey(current);
+                            if (expected.partition().find_row(*s.schema(), ck)) {
+                                auto end_position = position_in_partition(position_in_partition::after_clustering_row_tag_t(), ck);
+                                actual.may_produce_tombstones(position_range(start_position, end_position));
+                                actual.produces_row_with_key(ck, expected.partition().tombstone_for_row(*s.schema(), ck).regular().timestamp);
+                                start_position = std::move(end_position);
+                            }
+                        }
+                        actual.may_produce_tombstones(position_range(start_position, position_in_partition(position_in_partition::end_of_partition_tag_t())));
+                        actual.produces_partition_end();
+                    }
+                    actual.produces_end_of_stream();
+
+                    BOOST_TEST_MESSAGE("Read partitions with fast-forwarding to each individual row");
+                    pranges_walker = partition_range_walker(pranges);
+                    mr = ms.make_reader(s.schema(), pranges_walker.initial_range(), slice,
+                                        default_priority_class(), nullptr, streamed_mutation::forwarding::yes, fwd_mr);
+                    actual = assert_that(std::move(mr));
+                    for (auto& expected : mutations) {
+                        pranges_walker.fast_forward_if_needed(actual, expected);
+                        actual.produces_partition_start(expected.decorated_key());
+                        if (!expected.partition().static_row().empty()) {
+                            actual.produces_static_row();
+                        }
+                        actual.produces_end_of_stream();
+                        for (auto current = start; current < start + range_size; current++) {
+                            auto ck = s.make_ckey(current);
+                            auto pos_range = position_range(
+                                position_in_partition(position_in_partition::before_clustering_row_tag_t(), ck),
+                                position_in_partition(position_in_partition::after_clustering_row_tag_t(), ck));
+                            actual.fast_forward_to(pos_range);
+                            actual.may_produce_tombstones(pos_range);
+                            if (expected.partition().find_row(*s.schema(), ck)) {
+                                actual.produces_row_with_key(ck, expected.partition().tombstone_for_row(*s.schema(), ck).regular().timestamp);
+                                actual.may_produce_tombstones(pos_range);
+                            }
+                            actual.produces_end_of_stream();
+                        }
+                        actual.next_partition();
+                    }
+                    actual.produces_end_of_stream();
+                };
+
+                BOOST_TEST_MESSAGE("Single-range slice");
+                auto slice = partition_slice_builder(*s.schema())
+                    .with_range(range)
+                    .build();
+
+                test_common(slice);
+
+                BOOST_TEST_MESSAGE("Test monotonic positions");
+                auto mr = ms.make_reader(s.schema(), query::full_partition_range, slice,
+                                            default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
+                assert_that(std::move(mr)).has_monotonic_positions();
+
+                if (range_size != 1) {
+                    BOOST_TEST_MESSAGE("Read partitions fast-forwarded to the range of interest");
+                    auto pranges_walker = partition_range_walker(pranges);
+                    mr = ms.make_reader(s.schema(), pranges_walker.initial_range(), slice,
+                                        default_priority_class(), nullptr, streamed_mutation::forwarding::yes, fwd_mr);
+                    auto actual = assert_that(std::move(mr));
+                    for (auto& expected : mutations) {
+                        pranges_walker.fast_forward_if_needed(actual, expected);
+
+                        actual.produces_partition_start(expected.decorated_key());
+                        if (!expected.partition().static_row().empty()) {
+                            actual.produces_static_row();
+                        }
+                        actual.produces_end_of_stream();
+                        auto start_ck = s.make_ckey(start);
+                        auto end_ck = s.make_ckey(start + range_size);
+                        actual.fast_forward_to(position_range(
+                            position_in_partition(position_in_partition::clustering_row_tag_t(), start_ck),
+                            position_in_partition(position_in_partition::clustering_row_tag_t(), end_ck)));
+                        auto current_position = position_in_partition(position_in_partition::clustering_row_tag_t(), start_ck);
+                        for (auto current = start; current < start + range_size; current++) {
+                            auto ck = s.make_ckey(current);
+                            if (expected.partition().find_row(*s.schema(), ck)) {
+                                auto end_position = position_in_partition(position_in_partition::after_clustering_row_tag_t(), ck);
+                                actual.may_produce_tombstones(position_range(current_position, end_position));
+                                actual.produces_row_with_key(ck, expected.partition().tombstone_for_row(*s.schema(), ck).regular().timestamp);
+                                current_position = std::move(end_position);
+                            }
+                        }
+                        actual.may_produce_tombstones(position_range(current_position, position_in_partition(position_in_partition::clustering_row_tag_t(), end_ck)));
+                        actual.produces_end_of_stream();
+                        actual.next_partition();
+                    }
+                    actual.produces_end_of_stream();
+                }
+
+                BOOST_TEST_MESSAGE("Slice with not clustering ranges");
+                slice = partition_slice_builder(*s.schema())
+                    .with_ranges({})
+                    .build();
+
+                BOOST_TEST_MESSAGE("Read partitions with just static rows");
+                auto pranges_walker = partition_range_walker(pranges);
+                mr = ms.make_reader(s.schema(), pranges_walker.initial_range(), slice,
+                                    default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
+                auto actual = assert_that(std::move(mr));
+                for (auto& expected : mutations) {
+                    pranges_walker.fast_forward_if_needed(actual, expected);
+
+                    actual.produces_partition_start(expected.decorated_key());
+                    if (!expected.partition().static_row().empty()) {
+                        actual.produces_static_row();
+                    }
+                    actual.produces_partition_end();
+                }
+                actual.produces_end_of_stream();
+
+                if (range_size != 1) {
+                    BOOST_TEST_MESSAGE("Slice with single-row ranges");
+                    std::vector<query::clustering_range> ranges;
+                    for (auto i = start; i < start + range_size; i++) {
+                        ranges.emplace_back(query::clustering_range::make_singular(s.make_ckey(i)));
+                    }
+                    slice = partition_slice_builder(*s.schema())
+                        .with_ranges(ranges)
+                        .build();
+
+                    test_common(slice);
+                }
+            }
+        }
+    };
+
+    test_ckey({query::full_partition_range}, mutations, mutation_reader::forwarding::no);
+
+    for (auto prange_size = 1u; prange_size < mutations.size(); prange_size += 2) {
+        for (auto pstart = 0u; pstart + prange_size <= mutations.size(); pstart++) {
+            auto ms = boost::copy_range<std::vector<mutation>>(
+                mutations | boost::adaptors::sliced(pstart, pstart + prange_size)
+            );
+            if (prange_size == 1) {
+                test_ckey({dht::partition_range::make_singular(mutations[pstart].decorated_key())}, ms, mutation_reader::forwarding::yes);
+                test_ckey({dht::partition_range::make_singular(mutations[pstart].decorated_key())}, ms, mutation_reader::forwarding::no);
+            } else {
+                test_ckey({dht::partition_range::make({mutations[pstart].decorated_key()}, {mutations[pstart + prange_size - 1].decorated_key()})},
+                        ms, mutation_reader::forwarding::no);
+            }
+
+            {
+                auto pranges = std::vector<dht::partition_range>();
+                for (auto current = pstart; current < pstart + prange_size; current++) {
+                    pranges.emplace_back(dht::partition_range::make_singular(mutations[current].decorated_key()));
+                }
+                test_ckey(pranges, ms, mutation_reader::forwarding::yes);
+            }
+
+            if (prange_size > 1) {
+                auto pranges = std::vector<dht::partition_range>();
+                for (auto current = pstart; current < pstart + prange_size;) {
+                    if (current + 1 < pstart + prange_size) {
+                        pranges.emplace_back(dht::partition_range::make({mutations[current].decorated_key()}, {mutations[current + 1].decorated_key()}));
+                    } else {
+                        pranges.emplace_back(dht::partition_range::make_singular(mutations[current].decorated_key()));
+                    }
+                    current += 2;
+                }
+
+                test_ckey(pranges, ms, mutation_reader::forwarding::yes);
+            }
+        }
+    }
+}
+
 static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
@@ -1065,6 +1362,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
 }
 
 void run_mutation_reader_tests(populate_fn populate) {
+    test_slicing_and_fast_forwarding(populate);
     test_date_tiered_clustering_slicing(populate);
     test_fast_forwarding_across_partitions_to_empty_range(populate);
     test_clustering_slices(populate);
