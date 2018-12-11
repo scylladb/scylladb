@@ -2699,7 +2699,7 @@ sstable_writer_k_l::sstable_writer_k_l(sstable& sst, const schema& s, uint64_t e
 }
 
 static sstable_enabled_features all_features() {
-    return sstable_enabled_features{(1 << sstable_feature::End) - 1};
+    return sstable_enabled_features::all();
 }
 
 void sstable_writer_k_l::consume_end_of_stream()
