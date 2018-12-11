@@ -125,7 +125,6 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     const query::partition_slice& _slice;
     const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
-    streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     bool _range_query;
     // When reader enters a partition, it must be set up for reading that
@@ -150,7 +149,6 @@ public:
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
-            streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr)
         : _cache(cache)
         , _schema(std::move(schema))
@@ -158,7 +156,6 @@ public:
         , _slice(slice)
         , _pc(pc)
         , _trace_state(std::move(trace_state))
-        , _fwd(fwd)
         , _fwd_mr(fwd_mr)
         , _range_query(!range.is_singular() || !range.start()->value().has_key())
         , _underlying(_cache, *this)
@@ -184,7 +181,6 @@ public:
     const query::partition_slice& slice() const { return _slice; }
     const io_priority_class& pc() const { return _pc; }
     tracing::trace_state_ptr trace_state() const { return _trace_state; }
-    streamed_mutation::forwarding fwd() const { return _fwd; }
     mutation_reader::forwarding fwd_mr() const { return _fwd_mr; }
     bool is_range_query() const { return _range_query; }
     autoupdating_underlying_reader& underlying() { return _underlying; }

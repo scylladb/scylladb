@@ -353,10 +353,7 @@ static flat_mutation_reader read_directly_from_underlying(read_context& reader) 
     if (reader.schema()->version() != reader.underlying().underlying().schema()->version()) {
         res = transform(std::move(res), schema_upgrader(reader.schema()));
     }
-    if (reader.fwd() == streamed_mutation::forwarding::no) {
-        res = make_nonforwardable(std::move(res), true);
-    }
-    return std::move(res);
+    return make_nonforwardable(std::move(res), true);
 }
 
 // Reader which populates the cache using data from the delegate.
@@ -442,14 +439,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-        if (!_reader) {
-            _end_of_stream = true;
-            return make_ready_future<>();
-        }
-        assert(bool(_read_context->fwd()));
-        _end_of_stream = false;
-        forward_buffer_to(pr.start());
-        return _reader->fast_forward_to(std::move(pr), timeout);
+        throw std::bad_function_call();
     }
     virtual size_t buffer_size() const override {
         if (_reader) {
@@ -680,11 +670,7 @@ private:
         });
     }
     void on_end_of_stream() {
-        if (_read_context->fwd() == streamed_mutation::forwarding::yes) {
-            _end_of_stream = true;
-        } else {
-            _reader = {};
-        }
+        _reader = {};
     }
 public:
     scanning_and_populating_reader(row_cache& cache,
@@ -712,17 +698,9 @@ public:
         });
     }
     virtual void next_partition() override {
-        if (_read_context->fwd() == streamed_mutation::forwarding::yes) {
-            if (_reader) {
-                clear_buffer();
-                _reader->next_partition();
-                _end_of_stream = false;
-            }
-        } else {
-            clear_buffer_to_next_partition();
-            if (_reader && is_buffer_empty()) {
-                _reader->next_partition();
-            }
+        clear_buffer_to_next_partition();
+        if (_reader && is_buffer_empty()) {
+            _reader->next_partition();
         }
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
@@ -737,14 +715,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
-        forward_buffer_to(cr.start());
-        if (_reader) {
-            _end_of_stream = false;
-            return _reader->fast_forward_to(std::move(cr), timeout);
-        } else {
-            _end_of_stream = true;
-            return make_ready_future<>();
-        }
+        throw std::bad_function_call();
     }
     virtual size_t buffer_size() const override {
         if (_reader) {
@@ -768,7 +739,7 @@ row_cache::make_reader(schema_ptr s,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
-    auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, streamed_mutation::forwarding::no, fwd_mr);
+    auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, fwd_mr);
 
     if (!ctx->is_range_query() && !fwd_mr) {
         auto mr = _read_section(_tracker.region(), [&] {
@@ -1258,10 +1229,7 @@ flat_mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
     if (reader.schema()->version() != _schema->version()) {
         r = transform(std::move(r), schema_upgrader(reader.schema()));
     }
-    if (reader.fwd() == streamed_mutation::forwarding::yes) {
-        r = make_forwardable(std::move(r));
-    }
-    return std::move(r);
+    return r;
 }
 
 const schema_ptr& row_cache::schema() const {
