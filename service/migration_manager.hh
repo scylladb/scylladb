@@ -111,6 +111,8 @@ public:
 
     future<> announce_new_column_family(schema_ptr cfm, bool announce_locally = false);
 
+    future<> announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp, bool announce_locally = false);
+
     future<> announce_new_type(user_type new_type, bool announce_locally = false);
 
     future<> announce_type_update(user_type updated_type, bool announce_locally = false);
