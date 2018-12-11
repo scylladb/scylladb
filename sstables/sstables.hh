@@ -71,13 +71,16 @@ class row_consumer;
 
 namespace sstables {
 
+namespace mc {
+class writer;
+}
+
 namespace fs = std::experimental::filesystem;
 
 extern logging::logger sstlog;
 class key;
 class sstable_writer;
 class sstable_writer_k_l;
-class sstable_writer_m;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
 
@@ -790,7 +793,7 @@ public:
 
     friend class components_writer;
     friend class sstable_writer_k_l;
-    friend class sstable_writer_m;
+    friend class mc::writer;
     friend class index_reader;
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
