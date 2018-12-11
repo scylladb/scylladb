@@ -1711,7 +1711,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
         auto make_random_delay = [] (int from, int to) {
             return [gen = std::default_random_engine(std::random_device()()),
                     dist = std::uniform_int_distribution(from, to)] () mutable {
-                return seastar::sleep(std::chrono::milliseconds(dist(gen)));
+                return seastar::sleep(std::chrono::microseconds(dist(gen)));
             };
         };
 
