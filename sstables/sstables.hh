@@ -854,57 +854,6 @@ struct index_sampling_state {
     size_t summary_byte_cost = default_summary_byte_cost;
 };
 
-class components_writer {
-    sstable& _sst;
-    const schema& _schema;
-    file_writer& _out;
-    file_writer _index;
-    bool _index_needs_close;
-    uint64_t _max_sstable_size;
-    bool _tombstone_written;
-    // Remember first and last keys, which we need for the summary file.
-    stdx::optional<key> _first_key, _last_key;
-    stdx::optional<key> _partition_key;
-    index_sampling_state _index_sampling_state;
-    range_tombstone_stream _range_tombstones;
-    db::large_partition_handler* _large_partition_handler;
-private:
-    void maybe_add_summary_entry(const dht::token& token, bytes_view key);
-    uint64_t get_offset() const;
-    file_writer index_file_writer(sstable& sst, const io_priority_class& pc);
-    // Emits all tombstones which start before pos.
-    void drain_tombstones(position_in_partition_view pos);
-    void drain_tombstones();
-    void write_tombstone(range_tombstone&&);
-    void ensure_tombstone_is_written() {
-        if (!_tombstone_written) {
-            consume(tombstone());
-        }
-    }
-public:
-    components_writer(sstable& sst, const schema& s, file_writer& out, uint64_t estimated_partitions, const sstable_writer_config&, const io_priority_class& pc);
-    ~components_writer();
-    components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
-            _index_needs_close(o._index_needs_close), _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
-            _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
-            _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)),
-            _large_partition_handler(o._large_partition_handler) {
-        o._index_needs_close = false;
-    }
-
-    void consume_new_partition(const dht::decorated_key& dk);
-    void consume(tombstone t);
-    stop_iteration consume(static_row&& sr);
-    stop_iteration consume(clustering_row&& cr);
-    stop_iteration consume(range_tombstone&& rt);
-    stop_iteration consume_end_of_partition();
-    void consume_end_of_stream();
-
-    static constexpr size_t default_summary_byte_cost = index_sampling_state::default_summary_byte_cost;
-    static void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
-        uint64_t index_offset, index_sampling_state& state);
-};
-
 class sstable_writer {
 public:
     class writer_impl;
