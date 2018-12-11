@@ -44,7 +44,6 @@
 #include "mutation.hh"
 #include "utils/i_filter.hh"
 #include <seastar/core/stream.hh>
-#include "writer.hh"
 #include "metadata_collector.hh"
 #include "encoding_stats.hh"
 #include "filter.hh"

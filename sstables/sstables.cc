@@ -36,6 +36,7 @@
 
 #include "types.hh"
 #include "m_format_write_helpers_impl.hh"
+#include "writer.hh"
 #include "m_format_read_helpers.hh"
 #include "sstables.hh"
 #include "progress_monitor.hh"
