@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma once
+
 #include <functional>
 #include <boost/iterator/iterator_facade.hpp>
 #include <boost/container/static_vector.hpp>
@@ -33,19 +35,24 @@
 
 namespace sstables {
 
-template <typename T>
-inline void write_vint_impl(file_writer& out, T value) {
+template <typename T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write_vint_impl(W& out, T value) {
     using vint_type = std::conditional_t<std::is_unsigned_v<T>, unsigned_vint, signed_vint>;
     std::array<bytes::value_type, max_vint_length> encoding_buffer;
     const auto size = vint_type::serialize(value, encoding_buffer.begin());
     out.write(reinterpret_cast<const char*>(encoding_buffer.data()), size);
 }
 
-void write_unsigned_vint(file_writer& out, uint64_t value) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_unsigned_vint(W& out, uint64_t value) {
     return write_vint_impl(out, value);
 }
 
-void write_signed_vint(file_writer& out, int64_t value) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_signed_vint(W& out, int64_t value) {
     return write_vint_impl(out, value);
 }
 
@@ -181,16 +188,22 @@ public:
 
 // Writes cell value according to its data type traits
 // NOTE: this function is defined in sstables/sstables.cc
-void write_cell_value(file_writer& out, const abstract_type& type, bytes_view value);
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_cell_value(W& out, const abstract_type& type, bytes_view value);
 
-static void write(file_writer& out, const clustering_block& block) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+static void write(W& out, const clustering_block& block) {
     write_vint(out, block.header);
     for (const auto& [value, type]: block.values) {
         write_cell_value(out, type, value);
     }
 }
 
-void write_clustering_prefix(file_writer& out, const schema& s,
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_clustering_prefix(W& out, const schema& s,
         const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full) {
     clustering_blocks_input_range range{s, prefix, is_ephemerally_full};
     for (const auto block: range) {
@@ -289,32 +302,43 @@ public:
     }
 };
 
-void write_missing_columns(file_writer& out, const indexed_columns& columns, const row& row) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_missing_columns(W& out, const indexed_columns& columns, const row& row) {
     for (const auto value: missing_columns_input_range{columns, row}) {
         write_vint(out, value);
     }
 }
 
-template <typename T>
-void write_unsigned_delta_vint(file_writer& out, T value, T base) {
+template <typename T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_unsigned_delta_vint(W& out, T value, T base) {
     using unsigned_type = std::make_unsigned_t<T>;
     unsigned_type delta = static_cast<unsigned_type>(value) - base;
     write_vint(out, delta);
 }
 
-void write_delta_timestamp(file_writer& out, api::timestamp_type timestamp, const encoding_stats& enc_stats) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_timestamp(W& out, api::timestamp_type timestamp, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, timestamp, enc_stats.min_timestamp);
 }
 
-void write_delta_ttl(file_writer& out, uint32_t ttl, const encoding_stats& enc_stats) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_ttl(W& out, uint32_t ttl, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, ttl, enc_stats.min_ttl);
 }
 
-void write_delta_local_deletion_time(file_writer& out, uint32_t local_deletion_time, const encoding_stats& enc_stats) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_local_deletion_time(W& out, uint32_t local_deletion_time, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, local_deletion_time, enc_stats.min_local_deletion_time);
 }
 
-void write_delta_deletion_time(file_writer& out, deletion_time dt, const encoding_stats& enc_stats) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_deletion_time(W& out, deletion_time dt, const encoding_stats& enc_stats) {
     write_delta_timestamp(out, dt.marked_for_delete_at, enc_stats);
     write_delta_local_deletion_time(out, dt.local_deletion_time, enc_stats);
 }
