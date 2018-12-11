@@ -49,7 +49,7 @@ void cql3::statements::index_prop_defs::validate() {
     property_definitions::validate(keywords);
 
     if (is_custom && !custom_class) {
-        throw exceptions::invalid_request_exception("CUSTOM index requires specifiying the index class");
+        throw exceptions::invalid_request_exception("CUSTOM index requires specifying the index class");
     }
 
     if (!is_custom && custom_class) {
