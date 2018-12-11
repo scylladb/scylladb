@@ -35,21 +35,25 @@ class encoding_stats;
 
 namespace sstables {
 
-class file_writer;
-
 using indexed_columns = std::vector<std::reference_wrapper<const column_definition>>;
 
 // Utilities for writing integral values in variable-length format
 // See vint-serialization.hh for more details
-void write_unsigned_vint(file_writer& out, uint64_t value);
-void write_signed_vint(file_writer& out, int64_t value);
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_unsigned_vint(W& out, uint64_t value);
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_signed_vint(W& out, int64_t value);
 
-template <typename T>
+template <typename T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
 typename std::enable_if_t<!std::is_integral_v<T>>
-write_vint(file_writer& out, T t) = delete;
+write_vint(W& out, T t) = delete;
 
-template <typename T>
-inline void write_vint(file_writer& out, T value) {
+template <typename T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write_vint(W& out, T value) {
     static_assert(std::is_integral_v<T>, "Non-integral values can't be written using write_vint");
     return std::is_unsigned_v<T> ? write_unsigned_vint(out, value) : write_signed_vint(out, value);
 }
@@ -73,19 +77,31 @@ inline void write_vint(file_writer& out, T value) {
 using ephemerally_full_prefix = seastar::bool_class<struct ephemerally_full_prefix_tag>;
 
 // Writes clustering prefix, full or not, encoded in SSTables 3.0 format
-void write_clustering_prefix(file_writer& out, const schema& s,
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_clustering_prefix(W& out, const schema& s,
         const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full);
 
 // Writes encoded information about missing columns in the given row
-void write_missing_columns(file_writer& out, const indexed_columns& columns, const row& row);
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_missing_columns(W& out, const indexed_columns& columns, const row& row);
 
 // Helper functions for writing delta-encoded time-related values
-void write_delta_timestamp(file_writer& out, api::timestamp_type timestamp, const encoding_stats& enc_stats);
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_timestamp(W& out, api::timestamp_type timestamp, const encoding_stats& enc_stats);
 
-void write_delta_ttl(file_writer& out, uint32_t ttl, const encoding_stats& enc_stats);
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_ttl(W& out, uint32_t ttl, const encoding_stats& enc_stats);
 
-void write_delta_local_deletion_time(file_writer& out, uint32_t local_deletion_time, const encoding_stats& enc_stats);
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_local_deletion_time(W& out, uint32_t local_deletion_time, const encoding_stats& enc_stats);
 
-void write_delta_deletion_time(file_writer& out, deletion_time dt, const encoding_stats& enc_stats);
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_deletion_time(W& out, deletion_time dt, const encoding_stats& enc_stats);
 
 };   // namespace sstables

@@ -35,7 +35,7 @@
 #include <iterator>
 
 #include "types.hh"
-#include "m_format_write_helpers.hh"
+#include "m_format_write_helpers_impl.hh"
 #include "m_format_read_helpers.hh"
 #include "sstables.hh"
 #include "progress_monitor.hh"
@@ -241,13 +241,14 @@ parse(sstable_version_types v, random_access_reader& in, T& i) {
     });
 }
 
-template <typename T>
+template <typename T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
 inline typename std::enable_if_t<std::is_integral<T>::value, void>
-write(sstable_version_types v, file_writer& out, T i) {
+write(sstable_version_types v, W& out, T i) {
     auto *nr = reinterpret_cast<const net::packed<T> *>(&i);
     i = net::hton(*nr);
     auto p = reinterpret_cast<const char*>(&i);
-    out.write(p, sizeof(T)).get();
+    out.write(p, sizeof(T));
 }
 
 template <typename T>
@@ -256,9 +257,10 @@ parse(sstable_version_types v, random_access_reader& in, T& i) {
     return parse(v, in, reinterpret_cast<typename std::underlying_type<T>::type&>(i));
 }
 
-template <typename T>
+template <typename T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
 inline typename std::enable_if_t<std::is_enum<T>::value, void>
-write(sstable_version_types v, file_writer& out, T i) {
+write(sstable_version_types v, W& out, T i) {
     write(v, out, static_cast<typename std::underlying_type<T>::type>(i));
 }
 
@@ -266,7 +268,9 @@ future<> parse(sstable_version_types v, random_access_reader& in, bool& i) {
     return parse(v, in, reinterpret_cast<uint8_t&>(i));
 }
 
-inline void write(sstable_version_types v, file_writer& out, bool i) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, bool i) {
     write(v, out, static_cast<uint8_t>(i));
 }
 
@@ -296,7 +300,7 @@ inline void write(sstable_version_types v, file_writer& out, double d) {
     auto *nr = reinterpret_cast<const net::packed<unsigned long> *>(&d);
     auto tmp = net::hton(*nr);
     auto p = reinterpret_cast<const char*>(&tmp);
-    out.write(p, sizeof(unsigned long)).get();
+    out.write(p, sizeof(unsigned long));
 }
 
 template <typename T>
@@ -308,12 +312,16 @@ future<> parse(sstable_version_types, random_access_reader& in, T& len, bytes& s
     });
 }
 
-inline void write(sstable_version_types v, file_writer& out, const bytes& s) {
-    out.write(s).get();
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, const bytes& s) {
+    out.write(s);
 }
 
-inline void write(sstable_version_types v, file_writer& out, bytes_view s) {
-    out.write(reinterpret_cast<const char*>(s.data()), s.size()).get();
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, bytes_view s) {
+    out.write(reinterpret_cast<const char*>(s.data()), s.size());
 }
 
 inline void write(sstable_version_types v, file_writer& out, bytes_ostream s) {
@@ -330,8 +338,9 @@ future<> parse(sstable_version_types v, random_access_reader& in, First& first, 
     });
 }
 
-template<typename First, typename... Rest>
-inline void write(sstable_version_types v, file_writer& out, const First& first, Rest&&... rest) {
+template<typename W, typename First, typename... Rest>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, const First& first, Rest&&... rest) {
     write(v, out, first);
     write(v, out, std::forward<Rest>(rest)...);
 }
@@ -345,8 +354,9 @@ parse(sstable_version_types v, random_access_reader& in, T& t) {
     });
 }
 
-template <class T>
-inline void write(sstable_version_types v, file_writer& out, const vint<T>& t) {
+template <class T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
+inline void write(sstable_version_types v, W& out, const vint<T>& t) {
     write_vint(out, t.value);
 }
 
@@ -364,12 +374,13 @@ future<> parse(sstable_version_types, random_access_reader& in, utils::UUID& uui
 }
 
 inline void write(sstable_version_types v, file_writer& out, const utils::UUID& uuid) {
-    out.write(uuid.serialize()).get();
+    out.write(uuid.serialize());
 }
 
-template <class T>
+template <class T, typename W>
+GCC6_CONCEPT(requires Writer<W>())
 inline typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
-write(sstable_version_types v, file_writer& out, const T& t) {
+write(sstable_version_types v, W& out, const T& t) {
     // describe_type() is not const correct, so cheat here:
     const_cast<T&>(t).describe_type(v, [v, &out] (auto&&... what) -> void {
         write(v, out, std::forward<decltype(what)>(what)...);
@@ -515,7 +526,7 @@ write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Mem
         }
         auto p = reinterpret_cast<const char*>(tmp.data());
         auto bytes = now * sizeof(Members);
-        out.write(p, bytes).get();
+        out.write(p, bytes);
         idx += now;
     }
 }
@@ -758,7 +769,7 @@ inline void write(sstable_version_types v, file_writer& out, const summary_entry
     // endianness. We can treat it as little endian to preserve portability.
     write(v, out, entry.key);
     auto p = seastar::cpu_to_le<uint64_t>(entry.position);
-    out.write(reinterpret_cast<const char*>(&p), sizeof(p)).get();
+    out.write(reinterpret_cast<const char*>(&p), sizeof(p));
 }
 
 inline void write(sstable_version_types v, file_writer& out, const summary& s) {
@@ -770,7 +781,7 @@ inline void write(sstable_version_types v, file_writer& out, const summary& s) {
                   s.header.size_at_full_sampling);
     for (auto&& e : s.positions) {
         auto p = seastar::cpu_to_le(e);
-        out.write(reinterpret_cast<const char*>(&p), sizeof(p)).get();
+        out.write(reinterpret_cast<const char*>(&p), sizeof(p));
     }
     write(v, out, s.entries);
     write(v, out, s.first_key, s.last_key);
@@ -901,7 +912,7 @@ inline void write(sstable_version_types v, file_writer& out, const utils::estima
 
     auto p = reinterpret_cast<const char*>(elements.data());
     auto bytes = elements.size() * sizeof(element);
-    out.write(p, bytes).get();
+    out.write(p, bytes);
 }
 
 struct streaming_histogram_element {
@@ -1011,7 +1022,7 @@ void write(sstable_version_types v, file_writer& out, const compression& c) {
         }
         auto p = reinterpret_cast<const char*>(tmp.data());
         auto bytes = now * sizeof(uint64_t);
-        out.write(p, bytes).get();
+        out.write(p, bytes);
         idx += now;
     }
 }
@@ -1126,8 +1137,8 @@ void sstable::write_toc(const io_priority_class& pc) {
         bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
         write(_version, w, b);
     }
-    w.flush().get();
-    w.close().get();
+    w.flush();
+    w.close();
 
     // Flushing parent directory to guarantee that temporary TOC file reached
     // the disk.
@@ -1173,7 +1184,7 @@ void sstable::write_crc(const checksum& c) {
     options.buffer_size = 4096;
     auto w = file_writer(std::move(f), std::move(options));
     write(get_version(), w, c);
-    w.close().get();
+    w.close();
 }
 
 // Digest file stores the full checksum of data file converted into a string.
@@ -1190,7 +1201,7 @@ void sstable::write_digest(uint32_t full_checksum) {
 
     auto digest = to_sstring<bytes>(full_checksum);
     write(get_version(), w, digest);
-    w.close().get();
+    w.close();
 }
 
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
@@ -1237,8 +1248,8 @@ void sstable::write_simple(const T& component, const io_priority_class& pc) {
     options.io_priority_class = pc;
     auto w = file_writer(std::move(f), std::move(options));
     write(_version, w, component);
-    w.flush().get();
-    w.close().get();
+    w.flush();
+    w.close();
 }
 
 template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
@@ -1375,8 +1386,8 @@ void sstable::rewrite_statistics(const io_priority_class& pc) {
     options.io_priority_class = pc;
     auto w = file_writer(std::move(f), std::move(options));
     write(_version, w, _components->statistics);
-    w.flush().get();
-    w.close().get();
+    w.flush();
+    w.close();
     // rename() guarantees atomicity when renaming a file into place.
     sstable_write_io_check(rename_file, file_path, filename(component_type::Statistics)).get();
 }
@@ -1786,7 +1797,9 @@ void sstable::maybe_flush_pi_block(file_writer& out,
     }
 }
 
-void write_cell_value(file_writer& out, const abstract_type& type, bytes_view value) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_cell_value(W& out, const abstract_type& type, bytes_view value) {
     if (!value.empty()) {
         if (type.value_length_if_fixed()) {
             write(sstable_version_types::mc, out, value);
@@ -1797,7 +1810,9 @@ void write_cell_value(file_writer& out, const abstract_type& type, bytes_view va
     }
 }
 
-void write_cell_value(file_writer& out, const abstract_type& type, atomic_cell_value_view value) {
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_cell_value(W& out, const abstract_type& type, atomic_cell_value_view value) {
     if (!value.empty()) {
         if (!type.value_length_if_fixed()) {
             write_vint(out, value.size_bytes());
@@ -1812,8 +1827,9 @@ static inline void update_cell_stats(column_stats& c_stats, api::timestamp_type 
     c_stats.cells_count++;
 }
 
-template <typename WriteLengthFunc>
-static void write_counter_value(counter_cell_view ccv, file_writer& out, sstable_version_types v, WriteLengthFunc&& write_len_func) {
+template <typename WriteLengthFunc, typename W>
+GCC6_CONCEPT(requires Writer<W>())
+static void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v, WriteLengthFunc&& write_len_func) {
     auto shard_count = ccv.shard_count();
     static constexpr auto header_entry_size = sizeof(int16_t);
     static constexpr auto counter_shard_size = 32u; // counter_id: 16 + clock: 8 + value: 8
@@ -2459,7 +2475,7 @@ void components_writer::consume_end_of_stream() {
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state);
 
     _index_needs_close = false;
-    _index.close().get();
+    _index.close();
 
     if (_sst.has_component(component_type::CompressionInfo)) {
         _sst._collector.add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
@@ -2473,7 +2489,7 @@ void components_writer::consume_end_of_stream() {
 components_writer::~components_writer() {
     if (_index_needs_close) {
         try {
-            _index.close().get();
+            _index.close();
         } catch (...) {
             sstlog.error("components_writer failed to close file: {}", std::current_exception());
         }
@@ -2589,7 +2605,7 @@ void sstable_writer_k_l::prepare_file_writer()
 void sstable_writer_k_l::finish_file_writer()
 {
     auto writer = std::move(_writer);
-    writer->close().get();
+    writer->close();
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<adler32_checksummed_file_writer*>(writer.get());
@@ -2603,7 +2619,7 @@ void sstable_writer_k_l::finish_file_writer()
 sstable_writer_k_l::~sstable_writer_k_l() {
     if (_writer) {
         try {
-            _writer->close().get();
+            _writer->close();
         } catch (...) {
             sstlog.error("sstable_writer failed to close file: {}", std::current_exception());
         }
@@ -2796,8 +2812,7 @@ private:
     stdx::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
-    memory_data_sink_buffers _tmp_bufs;
-    file_writer _tmp_writer; // writes into _tmp_bufs.
+    bytes_ostream _tmp_bufs;
 
     // For static and regular columns, we write all simple columns first followed by collections
     // These containers have columns partitioned by atomicity
@@ -2882,16 +2897,16 @@ private:
         }
     }
 
-    void write_delta_timestamp(file_writer& writer, api::timestamp_type timestamp) {
+    void write_delta_timestamp(bytes_ostream& writer, api::timestamp_type timestamp) {
         sstables::write_delta_timestamp(writer, timestamp, _enc_stats);
     }
-    void write_delta_ttl(file_writer& writer, uint32_t ttl) {
+    void write_delta_ttl(bytes_ostream& writer, uint32_t ttl) {
         sstables::write_delta_ttl(writer, ttl, _enc_stats);
     }
-    void write_delta_local_deletion_time(file_writer& writer, uint32_t ldt) {
+    void write_delta_local_deletion_time(bytes_ostream& writer, uint32_t ldt) {
         sstables::write_delta_local_deletion_time(writer, ldt, _enc_stats);
     }
-    void write_delta_deletion_time(file_writer& writer, deletion_time dt) {
+    void write_delta_deletion_time(bytes_ostream& writer, deletion_time dt) {
         sstables::write_delta_deletion_time(writer, dt, _enc_stats);
     }
 
@@ -2902,18 +2917,18 @@ private:
     };
 
     // Writes single atomic cell
-    void write_cell(file_writer& writer, atomic_cell_view cell, const column_definition& cdef,
+    void write_cell(bytes_ostream& writer, atomic_cell_view cell, const column_definition& cdef,
                     const row_time_properties& properties, bytes_view cell_path = {});
 
     // Writes information about row liveness (formerly 'row marker')
-    void write_liveness_info(file_writer& writer, const row_marker& marker);
+    void write_liveness_info(bytes_ostream& writer, const row_marker& marker);
 
     // Writes a CQL collection (list, set or map)
-    void write_collection(file_writer& writer, const column_definition& cdef, collection_mutation_view collection,
+    void write_collection(bytes_ostream& writer, const column_definition& cdef, collection_mutation_view collection,
                           const row_time_properties& properties, bool has_complex_deletion);
 
-    void write_cells(file_writer& writer, column_kind kind, const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
-    void write_row_body(file_writer& writer, const clustering_row& row, bool has_complex_deletion);
+    void write_cells(bytes_ostream& writer, column_kind kind, const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
+    void write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion);
     void write_static_row(const row& static_row);
 
     // Clustered is a term used to denote an entity that has a clustering key prefix
@@ -2939,8 +2954,8 @@ private:
     void consume(rt_marker&& marker);
 
     void flush_tmp_bufs() {
-        for (auto&& buf : _tmp_bufs.buffers()) {
-            _data_writer->write(buf.get(), buf.size()).get();
+        for (auto&& buf : _tmp_bufs) {
+            _data_writer->write(buf);
         }
         _tmp_bufs.clear();
     }
@@ -2953,7 +2968,7 @@ public:
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _range_tombstones(_schema)
-        , _tmp_writer(output_stream<char>(data_sink(std::make_unique<memory_data_sink>(_tmp_bufs)), _sst.sstable_buffer_size))
+        , _tmp_bufs(_sst.sstable_buffer_size)
         , _static_columns(get_indexed_columns_partitioned_by_atomicity(s.static_columns()))
         , _regular_columns(get_indexed_columns_partitioned_by_atomicity(s.regular_columns()))
         , _run_identifier(cfg.run_identifier)
@@ -2988,7 +3003,7 @@ sstable_writer_m::~sstable_writer_m() {
     auto close_writer = [](auto& writer) {
         if (writer) {
             try {
-                writer->close().get();
+                writer->close();
             } catch (...) {
                 sstlog.error("sstable_writer_m failed to close file: {}", std::current_exception());
             }
@@ -3059,7 +3074,7 @@ void sstable_writer_m::init_file_writers() {
 
 void sstable_writer_m::close_data_writer() {
     auto writer = std::move(_data_writer);
-    writer->close().get();
+    writer->close();
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
@@ -3186,7 +3201,7 @@ void sstable_writer_m::consume(tombstone t) {
     _tombstone_written = true;
 }
 
-void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, const column_definition& cdef,
+void sstable_writer_m::write_cell(bytes_ostream& writer, atomic_cell_view cell, const column_definition& cdef,
         const row_time_properties& properties, bytes_view cell_path) {
 
     bool is_deleted = !cell.is_live();
@@ -3237,7 +3252,7 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
         if (cdef.is_counter()) {
             assert(!cell.is_counter_update());
           counter_cell_view::with_linearized(cell, [&] (counter_cell_view ccv) {
-            write_counter_value(ccv, writer, sstable_version_types::mc, [] (file_writer& out, uint32_t value) {
+            write_counter_value(ccv, writer, sstable_version_types::mc, [] (bytes_ostream& out, uint32_t value) {
                 return write_vint(out, value);
             });
           });
@@ -3271,7 +3286,7 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     _sst.get_stats().on_cell_write();
 }
 
-void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker& marker) {
+void sstable_writer_m::write_liveness_info(bytes_ostream& writer, const row_marker& marker) {
     if (marker.is_missing()) {
         return;
     }
@@ -3296,7 +3311,7 @@ void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker
     }
 }
 
-void sstable_writer_m::write_collection(file_writer& writer, const column_definition& cdef,
+void sstable_writer_m::write_collection(bytes_ostream& writer, const column_definition& cdef,
         collection_mutation_view collection, const row_time_properties& properties, bool has_complex_deletion) {
     auto& ctype = *static_pointer_cast<const collection_type_impl>(cdef.type);
     collection.data.with_linearized([&] (bytes_view collection_bv) {
@@ -3321,7 +3336,7 @@ void sstable_writer_m::write_collection(file_writer& writer, const column_defini
     });
 }
 
-void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const row& row_body,
+void sstable_writer_m::write_cells(bytes_ostream& writer, column_kind kind, const row& row_body,
         const row_time_properties& properties, bool has_complex_deletion) {
     // Note that missing columns are written based on the whole set of regular columns as defined by schema.
     // This differs from Origin where all updated columns are tracked and the set of filled columns of a row
@@ -3346,7 +3361,7 @@ void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const 
     _collections.clear();
 }
 
-void sstable_writer_m::write_row_body(file_writer& writer, const clustering_row& row, bool has_complex_deletion) {
+void sstable_writer_m::write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion) {
     write_liveness_info(writer, row.marker());
     auto write_tombstone_and_update_stats = [this, &writer] (const tombstone& t) {
         auto dt = to_deletion_time(t);
@@ -3371,14 +3386,14 @@ void sstable_writer_m::write_row_body(file_writer& writer, const clustering_row&
     return write_cells(writer, column_kind::regular_column, row.cells(), properties, has_complex_deletion);
 }
 
-template <typename Func>
+template<typename Func>
 uint64_t calculate_write_size(Func&& func) {
     uint64_t written_size = 0;
     {
         auto counting_writer = file_writer(make_sizing_output_stream(written_size));
         func(counting_writer);
-        counting_writer.flush().get();
-        counting_writer.close().get();
+        counting_writer.flush();
+        counting_writer.close();
     }
     return written_size;
 }
@@ -3420,8 +3435,7 @@ void sstable_writer_m::write_static_row(const row& static_row) {
     write(_sst.get_version(), *_data_writer, flags);
     write(_sst.get_version(), *_data_writer, row_extended_flags::is_static);
 
-    write_cells(_tmp_writer, column_kind::static_column, static_row, row_time_properties{}, has_complex_deletion);
-    _tmp_writer.flush().get();
+    write_cells(_tmp_bufs, column_kind::static_column, static_row, row_time_properties{}, has_complex_deletion);
 
     uint64_t row_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(0);
     write_vint(*_data_writer, row_body_size);
@@ -3474,8 +3488,7 @@ void sstable_writer_m::write_clustered(const clustering_row& clustered_row, uint
 
     write_clustering_prefix(*_data_writer, _schema, clustered_row.key(), ephemerally_full_prefix{_schema.is_compact_table()});
 
-    write_row_body(_tmp_writer, clustered_row, has_complex_deletion);
-    _tmp_writer.flush().get();
+    write_row_body(_tmp_bufs, clustered_row, has_complex_deletion);
 
     uint64_t row_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(prev_row_size);
     write_vint(*_data_writer, row_body_size);
@@ -3497,7 +3510,9 @@ stop_iteration sstable_writer_m::consume(clustering_row&& cr) {
 }
 
 // Write clustering prefix along with its bound kind and, if not full, its size
-static void write_clustering_prefix(file_writer& writer, bound_kind_m kind,
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+static void write_clustering_prefix(W& writer, bound_kind_m kind,
         const schema& s, const clustering_key_prefix& clustering) {
     assert(kind != bound_kind_m::static_clustering);
     write(sstable_version_types::mc, writer, kind);
@@ -3538,7 +3553,7 @@ void sstable_writer_m::write_promoted_index(file_writer& writer) {
 void sstable_writer_m::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write(sstable_version_types::mc, *_data_writer, row_flags::is_marker);
     write_clustering_prefix(*_data_writer, marker.kind, _schema, marker.clustering);
-    auto write_marker_body = [this, &marker] (file_writer& writer) {
+    auto write_marker_body = [this, &marker] (bytes_ostream& writer) {
         auto dt = to_deletion_time(marker.tomb);
         write_delta_deletion_time(writer, dt);
         update_deletion_time_stats(dt);
@@ -3549,12 +3564,15 @@ void sstable_writer_m::write_clustered(const rt_marker& marker, uint64_t prev_ro
         }
     };
 
-    uint64_t marker_body_size = calculate_write_size(write_marker_body) + unsigned_vint::serialized_size(prev_row_size);
+    write_marker_body(_tmp_bufs);
+
+    uint64_t marker_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(prev_row_size);
 
     write_vint(*_data_writer, marker_body_size);
     write_vint(*_data_writer, prev_row_size);
 
-    write_marker_body(*_data_writer);
+    flush_tmp_bufs();
+
     if (_schema.clustering_key_size()) {
         column_name_helper::min_max_components(_schema, _sst.get_metadata_collector().min_column_names(),
             _sst.get_metadata_collector().max_column_names(), marker.clustering.components());
@@ -3617,7 +3635,7 @@ void sstable_writer_m::consume_end_of_stream() {
         _sst.get_metadata_collector().add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
-    _index_writer->close().get();
+    _index_writer->close();
     _index_writer.reset();
     _sst.set_first_and_last_keys();
     seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(),
@@ -3638,7 +3656,6 @@ void sstable_writer_m::consume_end_of_stream() {
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
     }
-    _tmp_writer.close().get();
     _cfg.monitor->on_flush_completed();
 }
 

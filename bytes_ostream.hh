@@ -57,12 +57,12 @@ private:
         value_type data[0];
         void operator delete(void* ptr) { free(ptr); }
     };
-    // FIXME: consider increasing chunk size as the buffer grows
-    static constexpr size_type chunk_size{512};
+    static constexpr size_type default_chunk_size{512};
 private:
     std::unique_ptr<chunk> _begin;
     chunk* _current;
     size_type _size;
+    size_type _initial_chunk_size = default_chunk_size;
 public:
     class fragment_iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
         chunk* _current = nullptr;
@@ -102,13 +102,13 @@ private:
     }
     // Figure out next chunk size.
     //   - must be enough for data_size
-    //   - must be at least chunk_size
+    //   - must be at least _initial_chunk_size
     //   - try to double each time to prevent too many allocations
     //   - do not exceed max_chunk_size
     size_type next_alloc_size(size_t data_size) const {
         auto next_size = _current
                 ? _current->size * 2
-                : chunk_size;
+                : _initial_chunk_size;
         next_size = std::min(next_size, max_chunk_size());
         // FIXME: check for overflow?
         return std::max<size_type>(next_size, data_size + sizeof(chunk));
@@ -116,13 +116,19 @@ private:
     // Makes room for a contiguous region of given size.
     // The region is accounted for as already written.
     // size must not be zero.
+    [[gnu::always_inline]]
     value_type* alloc(size_type size) {
-        if (size <= current_space_left()) {
+        if (__builtin_expect(size <= current_space_left(), true)) {
             auto ret = _current->data + _current->offset;
             _current->offset += size;
             _size += size;
             return ret;
         } else {
+            return alloc_new(size);
+        }
+    }
+    [[gnu::noinline]]
+    value_type* alloc_new(size_type size) {
             auto alloc_size = next_alloc_size(size);
             auto space = malloc(alloc_size);
             if (!space) {
@@ -140,19 +146,22 @@ private:
             }
             _size += size;
             return _current->data;
-        };
     }
 public:
-    bytes_ostream() noexcept
+    explicit bytes_ostream(size_t initial_chunk_size) noexcept
         : _begin()
         , _current(nullptr)
         , _size(0)
+        , _initial_chunk_size(initial_chunk_size)
     { }
+
+    bytes_ostream() noexcept : bytes_ostream(default_chunk_size) {}
 
     bytes_ostream(bytes_ostream&& o) noexcept
         : _begin(std::move(o._begin))
         , _current(o._current)
         , _size(o._size)
+        , _initial_chunk_size(o._initial_chunk_size)
     {
         o._current = nullptr;
         o._size = 0;
@@ -162,6 +171,7 @@ public:
         : _begin()
         , _current(nullptr)
         , _size(0)
+        , _initial_chunk_size(o._initial_chunk_size)
     {
         append(o);
     }
@@ -199,18 +209,20 @@ public:
         return place_holder<T>{alloc(sizeof(T))};
     }
 
+    [[gnu::always_inline]]
     value_type* write_place_holder(size_type size) {
         return alloc(size);
     }
 
     // Writes given sequence of bytes
+    [[gnu::always_inline]]
     inline void write(bytes_view v) {
         if (v.empty()) {
             return;
         }
 
         auto this_size = std::min(v.size(), size_t(current_space_left()));
-        if (this_size) {
+        if (__builtin_expect(this_size, true)) {
             memcpy(_current->data + _current->offset, v.begin(), this_size);
             _current->offset += this_size;
             _size += this_size;
@@ -219,11 +231,12 @@ public:
 
         while (!v.empty()) {
             auto this_size = std::min(v.size(), size_t(max_chunk_size()));
-            std::copy_n(v.begin(), this_size, alloc(this_size));
+            std::copy_n(v.begin(), this_size, alloc_new(this_size));
             v.remove_prefix(this_size);
         }
     }
 
+    [[gnu::always_inline]]
     void write(const char* ptr, size_t size) {
         write(bytes_view(reinterpret_cast<const signed char*>(ptr), size));
     }
@@ -392,5 +405,20 @@ public:
 
     bool operator!=(const bytes_ostream& other) const {
         return !(*this == other);
+    }
+
+    // Makes this instance empty.
+    //
+    // The first buffer is not deallocated, so callers may rely on the
+    // fact that if they write less than the initial chunk size between
+    // the clear() calls then writes will not involve any memory allocations,
+    // except for the first write made on this instance.
+    void clear() {
+        if (_begin) {
+            _begin->offset = 0;
+            _size = 0;
+            _current = _begin.get();
+            _begin->next.reset();
+        }
     }
 };
