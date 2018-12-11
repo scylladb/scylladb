@@ -82,8 +82,6 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
-static const db::config& get_config();
-
 // Because this is a noop and won't hold any state, it is better to use a global than a
 // thread_local. It will be faster, specially on non-x86.
 static noop_write_monitor default_noop_write_monitor;
@@ -706,7 +704,7 @@ future<> parse(sstable_version_types v, random_access_reader& in, utils::estimat
     });
 }
 
-inline void write(sstable_version_types v, file_writer& out, const utils::estimated_histogram& eh) {
+void write(sstable_version_types v, file_writer& out, const utils::estimated_histogram& eh) {
     uint32_t len = 0;
     check_truncate_and_assign(len, eh.buckets.size());
 
@@ -774,7 +772,7 @@ future<> parse(sstable_version_types v, random_access_reader& in, utils::streami
     });
 }
 
-inline void write(sstable_version_types v, file_writer& out, const utils::streaming_histogram& sh) {
+void write(sstable_version_types v, file_writer& out, const utils::streaming_histogram& sh) {
     uint32_t max_bin_size;
     check_truncate_and_assign(max_bin_size, sh.max_bin_size);
 
@@ -791,7 +789,7 @@ future<> parse(sstable_version_types v, random_access_reader& in, commitlog_inte
     });
 }
 
-inline void write(sstable_version_types v, file_writer& out, const commitlog_interval& ci) {
+void write(sstable_version_types v, file_writer& out, const commitlog_interval& ci) {
     write(v, out, ci.start);
     write(v, out, ci.end);
 }
@@ -1765,7 +1763,7 @@ static void write_index_promoted(sstable_version_types v, file_writer& out, byte
     }
 }
 
-static void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
+void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
     assert(expected_partition_count >= 1);
 
     s.header.min_index_interval = min_index_interval;
@@ -1781,7 +1779,7 @@ static void prepare_summary(summary& s, uint64_t expected_partition_count, uint3
     s.header.memory_size = 0;
 }
 
-static void seal_summary(summary& s,
+void seal_summary(summary& s,
         std::experimental::optional<key>&& first_key,
         std::experimental::optional<key>&& last_key,
         const index_sampling_state& state) {
@@ -1904,9 +1902,9 @@ static serialization_header make_serialization_header(const schema& s, const enc
 
 // In the beginning of the statistics file, there is a disk_hash used to
 // map each metadata type to its correspondent position in the file.
-static void seal_statistics(sstable_version_types v, statistics& s, metadata_collector& collector,
+void seal_statistics(sstable_version_types v, statistics& s, metadata_collector& collector,
         const sstring partitioner, double bloom_filter_fp_chance, schema_ptr schema,
-        const dht::decorated_key& first_key, const dht::decorated_key& last_key, encoding_stats enc_stats = {}) {
+        const dht::decorated_key& first_key, const dht::decorated_key& last_key, encoding_stats enc_stats) {
     validation_metadata validation;
     compaction_metadata compaction;
     stats_metadata stats;
@@ -2018,7 +2016,7 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
 
 // Get the currently loaded configuration, or the default configuration in
 // case none has been loaded (this happens, for example, in unit tests).
-static const db::config& get_config() {
+const db::config& get_config() {
     if (service::get_storage_service().local_is_initialized() &&
             service::get_local_storage_service().db().local_is_initialized()) {
         return service::get_local_storage_service().db().local().get_config();
@@ -2030,7 +2028,7 @@ static const db::config& get_config() {
 
 // Returns the cost for writing a byte to summary such that the ratio of summary
 // to data will be 1 to cost by the time sstable is sealed.
-static size_t summary_byte_cost() {
+size_t summary_byte_cost() {
     auto summary_ratio = get_config().sstable_summary_ratio();
     return summary_ratio ? (1 / summary_ratio) : components_writer::default_summary_byte_cost;
 }

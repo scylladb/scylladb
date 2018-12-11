@@ -577,4 +577,28 @@ void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v,
     }
 }
 
+// Get the currently loaded configuration, or the default configuration in
+// case none has been loaded (this happens, for example, in unit tests).
+const db::config& get_config();
+
+// Returns the cost for writing a byte to summary such that the ratio of summary
+// to data will be 1 to cost by the time sstable is sealed.
+size_t summary_byte_cost();
+
+void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval);
+
+void seal_summary(summary& s,
+    std::experimental::optional<key>&& first_key,
+    std::experimental::optional<key>&& last_key,
+    const index_sampling_state& state);
+
+void seal_statistics(sstable_version_types, statistics&, metadata_collector&,
+    const sstring partitioner, double bloom_filter_fp_chance, schema_ptr,
+    const dht::decorated_key& first_key, const dht::decorated_key& last_key, encoding_stats enc_stats = {});
+
+void write(sstable_version_types, file_writer&, const utils::estimated_histogram&);
+void write(sstable_version_types, file_writer&, const utils::streaming_histogram&);
+void write(sstable_version_types, file_writer&, const commitlog_interval&);
+void write(sstable_version_types, file_writer&, const compression&);
+
 }
