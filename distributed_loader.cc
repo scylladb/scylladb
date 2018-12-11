@@ -179,6 +179,43 @@ static future<std::vector<sstables::shared_sstable>> get_all_shared_sstables(dis
     });
 }
 
+// Verify that all files and directories are owned by current uid
+// and that files can be read and directories can be read, written, and looked up (execute)
+// No other file types may exist.
+future<> distributed_loader::verify_owner_and_mode(fs::path path) {
+    return file_stat(path.string()).then([path = std::move(path)] (stat_data sd) {
+        if (sd.uid != geteuid()) {
+            throw std::runtime_error(fmt::format(FMT_STRING("{} not owned by current euid: {}, owner: {}"), path, geteuid(), sd.uid));
+        }
+        switch (sd.type) {
+        case directory_entry_type::regular: {
+            auto f = file_accessible(path.string(), access_flags::read);
+            return f.then([path = std::move(path)] (bool can_access) {
+                if (!can_access) {
+                    throw std::runtime_error(fmt::format(FMT_STRING("File {} cannot be accessed for read"), path));
+                }
+                return make_ready_future<>();
+            });
+            break;
+        }
+        case directory_entry_type::directory: {
+            auto f = file_accessible(path.string(), access_flags::read | access_flags::write | access_flags::execute);
+            return f.then([path = std::move(path)] (bool can_access) {
+                if (!can_access) {
+                    throw std::runtime_error(fmt::format(FMT_STRING("Directory {} cannot be accessed for read, write, and execute"), path));
+                }
+                return lister::scan_dir(path, {}, [] (fs::path dir, directory_entry de) {
+                    return verify_owner_and_mode(dir / de.name);
+                });
+            });
+            break;
+        }
+        default:
+            throw std::runtime_error(fmt::format(FMT_STRING("{} must be either a regular file or a directory (type={})"), path, int(sd.type)));
+        }
+    });
+};
+
 // This function will iterate through upload directory in column family,
 // and will do the following for each sstable found:
 // 1) Mutate sstable level to 0.
@@ -198,12 +235,17 @@ distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::
         auto& cf = db.local().find_column_family(ks_name, cf_name);
         lister::scan_dir(fs::path(cf._config.datadir) / "upload", { directory_entry_type::regular },
                 [&descriptors] (fs::path parent_dir, directory_entry de) {
+          return verify_owner_and_mode(parent_dir / de.name).then([&descriptors, parent_dir = std::move(parent_dir), de = std::move(de)] {
             auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
             if (comps.component != component_type::TOC) {
                 return make_ready_future<>();
             }
             descriptors.emplace(comps.generation, std::move(comps));
             return make_ready_future<>();
+          }).handle_exception([parent_dir = std::move(parent_dir), de = std::move(de)] (auto ep) {
+              dblog.error("Failed owner and mode verification: {}", ep);
+              std::rethrow_exception(ep);
+          });
         }, &column_family::manifest_json_filter).get();
 
         flushed.reserve(descriptors.size());

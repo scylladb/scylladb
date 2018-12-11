@@ -59,6 +59,7 @@ public:
     static future<> open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
         std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func,
         const io_priority_class& pc = default_priority_class());
+    static future<> verify_owner_and_mode(std::filesystem::path path);
     static future<> load_new_sstables(distributed<database>& db, distributed<db::view::view_update_generator>& view_update_generator,
             sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables);
     static future<std::vector<sstables::entry_descriptor>> flush_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, sstring ks_name, sstring cf_name);

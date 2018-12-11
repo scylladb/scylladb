@@ -590,7 +590,12 @@ int main(int ac, char** av) {
 
             supervisor::notify("verifying directories");
             parallel_for_each(directories, [&db] (sstring pathname) {
-                return disk_sanity(pathname, db.local().get_config().developer_mode());
+                return disk_sanity(pathname, db.local().get_config().developer_mode()).then([dir = std::move(pathname)] {
+                    return distributed_loader::verify_owner_and_mode(fs::path(dir)).handle_exception([](auto ep) {
+                        startlog.error("Failed owner and mode verification: {}", ep);
+                        return make_exception_future<>(ep);
+                    });
+                });
             }).get();
 
             // Initialization of a keyspace is done by shard 0 only. For system
