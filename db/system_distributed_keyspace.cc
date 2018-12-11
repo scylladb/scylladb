@@ -87,7 +87,7 @@ future<> system_distributed_keyspace::start() {
         return do_with(all_tables(), [this] (std::vector<schema_ptr>& tables) {
             return do_for_each(tables, [this] (schema_ptr table) {
                 return ignore_existing([this, table = std::move(table)] {
-                    return _mm.announce_new_column_family(std::move(table), false);
+                    return _mm.announce_new_column_family(std::move(table), api::min_timestamp, false);
                 });
             });
         });
