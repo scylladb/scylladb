@@ -1716,13 +1716,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
         };
 
         BOOST_TEST_MESSAGE("run_mutation_source_tests(delay=no_delay, evict_readers=false)");
-        run_mutation_source_tests(make_populate(test_reader_lifecycle_policy::no_delay, false), streamed_mutation::forwarding::no);
+        run_mutation_source_tests(make_populate(test_reader_lifecycle_policy::no_delay, false));
 
         BOOST_TEST_MESSAGE("run_mutation_source_tests(delay=random, evict_readers=false)");
-        run_mutation_source_tests(make_populate(make_random_delay(1, 10), false), streamed_mutation::forwarding::no);
+        run_mutation_source_tests(make_populate(make_random_delay(1, 10), false));
 
         BOOST_TEST_MESSAGE("run_mutation_source_tests(delay=random, evict_readers=true)");
-        run_mutation_source_tests(make_populate(make_random_delay(1, 10), true), streamed_mutation::forwarding::no);
+        run_mutation_source_tests(make_populate(make_random_delay(1, 10), true));
 
         return make_ready_future<>();
     }).get();

@@ -1032,7 +1032,7 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populat
 }
 
 static
-void test_slicing_with_overlapping_range_tombstones(populate_fn populate, streamed_mutation::forwarding fwd_sm) {
+void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
     simple_schema ss;
     auto s = ss.schema();
 
@@ -1070,10 +1070,6 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate, stream
         assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
     }
 
-    if (!fwd_sm) {
-        return;
-    }
-
     // Check fast_forward_to()
     {
         auto rd = ds.make_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
@@ -1109,22 +1105,16 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate, stream
     }
 }
 
-void run_mutation_reader_tests(populate_fn populate, streamed_mutation::forwarding fwd_sm) {
+void run_mutation_reader_tests(populate_fn populate) {
     test_date_tiered_clustering_slicing(populate);
     test_fast_forwarding_across_partitions_to_empty_range(populate);
-    if (fwd_sm) {
-        test_clustering_slices(populate);
-    }
+    test_clustering_slices(populate);
     test_mutation_reader_fragments_have_monotonic_positions(populate);
-    if (fwd_sm) {
-        test_streamed_mutation_forwarding_across_range_tombstones(populate);
-        test_streamed_mutation_forwarding_guarantees(populate);
-    }
+    test_streamed_mutation_forwarding_across_range_tombstones(populate);
+    test_streamed_mutation_forwarding_guarantees(populate);
     test_all_data_is_read_back(populate);
     test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate);
-    if (fwd_sm) {
-        test_streamed_mutation_forwarding_is_consistent_with_slicing(populate);
-    }
+    test_streamed_mutation_forwarding_is_consistent_with_slicing(populate);
     test_range_queries(populate);
     test_query_only_static_row(populate);
     test_query_no_clustering_ranges_no_static_columns(populate);
@@ -1164,17 +1154,15 @@ void test_next_partition(populate_fn populate) {
         .produces_end_of_stream();
 }
 
-void run_flat_mutation_reader_tests(populate_fn populate, streamed_mutation::forwarding fwd_sm) {
+void run_flat_mutation_reader_tests(populate_fn populate) {
     test_next_partition(populate);
-    if (fwd_sm) {
-        test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
-    }
-    test_slicing_with_overlapping_range_tombstones(populate, fwd_sm);
+    test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
+    test_slicing_with_overlapping_range_tombstones(populate);
 }
 
-void run_mutation_source_tests(populate_fn populate, streamed_mutation::forwarding fwd_sm) {
-    run_mutation_reader_tests(populate, fwd_sm);
-    run_flat_mutation_reader_tests(populate, fwd_sm);
+void run_mutation_source_tests(populate_fn populate) {
+    run_mutation_reader_tests(populate);
+    run_flat_mutation_reader_tests(populate);
 }
 
 struct mutation_sets {
