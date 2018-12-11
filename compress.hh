@@ -99,6 +99,7 @@ public:
 
     static const sstring SSTABLE_COMPRESSION;
     static const sstring CHUNK_LENGTH_KB;
+    static const sstring CHUNK_LENGTH_KB_ERR;
     static const sstring CRC_CHECK_CHANCE;
 private:
     compressor_ptr _compressor;

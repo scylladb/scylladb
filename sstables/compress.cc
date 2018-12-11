@@ -264,7 +264,7 @@ local_compression::local_compression(const compression& c)
     : _compressor([&c] {
         sstring n(c.name.value.begin(), c.name.value.end());
         return compressor::create(n, [&c, &n](const sstring& key) -> compressor::opt_string {
-            if (key == compression_parameters::CHUNK_LENGTH_KB) {
+            if (key == compression_parameters::CHUNK_LENGTH_KB || key == compression_parameters::CHUNK_LENGTH_KB_ERR) {
                 return to_sstring(c.chunk_len);
             }
             if (key == compression_parameters::SSTABLE_COMPRESSION) {
