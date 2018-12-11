@@ -1974,11 +1974,9 @@ public:
     void consume_end_of_stream();
 
     static constexpr size_t default_summary_byte_cost = index_sampling_state::default_summary_byte_cost;
-    static void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
-        uint64_t index_offset, index_sampling_state& state);
 };
 
-void components_writer::maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
+void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
         uint64_t index_offset, index_sampling_state& state) {
     state.partition_count++;
     // generates a summary entry when possible (= keep summary / data size ratio within reasonable limits)
@@ -1992,7 +1990,7 @@ void components_writer::maybe_add_summary_entry(summary& s, const dht::token& to
 }
 
 void components_writer::maybe_add_summary_entry(const dht::token& token, bytes_view key) {
-    return maybe_add_summary_entry(_sst._components->summary, token, key, get_offset(),
+    return sstables::maybe_add_summary_entry(_sst._components->summary, token, key, get_offset(),
         _index.offset(), _index_sampling_state);
 }
 
@@ -2571,7 +2569,7 @@ private:
     void drain_tombstones(std::optional<position_in_partition_view> pos = {});
 
     void maybe_add_summary_entry(const dht::token& token, bytes_view key) {
-        return components_writer::maybe_add_summary_entry(
+        return sstables::maybe_add_summary_entry(
             _sst._components->summary, token, key, get_data_offset(),
             _index_writer->offset(), _index_sampling_state);
     }
@@ -3460,7 +3458,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         }
         void consume_entry(index_entry&& ie, uint64_t index_offset) {
             auto token = dht::global_partitioner().get_token(ie.get_key());
-            components_writer::maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset, _state);
+            maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset, _state);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
             } else {
