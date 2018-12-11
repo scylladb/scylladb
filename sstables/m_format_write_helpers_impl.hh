@@ -35,27 +35,6 @@
 
 namespace sstables {
 
-template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline void write_vint_impl(W& out, T value) {
-    using vint_type = std::conditional_t<std::is_unsigned_v<T>, unsigned_vint, signed_vint>;
-    std::array<bytes::value_type, max_vint_length> encoding_buffer;
-    const auto size = vint_type::serialize(value, encoding_buffer.begin());
-    out.write(reinterpret_cast<const char*>(encoding_buffer.data()), size);
-}
-
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-void write_unsigned_vint(W& out, uint64_t value) {
-    return write_vint_impl(out, value);
-}
-
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-void write_signed_vint(W& out, int64_t value) {
-    return write_vint_impl(out, value);
-}
-
 // A helper CRTP base class for input ranges.
 // Derived classes should implement the following functions:
 //      bool next() const;

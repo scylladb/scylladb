@@ -37,27 +37,6 @@ namespace sstables {
 
 using indexed_columns = std::vector<std::reference_wrapper<const column_definition>>;
 
-// Utilities for writing integral values in variable-length format
-// See vint-serialization.hh for more details
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-void write_unsigned_vint(W& out, uint64_t value);
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-void write_signed_vint(W& out, int64_t value);
-
-template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
-typename std::enable_if_t<!std::is_integral_v<T>>
-write_vint(W& out, T t) = delete;
-
-template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline void write_vint(W& out, T value) {
-    static_assert(std::is_integral_v<T>, "Non-integral values can't be written using write_vint");
-    return std::is_unsigned_v<T> ? write_unsigned_vint(out, value) : write_signed_vint(out, value);
-}
-
 // There is a special case when we need to treat a non-full clustering key prefix as a full one
 // for serialization purposes. This is the case that may occur with a compact table.
 // For historical reasons a compact table may have rows with missing trailing clustering columns in their clustering keys.

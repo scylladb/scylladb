@@ -215,15 +215,6 @@ static void check_buf_size(temporary_buffer<char>& buf, size_t expected) {
     }
 }
 
-template <typename T, typename U>
-static void check_truncate_and_assign(T& to, const U from) {
-    static_assert(std::is_integral<T>::value && std::is_integral<U>::value, "T and U must be integral");
-    to = from;
-    if (to != from) {
-        throw std::overflow_error("assigning U to T caused an overflow");
-    }
-}
-
 // Base parser, parses an integer type
 template <typename T>
 typename std::enable_if_t<std::is_integral<T>::value, void>
@@ -243,15 +234,6 @@ parse(sstable_version_types v, random_access_reader& in, T& i) {
     });
 }
 
-template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline typename std::enable_if_t<std::is_integral<T>::value, void>
-write(sstable_version_types v, W& out, T i) {
-    auto *nr = reinterpret_cast<const net::packed<T> *>(&i);
-    i = net::hton(*nr);
-    auto p = reinterpret_cast<const char*>(&i);
-    out.write(p, sizeof(T));
-}
 
 template <typename T>
 typename std::enable_if_t<std::is_enum<T>::value, future<>>
@@ -259,21 +241,8 @@ parse(sstable_version_types v, random_access_reader& in, T& i) {
     return parse(v, in, reinterpret_cast<typename std::underlying_type<T>::type&>(i));
 }
 
-template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline typename std::enable_if_t<std::is_enum<T>::value, void>
-write(sstable_version_types v, W& out, T i) {
-    write(v, out, static_cast<typename std::underlying_type<T>::type>(i));
-}
-
 future<> parse(sstable_version_types v, random_access_reader& in, bool& i) {
     return parse(v, in, reinterpret_cast<uint8_t&>(i));
-}
-
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline void write(sstable_version_types v, W& out, bool i) {
-    write(v, out, static_cast<uint8_t>(i));
 }
 
 template <typename To, typename From>
@@ -298,13 +267,6 @@ future<> parse(sstable_version_types, random_access_reader& in, double& d) {
     });
 }
 
-inline void write(sstable_version_types v, file_writer& out, double d) {
-    auto *nr = reinterpret_cast<const net::packed<unsigned long> *>(&d);
-    auto tmp = net::hton(*nr);
-    auto p = reinterpret_cast<const char*>(&tmp);
-    out.write(p, sizeof(unsigned long));
-}
-
 template <typename T>
 future<> parse(sstable_version_types, random_access_reader& in, T& len, bytes& s) {
     return in.read_exactly(len).then([&s, len] (auto buf) {
@@ -312,24 +274,6 @@ future<> parse(sstable_version_types, random_access_reader& in, T& len, bytes& s
         // Likely a different type of char. Most bufs are unsigned, whereas the bytes type is signed.
         s = bytes(reinterpret_cast<const bytes::value_type *>(buf.get()), len);
     });
-}
-
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline void write(sstable_version_types v, W& out, const bytes& s) {
-    out.write(s);
-}
-
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline void write(sstable_version_types v, W& out, bytes_view s) {
-    out.write(reinterpret_cast<const char*>(s.data()), s.size());
-}
-
-inline void write(sstable_version_types v, file_writer& out, bytes_ostream s) {
-    for (bytes_view fragment : s) {
-        write(v, out, fragment);
-    }
 }
 
 // All composite parsers must come after this
@@ -340,13 +284,6 @@ future<> parse(sstable_version_types v, random_access_reader& in, First& first, 
     });
 }
 
-template<typename W, typename First, typename... Rest>
-GCC6_CONCEPT(requires Writer<W>())
-inline void write(sstable_version_types v, W& out, const First& first, Rest&&... rest) {
-    write(v, out, first);
-    write(v, out, std::forward<Rest>(rest)...);
-}
-
 // Intended to be used for a type that describes itself through describe_type().
 template <class T>
 typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, future<>>
@@ -354,12 +291,6 @@ parse(sstable_version_types v, random_access_reader& in, T& t) {
     return t.describe_type(v, [v, &in] (auto&&... what) -> future<> {
         return parse(v, in, what...);
     });
-}
-
-template <class T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline void write(sstable_version_types v, W& out, const vint<T>& t) {
-    write_vint(out, t.value);
 }
 
 template <class T>
@@ -377,16 +308,6 @@ future<> parse(sstable_version_types, random_access_reader& in, utils::UUID& uui
 
 inline void write(sstable_version_types v, file_writer& out, const utils::UUID& uuid) {
     out.write(uuid.serialize());
-}
-
-template <class T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
-inline typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
-write(sstable_version_types v, W& out, const T& t) {
-    // describe_type() is not const correct, so cheat here:
-    const_cast<T&>(t).describe_type(v, [v, &out] (auto&&... what) -> void {
-        write(v, out, std::forward<decltype(what)>(what)...);
-    });
 }
 
 // For all types that take a size, we provide a template that takes the type
@@ -418,37 +339,6 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_array_vin
     return f.then([v, &in, &arr, len = std::move(len)] {
         return parse(v, in, *len, arr.elements);
     });
-}
-
-template <typename Size>
-inline void write(sstable_version_types v, file_writer& out, const disk_string<Size>& s) {
-    Size len = 0;
-    check_truncate_and_assign(len, s.value.size());
-    write(v, out, len);
-    write(v, out, s.value);
-}
-
-inline void write(sstable_version_types v, file_writer& out, const disk_string_vint_size& s) {
-    uint64_t len = 0;
-    check_truncate_and_assign(len, s.value.size());
-    write_vint(out, len);
-    write(v, out, s.value);
-}
-
-template <typename Size>
-inline void write(sstable_version_types v, file_writer& out, const disk_string_view<Size>& s) {
-    Size len;
-    check_truncate_and_assign(len, s.value.size());
-    write(v, out, len, s.value);
-}
-
-template<typename SizeType>
-inline void write(sstable_version_types ver, file_writer& out, const disk_data_value_view<SizeType>& v) {
-    SizeType length;
-    check_truncate_and_assign(length, v.value.size_bytes());
-    write(ver, out, length);
-    using boost::range::for_each;
-    for_each(v.value, [&] (bytes_view fragment) { write(ver, out, fragment); });
 }
 
 // We cannot simply read the whole array at once, because we don't know its
@@ -504,59 +394,6 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_array<Siz
     }).finally([len] {});
 }
 
-template <typename Members>
-inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
-write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Members>& arr) {
-    for (auto& a : arr) {
-        write(v, out, a);
-    }
-}
-
-template <typename Members>
-inline typename std::enable_if_t<std::is_integral<Members>::value, void>
-write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Members>& arr) {
-    std::vector<Members> tmp;
-    size_t per_loop = 100000 / sizeof(Members);
-    tmp.resize(per_loop);
-    size_t idx = 0;
-    while (idx != arr.size()) {
-        auto now = std::min(arr.size() - idx, per_loop);
-        // copy arr into tmp converting each entry into big-endian representation.
-        auto nr = arr.begin() + idx;
-        for (size_t i = 0; i < now; i++) {
-            tmp[i] = net::hton(nr[i]);
-        }
-        auto p = reinterpret_cast<const char*>(tmp.data());
-        auto bytes = now * sizeof(Members);
-        out.write(p, bytes);
-        idx += now;
-    }
-}
-
-template <typename Size, typename Members>
-inline void write(sstable_version_types v, file_writer& out, const disk_array<Size, Members>& arr) {
-    Size len = 0;
-    check_truncate_and_assign(len, arr.elements.size());
-    write(v, out, len);
-    write(v, out, arr.elements);
-}
-
-template <typename Members>
-inline void write(sstable_version_types v, file_writer& out, const disk_array_vint_size<Members>& arr) {
-    uint64_t len = 0;
-    check_truncate_and_assign(len, arr.elements.size());
-    write_vint(out, len);
-    write(v, out, arr.elements);
-}
-
-template <typename Size, typename Members>
-inline void write(sstable_version_types v, file_writer& out, const disk_array_ref<Size, Members>& arr) {
-    Size len = 0;
-    check_truncate_and_assign(len, arr.elements.size());
-    write(v, out, len);
-    write(v, out, arr.elements);
-}
-
 template <typename Size, typename Key, typename Value>
 future<> parse(sstable_version_types v, random_access_reader& in, Size& len, std::unordered_map<Key, Value>& map) {
     return do_with(Size(), [v, &in, len, &map] (Size& count) {
@@ -588,26 +425,6 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_hash<Size
     return f.then([v, &in, &h, w = std::move(w)] {
         return parse(v, in, *w, h.map);
     });
-}
-
-template <typename Key, typename Value>
-inline void write(sstable_version_types v, file_writer& out, const std::unordered_map<Key, Value>& map) {
-    for (auto& val: map) {
-        write(v, out, val.first, val.second);
-    };
-}
-
-template <typename First, typename Second>
-inline void write(sstable_version_types v, file_writer& out, const std::pair<First, Second>& val) {
-    write(v, out, val.first, val.second);
-}
-
-template <typename Size, typename Key, typename Value>
-inline void write(sstable_version_types v, file_writer& out, const disk_hash<Size, Key, Value>& h) {
-    Size len = 0;
-    check_truncate_and_assign(len, h.map.size());
-    write(v, out, len);
-    write(v, out, h.map);
 }
 
 // Abstract parser/sizer/writer for a single tagged member of a tagged union
@@ -1603,98 +1420,6 @@ static composite::eoc bound_kind_to_end_marker(bound_kind end_kind) {
          : composite::eoc::end;
 }
 
-class bytes_writer_for_column_name {
-    bytes _buf;
-    bytes::iterator _pos;
-public:
-    void prepare(size_t size) {
-        _buf = bytes(bytes::initialized_later(), size);
-        _pos = _buf.begin();
-    }
-
-    template<typename... Args>
-    void write(Args&&... args) {
-        auto write_one = [this] (bytes_view data) {
-            _pos = std::copy(data.begin(), data.end(), _pos);
-        };
-        auto ignore = { (write_one(bytes_view(args)), 0)... };
-        (void)ignore;
-    }
-
-    bytes&& release() && {
-        return std::move(_buf);
-    }
-};
-
-class file_writer_for_column_name {
-    sstable_version_types _v;
-    file_writer& _fw;
-public:
-    file_writer_for_column_name(sstable_version_types v, file_writer& fw) : _v(v), _fw(fw) { }
-
-    void prepare(uint16_t size) {
-        sstables::write(_v, _fw, size);
-    }
-
-    template<typename... Args>
-    void write(Args&&... args) {
-        sstables::write(_v, _fw, std::forward<Args>(args)...);
-    }
-};
-
-template<typename Writer>
-static void write_compound_non_dense_column_name(sstable_version_types v, Writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
-    // was defined in the schema, for example.
-    auto c = composite::from_exploded(column_names, true, marker);
-    auto ck_bview = bytes_view(clustering_key);
-
-    // The marker is not a component, so if the last component is empty (IOW,
-    // only serializes to the marker), then we just replace the key's last byte
-    // with the marker. If the component however it is not empty, then the
-    // marker should be in the end of it, and we just join them together as we
-    // do for any normal component
-    if (c.size() == 1) {
-        ck_bview.remove_suffix(1);
-    }
-    size_t sz = ck_bview.size() + c.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(format("Column name too large ({:d} > {:d})", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    out.prepare(uint16_t(sz));
-    out.write(ck_bview, c);
-}
-
-static void write_compound_non_dense_column_name(sstable_version_types v, file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
-    auto w = file_writer_for_column_name(v, out);
-    write_compound_non_dense_column_name(v, w, clustering_key, column_names, marker);
-}
-
-template<typename Writer>
-static void write_column_name(sstable_version_types v, Writer& out, bytes_view column_names) {
-    size_t sz = column_names.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(format("Column name too large ({:d} > {:d})", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    out.prepare(uint16_t(sz));
-    out.write(column_names);
-}
-
-static void write_column_name(sstable_version_types v, file_writer& out, bytes_view column_names) {
-    auto w = file_writer_for_column_name(v, out);
-    write_column_name(v, w, column_names);
-}
-
-template<typename Writer>
-static void write_column_name(sstable_version_types v, Writer& out, const schema& s, const composite& clustering_element, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
-    if (s.is_dense()) {
-        write_column_name(v, out, bytes_view(clustering_element));
-    } else if (s.is_compound()) {
-        write_compound_non_dense_column_name(v, out, clustering_element, column_names, marker);
-    } else {
-        write_column_name(v, out, column_names[0]);
-    }
-}
-
 void sstable::write_range_tombstone_bound(file_writer& out,
         const schema& s,
         const composite& clustering_element,
@@ -1799,64 +1524,9 @@ void sstable::maybe_flush_pi_block(file_writer& out,
     }
 }
 
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-void write_cell_value(W& out, const abstract_type& type, bytes_view value) {
-    if (!value.empty()) {
-        if (type.value_length_if_fixed()) {
-            write(sstable_version_types::mc, out, value);
-        } else {
-            write_vint(out, value.size());
-            write(sstable_version_types::mc, out, value);
-        }
-    }
-}
-
-template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
-void write_cell_value(W& out, const abstract_type& type, atomic_cell_value_view value) {
-    if (!value.empty()) {
-        if (!type.value_length_if_fixed()) {
-            write_vint(out, value.size_bytes());
-        }
-        using boost::range::for_each;
-        for_each(value, [&] (bytes_view fragment) { write(sstable_version_types::mc, out, fragment); });
-    }
-}
-
 static inline void update_cell_stats(column_stats& c_stats, api::timestamp_type timestamp) {
     c_stats.update_timestamp(timestamp);
     c_stats.cells_count++;
-}
-
-template <typename WriteLengthFunc, typename W>
-GCC6_CONCEPT(requires Writer<W>())
-static void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v, WriteLengthFunc&& write_len_func) {
-    auto shard_count = ccv.shard_count();
-    static constexpr auto header_entry_size = sizeof(int16_t);
-    static constexpr auto counter_shard_size = 32u; // counter_id: 16 + clock: 8 + value: 8
-    auto total_size = sizeof(int16_t) + shard_count * (header_entry_size + counter_shard_size);
-
-    write_len_func(out, uint32_t(total_size));
-    write(v, out, int16_t(shard_count));
-    for (auto i = 0u; i < shard_count; i++) {
-        write<int16_t>(v, out, std::numeric_limits<int16_t>::min() + i);
-    }
-    auto write_shard = [&] (auto&& s) {
-        auto uuid = s.id().to_uuid();
-        write(v, out, int64_t(uuid.get_most_significant_bits()),
-              int64_t(uuid.get_least_significant_bits()),
-              int64_t(s.logical_clock()), int64_t(s.value()));
-    };
-    if (service::get_local_storage_service().cluster_supports_correct_counter_order()) {
-        for (auto&& s : ccv.shards()) {
-            write_shard(s);
-        }
-    } else {
-        for (auto&& s : ccv.shards_compatible_with_1_7_4()) {
-            write_shard(s);
-        }
-    }
 }
 
 // Intended to write all cell components that follow column name.
