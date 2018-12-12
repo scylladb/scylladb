@@ -25,7 +25,7 @@
 #include <seastar/core/distributed.hh>
 #include "auth/service.hh"
 #include "db/system_distributed_keyspace.hh"
-#include "database.hh"
+#include "database_fwd.hh"
 #include "log.hh"
 #include "seastarx.hh"
 

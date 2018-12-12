@@ -46,7 +46,7 @@
 #include "unimplemented.hh"
 #include "timestamp.hh"
 #include "db_clock.hh"
-#include "database.hh"
+#include "database_fwd.hh"
 #include "auth/authenticated_user.hh"
 #include "auth/authenticator.hh"
 #include "auth/permission.hh"

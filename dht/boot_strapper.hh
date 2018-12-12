@@ -40,7 +40,8 @@
 #include "locator/token_metadata.hh"
 #include "dht/i_partitioner.hh"
 #include <unordered_set>
-#include "database.hh"
+#include "database_fwd.hh"
+#include <seastar/core/distributed.hh>
 
 namespace dht {
 

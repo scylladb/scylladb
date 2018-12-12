@@ -27,6 +27,7 @@
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
 #include "cql3/constants.hh"
+#include "database.hh"
 
 namespace cql3 {
 namespace functions {

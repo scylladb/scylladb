@@ -36,6 +36,7 @@
 #include "tracing/tracing.hh"
 #include "digest_algorithm.hh"
 #include "streaming/stream_reason.hh"
+#include "cache_temperature.hh"
 
 #include <seastar/net/tls.hh>
 

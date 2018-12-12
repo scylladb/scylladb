@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
-#include "database.hh"
+#include "database_fwd.hh"
 #include "service/storage_proxy.hh"
 #include <seastar/http/httpd.hh>
 

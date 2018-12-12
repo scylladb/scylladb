@@ -22,6 +22,7 @@
 #include "api/config.hh"
 #include "api/api-doc/config.json.hh"
 #include "db/config.hh"
+#include "database.hh"
 #include <sstream>
 #include <boost/algorithm/string/replace.hpp>
 

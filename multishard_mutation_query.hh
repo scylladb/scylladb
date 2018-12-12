@@ -21,7 +21,12 @@
 
 #pragma once
 
-#include "database.hh"
+#include "database_fwd.hh"
+#include "schema.hh"
+#include "mutation_query.hh"
+#include "cache_temperature.hh"
+
+#include <seastar/core/distributed.hh>
 
 /// Run the mutation query on all shards.
 ///

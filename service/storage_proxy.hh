@@ -41,11 +41,12 @@
 
 #pragma once
 
-#include "database.hh"
+#include "database_fwd.hh"
 #include "query-request.hh"
 #include "query-result.hh"
 #include "query-result-set.hh"
 #include <seastar/core/distributed.hh>
+#include <seastar/core/execution_stage.hh>
 #include "db/consistency_level_type.hh"
 #include "db/read_repair_decision.hh"
 #include "db/write_type.hh"
@@ -56,6 +57,14 @@
 #include <seastar/core/metrics.hh>
 #include "frozen_mutation.hh"
 #include "storage_proxy_stats.hh"
+#include "cache_temperature.hh"
+#include "mutation_query.hh"
+
+namespace locator {
+
+class token_metadata;
+
+}
 
 namespace compat {
 
