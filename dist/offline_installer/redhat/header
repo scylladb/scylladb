@@ -43,7 +43,13 @@ if [ "$(id -u)" != "0" ]; then
     echo "Error: root user required"
     exit 1
 fi
-yum install -y *.rpm
+cat << EOS > /etc/yum.repos.d/scylla_offline.repo
+[scylla]
+name=scylla_offline
+baseurl=file://$(pwd)
+EOS
+yum install --nogpgcheck -y scylla sudo ntp ntpdate net-tools kernel-tools
+rm -f /etc/yum.repos.d/scylla_offline.repo
 if [ $SKIP_SETUP -eq 0 ]; then
     /usr/lib/scylla/scylla_setup
 fi
