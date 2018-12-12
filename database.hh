@@ -87,6 +87,7 @@
 #include "querier.hh"
 #include "mutation_query.hh"
 #include "db/large_partition_handler.hh"
+#include "cache_temperature.hh"
 #include <unordered_set>
 
 class cell_locker;
@@ -279,20 +280,6 @@ struct cf_stats {
     int64_t clustering_filter_fast_path_count = 0;
     // how many sstables survived the clustering key checks
     int64_t surviving_sstables_after_clustering_filter = 0;
-};
-
-class cache_temperature {
-    float hit_rate;
-    explicit cache_temperature(uint8_t hr) : hit_rate(hr/255.0f) {}
-public:
-    uint8_t get_serialized_temperature() const {
-        return hit_rate * 255;
-    }
-    cache_temperature() : hit_rate(0) {}
-    explicit cache_temperature(float hr) : hit_rate(hr) {}
-    explicit operator float() const { return hit_rate; }
-    static cache_temperature invalid() { return cache_temperature(-1.0f); }
-    friend struct ser::serializer<cache_temperature>;
 };
 
 class table;
