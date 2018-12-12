@@ -878,6 +878,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         }
     }
 
+    bool is_member = _token_metadata.is_member(endpoint);
     // Update pending ranges after update of normal tokens immediately to avoid
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
@@ -906,7 +907,10 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         db::system_keyspace::update_local_tokens(std::unordered_set<dht::token>(), local_tokens_to_remove).discard_result().get();
     }
 
-    notify_joined(endpoint);
+    // Send joined notification only when this node was not a member prior to this
+    if (!is_member) {
+        notify_joined(endpoint);
+    }
 
     update_pending_ranges().get();
     if (slogger.is_enabled(logging::log_level::debug)) {
