@@ -69,7 +69,7 @@ future<> cql_table_large_partition_handler::update_large_partitions(const schema
     .then_wrapped([ks_name, cf_name, key_str, partition_size](auto&& f) {
         try {
             f.get();
-            large_partition_logger.warn("Writing large row {}/{}:{} ({} bytes)", ks_name, cf_name, key_str, partition_size);
+            large_partition_logger.warn("Writing large partition {}/{}:{} ({} bytes)", ks_name, cf_name, key_str, partition_size);
         } catch (...) {
             large_partition_logger.warn("Failed to update {}: {}", db::system_keyspace::LARGE_PARTITIONS, std::current_exception());
         }
