@@ -615,9 +615,8 @@ public:
                 return bound_kind::incl_start;
             case composite::eoc::end:
                 return bound_kind::excl_start;
-            default:
-                throw malformed_sstable_exception(format("Unexpected start composite marker {:d}\n", uint16_t(uint8_t(found))));
         }
+        throw malformed_sstable_exception(format("Unexpected start composite marker {:d}\n", uint16_t(uint8_t(found))));
     }
 
     static bound_kind end_marker_to_bound_kind(bytes_view component) {
@@ -631,9 +630,8 @@ public:
                 return bound_kind::excl_end;
             case composite::eoc::end:
                 return bound_kind::incl_end;
-            default:
-                throw malformed_sstable_exception(format("Unexpected start composite marker {:d}\n", uint16_t(uint8_t(found))));
         }
+        throw malformed_sstable_exception(format("Unexpected start composite marker {:d}\n", uint16_t(uint8_t(found))));
     }
 
     virtual proceed consume_range_tombstone(
