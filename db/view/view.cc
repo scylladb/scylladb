@@ -1643,5 +1643,22 @@ future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& v
     });
 }
 
+update_backlog node_update_backlog::add_fetch(unsigned shard, update_backlog backlog) {
+    _backlogs[shard].backlog.store(backlog, std::memory_order_relaxed);
+    auto now = clock::now();
+    if (now >= _last_update.load(std::memory_order_relaxed) + _interval) {
+        _last_update.store(now, std::memory_order_relaxed);
+        auto new_max = boost::accumulate(
+                _backlogs,
+                update_backlog::no_backlog(),
+                [] (const update_backlog& lhs, const per_shard_backlog& rhs) {
+                    return std::max(lhs, rhs.load());
+                });
+        _max.store(new_max, std::memory_order_relaxed);
+        return new_max;
+    }
+    return std::max(backlog, _max.load(std::memory_order_relaxed));
+}
+
 } // namespace view
 } // namespace db
