@@ -24,6 +24,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "database.hh"
+#include "db/view/node_view_update_backlog.hh"
 #include "db/view/view_builder.hh"
 
 #include "tests/test-utils.hh"
@@ -3670,4 +3671,15 @@ SEASTAR_TEST_CASE(test_unselected_column) {
         } catch (exceptions::invalid_request_exception&) {
         }
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
+    db::view::node_update_backlog b(2, 10ms);
+    auto backlog = [] (size_t size) { return db::view::update_backlog{size, 1000}; };
+    b.add_fetch(0, backlog(10));
+    b.add_fetch(1, backlog(50));
+    BOOST_REQUIRE(b.load() == backlog(10));
+    sleep(11ms).get();
+    b.add_fetch(1, backlog(100));
+    BOOST_REQUIRE(b.load() == backlog(100));
 }
