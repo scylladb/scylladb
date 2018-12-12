@@ -73,6 +73,26 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
     return broken_sst(dir, generation, s, msg);
 }
 
+SEASTAR_THREAD_TEST_CASE(broken_start_composite) {
+    schema_ptr s =
+        schema_builder("test_ks", "test_table")
+            .with_column("test_key", utf8_type, column_kind::partition_key)
+            .with_column("test_val", utf8_type, column_kind::clustering_key)
+            .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/broken_start_composite", 76, s,
+        "Unexpected start composite marker 2 in sstable tests/sstables/broken_start_composite/la-76-big-Data.db");
+}
+
+SEASTAR_THREAD_TEST_CASE(broken_end_composite) {
+    schema_ptr s =
+        schema_builder("test_ks", "test_table")
+            .with_column("test_key", utf8_type, column_kind::partition_key)
+            .with_column("test_val", utf8_type, column_kind::clustering_key)
+            .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/broken_end_composite", 76, s,
+        "Unexpected end composite marker 3 in sstable tests/sstables/broken_end_composite/la-76-big-Data.db");
+}
+
 SEASTAR_THREAD_TEST_CASE(static_mismatch) {
     schema_ptr s =
         schema_builder("test_foo_bar_zed_baz_ks", "test_foo_bar_zed_baz_table")
