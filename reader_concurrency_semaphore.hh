@@ -128,6 +128,10 @@ public:
         explicit inactive_read_handle(uint64_t id)
             : _id(id) {
         }
+    public:
+        explicit operator bool() const {
+            return bool(_id);
+        }
     };
 
 private:
