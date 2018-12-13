@@ -80,12 +80,6 @@ public:
         size_t available_memory;
     };
 private:
-    struct rh_entry {
-        ::shared_ptr<abstract_write_response_handler> handler;
-        timer<clock_type> expire_timer;
-        rh_entry(::shared_ptr<abstract_write_response_handler>&& h);
-        rh_entry(rh_entry&&) = delete;
-    };
 
     using response_id_type = uint64_t;
     struct unique_response_handler {
@@ -145,7 +139,7 @@ public:
 private:
     distributed<database>& _db;
     response_id_type _next_response_id;
-    std::unordered_map<response_id_type, rh_entry> _response_handlers;
+    std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>> _response_handlers;
     // This buffer hold ids of throttled writes in case resource consumption goes
     // below the threshold and we want to unthrottle some of them. Without this throttled
     // request with dead or slow replica may wait for up to timeout ms before replying
