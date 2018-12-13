@@ -30,6 +30,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
+#include "sstables/compaction_manager.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
 #include "auth/service.hh"
@@ -358,6 +359,10 @@ public:
             auto stop_db = defer([db] {
                 db->stop().get();
             });
+
+            db->invoke_on_all([] (database& db) {
+                db.get_compaction_manager().start();
+            }).get();
 
             // FIXME: split
             tst_init_ms_fd_gossiper(*feature_service, db::config::seed_provider_type()).get();
