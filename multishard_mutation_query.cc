@@ -330,13 +330,16 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
         mutation_reader::forwarding) {
     auto& rs = _readers[shard];
 
-    if (!std::holds_alternative<successful_lookup_state>(rs) && !std::holds_alternative<inexistent_state>(rs)) {
-        mmq_log.warn("Unexpected request to create reader for shard {}. A reader for this shard was already created.", shard);
-        throw std::logic_error(sprint("Unexpected request to create reader for shard {}."
-                    " A reader for this shard was already created in the context of this read.", shard));
+    if (!std::holds_alternative<successful_lookup_state>(rs) && !std::holds_alternative<inexistent_state>(rs)
+            && !std::holds_alternative<evicted_state>(rs)) {
+        auto msg = format("Unexpected request to create reader for shard {}."
+                " The reader is expected to be in either `successful_lookup`, `inexistent` or `evicted` state,"
+                " but is in `{}` state instead.", shard, reader_state_to_string(rs));
+        mmq_log.warn(msg.c_str());
+        throw std::logic_error(msg.c_str());
     }
 
-    // The reader is either in inexistent or successful lookup state.
+    // The reader is either in inexistent, evicted or successful lookup state.
     if (auto current_state = std::get_if<successful_lookup_state>(&rs)) {
         auto reader = std::move(current_state->reader);
         rs = used_state{std::move(current_state->params), std::move(current_state->read_operation)};
