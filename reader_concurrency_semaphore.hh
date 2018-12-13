@@ -225,6 +225,9 @@ public:
 
     future<lw_shared_ptr<reader_permit>> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
 
+    /// Consume the specific amount of resources without waiting.
+    lw_shared_ptr<reader_permit> consume_resources(resources r);
+
     const resources available_resources() const {
         return _resources;
     }
