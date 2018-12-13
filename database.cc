@@ -2375,6 +2375,9 @@ database::setup_metrics() {
                        sm::description("Counts the total number of failed read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard.")),
 
+        sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().current; },
+                       sm::description("Holds the current size in bytes of the pending view updates for all tables")),
+
         sm::make_derive("querier_cache_lookups", _querier_cache.get_stats().lookups,
                        sm::description("Counts querier cache lookups (paging queries)")),
 
