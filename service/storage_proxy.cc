@@ -214,6 +214,7 @@ protected:
     size_t _all_failures = 0; // total amount of failures
     size_t _total_endpoints = 0;
     storage_proxy::write_stats& _stats;
+    timer<storage_proxy::clock_type> _expire_timer;
 
 protected:
     virtual bool waited_for(gms::inet_address from) = 0;
@@ -228,7 +229,7 @@ public:
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, tracing::trace_state_ptr trace_state,
             storage_proxy::write_stats& stats, size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
             : _id(p->get_next_response_id()), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
-              _dead_endpoints(std::move(dead_endpoints)), _stats(stats) {
+              _dead_endpoints(std::move(dead_endpoints)), _stats(stats), _expire_timer([this] { timeout_cb(); }) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
         // or we may fail the consistency level guarantees (see #833, #8058)
@@ -322,6 +323,12 @@ public:
             // leftover targets are all reported error, so nothing to wait for any longer
             timeout_cb();
         }
+    }
+    void expire_at(storage_proxy::clock_type::time_point timeout) {
+        _expire_timer.arm(timeout);
+    }
+    void on_released() {
+        _expire_timer.cancel();
     }
     void timeout_cb() {
         if (_cl_achieved || _cl == db::consistency_level::ANY) {
@@ -503,7 +510,7 @@ void storage_proxy::unthrottle() {
        _throttled_writes.pop_front();
        auto it = _response_handlers.find(id);
        if (it != _response_handlers.end()) {
-           it->second.handler->unthrottle();
+           it->second->unthrottle();
        }
    }
 }
@@ -516,17 +523,19 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
 }
 
 void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) {
-    _response_handlers.erase(id);
+    auto entry = _response_handlers.find(id);
+    entry->second->on_released();
+    _response_handlers.erase(std::move(entry));
 }
 
 void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_address from) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
-        tracing::trace(it->second.handler->get_trace_state(), "Got a response from /{}", from);
-        if (it->second.handler->response(from)) {
+        tracing::trace(it->second->get_trace_state(), "Got a response from /{}", from);
+        if (it->second->response(from)) {
             remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
         } else {
-            it->second.handler->check_for_early_completion();
+            it->second->check_for_early_completion();
         }
     }
 }
@@ -534,25 +543,23 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
 void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
-        tracing::trace(it->second.handler->get_trace_state(), "Got {} failures from /{}", count, from);
-        if (it->second.handler->failure_response(from, count)) {
+        tracing::trace(it->second->get_trace_state(), "Got {} failures from /{}", count, from);
+        if (it->second->failure_response(from, count)) {
             remove_response_handler(id);
         } else {
-            it->second.handler->check_for_early_completion();
+            it->second->check_for_early_completion();
         }
     }
 }
 
 future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
-    auto& e = _response_handlers.find(id)->second;
-
-    e.expire_timer.arm(timeout);
-
-    return e.handler->wait();
+    auto& handler = _response_handlers.find(id)->second;
+    handler->expire_at(timeout);
+    return handler->wait();
 }
 
 ::shared_ptr<abstract_write_response_handler>& storage_proxy::get_write_response_handler(storage_proxy::response_id_type id) {
-        return _response_handlers.find(id)->second.handler;
+        return _response_handlers.find(id)->second;
 }
 
 storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
@@ -800,8 +807,6 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
     _hints_resource_manager.register_manager(_hints_for_views_manager);
 }
-
-storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h) : handler(std::move(h)), expire_timer([this] { handler->timeout_cb(); }) {}
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
 storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) : id(x.id), p(x.p) { x.id = 0; };
