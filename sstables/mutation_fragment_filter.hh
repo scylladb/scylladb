@@ -81,18 +81,17 @@ public:
     }
 
     result apply(const clustering_row& cr) {
+        if (is_after_fwd_window(cr.position())) {
+            // This happens only when fwd is set
+            _out_of_range = true;
+            return result::store_and_finish;
+        }
         bool inside_requested_ranges = _walker.advance_to(cr.position());
         _out_of_range |= _walker.out_of_range();
         if (!inside_requested_ranges) {
             return result::ignore;
         }
-        if (is_after_fwd_window(cr.position())) {
-            // This happens only when fwd is set
-            _out_of_range = true;
-            return result::store_and_finish;
-        } else {
-            return result::emit;
-        }
+        return result::emit;
     }
 
     result apply(const range_tombstone& rt) {
