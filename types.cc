@@ -49,6 +49,7 @@
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
 #include "utils/utf8.hh"
+#include "utils/ascii.hh"
 #include "mutation_partition.hh"
 #include "json.hh"
 
@@ -336,7 +337,7 @@ struct string_type_impl : public concrete_type<sstring> {
     }
     virtual void validate(bytes_view v) const override {
         if (as_cql3_type() == cql3::cql3_type::ascii) {
-            if (std::any_of(v.begin(), v.end(), [] (int8_t b) { return b < 0; })) {
+            if (!utils::ascii::validate(v)) {
                 throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
             }
         } else {
