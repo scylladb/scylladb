@@ -88,6 +88,11 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on materialized views");
     }
 
+    if (schema->is_dense()) {
+        throw exceptions::invalid_request_exception(
+                "Secondary indexes are not supported on COMPACT STORAGE tables that have clustering columns");
+    }
+
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {
         targets.emplace_back(raw_target->prepare(schema));
@@ -122,8 +127,7 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
         }
 
         // Origin TODO: we could lift that limitation
-        if ((schema->is_dense() || !schema->thrift().has_compound_comparator()) &&
-            cd->kind != column_kind::regular_column) {
+        if ((schema->is_dense() || !schema->thrift().has_compound_comparator()) && cd->is_primary_key()) {
             throw exceptions::invalid_request_exception(
                     "Secondary indexes are not supported on PRIMARY KEY columns in COMPACT STORAGE tables");
         }
