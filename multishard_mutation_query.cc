@@ -204,6 +204,8 @@ class read_context : public reader_lifecycle_policy {
 
     gate _dismantling_gate;
 
+    static std::string_view reader_state_to_string(const reader_state& rs);
+
     static future<bundled_remote_reader> do_make_remote_reader(
             distributed<database>& db,
             shard_id shard,
@@ -271,6 +273,28 @@ public:
 
     future<> stop();
 };
+
+// Deliberatly not using the `reader_state` alias here, so that we can enlist
+// the help of the compiler to keep this up-to-date.
+std::string_view read_context::reader_state_to_string(const std::variant<
+        inexistent_state,
+        successful_lookup_state,
+        used_state,
+        paused_state,
+        evicted_state,
+        dismantling_state,
+        ready_to_save_state>& rs) {
+    static const std::array<const char*, 7> reader_state_names{
+        "inexistent",
+        "successful_lookup",
+        "used",
+        "paused",
+        "evicted",
+        "dismantling",
+        "ready_to_save",
+    };
+    return reader_state_names.at(rs.index());
+}
 
 future<read_context::bundled_remote_reader> read_context::do_make_remote_reader(
         distributed<database>& db,
@@ -352,9 +376,9 @@ void read_context::dismantle_reader(shard_id shard, future<paused_or_stopped_rea
             // Do nothing for evicted readers.
             } else if (!std::holds_alternative<evicted_state>(rs)) {
                 mmq_log.warn(
-                        "Unexpected request to dismantle reader in state {} for shard {}."
+                        "Unexpected request to dismantle reader in state `{}` for shard {}."
                         " Reader was not created nor is in the process of being created.",
-                        rs.index(),
+                        reader_state_to_string(rs),
                         shard);
             }
         });
