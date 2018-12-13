@@ -25,6 +25,8 @@
 
 #include <boost/range/adaptor/reversed.hpp>
 
+#include <fmt/ostream.h>
+
 logging::logger mmq_log("multishard_mutation_query");
 
 template <typename T>
@@ -171,6 +173,9 @@ class read_context : public reader_lifecycle_policy {
         size_t partitions = 0;
         size_t fragments = 0;
         size_t bytes = 0;
+        size_t discarded_partitions = 0;
+        size_t discarded_fragments = 0;
+        size_t discarded_bytes = 0;
 
         void add(const schema& s, const mutation_fragment& mf) {
             partitions += unsigned(mf.is_partition_start());
@@ -189,6 +194,35 @@ class read_context : public reader_lifecycle_policy {
             ++partitions;
             ++fragments;
             bytes += ps.memory_usage(s);
+        }
+        void add_discarded(const schema& s, const mutation_fragment& mf) {
+            discarded_partitions += unsigned(mf.is_partition_start());
+            ++discarded_fragments;
+            discarded_bytes += mf.memory_usage(s);
+        }
+        void add_discarded(const schema& s, const range_tombstone& rt) {
+            ++discarded_fragments;
+            discarded_bytes += rt.memory_usage(s);
+        }
+        void add_discarded(const schema& s, const static_row& sr) {
+            ++discarded_fragments;
+            discarded_bytes += sr.memory_usage(s);
+        }
+        void add_discarded(const schema& s, const partition_start& ps) {
+            ++discarded_partitions;
+            ++discarded_fragments;
+            discarded_bytes += ps.memory_usage(s);
+        }
+        friend std::ostream& operator<<(std::ostream& os, const dismantle_buffer_stats& s) {
+            os << format(
+                    "kept {} partitions/{} fragments/{} bytes, discarded {} partitions/{} fragments/{} bytes",
+                    s.partitions,
+                    s.fragments,
+                    s.bytes,
+                    s.discarded_partitions,
+                    s.discarded_fragments,
+                    s.discarded_bytes);
+            return os;
         }
     };
 
@@ -606,12 +640,10 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
         auto last_pkey = compaction_state.partition_start.key();
 
         const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
-        tracing::trace(_trace_state, "Dismantled combined buffer: {} partitions/{} fragments/{} bytes", cb_stats.partitions, cb_stats.fragments,
-                cb_stats.bytes);
+        tracing::trace(_trace_state, "Dismantled combined buffer: {}", cb_stats);
 
         const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
-        tracing::trace(_trace_state, "Dismantled compaction state: {} partitions/{} fragments/{} bytes", cs_stats.partitions, cs_stats.fragments,
-                cs_stats.bytes);
+        tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
 
         return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
                 const std::optional<clustering_key_prefix>& last_ckey) {
