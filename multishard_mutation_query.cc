@@ -460,7 +460,21 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
     for (;rit != rend; ++rit) {
         if (rit->is_partition_start()) {
             const auto shard = partitioner.shard_of(rit->as_partition_start().key().token());
-            auto& shard_buffer = std::get<dismantling_state>(_readers[shard]).buffer;
+            auto maybe_dismantling_state = std::get_if<dismantling_state>(&_readers[shard]);
+
+            // It is possible that the reader this partition originates from
+            // does not exist anymore. Either because we failed stopping it or
+            // because it was evicted.
+            if (!maybe_dismantling_state) {
+                for (auto& smf : tmp_buffer) {
+                    stats.add_discarded(*_schema, smf);
+                }
+                stats.add_discarded(*_schema, *rit);
+                tmp_buffer.clear();
+                continue;
+            }
+
+            auto& shard_buffer = maybe_dismantling_state->buffer;
             for (auto& smf : tmp_buffer) {
                 stats.add(*_schema, smf);
                 shard_buffer.emplace_front(std::move(smf));
@@ -484,10 +498,26 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
 }
 
 read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(detached_compaction_state compaction_state) {
+    auto stats = dismantle_buffer_stats();
     auto& partitioner = dht::global_partitioner();
     const auto shard = partitioner.shard_of(compaction_state.partition_start.key().token());
-    auto& shard_buffer = std::get<dismantling_state>(_readers[shard]).buffer;
-    auto stats = dismantle_buffer_stats();
+    auto maybe_dismantling_state = std::get_if<dismantling_state>(&_readers[shard]);
+
+    // It is possible that the reader this partition originates from does not
+    // exist anymore. Either because we failed stopping it or because it was
+    // evicted.
+    if (!maybe_dismantling_state) {
+        for (auto& rt : compaction_state.range_tombstones) {
+            stats.add_discarded(*_schema, rt);
+        }
+        if (compaction_state.static_row) {
+            stats.add_discarded(*_schema, *compaction_state.static_row);
+        }
+        stats.add_discarded(*_schema, compaction_state.partition_start);
+        return stats;
+    }
+
+    auto& shard_buffer = maybe_dismantling_state->buffer;
 
     for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
         stats.add(*_schema, rt);
