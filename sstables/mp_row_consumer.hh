@@ -1062,12 +1062,12 @@ public:
         return proceed::no;
     }
 
-    virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
+    virtual consumer_m::row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
         _in_progress_row.emplace(clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
             [] (const temporary_buffer<char>& b) { return to_bytes_view(b); })));
         sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", this, _in_progress_row->position());
         _cells.clear();
-        return proceed::yes;
+        return consumer_m::do_proceed{};
     }
 
     virtual proceed consume_row_marker_and_tombstone(
@@ -1082,12 +1082,12 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_static_row_start() override {
+    virtual consumer_m::row_processing_result consume_static_row_start() override {
         sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", this);
         _inside_static_row = true;
         _in_progress_static_row = static_row();
         _cells.clear();
-        return proceed::yes;
+        return consumer_m::do_proceed{};
     }
 
     virtual proceed consume_column(const column_translation::column_info& column_info,

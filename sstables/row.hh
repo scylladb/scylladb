@@ -44,6 +44,8 @@
 #include "tombstone.hh"
 #include "m_format_read_helpers.hh"
 
+#include <variant>
+
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
 //
@@ -140,6 +142,18 @@ class consumer_m {
 public:
     using proceed = data_consumer::proceed;
 
+    // Causes the parser to return the control to the caller without advancing.
+    // Next time when the parser is called, the same consumer method will be called.
+    struct retry_later {};
+
+    // Causes the parser to proceed to the next element.
+    struct do_proceed {};
+
+    // Causes the parser to skip the whole row. consume_row_end() will not be called for the current row.
+    struct skip_row {};
+
+    using row_processing_result = std::variant<retry_later, do_proceed, skip_row>;
+
     consumer_m(reader_resource_tracker resource_tracker, const io_priority_class& pc)
     : _resource_tracker(resource_tracker)
     , _pc(pc) {
@@ -160,12 +174,12 @@ public:
     // proceed consuming more data.
     virtual proceed consume_partition_end() = 0;
 
-    virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
+    virtual row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
 
     virtual proceed consume_row_marker_and_tombstone(
             const sstables::liveness_info& info, tombstone tomb, tombstone shadowable_tomb) = 0;
 
-    virtual proceed consume_static_row_start() = 0;
+    virtual row_processing_result consume_static_row_start() = 0;
 
     virtual proceed consume_column(const sstables::column_translation::column_info& column_info,
                                    bytes_view cell_path,
@@ -574,7 +588,6 @@ private:
         CK_BLOCK_HEADER,
         CK_BLOCK2,
         CK_BLOCK_END,
-        CLUSTERING_ROW_CONSUME,
         ROW_BODY,
         ROW_BODY_SIZE,
         ROW_BODY_PREV_SIZE,
@@ -633,6 +646,7 @@ private:
 
     unfiltered_flags_m _flags{0};
     unfiltered_extended_flags_m _extended_flags{0};
+    uint64_t _next_row_offset;
     liveness_info _liveness;
     bool _is_first_unfiltered = true;
 
@@ -758,7 +772,6 @@ public:
                 || _state == state::CLUSTERING_ROW
                 || _state == state::CK_BLOCK_HEADER
                 || _state == state::CK_BLOCK_END
-                || _state == state::CLUSTERING_ROW_CONSUME
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
                 || _state == state::ROW_BODY_DELETION_3
                 || _state == state::ROW_BODY_MISSING_COLUMNS_2
@@ -851,7 +864,6 @@ private:
                 if (_is_first_unfiltered) {
                     start_row(_static_row);
                     _is_first_unfiltered = false;
-                    _consumer.consume_static_row_start();
                     goto row_body_label;
                 } else {
                     throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
@@ -870,7 +882,7 @@ private:
                 if (_reading_range_tombstone_ck) {
                     goto range_tombstone_consume_ck_label;
                 } else {
-                    goto clustering_row_consume_label;
+                    goto row_body_label;
                 }
             }
             if (!should_read_block_header()) {
@@ -914,16 +926,6 @@ private:
             move_to_next_ck_block();
             _state = state::CK_BLOCK;
             goto ck_block_label;
-        case state::CLUSTERING_ROW_CONSUME:
-        clustering_row_consume_label:
-            {
-                auto ret = _consumer.consume_row_start(_row_key);
-                _row_key.clear();
-                _state = state::ROW_BODY;
-                if (ret == consumer_m::proceed::no) {
-                    return consumer_m::proceed::no;
-                }
-            }
         case state::ROW_BODY:
         row_body_label:
             if (read_unsigned_vint(data) != read_status::ready) {
@@ -931,13 +933,27 @@ private:
                 break;
             }
         case state::ROW_BODY_SIZE:
-            // Ignore the result
+            _next_row_offset = position() - data.size() + _u64;
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_PREV_SIZE;
                 break;
             }
         case state::ROW_BODY_PREV_SIZE:
+          {
             // Ignore the result
+            consumer_m::row_processing_result ret = _extended_flags.is_static()
+                ? _consumer.consume_static_row_start()
+                : _consumer.consume_row_start(_row_key);
+
+            if (std::holds_alternative<consumer_m::retry_later>(ret)) {
+                _state = state::ROW_BODY_PREV_SIZE;
+                return consumer_m::proceed::no;
+            } else if (std::holds_alternative<consumer_m::skip_row>(ret)) {
+                _state = state::FLAGS;
+                auto current_pos = position() - data.size();
+                return skip(data, _next_row_offset - current_pos);
+            }
+
             if (!_flags.has_timestamp()) {
                 _state = state::ROW_BODY_DELETION;
                 goto row_body_deletion_label;
@@ -946,6 +962,7 @@ private:
                 _state = state::ROW_BODY_TIMESTAMP;
                 break;
             }
+          }
         case state::ROW_BODY_TIMESTAMP:
             _liveness.set_timestamp(_u64);
             if (!_flags.has_ttl()) {
