@@ -109,6 +109,11 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
                     sprint("No column definition found for column %s", *target->column));
         }
 
+        //NOTICE(sarna): Should be lifted after resolving issue #2963
+        if (cd->is_static()) {
+            throw exceptions::invalid_request_exception("Indexing static columns is not implemented yet.");
+        }
+
         if (cd->type->references_duration()) {
             using request_validations::check_false;
             const auto& ty = *cd->type;
