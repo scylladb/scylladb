@@ -23,6 +23,7 @@
 
 // database.hh
 class database;
+class keyspace;
 class table;
 using column_family = table;
 class memtable_list;

@@ -22,6 +22,7 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "multishard_mutation_query.hh"
+#include "database.hh"
 
 #include <boost/range/adaptor/reversed.hpp>
 

@@ -54,7 +54,7 @@
 #include <seastar/core/semaphore.hh>
 #include "utils/fb_utilities.hh"
 #include "utils/serialized_action.hh"
-#include "database.hh"
+#include "database_fwd.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>

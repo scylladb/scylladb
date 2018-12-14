@@ -28,7 +28,8 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 
-#include "database.hh"
+#include "database_fwd.hh"
+#include "flat_mutation_reader.hh"
 #include "utils/UUID.hh"
 
 

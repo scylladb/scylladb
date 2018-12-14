@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 ScyllaDB
+ * Copyright 2018 ScyllaDB
  */
 
 /*
@@ -19,18 +19,27 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef APPS_SEASTAR_THRIFT_HANDLER_HH_
-#define APPS_SEASTAR_THRIFT_HANDLER_HH_
+#pragma once
 
-#include "Cassandra.h"
-#include "auth/service.hh"
-#include "database_fwd.hh"
-#include <seastar/core/distributed.hh>
-#include "cql3/query_processor.hh"
-#include <memory>
+#include <stdint.h>
 
-struct timeout_config;
+namespace ser {
 
-std::unique_ptr<::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, timeout_config);
+template <typename T>
+class serializer;
 
-#endif /* APPS_SEASTAR_THRIFT_HANDLER_HH_ */
+};
+
+class cache_temperature {
+    float hit_rate;
+    explicit cache_temperature(uint8_t hr) : hit_rate(hr/255.0f) {}
+public:
+    uint8_t get_serialized_temperature() const {
+        return hit_rate * 255;
+    }
+    cache_temperature() : hit_rate(0) {}
+    explicit cache_temperature(float hr) : hit_rate(hr) {}
+    explicit operator float() const { return hit_rate; }
+    static cache_temperature invalid() { return cache_temperature(-1.0f); }
+    friend struct ser::serializer<cache_temperature>;
+};

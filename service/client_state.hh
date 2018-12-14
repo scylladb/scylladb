@@ -46,7 +46,7 @@
 #include "unimplemented.hh"
 #include "timestamp.hh"
 #include "db_clock.hh"
-#include "database.hh"
+#include "database_fwd.hh"
 #include "auth/authenticated_user.hh"
 #include "auth/authenticator.hh"
 #include "auth/permission.hh"
@@ -280,15 +280,7 @@ public:
     /// \return The shared_ptr created on a local shard pointing to the auth::authenticated_user object equal to the *orig._user.
     ::shared_ptr<auth::authenticated_user> local_user_copy(const service::client_state& orig) const;
 
-    void set_keyspace(seastar::sharded<database>& db, sstring keyspace) {
-        // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
-        // call set_keyspace() before calling login(), and we have to handle that.
-        if (_user && !db.local().has_keyspace(keyspace)) {
-            throw exceptions::invalid_request_exception(format("Keyspace '{}' does not exist", keyspace));
-        }
-        _keyspace = keyspace;
-        _dirty = true;
-    }
+    void set_keyspace(seastar::sharded<database>& db, sstring keyspace);
 
     void set_raw_keyspace(sstring new_keyspace) noexcept {
         _keyspace = std::move(new_keyspace);

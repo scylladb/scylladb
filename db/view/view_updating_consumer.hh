@@ -26,6 +26,7 @@
 #include "schema.hh"
 #include "mutation_fragment.hh"
 #include "sstables/shared_sstable.hh"
+#include "database.hh"
 
 namespace db::view {
 

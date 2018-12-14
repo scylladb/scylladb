@@ -28,6 +28,7 @@
 #include "statement_restrictions.hh"
 #include "single_column_primary_key_restrictions.hh"
 #include "token_restriction.hh"
+#include "database.hh"
 
 #include "cql3/single_column_relation.hh"
 #include "cql3/constants.hh"

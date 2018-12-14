@@ -27,7 +27,7 @@
 #include <boost/range/algorithm/find_if.hpp>
 
 #include "clustering_bounds_comparator.hh"
-#include "database.hh"
+#include "database_fwd.hh"
 #include "db/system_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "mutation_reader.hh"

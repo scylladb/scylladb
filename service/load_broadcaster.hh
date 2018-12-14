@@ -40,7 +40,7 @@
 
 #pragma once
 
-#include "database.hh"
+#include "database_fwd.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
 
