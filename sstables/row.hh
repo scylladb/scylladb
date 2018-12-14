@@ -638,8 +638,23 @@ private:
 
     std::vector<temporary_buffer<char>> _row_key;
 
-    boost::iterator_range<std::vector<column_translation::column_info>::const_iterator> _columns;
-    boost::dynamic_bitset<uint64_t> _columns_selector;
+    struct row_schema {
+        using column_range = boost::iterator_range<std::vector<column_translation::column_info>::const_iterator>;
+
+        // All columns for this kind of row inside column_translation of the current sstable
+        column_range _all_columns;
+
+        // Subrange of _all_columns which is yet to be processed for current row
+        column_range _columns;
+
+        // Represents the subset of _all_columns present in current row
+        boost::dynamic_bitset<uint64_t> _columns_selector; // size() == _columns.size()
+    };
+
+    row_schema _regular_row;
+    row_schema _static_row;
+    row_schema* _row;
+
     uint64_t _missing_columns_to_read;
 
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
@@ -672,34 +687,36 @@ private:
      */
     tombstone _left_range_tombstone;
     tombstone _right_range_tombstone;
-    void setup_columns(const std::vector<column_translation::column_info>& columns) {
-        _columns = boost::make_iterator_range(columns);
+    void start_row(row_schema& rs) {
+        _row = &rs;
+        _row->_columns = _row->_all_columns;
     }
-    bool is_current_column_present() {
-        return _columns_selector.test(_columns_selector.size() - _columns.size());
+    void setup_columns(row_schema& rs, const std::vector<column_translation::column_info>& columns) {
+        rs._all_columns = boost::make_iterator_range(columns);
+        rs._columns_selector = boost::dynamic_bitset<uint64_t>(columns.size());
     }
     void skip_absent_columns() {
-        size_t pos = _columns_selector.find_first();
+        size_t pos = _row->_columns_selector.find_first();
         if (pos == boost::dynamic_bitset<uint64_t>::npos) {
-            pos = _columns.size();
+            pos = _row->_columns.size();
         }
-        _columns.advance_begin(pos);
+        _row->_columns.advance_begin(pos);
     }
-    bool no_more_columns() { return _columns.empty(); }
+    bool no_more_columns() { return _row->_columns.empty(); }
     void move_to_next_column() {
-        size_t current_pos = _columns_selector.size() - _columns.size();
-        size_t next_pos = _columns_selector.find_next(current_pos);
-        size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _columns.size()
+        size_t current_pos = _row->_columns_selector.size() - _row->_columns.size();
+        size_t next_pos = _row->_columns_selector.find_next(current_pos);
+        size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _row->_columns.size()
                                                                                   : next_pos - current_pos;
-        _columns.advance_begin(jump_to_next);
+        _row->_columns.advance_begin(jump_to_next);
     }
-    bool is_column_simple() { return !_columns.front().is_collection; }
-    bool is_column_counter() { return _columns.front().is_counter; }
+    bool is_column_simple() { return !_row->_columns.front().is_collection; }
+    bool is_column_counter() { return _row->_columns.front().is_counter; }
     const column_translation::column_info& get_column_info() {
-        return _columns.front();
+        return _row->_columns.front();
     }
     std::optional<uint32_t> get_column_value_length() {
-        return _columns.front().value_length;
+        return _row->_columns.front().value_length;
     }
     void setup_ck(const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
         _row_key.clear();
@@ -817,7 +834,7 @@ private:
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
                 _state = state::CLUSTERING_ROW;
-                setup_columns(_column_translation.regular_columns());
+                start_row(_regular_row);
                 _ck_size = _column_translation.clustering_column_value_fix_legths().size();
                 goto clustering_row_label;
             }
@@ -832,7 +849,7 @@ private:
             }
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
-                    setup_columns(_column_translation.static_columns());
+                    start_row(_static_row);
                     _is_first_unfiltered = false;
                     _consumer.consume_static_row_start();
                     goto row_body_label;
@@ -840,7 +857,7 @@ private:
                     throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
                 }
             }
-            setup_columns(_column_translation.regular_columns());
+            start_row(_regular_row);
             _ck_size = _column_translation.clustering_column_value_fix_legths().size();
         case state::CLUSTERING_ROW:
         clustering_row_label:
@@ -1002,8 +1019,7 @@ private:
                 }
                 goto row_body_missing_columns_2_label;
             } else {
-                _columns_selector = boost::dynamic_bitset<uint64_t>(_columns.size());
-                _columns_selector.set();
+                _row->_columns_selector.set();
             }
         case state::COLUMN:
         column_label:
@@ -1140,21 +1156,21 @@ private:
         case state::ROW_BODY_MISSING_COLUMNS_2:
         row_body_missing_columns_2_label: {
             uint64_t missing_column_bitmap_or_count = _u64;
-            if (_columns.size() < 64) {
-                _columns_selector.clear();
-                _columns_selector.append(missing_column_bitmap_or_count);
-                _columns_selector.flip();
-                _columns_selector.resize(_columns.size());
+            if (_row->_columns.size() < 64) {
+                _row->_columns_selector.clear();
+                _row->_columns_selector.append(missing_column_bitmap_or_count);
+                _row->_columns_selector.flip();
+                _row->_columns_selector.resize(_row->_columns.size());
                 skip_absent_columns();
                 goto column_label;
             }
-            _columns_selector.resize(_columns.size());
-            if (_columns.size() - missing_column_bitmap_or_count < _columns.size() / 2) {
-                _missing_columns_to_read = _columns.size() - missing_column_bitmap_or_count;
-                _columns_selector.reset();
+            _row->_columns_selector.resize(_row->_columns.size());
+            if (_row->_columns.size() - missing_column_bitmap_or_count < _row->_columns.size() / 2) {
+                _missing_columns_to_read = _row->_columns.size() - missing_column_bitmap_or_count;
+                _row->_columns_selector.reset();
             } else {
                 _missing_columns_to_read = missing_column_bitmap_or_count;
-                _columns_selector.set();
+                _row->_columns_selector.set();
             }
             goto row_body_missing_columns_read_columns_label;
         }
@@ -1170,7 +1186,7 @@ private:
                 break;
             }
         case state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2:
-            _columns_selector.flip(_u64);
+            _row->_columns_selector.flip(_u64);
             goto row_body_missing_columns_read_columns_label;
         case state::COMPLEX_COLUMN:
         complex_column_label:
@@ -1318,7 +1334,10 @@ public:
         , _column_translation(sst->get_column_translation(s, _header))
         , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
         , _liveness(_header)
-    { }
+    {
+        setup_columns(_regular_row, _column_translation.regular_columns());
+        setup_columns(_static_row, _column_translation.static_columns());
+    }
 
     void verify_end_state() {
         // If reading a partial row (i.e., when we have a clustering row
