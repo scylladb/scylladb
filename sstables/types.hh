@@ -472,6 +472,10 @@ struct sstable_enabled_features {
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) { return f(enabled_features); }
+
+    static sstable_enabled_features all() {
+        return sstable_enabled_features{(1 << sstable_feature::End) - 1};
+    }
 };
 
 // Numbers are found on disk, so they do matter. Also, setting their sizes of

@@ -4671,7 +4671,7 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
         auto s = builder.build(schema_builder::compact_storage::no);
         const column_definition& col = *s->get_column_definition("value");
 
-        auto summary_byte_cost = sstables::components_writer::default_summary_byte_cost;
+        auto summary_byte_cost = sstables::index_sampling_state::default_summary_byte_cost;
 
         auto make_large_partition = [&] (partition_key key) {
             mutation m(s, key);
