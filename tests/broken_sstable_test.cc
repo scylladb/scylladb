@@ -36,9 +36,10 @@ struct my_consumer {
 };
 }
 
-static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstring msg) {
+static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstring msg,
+    sstable_version_types version = la) {
     try {
-        sstable_ptr sstp = std::get<0>(reusable_sst(s, dir, generation).get());
+        sstable_ptr sstp = std::get<0>(reusable_sst(s, dir, generation, version).get());
         auto r = sstp->read_rows_flat(s);
         r.consume(my_consumer{}, db::no_timeout).get();
         BOOST_FAIL("expecting exception");
@@ -52,6 +53,36 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
     // a malformed component and checking that it fails.
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
     return broken_sst(dir, generation, s, msg);
+}
+
+SEASTAR_THREAD_TEST_CASE(broken_open_tombstone) {
+    schema_ptr s = schema_builder("test_ks", "test_table")
+                       .with_column("key1", utf8_type, column_kind::partition_key)
+                       .with_column("key2", utf8_type, column_kind::clustering_key)
+                       .with_column("key3", utf8_type, column_kind::clustering_key)
+                       .with_column("val", utf8_type, column_kind::regular_column)
+                       .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/broken_open_tombstone", 122, s,
+        "Range tombstones have to be disjoint: current opened range tombstone { clustering: "
+        "ckp{00056b65793262}, kind: incl start, tombstone: {tombstone: timestamp=1544745393692803, "
+        "deletion_time=1544745393} }, new tombstone {tombstone: timestamp=1544745393692803, "
+        "deletion_time=1544745393} in sstable "
+        "tests/sstables/broken_open_tombstone/mc-122-big-Data.db",
+        sstable::version_types::mc);
+}
+
+SEASTAR_THREAD_TEST_CASE(broken_close_tombstone) {
+    schema_ptr s = schema_builder("test_ks", "test_table")
+                       .with_column("key1", utf8_type, column_kind::partition_key)
+                       .with_column("key2", utf8_type, column_kind::clustering_key)
+                       .with_column("key3", utf8_type, column_kind::clustering_key)
+                       .with_column("val", utf8_type, column_kind::regular_column)
+                       .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/broken_close_tombstone", 122, s,
+        "Closing range tombstone that wasn't opened: clustering ckp{00056b65793262}, kind incl "
+        "end, tombstone {tombstone: timestamp=1544745393692803, deletion_time=1544745393} in "
+        "sstable tests/sstables/broken_close_tombstone/mc-122-big-Data.db",
+        sstable::version_types::mc);
 }
 
 SEASTAR_THREAD_TEST_CASE(broken_start_composite) {
