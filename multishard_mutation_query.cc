@@ -391,14 +391,16 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
 void read_context::dismantle_reader(shard_id shard, future<paused_or_stopped_reader>&& reader_fut) {
     with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
         return reader_fut.then_wrapped([this, shard] (future<paused_or_stopped_reader>&& reader_fut) {
+            auto& rs = _readers[shard];
+
             if (reader_fut.failed()) {
                 mmq_log.debug("Failed to stop reader on shard {}: {}", shard, reader_fut.get_exception());
                 ++_db.local().get_stats().multishard_query_failed_reader_stops;
+                rs = inexistent_state{};
                 return;
             }
 
             auto reader = reader_fut.get0();
-            auto& rs = _readers[shard];
             if (auto* maybe_used_state = std::get_if<used_state>(&rs)) {
                 auto read_operation = std::move(maybe_used_state->read_operation);
                 auto params = std::move(maybe_used_state->params);
