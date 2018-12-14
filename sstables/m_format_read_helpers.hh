@@ -29,76 +29,9 @@
 #include "sstables/types.hh"
 #include "sstables/exceptions.hh"
 #include "clustering_bounds_comparator.hh"
+#include "sstables/mc/types.hh"
 
 namespace sstables {
-
-// This enum corresponds to Origin's ClusteringPrefix.Kind.
-// It is a superset of values of the bound_kind enum
-// declared in clustering_bounds_comparator.hh
-enum class bound_kind_m : uint8_t {
-    excl_end = 0,
-    incl_start = 1,
-    excl_end_incl_start = 2,
-    static_clustering = 3,
-    clustering = 4,
-    incl_end_excl_start = 5,
-    incl_end = 6,
-    excl_start = 7,
-};
-
-inline bound_kind to_bound_kind(bound_kind_m kind) {
-    assert (kind == bound_kind_m::incl_start ||
-            kind == bound_kind_m::incl_end ||
-            kind == bound_kind_m::excl_start ||
-            kind == bound_kind_m::excl_end);
-
-    using underlying_type = std::underlying_type_t<bound_kind_m>;
-    return bound_kind{static_cast<underlying_type>(kind)};
-}
-
-inline bound_kind_m to_bound_kind_m(bound_kind kind) {
-    using underlying_type = std::underlying_type_t<bound_kind>;
-    return bound_kind_m{static_cast<underlying_type>(kind)};
-}
-
-inline bool is_start(bound_kind_m kind) {
-    switch (kind) {
-    case bound_kind_m::incl_start:
-    case bound_kind_m::excl_end_incl_start:
-    case bound_kind_m::incl_end_excl_start:
-    case bound_kind_m::excl_start:
-        return true;
-    default:
-        return false;
-    }
-}
-
-inline bool is_boundary(bound_kind_m kind) {
-    switch (kind) {
-    case bound_kind_m::excl_end_incl_start:
-    case bound_kind_m::incl_end_excl_start:
-        return true;
-    default:
-        return false;
-    }
-}
-
-inline constexpr bool is_in_bound_kind(bound_kind_m kind) {
-    return kind == bound_kind_m::incl_start
-            || kind == bound_kind_m::excl_start
-            || kind == bound_kind_m::incl_end
-            || kind == bound_kind_m::excl_end;
-}
-
-inline bound_kind boundary_to_start_bound(bound_kind_m kind) {
-    assert(kind == bound_kind_m::incl_end_excl_start || kind == bound_kind_m::excl_end_incl_start);
-    return (kind == bound_kind_m::incl_end_excl_start) ? bound_kind::excl_start : bound_kind::incl_start;
-}
-
-inline bound_kind boundary_to_end_bound(bound_kind_m kind) {
-    assert(kind == bound_kind_m::incl_end_excl_start || kind == bound_kind_m::excl_end_incl_start);
-    return (kind == bound_kind_m::incl_end_excl_start) ? bound_kind::incl_end : bound_kind::excl_end;
-}
 
 class random_access_reader;
 
