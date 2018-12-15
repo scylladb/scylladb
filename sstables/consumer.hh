@@ -404,11 +404,12 @@ public:
             // We received more data than we actually care about, so process
             // the beginning of the buffer, and return the rest to the stream
             auto segment = data.share(0, _remain);
+            _stream_position.position += _remain;
             auto ret = process(segment);
+            _stream_position.position -= segment.size();
             data.trim_front(_remain - segment.size());
             auto len = _remain - segment.size();
             _remain -= len;
-            _stream_position.position += len;
             if (_remain == 0 && ret == proceed::yes) {
                 verify_end_state();
             }
@@ -464,6 +465,9 @@ public:
         return fast_forward_to(begin, _stream_position.position + _remain);
     }
 
+    // Returns the offset of the first byte which has not been consumed yet.
+    // When called from state_processor::process_state() invoked by this consumer,
+    // returns the offset of the first byte after the buffer passed to process_state().
     uint64_t position() const {
         return _stream_position.position;
     }
