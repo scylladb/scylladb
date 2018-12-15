@@ -80,13 +80,13 @@ public:
         }
     }
 
-    result apply(const clustering_row& cr) {
-        if (is_after_fwd_window(cr.position())) {
+    result apply(position_in_partition_view pos) {
+        if (is_after_fwd_window(pos)) {
             // This happens only when fwd is set
             _out_of_range = true;
             return result::store_and_finish;
         }
-        bool inside_requested_ranges = _walker.advance_to(cr.position());
+        bool inside_requested_ranges = _walker.advance_to(pos);
         _out_of_range |= _walker.out_of_range();
         if (!inside_requested_ranges) {
             return result::ignore;
