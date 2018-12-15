@@ -199,6 +199,16 @@ protected:
             return read_status::waiting;
         }
     }
+    data_consumer::processing_result skip(temporary_buffer<char>& data, uint32_t len) {
+        if (data.size() >= len) {
+            data.trim_front(len);
+            return proceed::yes;
+        } else {
+            auto left = len - data.size();
+            data.trim(0);
+            return skip_bytes{left};
+        }
+    }
     inline read_status read_short_length_bytes(temporary_buffer<char>& data, temporary_buffer<char>& where) {
         if (data.size() >= sizeof(uint16_t)) {
             _u16 = consume_be<uint16_t>(data);
