@@ -954,6 +954,13 @@ private:
                 return skip(data, _next_row_offset - current_pos);
             }
 
+            if (_extended_flags.is_static()) {
+                if (_flags.has_timestamp() || _flags.has_ttl() || _flags.has_deletion()) {
+                    throw malformed_sstable_exception(format("Static row has unexpected flags: timestamp={}, ttl={}, deletion={}",
+                        _flags.has_timestamp(), _flags.has_ttl(), _flags.has_deletion()));
+                }
+                goto row_body_missing_columns_label;
+            }
             if (!_flags.has_timestamp()) {
                 _state = state::ROW_BODY_DELETION;
                 goto row_body_deletion_label;
@@ -1029,6 +1036,7 @@ private:
                 break;
             }
         case state::ROW_BODY_MISSING_COLUMNS:
+        row_body_missing_columns_label:
             if (!_flags.has_all_columns()) {
                 if (read_unsigned_vint(data) != read_status::ready) {
                     _state = state::ROW_BODY_MISSING_COLUMNS_2;
