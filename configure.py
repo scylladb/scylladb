@@ -1253,6 +1253,13 @@ with open(buildfile, 'w') as f:
                                             '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
         f.write('build {}: link.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
                                                 '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'))
+        f.write(
+            'build {mode}-objects: phony {objs}\n'.format(
+                mode=mode,
+                objs=' '.join(compiles)
+            )
+        )
+
         for obj in compiles:
             src = compiles[obj]
             gen_headers = list(ragels.keys())
