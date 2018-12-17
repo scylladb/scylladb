@@ -128,6 +128,10 @@ public:
         explicit inactive_read_handle(uint64_t id)
             : _id(id) {
         }
+    public:
+        explicit operator bool() const {
+            return bool(_id);
+        }
     };
 
 private:
@@ -175,13 +179,22 @@ private:
         signal(resources(0, static_cast<ssize_t>(memory)));
     }
 public:
-    reader_concurrency_semaphore(unsigned count,
-            size_t memory,
+    struct no_limits { };
+
+    reader_concurrency_semaphore(int count,
+            ssize_t memory,
             size_t max_queue_length = std::numeric_limits<size_t>::max(),
             std::function<std::exception_ptr()> raise_queue_overloaded_exception = default_make_queue_overloaded_exception)
         : _resources(count, memory)
         , _max_queue_length(max_queue_length)
         , _make_queue_overloaded_exception(raise_queue_overloaded_exception) {
+    }
+
+    /// Create a semaphore with practically unlimited count and memory.
+    ///
+    /// And conversely, no queue limit either.
+    explicit reader_concurrency_semaphore(no_limits)
+        : reader_concurrency_semaphore(std::numeric_limits<int>::max(), std::numeric_limits<ssize_t>::max()) {
     }
 
     reader_concurrency_semaphore(const reader_concurrency_semaphore&) = delete;
@@ -220,6 +233,9 @@ public:
     }
 
     future<lw_shared_ptr<reader_permit>> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
+
+    /// Consume the specific amount of resources without waiting.
+    lw_shared_ptr<reader_permit> consume_resources(resources r);
 
     const resources available_resources() const {
         return _resources;

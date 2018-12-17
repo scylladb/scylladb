@@ -285,9 +285,12 @@ static void insert_querier(
 
     auto& e = entries.emplace_back(key, std::move(q), expires);
     e.set_pos(--entries.end());
-    e.set_inactive_handle(sem.register_inactive_read(std::make_unique<querier_inactive_read>(entries, e.pos(), stats)));
-    index.insert(e);
-    ++stats.population;
+
+    if (auto irh = sem.register_inactive_read(std::make_unique<querier_inactive_read>(entries, e.pos(), stats))) {
+        e.set_inactive_handle(irh);
+        index.insert(e);
+        ++stats.population;
+    }
 }
 
 void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {

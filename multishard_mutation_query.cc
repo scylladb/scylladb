@@ -26,6 +26,8 @@
 
 #include <boost/range/adaptor/reversed.hpp>
 
+#include <fmt/ostream.h>
+
 logging::logger mmq_log("multishard_mutation_query");
 
 template <typename T>
@@ -172,6 +174,9 @@ class read_context : public reader_lifecycle_policy {
         size_t partitions = 0;
         size_t fragments = 0;
         size_t bytes = 0;
+        size_t discarded_partitions = 0;
+        size_t discarded_fragments = 0;
+        size_t discarded_bytes = 0;
 
         void add(const schema& s, const mutation_fragment& mf) {
             partitions += unsigned(mf.is_partition_start());
@@ -191,6 +196,35 @@ class read_context : public reader_lifecycle_policy {
             ++fragments;
             bytes += ps.memory_usage(s);
         }
+        void add_discarded(const schema& s, const mutation_fragment& mf) {
+            discarded_partitions += unsigned(mf.is_partition_start());
+            ++discarded_fragments;
+            discarded_bytes += mf.memory_usage(s);
+        }
+        void add_discarded(const schema& s, const range_tombstone& rt) {
+            ++discarded_fragments;
+            discarded_bytes += rt.memory_usage(s);
+        }
+        void add_discarded(const schema& s, const static_row& sr) {
+            ++discarded_fragments;
+            discarded_bytes += sr.memory_usage(s);
+        }
+        void add_discarded(const schema& s, const partition_start& ps) {
+            ++discarded_partitions;
+            ++discarded_fragments;
+            discarded_bytes += ps.memory_usage(s);
+        }
+        friend std::ostream& operator<<(std::ostream& os, const dismantle_buffer_stats& s) {
+            os << format(
+                    "kept {} partitions/{} fragments/{} bytes, discarded {} partitions/{} fragments/{} bytes",
+                    s.partitions,
+                    s.fragments,
+                    s.bytes,
+                    s.discarded_partitions,
+                    s.discarded_fragments,
+                    s.discarded_bytes);
+            return os;
+        }
     };
 
     distributed<database>& _db;
@@ -203,6 +237,8 @@ class read_context : public reader_lifecycle_policy {
     std::vector<reader_state> _readers;
 
     gate _dismantling_gate;
+
+    static std::string_view reader_state_to_string(const reader_state& rs);
 
     static future<bundled_remote_reader> do_make_remote_reader(
             distributed<database>& db,
@@ -272,6 +308,28 @@ public:
     future<> stop();
 };
 
+// Deliberatly not using the `reader_state` alias here, so that we can enlist
+// the help of the compiler to keep this up-to-date.
+std::string_view read_context::reader_state_to_string(const std::variant<
+        inexistent_state,
+        successful_lookup_state,
+        used_state,
+        paused_state,
+        evicted_state,
+        dismantling_state,
+        ready_to_save_state>& rs) {
+    static const std::array<const char*, 7> reader_state_names{
+        "inexistent",
+        "successful_lookup",
+        "used",
+        "paused",
+        "evicted",
+        "dismantling",
+        "ready_to_save",
+    };
+    return reader_state_names.at(rs.index());
+}
+
 future<read_context::bundled_remote_reader> read_context::do_make_remote_reader(
         distributed<database>& db,
         shard_id shard,
@@ -307,13 +365,16 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
         mutation_reader::forwarding) {
     auto& rs = _readers[shard];
 
-    if (!std::holds_alternative<successful_lookup_state>(rs) && !std::holds_alternative<inexistent_state>(rs)) {
-        mmq_log.warn("Unexpected request to create reader for shard {}. A reader for this shard was already created.", shard);
-        throw std::logic_error(format("Unexpected request to create reader for shard {}."
-                    " A reader for this shard was already created in the context of this read.", shard));
+    if (!std::holds_alternative<successful_lookup_state>(rs) && !std::holds_alternative<inexistent_state>(rs)
+            && !std::holds_alternative<evicted_state>(rs)) {
+        auto msg = format("Unexpected request to create reader for shard {}."
+                " The reader is expected to be in either `successful_lookup`, `inexistent` or `evicted` state,"
+                " but is in `{}` state instead.", shard, reader_state_to_string(rs));
+        mmq_log.warn(msg.c_str());
+        throw std::logic_error(msg.c_str());
     }
 
-    // The reader is either in inexistent or successful lookup state.
+    // The reader is either in inexistent, evicted or successful lookup state.
     if (auto current_state = std::get_if<successful_lookup_state>(&rs)) {
         auto reader = std::move(current_state->reader);
         rs = used_state{std::move(current_state->params), std::move(current_state->read_operation)};
@@ -330,14 +391,16 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
 void read_context::dismantle_reader(shard_id shard, future<paused_or_stopped_reader>&& reader_fut) {
     with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
         return reader_fut.then_wrapped([this, shard] (future<paused_or_stopped_reader>&& reader_fut) {
+            auto& rs = _readers[shard];
+
             if (reader_fut.failed()) {
                 mmq_log.debug("Failed to stop reader on shard {}: {}", shard, reader_fut.get_exception());
                 ++_db.local().get_stats().multishard_query_failed_reader_stops;
+                rs = inexistent_state{};
                 return;
             }
 
             auto reader = reader_fut.get0();
-            auto& rs = _readers[shard];
             if (auto* maybe_used_state = std::get_if<used_state>(&rs)) {
                 auto read_operation = std::move(maybe_used_state->read_operation);
                 auto params = std::move(maybe_used_state->params);
@@ -352,9 +415,9 @@ void read_context::dismantle_reader(shard_id shard, future<paused_or_stopped_rea
             // Do nothing for evicted readers.
             } else if (!std::holds_alternative<evicted_state>(rs)) {
                 mmq_log.warn(
-                        "Unexpected request to dismantle reader in state {} for shard {}."
+                        "Unexpected request to dismantle reader in state `{}` for shard {}."
                         " Reader was not created nor is in the process of being created.",
-                        rs.index(),
+                        reader_state_to_string(rs),
                         shard);
             }
         });
@@ -399,7 +462,21 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
     for (;rit != rend; ++rit) {
         if (rit->is_partition_start()) {
             const auto shard = partitioner.shard_of(rit->as_partition_start().key().token());
-            auto& shard_buffer = std::get<dismantling_state>(_readers[shard]).buffer;
+            auto maybe_dismantling_state = std::get_if<dismantling_state>(&_readers[shard]);
+
+            // It is possible that the reader this partition originates from
+            // does not exist anymore. Either because we failed stopping it or
+            // because it was evicted.
+            if (!maybe_dismantling_state) {
+                for (auto& smf : tmp_buffer) {
+                    stats.add_discarded(*_schema, smf);
+                }
+                stats.add_discarded(*_schema, *rit);
+                tmp_buffer.clear();
+                continue;
+            }
+
+            auto& shard_buffer = maybe_dismantling_state->buffer;
             for (auto& smf : tmp_buffer) {
                 stats.add(*_schema, smf);
                 shard_buffer.emplace_front(std::move(smf));
@@ -423,10 +500,26 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
 }
 
 read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(detached_compaction_state compaction_state) {
+    auto stats = dismantle_buffer_stats();
     auto& partitioner = dht::global_partitioner();
     const auto shard = partitioner.shard_of(compaction_state.partition_start.key().token());
-    auto& shard_buffer = std::get<dismantling_state>(_readers[shard]).buffer;
-    auto stats = dismantle_buffer_stats();
+    auto maybe_dismantling_state = std::get_if<dismantling_state>(&_readers[shard]);
+
+    // It is possible that the reader this partition originates from does not
+    // exist anymore. Either because we failed stopping it or because it was
+    // evicted.
+    if (!maybe_dismantling_state) {
+        for (auto& rt : compaction_state.range_tombstones) {
+            stats.add_discarded(*_schema, rt);
+        }
+        if (compaction_state.static_row) {
+            stats.add_discarded(*_schema, *compaction_state.static_row);
+        }
+        stats.add_discarded(*_schema, compaction_state.partition_start);
+        return stats;
+    }
+
+    auto& shard_buffer = maybe_dismantling_state->buffer;
 
     for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
         stats.add(*_schema, rt);
@@ -580,12 +673,10 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
         auto last_pkey = compaction_state.partition_start.key();
 
         const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
-        tracing::trace(_trace_state, "Dismantled combined buffer: {} partitions/{} fragments/{} bytes", cb_stats.partitions, cb_stats.fragments,
-                cb_stats.bytes);
+        tracing::trace(_trace_state, "Dismantled combined buffer: {}", cb_stats);
 
         const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
-        tracing::trace(_trace_state, "Dismantled compaction state: {} partitions/{} fragments/{} bytes", cs_stats.partitions, cs_stats.fragments,
-                cs_stats.bytes);
+        tracing::trace(_trace_state, "Dismantled compaction state: {}", cs_stats);
 
         return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
                 const std::optional<clustering_key_prefix>& last_ckey) {
