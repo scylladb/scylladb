@@ -78,7 +78,7 @@ if [ $LOCALRPM -eq 1 ]; then
     fi
     if [ ! -f dist/ami/files/scylla-jmx.noarch.rpm ]; then
         cd build
-        git clone --depth 1 https://github.com/scylladb/scylla-jmx.git
+        git clone -b branch-3.0 --depth 1 https://github.com/scylladb/scylla-jmx.git
         cd scylla-jmx
         dist/redhat/build_rpm.sh --target epel-7-x86_64
         cd ../..
