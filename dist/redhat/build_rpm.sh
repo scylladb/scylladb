@@ -108,11 +108,11 @@ fix_ownership() {
 if [ $JOBS -gt 0 ]; then
     RPM_JOBS_OPTS=(--define="_smp_mflags -j$JOBS")
 fi
-sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/$PRODUCT-$VERSION.tar $SRPM_OPTS "${RPM_JOBS_OPTS[@]}"
+sudo mock --rootdir=`pwd`/build/mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/$PRODUCT-$VERSION.tar $SRPM_OPTS "${RPM_JOBS_OPTS[@]}"
 fix_ownership build/srpms
 if [[ "$TARGET" =~ ^epel-7- ]]; then
     TARGET=scylla-$TARGET
     RPM_OPTS="$RPM_OPTS --configdir=dist/redhat/mock"
 fi
-sudo mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS "${RPM_JOBS_OPTS[@]}" build/srpms/$PRODUCT-$VERSION*.src.rpm
+sudo mock --rootdir=`pwd`/build/mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS "${RPM_JOBS_OPTS[@]}" build/srpms/$PRODUCT-$VERSION*.src.rpm
 fix_ownership build/rpms

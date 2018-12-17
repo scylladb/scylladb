@@ -50,12 +50,12 @@ Then, to build an RPM, run:
 ./dist/redhat/build_rpm.sh
 ```
 
-The built RPM is stored in ``/var/lib/mock/<configuration>/result`` directory.
+The built RPM is stored in the ``build/mock/<configuration>/result`` directory.
 For example, on Fedora 21 mock reports the following:
 
 ```
 INFO: Done(scylla-server-0.00-1.fc21.src.rpm) Config(default) 20 minutes 7 seconds
-INFO: Results and/or logs in: /var/lib/mock/fedora-21-x86_64/result
+INFO: Results and/or logs in: build/mock/fedora-21-x86_64/result
 ```
 
 ## Building Fedora-based Docker image
