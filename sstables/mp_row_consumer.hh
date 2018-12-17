@@ -1278,8 +1278,10 @@ public:
             position_in_partition::less_compare less(*_schema);
             auto start_pos = position_in_partition_view(position_in_partition_view::range_tag_t{},
                                                         bound_view(_opened_range_tombstone->ck, _opened_range_tombstone->kind));
-            if (!less(range_end, start_pos)) {
-                auto end_bound = range_end.as_end_bound_view();
+            if (less(start_pos, range_end)) {
+                auto end_bound = range_end.is_clustering_row()
+                    ? position_in_partition_view::after_key(range_end.key()).as_end_bound_view()
+                    : range_end.as_end_bound_view();
                 auto rt = range_tombstone {std::move(_opened_range_tombstone->ck),
                                            _opened_range_tombstone->kind,
                                            end_bound.prefix(),
