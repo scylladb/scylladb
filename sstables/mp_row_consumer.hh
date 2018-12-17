@@ -1066,7 +1066,6 @@ public:
         _in_progress_row.emplace(clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
             [] (const temporary_buffer<char>& b) { return to_bytes_view(b); })));
         sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", this, _in_progress_row->position());
-        _cells.clear();
         return consumer_m::do_proceed{};
     }
 
@@ -1086,7 +1085,6 @@ public:
         sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", this);
         _inside_static_row = true;
         _in_progress_static_row = static_row();
-        _cells.clear();
         return consumer_m::do_proceed{};
     }
 
@@ -1221,6 +1219,7 @@ public:
             for (auto &&c : _cells) {
                 cells.apply(_schema->column_at(kind, c.id), std::move(c.val));
             }
+            _cells.clear();
         };
 
         if (_inside_static_row) {
