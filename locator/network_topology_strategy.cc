@@ -36,12 +36,26 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <functional>
 #include "locator/network_topology_strategy.hh"
 #include "utils/sequenced_set.hh"
 #include <boost/algorithm/string.hpp>
+#include "utils/hash.hh"
+
+namespace std {
+template<>
+struct hash<locator::endpoint_dc_rack> {
+    size_t operator()(const locator::endpoint_dc_rack& v) const {
+        return utils::tuple_hash()(std::tie(v.dc, v.rack));
+    }
+};
+}
 
 namespace locator {
 
+bool operator==(const endpoint_dc_rack& d1, const endpoint_dc_rack& d2) {
+    return std::tie(d1.dc, d1.rack) == std::tie(d2.dc, d2.rack);
+}
 
 network_topology_strategy::network_topology_strategy(
     const sstring& keyspace_name,
@@ -90,35 +104,100 @@ network_topology_strategy::network_topology_strategy(
 std::vector<inet_address>
 network_topology_strategy::calculate_natural_endpoints(
     const token& search_token, token_metadata& tm) const {
+
+    using endpoint_set = utils::sequenced_set<inet_address>;
+    using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
+
+    /**
+     * Endpoint adder applying the replication rules for a given DC.
+     */
+    struct data_center_endpoints {
+        /** List accepted endpoints get pushed into. */
+        endpoint_set& _endpoints;
+
+        /**
+         * Racks encountered so far. Replicas are put into separate racks while possible.
+         * For efficiency the set is shared between the instances, using the location pair (dc, rack) to make sure
+         * clashing names aren't a problem.
+         */
+        endpoint_dc_rack_set& _racks;
+
+        /** Number of replicas left to fill from this DC. */
+        size_t _rf_left;
+        ssize_t _acceptable_rack_repeats;
+
+        data_center_endpoints(size_t rf, size_t rack_count, size_t node_count, endpoint_set& endpoints, endpoint_dc_rack_set& racks)
+            : _endpoints(endpoints)
+            , _racks(racks)
+            // If there aren't enough nodes in this DC to fill the RF, the number of nodes is the effective RF.
+            , _rf_left(std::min(rf, node_count))
+            // If there aren't enough racks in this DC to fill the RF, we'll still use at least one node from each rack,
+            // and the difference is to be filled by the first encountered nodes.
+            , _acceptable_rack_repeats(rf - rack_count)
+        {}
+
+        /**
+         * Attempts to add an endpoint to the replicas for this datacenter, adding to the endpoints set if successful.
+         * Returns true if the endpoint was added, and this datacenter does not require further replicas.
+         */
+        bool add_endpoint_and_check_if_done(const inet_address& ep, const endpoint_dc_rack& location) {
+            if (done()) {
+                return false;
+            }
+
+            if (_racks.emplace(location).second) {
+                // New rack.
+                --_rf_left;
+                auto added = _endpoints.insert(ep).second;
+                if (!added) {
+                    throw std::runtime_error(sprint("Topology error: found {} in more than one rack", ep));
+                }
+                return done();
+            }
+
+            /**
+             * Ensure we don't allow too many endpoints in the same rack, i.e. we have
+             * minimum current rf_left + 1 distinct racks. See above, _acceptable_rack_repeats
+             * is defined as RF - rack_count, i.e. how many nodes in a single rack we are ok
+             * with.
+             *
+             * With RF = 3 and 2 Racks in DC,
+             *
+             * IP1, Rack1
+             * IP2, Rack1
+             * IP3, Rack1,    The line _acceptable_rack_repeats <= 0 will reject IP3.
+             * IP4, Rack2
+             *
+             */
+            if (_acceptable_rack_repeats <= 0) {
+                // There must be rf_left distinct racks left, do not add any more rack repeats.
+                return false;
+            }
+
+            if (!_endpoints.insert(ep).second) {
+                // Cannot repeat a node.
+                return false;
+            }
+
+            // Added a node that is from an already met rack to match RF when there aren't enough racks.
+            --_acceptable_rack_repeats;
+            --_rf_left;
+
+            return done();
+        }
+
+        bool done() const {
+            return _rf_left == 0;
+        }
+    };
+
     //
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
     //
-    utils::sequenced_set<inet_address> replicas;
-
-    // replicas we have found in each DC
-    std::unordered_map<sstring, std::unordered_set<inet_address>> dc_replicas;
+    endpoint_set replicas;
     // tracks the racks we have already placed replicas in
-    std::unordered_map<sstring, std::unordered_set<sstring>> seen_racks;
-    //
-    // tracks the endpoints that we skipped over while looking for unique racks
-    // when we relax the rack uniqueness we can append this to the current
-    // result so we don't have to wind back the iterator
-    //
-    std::unordered_map<sstring, utils::sequenced_set<inet_address>>
-        skipped_dc_endpoints;
-
-    //
-    // Populate the temporary data structures.
-    //
-    replicas.reserve(get_replication_factor());
-    for (auto& dc_rep_factor_pair : _dc_rep_factor) {
-        auto& dc_name = dc_rep_factor_pair.first;
-
-        dc_replicas[dc_name].reserve(dc_rep_factor_pair.second);
-        seen_racks[dc_name] = {};
-        skipped_dc_endpoints[dc_name] = {};
-    }
+    endpoint_dc_rack_set  seen_racks;
 
     topology& tp = tm.get_topology();
 
@@ -137,61 +216,41 @@ network_topology_strategy::calculate_natural_endpoints(
                        std::unordered_map<sstring,
                                           std::unordered_set<inet_address>>>&
         racks = tp.get_datacenter_racks();
-
     // not aware of any cluster members
     assert(!all_endpoints.empty() && !racks.empty());
 
-    for (auto& next : tm.ring_range(search_token)) {
+    std::unordered_map<sstring_view, data_center_endpoints> dcs(_dc_rep_factor.size());
 
-        if (has_sufficient_replicas(dc_replicas, all_endpoints)) {
+    auto size_for = [](auto& map, auto& k) {
+        auto i = map.find(k);
+        return i != map.end() ? i->second.size() : size_t(0);
+    };
+
+    // Create a data_center_endpoints object for each non-empty DC.
+    for (auto& p : _dc_rep_factor) {
+        auto& dc = p.first;
+        auto rf = p.second;
+        auto node_count = size_for(all_endpoints, dc);
+
+        if (rf == 0 || node_count == 0) {
+            continue;
+        }
+
+        dcs.emplace(dc, data_center_endpoints(rf, size_for(racks, dc), node_count, replicas, seen_racks));
+    }
+
+    auto dcs_to_fill = dcs.size();
+
+    for (auto& next : tm.ring_range(search_token)) {
+        if (dcs_to_fill == 0) {
             break;
         }
 
         inet_address ep = *tm.get_endpoint(next);
-        sstring dc = _snitch->get_datacenter(ep);
-
-        auto& seen_racks_dc_set = seen_racks[dc];
-        auto& racks_dc_map = racks[dc];
-        auto& skipped_dc_endpoints_set = skipped_dc_endpoints[dc];
-        auto& dc_replicas_dc_set = dc_replicas[dc];
-
-        // have we already found all replicas for this dc?
-        if (_dc_rep_factor.find(dc)  == _dc_rep_factor.end() ||
-            has_sufficient_replicas(dc, dc_replicas, all_endpoints)) {
-            continue;
-        }
-
-        //
-        // can we skip checking the rack? - namely, we've seen all racks in this
-        // DC already and may add this endpoint right away.
-        //
-        if (seen_racks_dc_set.size() == racks_dc_map.size()) {
-            dc_replicas_dc_set.insert(ep);
-            replicas.push_back(ep);
-        } else {
-            sstring rack = _snitch->get_rack(ep);
-            // is this a new rack? - we prefer to replicate on different racks
-            if (seen_racks_dc_set.find(rack) != seen_racks_dc_set.end()) {
-                skipped_dc_endpoints_set.push_back(ep);
-            } else { // this IS a new rack
-                dc_replicas_dc_set.insert(ep);
-                replicas.push_back(ep);
-                seen_racks_dc_set.insert(rack);
-                //
-                // if we've run out of distinct racks, add the hosts we skipped
-                // past already (up to RF)
-                //
-                if (seen_racks_dc_set.size() == racks_dc_map.size())
-                {
-                    auto skipped_it = skipped_dc_endpoints_set.begin();
-                    while (skipped_it != skipped_dc_endpoints_set.end() &&
-                           !has_sufficient_replicas(dc, dc_replicas, all_endpoints)) {
-                        inet_address skipped = *skipped_it++;
-                        dc_replicas_dc_set.insert(skipped);
-                        replicas.push_back(skipped);
-                    }
-                }
-            }
+        auto& loc = tp.get_location(ep);
+        auto i = dcs.find(loc.dc);
+        if (i != dcs.end() && i->second.add_endpoint_and_check_if_done(ep, loc)) {
+            --dcs_to_fill;
         }
     }
 
@@ -212,32 +271,6 @@ void network_topology_strategy::validate_options() const {
 std::experimental::optional<std::set<sstring>> network_topology_strategy::recognized_options() const {
     // We explicitely allow all options
     return std::experimental::nullopt;
-}
-
-inline bool network_topology_strategy::has_sufficient_replicas(
-        const sstring& dc,
-        std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& dc_replicas,
-        std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& all_endpoints) const {
-
-        return dc_replicas[dc].size() >=
-            std::min(all_endpoints[dc].size(), get_replication_factor(dc));
-}
-
-inline bool network_topology_strategy::has_sufficient_replicas(
-        std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& dc_replicas,
-        std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& all_endpoints) const {
-
-        for (auto& dc : get_datacenters()) {
-            if (!has_sufficient_replicas(dc, dc_replicas, all_endpoints)) {
-                return false;
-            }
-        }
-
-        return true;
 }
 
 using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const sstring&, token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;

@@ -684,5 +684,9 @@ bool topology::has_endpoint(inet_address ep) const
     return i != _current_locations.end();
 }
 
+const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
+    return _current_locations.at(ep);
+}
+
 /////////////////// class topology end /////////////////////////////////////////
 } // namespace locator

@@ -79,20 +79,6 @@ protected:
     virtual std::experimental::optional<std::set<sstring>> recognized_options() const override;
 
 private:
-    bool has_sufficient_replicas(
-        const sstring& dc,
-        std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& dc_replicas,
-        std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& all_endpoints) const;
-
-    bool has_sufficient_replicas(
-        std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& dc_replicas,
-        std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& all_endpoints) const;
-
-private:
     // map: data centers -> replication factor
     std::unordered_map<sstring, size_t> _dc_rep_factor;
 

@@ -20,7 +20,10 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <boost/range/adaptor/map.hpp>
 #include "utils/fb_utilities.hh"
+#include "utils/sequenced_set.hh"
+#include "dht/murmur3_partitioner.hh"
 #include "locator/network_topology_strategy.hh"
 #include "tests/test-utils.hh"
 #include <seastar/core/sstring.hh>
@@ -28,6 +31,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <set>
 #include <iostream>
 #include <sstream>
 #include <boost/range/algorithm/adjacent_find.hpp>
@@ -327,3 +331,280 @@ SEASTAR_TEST_CASE(NetworkTopologyStrategy_simple) {
 SEASTAR_TEST_CASE(NetworkTopologyStrategy_heavy) {
     return heavy_origin_test();
 }
+
+/**
+ * static impl of "old" network topology strategy endpoint calculation.
+ */
+static size_t get_replication_factor(const sstring& dc,
+                const std::unordered_map<sstring, size_t>& datacenters) {
+    auto dc_factor = datacenters.find(dc);
+    return (dc_factor == datacenters.end()) ? 0 : dc_factor->second;
+}
+
+static bool has_sufficient_replicas(const sstring& dc,
+                std::unordered_map<sstring, std::unordered_set<inet_address>>& dc_replicas,
+                std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
+                const std::unordered_map<sstring, size_t>& datacenters) {
+
+    return dc_replicas[dc].size()
+                    >= std::min(all_endpoints[dc].size(),
+                                    get_replication_factor(dc, datacenters));
+}
+
+static bool has_sufficient_replicas(
+                std::unordered_map<sstring, std::unordered_set<inet_address>>& dc_replicas,
+                std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
+                const std::unordered_map<sstring, size_t>& datacenters) {
+
+    for (auto& dc : datacenters | boost::adaptors::map_keys) {
+        if (!has_sufficient_replicas(dc, dc_replicas, all_endpoints,
+                        datacenters)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static std::vector<inet_address> calculate_natural_endpoints(
+                const token& search_token, token_metadata& tm,
+                snitch_ptr& snitch,
+                const std::unordered_map<sstring, size_t>& datacenters) {
+    //
+    // We want to preserve insertion order so that the first added endpoint
+    // becomes primary.
+    //
+    utils::sequenced_set<inet_address> replicas;
+
+    // replicas we have found in each DC
+    std::unordered_map<sstring, std::unordered_set<inet_address>> dc_replicas;
+    // tracks the racks we have already placed replicas in
+    std::unordered_map<sstring, std::unordered_set<sstring>> seen_racks;
+    //
+    // tracks the endpoints that we skipped over while looking for unique racks
+    // when we relax the rack uniqueness we can append this to the current
+    // result so we don't have to wind back the iterator
+    //
+    std::unordered_map<sstring, utils::sequenced_set<inet_address>>
+        skipped_dc_endpoints;
+
+    //
+    // Populate the temporary data structures.
+    //
+    for (auto& dc_rep_factor_pair : datacenters) {
+        auto& dc_name = dc_rep_factor_pair.first;
+
+        dc_replicas[dc_name].reserve(dc_rep_factor_pair.second);
+        seen_racks[dc_name] = {};
+        skipped_dc_endpoints[dc_name] = {};
+    }
+
+    topology& tp = tm.get_topology();
+
+    //
+    // all endpoints in each DC, so we can check when we have exhausted all
+    // the members of a DC
+    //
+    std::unordered_map<sstring,
+                       std::unordered_set<inet_address>>&
+        all_endpoints = tp.get_datacenter_endpoints();
+    //
+    // all racks in a DC so we can check when we have exhausted all racks in a
+    // DC
+    //
+    std::unordered_map<sstring,
+                       std::unordered_map<sstring,
+                                          std::unordered_set<inet_address>>>&
+        racks = tp.get_datacenter_racks();
+
+    // not aware of any cluster members
+    assert(!all_endpoints.empty() && !racks.empty());
+
+    for (auto& next : tm.ring_range(search_token)) {
+
+        if (has_sufficient_replicas(dc_replicas, all_endpoints, datacenters)) {
+            break;
+        }
+
+        inet_address ep = *tm.get_endpoint(next);
+        sstring dc = snitch->get_datacenter(ep);
+
+        auto& seen_racks_dc_set = seen_racks[dc];
+        auto& racks_dc_map = racks[dc];
+        auto& skipped_dc_endpoints_set = skipped_dc_endpoints[dc];
+        auto& dc_replicas_dc_set = dc_replicas[dc];
+
+        // have we already found all replicas for this dc?
+        if (datacenters.find(dc) == datacenters.end() ||
+            has_sufficient_replicas(dc, dc_replicas, all_endpoints, datacenters)) {
+            continue;
+        }
+
+        //
+        // can we skip checking the rack? - namely, we've seen all racks in this
+        // DC already and may add this endpoint right away.
+        //
+        if (seen_racks_dc_set.size() == racks_dc_map.size()) {
+            dc_replicas_dc_set.insert(ep);
+            replicas.push_back(ep);
+        } else {
+            sstring rack = snitch->get_rack(ep);
+            // is this a new rack? - we prefer to replicate on different racks
+            if (seen_racks_dc_set.find(rack) != seen_racks_dc_set.end()) {
+                skipped_dc_endpoints_set.push_back(ep);
+            } else { // this IS a new rack
+                dc_replicas_dc_set.insert(ep);
+                replicas.push_back(ep);
+                seen_racks_dc_set.insert(rack);
+                //
+                // if we've run out of distinct racks, add the hosts we skipped
+                // past already (up to RF)
+                //
+                if (seen_racks_dc_set.size() == racks_dc_map.size())
+                {
+                    auto skipped_it = skipped_dc_endpoints_set.begin();
+                    while (skipped_it != skipped_dc_endpoints_set.end() &&
+                           !has_sufficient_replicas(dc, dc_replicas, all_endpoints, datacenters)) {
+                        inet_address skipped = *skipped_it++;
+                        dc_replicas_dc_set.insert(skipped);
+                        replicas.push_back(skipped);
+                    }
+                }
+            }
+        }
+    }
+
+    return std::move(replicas.get_vector());
+}
+
+static void test_equivalence(token_metadata& tm, snitch_ptr& snitch, dht::murmur3_partitioner& partitioner, const std::unordered_map<sstring, size_t>& datacenters) {
+    class my_network_topology_strategy : public network_topology_strategy {
+    public:
+        using network_topology_strategy::network_topology_strategy;
+        using network_topology_strategy::calculate_natural_endpoints;
+    };
+
+    my_network_topology_strategy nts("ks", tm, snitch,
+                    boost::copy_range<std::map<sstring, sstring>>(
+                                    datacenters
+                                                    | boost::adaptors::transformed(
+                                                                    [](const std::pair<sstring, size_t>& p) {
+                                                                        return std::make_pair(p.first, to_sstring(p.second));
+                                                                    })));
+
+    for (size_t i = 0; i < 1000; ++i) {
+        auto token = partitioner.get_random_token();
+        auto expected = calculate_natural_endpoints(token, tm, snitch, datacenters);
+        auto actual = nts.calculate_natural_endpoints(token, tm);
+
+        // Because the old algorithm does not put the nodes in the correct order in the case where more replicas
+        // are required than there are racks in a dc, we accept different order as long as the primary
+        // replica is the same.
+
+        BOOST_REQUIRE_EQUAL(expected[0], actual[0]);
+        BOOST_REQUIRE_EQUAL(std::set<inet_address>(expected.begin(), expected.end()),
+                        std::set<inet_address>(actual.begin(), actual.end()));
+
+    }
+}
+
+
+std::unique_ptr<i_endpoint_snitch> generate_snitch(const std::unordered_map<sstring, size_t> datacenters, const std::vector<inet_address>& nodes) {
+    static std::random_device rd;
+    static std::default_random_engine e1(rd());
+
+    using addr_to_string_type = std::unordered_map<inet_address, sstring>;
+
+    addr_to_string_type node_to_rack, node_to_dc;
+    std::unordered_map<sstring, size_t> racks_per_dc;
+    std::vector<std::reference_wrapper<const sstring>> dcs;
+
+    dcs.reserve(datacenters.size() * 4);
+
+    using udist = std::uniform_int_distribution<size_t>;
+
+    auto out = std::back_inserter(dcs);
+
+    for (auto& p : datacenters) {
+        auto& dc = p.first;
+        auto rf = p.second;
+        auto rc = udist(0, rf * 3 - 1)(e1) + 1;
+        racks_per_dc.emplace(dc, rc);
+        out = std::fill_n(out, rf, std::cref(dc));
+    }
+
+    for (auto& node : nodes) {
+        const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
+        auto rc = racks_per_dc.at(dc);
+        auto r = udist(0, rc)(e1);
+        node_to_rack.emplace(node, to_sstring(r));
+        node_to_dc.emplace(node, dc);
+    }
+
+    class my_snitch : public snitch_base {
+    public:
+        my_snitch(addr_to_string_type node_to_rack,
+                        addr_to_string_type node_to_dc)
+            : _node_to_rack(std::move(node_to_rack))
+            , _node_to_dc(std::move(node_to_dc))
+        {}
+        sstring get_rack(inet_address endpoint) override {
+            return _node_to_rack.at(endpoint);
+        }
+        sstring get_datacenter(inet_address endpoint) override {
+            return _node_to_dc.at(endpoint);
+        }
+        sstring get_name() const {
+            return "muminpappa";
+        }
+    private:
+        addr_to_string_type _node_to_rack, _node_to_dc;
+    };
+
+    return std::make_unique<my_snitch>(std::move(node_to_rack), std::move(node_to_dc));
+}
+
+SEASTAR_TEST_CASE(testCalculateEndpoints) {
+    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+
+    return i_endpoint_snitch::create_snitch("RackInferringSnitch").then([] {
+        constexpr size_t NODES = 100;
+        constexpr size_t VNODES = 64;
+        constexpr size_t RUNS = 10;
+
+        dht::murmur3_partitioner partitioner;
+        std::unordered_map<sstring, size_t> datacenters = {
+                        { "rf1", 1 },
+                        { "rf3", 3 },
+                        { "rf5_1", 5 },
+                        { "rf5_2", 5 },
+                        { "rf5_3", 5 },
+        };
+        std::vector<inet_address> nodes;
+        nodes.reserve(NODES);
+        std::generate_n(std::back_inserter(nodes), NODES, [i = 0u]() mutable {
+           return inet_address((127u << 24) | ++i);
+        });
+
+        auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
+
+        for (size_t run = 0; run < RUNS; ++run) {
+            token_metadata tm;
+            // not doing anything sharded. We can just play fast and loose with the snitch.
+            snitch.stop();
+            snitch = generate_snitch(datacenters, nodes);
+
+            for (auto& node : nodes) {
+                for (size_t i = 0; i < VNODES; ++i) {
+                    tm.update_normal_token(partitioner.get_random_token(), node);
+                }
+            }
+            test_equivalence(tm, snitch, partitioner, datacenters);
+        }
+
+        return i_endpoint_snitch::stop_snitch();
+    });
+}
+
+
