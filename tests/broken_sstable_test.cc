@@ -55,6 +55,21 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
     return broken_sst(dir, generation, s, msg);
 }
 
+SEASTAR_THREAD_TEST_CASE(mismatched_timestamp) {
+    schema_ptr s = schema_builder("test_ks", "test_table")
+                       .with_column("key1", utf8_type, column_kind::partition_key)
+                       .with_column("key2", utf8_type, column_kind::clustering_key)
+                       .with_column("key3", utf8_type, column_kind::clustering_key)
+                       .with_column("val", utf8_type, column_kind::regular_column)
+                       .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/mismatched_timestamp", 122, s,
+        "Range tombstone with ck ckp{00056b65793262} and two different tombstones at ends: "
+        "{tombstone: timestamp=1544745393692803, deletion_time=1544745393}, {tombstone: "
+        "timestamp=1446576446577440, deletion_time=1442880998} in sstable "
+        "tests/sstables/mismatched_timestamp/mc-122-big-Data.db",
+        sstable::version_types::mc);
+}
+
 SEASTAR_THREAD_TEST_CASE(broken_open_tombstone) {
     schema_ptr s = schema_builder("test_ks", "test_table")
                        .with_column("key1", utf8_type, column_kind::partition_key)
