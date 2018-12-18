@@ -158,7 +158,7 @@ public:
     };
 
     test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, size_t cache_size = 100000)
-        : _sem(std::numeric_limits<unsigned>::max(), std::numeric_limits<size_t>::max())
+        : _sem(reader_concurrency_semaphore::no_limits{})
         , _cache(_sem, cache_size, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr, const dht::partition_range& range) {
@@ -728,4 +728,28 @@ SEASTAR_THREAD_TEST_CASE(test_evict_all_for_table) {
 
     // Check that the querier was removed from the semaphore too.
     BOOST_CHECK(!t.get_semaphore().try_evict_one_inactive_read());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
+    test_querier_cache t;
+
+    auto& sem = t.get_semaphore();
+
+    auto permit1 = sem.consume_resources(reader_concurrency_semaphore::resources(sem.available_resources().count, 0));
+
+    BOOST_CHECK_EQUAL(sem.available_resources().count, 0);
+
+    auto permit2_fut = sem.wait_admission(1);
+
+    BOOST_CHECK_EQUAL(sem.waiters(), 1);
+
+    const auto entry = t.produce_first_page_and_save_mutation_querier();
+    t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+        .misses()
+        .no_drops()
+        .resource_based_evictions();
+
+    permit1.release();
+
+    permit2_fut.get();
 }

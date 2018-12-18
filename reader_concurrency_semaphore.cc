@@ -89,6 +89,11 @@ future<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> reader_concur
     return fut;
 }
 
+lw_shared_ptr<reader_concurrency_semaphore::reader_permit> reader_concurrency_semaphore::consume_resources(resources r) {
+    _resources -= r;
+    return make_lw_shared<reader_permit>(*this, r);
+}
+
 // A file that tracks the memory usage of buffers resulting from read
 // operations.
 class tracking_file_impl : public file_impl {
