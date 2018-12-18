@@ -24,6 +24,7 @@
 #include <random>
 
 #include <boost/range/algorithm/generate.hpp>
+#include <iostream>
 
 namespace tests::random {
 
