@@ -770,7 +770,7 @@ row_cache::make_reader(schema_ptr s,
 {
     auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, streamed_mutation::forwarding::no, fwd_mr);
 
-    if (!ctx->is_range_query()) {
+    if (!ctx->is_range_query() && !fwd_mr) {
         auto mr = _read_section(_tracker.region(), [&] {
             return with_linearized_managed_bytes([&] {
                 cache_entry::compare cmp(_schema);
