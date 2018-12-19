@@ -509,6 +509,7 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
             // clear_and_dispose() used by mutation_partition destructor won't
             // work properly.
 
+            _cur = _mutations.begin();
             while (_cur != _end) {
                 destroy_current_mutation();
                 ++_cur;
