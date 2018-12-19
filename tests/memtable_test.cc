@@ -84,6 +84,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
     return seastar::async([] {
         lw_shared_ptr<memtable> mt;
         std::vector<flat_mutation_reader> readers;
+        std::deque<dht::partition_range> ranges_storage;
         run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& muts) {
             readers.clear();
             mt = make_lw_shared<memtable>(s);
@@ -91,7 +92,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
             for (auto&& m : muts) {
                 mt->apply(m);
                 // Create reader so that each mutation is in a separate version
-                flat_mutation_reader rd = mt->make_flat_reader(s, dht::partition_range::make_singular(m.decorated_key()));
+                flat_mutation_reader rd = mt->make_flat_reader(s, ranges_storage.emplace_back(dht::partition_range::make_singular(m.decorated_key())));
                 rd.set_max_buffer_size(1);
                 rd.fill_buffer(db::no_timeout).get();
                 readers.push_back(std::move(rd));
