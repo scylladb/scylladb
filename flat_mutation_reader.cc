@@ -487,11 +487,11 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
         }
     public:
         reader(schema_ptr s, std::vector<mutation>&& mutations, const dht::partition_range& pr)
-            : impl(std::move(s))
+            : impl(s)
             , _mutations(std::move(mutations))
             , _cur(find_first_partition(_mutations, pr))
             , _end(find_last_partition(_mutations, pr))
-            , _cmp(*_cur->schema())
+            , _cmp(*s)
         {
             _end_of_stream = _cur == _end;
             if (!_end_of_stream) {
