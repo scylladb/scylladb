@@ -4953,7 +4953,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
                 .produces_end_of_stream(),
             std::exception,
             [&] (const std::exception& e) {
-                return e.what() == "Column val1 missing in current schema. in sstable " + sst->get_filename();
+                return e.what() == "Column val1 missing in current schema in sstable " + sst->get_filename();
             });
     }
 }

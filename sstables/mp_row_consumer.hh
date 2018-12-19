@@ -913,8 +913,8 @@ class mp_row_consumer_m : public consumer_m {
     void check_schema_mismatch(const column_translation::column_info& column_info, const column_definition& column_def) {
         if (column_info.schema_mismatch) {
             throw malformed_sstable_exception(
-                    format("{} definition in serialization header does not match schema. Expected {} but got {}.",
-                        column_def.name(),
+                    format("{} definition in serialization header does not match schema. Expected {} but got {}",
+                        column_def.name_as_text(),
                         column_def.type->name(),
                         column_info.type->name()));
         }
@@ -926,7 +926,7 @@ class mp_row_consumer_m : public consumer_m {
             sstring name = sstring(to_sstring_view(*column_info.name));
             auto it = _schema->dropped_columns().find(name);
             if (it == _schema->dropped_columns().end() || timestamp > it->second.timestamp) {
-                throw malformed_sstable_exception(format("Column {} missing in current schema.", name));
+                throw malformed_sstable_exception(format("Column {} missing in current schema", name));
             }
         }
     }

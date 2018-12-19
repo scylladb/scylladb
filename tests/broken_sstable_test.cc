@@ -55,6 +55,33 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
     return broken_sst(dir, generation, s, msg);
 }
 
+SEASTAR_THREAD_TEST_CASE(missing_column_in_schema) {
+    schema_ptr s = schema_builder("test_ks", "test_table")
+                       .with_column("key1", utf8_type, column_kind::partition_key)
+                       .with_column("key2", utf8_type, column_kind::clustering_key)
+                       .with_column("key3", utf8_type, column_kind::clustering_key)
+                       .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/incompatible_serialized_type", 122, s,
+        "Column val missing in current schema in sstable "
+        "tests/sstables/incompatible_serialized_type/mc-122-big-Data.db",
+        sstable::version_types::mc);
+}
+
+SEASTAR_THREAD_TEST_CASE(incompatible_serialized_type) {
+    schema_ptr s = schema_builder("test_ks", "test_table")
+                       .with_column("key1", utf8_type, column_kind::partition_key)
+                       .with_column("key2", utf8_type, column_kind::clustering_key)
+                       .with_column("key3", utf8_type, column_kind::clustering_key)
+                       .with_column("val", int32_type, column_kind::regular_column)
+                       .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/incompatible_serialized_type", 122, s,
+        "val definition in serialization header does not match schema. Expected "
+        "org.apache.cassandra.db.marshal.Int32Type but got "
+        "org.apache.cassandra.db.marshal.UTF8Type in sstable "
+        "tests/sstables/incompatible_serialized_type/mc-122-big-Data.db",
+        sstable::version_types::mc);
+}
+
 SEASTAR_THREAD_TEST_CASE(mismatched_timestamp) {
     schema_ptr s = schema_builder("test_ks", "test_table")
                        .with_column("key1", utf8_type, column_kind::partition_key)
