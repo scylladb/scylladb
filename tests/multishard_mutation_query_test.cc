@@ -30,40 +30,17 @@
 
 #include <experimental/source_location>
 
-class delete_rows {
-    int _skip = 0;
-    int _delete = 0;
-
-public:
-    delete_rows() = default;
-    delete_rows(int skip_rows, int delete_rows)
-        : _skip(skip_rows)
-        , _delete(delete_rows) {
-    }
-
-    bool should_delete_row(int row) {
-        if (!_delete) {
-            return false;
-        }
-        const auto total = _skip + _delete;
-        const auto i = row % total;
-        return i >= _skip;
-    }
-};
-
 static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_cf(cql_test_env& env, unsigned partition_count = 10 * smp::count,
-        unsigned row_per_partition_count = 10, delete_rows dr = {}) {
+        unsigned row_per_partition_count = 10) {
     env.execute_cql("CREATE KEYSPACE multishard_mutation_query_cache_ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
     env.execute_cql("CREATE TABLE multishard_mutation_query_cache_ks.test (pk int, ck int, v int, PRIMARY KEY(pk, ck));").get();
 
     const auto insert_id = env.prepare("INSERT INTO multishard_mutation_query_cache_ks.test (\"pk\", \"ck\", \"v\") VALUES (?, ?, ?);").get0();
-    const auto delete_id = env.prepare("DELETE FROM multishard_mutation_query_cache_ks.test WHERE pk = ? AND ck = ?;").get0();
 
     auto s = env.local_db().find_column_family("multishard_mutation_query_cache_ks", "test").schema();
 
     std::vector<dht::decorated_key> pkeys;
 
-    auto row_counter = int(0);
     for (int pk = 0; pk < int(partition_count); ++pk) {
         pkeys.emplace_back(dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, data_value(pk).serialize())));
         for (int ck = 0; ck < int(row_per_partition_count); ++ck) {
@@ -71,12 +48,6 @@ static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_cf(cql
                     cql3::raw_value::make_value(data_value(pk).serialize()),
                     cql3::raw_value::make_value(data_value(ck).serialize()),
                     cql3::raw_value::make_value(data_value(pk ^ ck).serialize())}}).get();
-
-            if (dr.should_delete_row(row_counter++)) {
-                env.execute_prepared(delete_id, {{
-                    cql3::raw_value::make_value(data_value(pk).serialize()),
-                    cql3::raw_value::make_value(data_value(ck).serialize())}});
-            }
         }
     }
 
@@ -323,40 +294,6 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
         BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0);
         BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), npages);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0);
-
-        require_eventually_empty_caches(env.db());
-
-        return make_ready_future<>();
-    }).get();
-}
-
-SEASTAR_THREAD_TEST_CASE(test_range_tombstones) {
-    do_with_cql_env([] (cql_test_env& env) -> future<> {
-        using namespace std::chrono_literals;
-
-        env.db().invoke_on_all([] (database& db) {
-            db.set_querier_cache_entry_ttl(2s);
-        }).get();
-
-        // Delete 20 rows after each 5 undeleted ones.
-        auto [s, pkeys] = create_test_cf(env, 2, 50, {5, 20});
-
-        // First read all partition-by-partition (not paged).
-        auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
-
-        // Then do a paged range-query
-        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
-            check_cache_population(env.db(), 1);
-            BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
-            BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0);
-        }).first;
-
-        check_results_are_equal(results1, results2);
-
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), 0);
         BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0);
 
         require_eventually_empty_caches(env.db());
