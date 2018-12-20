@@ -58,6 +58,10 @@ namespace db {
 class seed_provider_type;
 }
 
+namespace db::view {
+class update_backlog;
+}
+
 class frozen_mutation;
 class frozen_schema;
 class partition_checksum;
@@ -317,14 +321,14 @@ public:
     future<> send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info = std::experimental::nullopt);
 
     // Wrapper for MUTATION_DONE
-    void register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func);
+    void register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, rpc::optional<db::view::update_backlog> backlog)>&& func);
     void unregister_mutation_done();
-    future<> send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id);
+    future<> send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id, db::view::update_backlog backlog);
 
     // Wrapper for MUTATION_FAILED
-    void register_mutation_failed(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, size_t num_failed)>&& func);
+    void register_mutation_failed(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog)>&& func);
     void unregister_mutation_failed();
-    future<> send_mutation_failed(msg_addr id, unsigned shard, response_id_type response_id, size_t num_failed);
+    future<> send_mutation_failed(msg_addr id, unsigned shard, response_id_type response_id, size_t num_failed, db::view::update_backlog backlog);
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>

@@ -50,6 +50,8 @@
 #include "db/read_repair_decision.hh"
 #include "db/write_type.hh"
 #include "db/hints/manager.hh"
+#include "db/view/view_update_backlog.hh"
+#include "db/view/node_view_update_backlog.hh"
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
@@ -71,6 +73,11 @@ class abstract_read_executor;
 class mutation_holder;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
+
+struct view_update_backlog_timestamped {
+    db::view::update_backlog backlog;
+    api::timestamp_type ts;
+};
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
@@ -166,6 +173,9 @@ private:
             clock_type::time_point,
             tracing::trace_state_ptr,
             bool> _mutate_stage;
+    db::view::node_update_backlog& _max_view_update_backlog;
+    std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
+
 private:
     void uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -174,8 +184,8 @@ private:
             coordinator_query_options optional_params);
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
-    void got_response(response_id_type id, gms::inet_address from);
-    void got_failure_response(response_id_type id, gms::inet_address from, size_t count);
+    void got_response(response_id_type id, gms::inet_address from, stdx::optional<db::view::update_backlog> backlog);
+    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, stdx::optional<db::view::update_backlog> backlog);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,
@@ -264,8 +274,14 @@ private:
             std::vector<gms::inet_address> pending_endpoints,
             db::write_type type,
             write_stats& stats);
+
+    db::view::update_backlog get_view_update_backlog() const;
+
+    void maybe_update_view_backlog_of(gms::inet_address, stdx::optional<db::view::update_backlog>);
+
+    db::view::update_backlog get_backlog_of(gms::inet_address) const;
 public:
-    storage_proxy(distributed<database>& db, config cfg);
+    storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;
@@ -334,8 +350,6 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
-    future<> send_to_endpoint(mutation m, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats);
-    future<> send_to_endpoint(mutation m, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type);
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats);
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type);
 
@@ -399,6 +413,7 @@ public:
     friend class abstract_read_executor;
     friend class abstract_write_response_handler;
     friend class speculating_read_executor;
+    friend class view_update_backlog_broker;
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;
