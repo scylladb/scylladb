@@ -142,6 +142,9 @@ class sstable_mutation_reader : public mp_row_consumer_reader {
     read_monitor& _monitor;
     std::optional<dht::decorated_key> _current_partition_key;
     bool _partition_finished = true;
+    // when set, the consumer is positioned right before a partition.
+    // _index_in_current_partition applies to the partition which is about to be read.
+    bool _before_partition = true;
 public:
     sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc,
@@ -250,6 +253,7 @@ private:
     }
     future<> advance_to_next_partition() {
         sstlog.trace("reader {}: advance_to_next_partition()", this);
+        _before_partition = true;
         auto& consumer = _consumer;
         if (consumer.is_mutation_end()) {
             sstlog.trace("reader {}: already at partition boundary", this);
@@ -311,7 +315,9 @@ private:
     future<> read_partition() {
         sstlog.trace("reader {}: reading partition", this);
 
+        _end_of_stream = true; // on_next_partition() will set it to true
         if (!_read_enabled) {
+            sstlog.trace("reader {}: eof", this);
             return make_ready_future<>();
         }
 
@@ -391,6 +397,7 @@ private:
     }
     void on_next_partition(dht::decorated_key key, tombstone tomb) {
         _partition_finished = false;
+        _before_partition = false;
         _end_of_stream = false;
         _current_partition_key = std::move(key);
         push_mutation_fragment(
@@ -422,6 +429,7 @@ public:
             } else {
                 clear_buffer();
                 _partition_finished = true;
+                _before_partition = true;
                 _end_of_stream = false;
                 assert(_index_reader);
                 auto f1 = _index_reader->advance_to(pr);
@@ -456,7 +464,11 @@ public:
         }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
             if (_partition_finished) {
-                return read_next_partition();
+                if (_before_partition) {
+                    return read_partition();
+                } else {
+                    return read_next_partition();
+                }
             } else {
                 return do_until([this] { return is_buffer_full() || _partition_finished || _end_of_stream; }, [this] {
                     _consumer.push_ready_fragments();

@@ -814,7 +814,6 @@ class mp_row_consumer_m : public consumer_m {
     streamed_mutation::forwarding _fwd;
 
     std::optional<clustering_row> _in_progress_row;
-    std::optional<clustering_row> _stored_row;
     std::optional<range_tombstone> _stored_tombstone;
     static_row _in_progress_static_row;
     bool _inside_static_row = false;
@@ -904,7 +903,6 @@ class mp_row_consumer_m : public consumer_m {
     inline void reset_for_new_partition() {
         _is_mutation_end = true;
         _in_progress_row.reset();
-        _stored_row.reset();
         _stored_tombstone.reset();
         _mf_filter.reset();
         _opened_range_tombstone.reset();
@@ -996,14 +994,7 @@ public:
             return false;
         };
 
-        if (maybe_push(_stored_tombstone)) {
-            return proceed::no;
-        }
-        if (maybe_push(_stored_row)) {
-            return proceed::no;
-        }
-
-        return proceed::yes;
+        return maybe_push(_stored_tombstone) ? proceed::no : proceed::yes;
     }
 
     std::optional<position_in_partition_view> maybe_skip() {
@@ -1062,12 +1053,54 @@ public:
         return proceed::no;
     }
 
-    virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
-        _in_progress_row.emplace(clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
-            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); })));
-        sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", this, _in_progress_row->position());
-        _cells.clear();
-        return proceed::yes;
+    virtual consumer_m::row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
+        auto key = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
+
+        sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", this, key);
+
+        // enagaged _in_progress_row means we have already split around this key.
+        if (_opened_range_tombstone && !_in_progress_row) {
+            // We have an opened range tombstone which means that the current row is spanned by that RT.
+            auto ck = key;
+            bool was_non_full_key = clustering_key::make_full(*_schema, ck);
+            auto end_kind = was_non_full_key ? bound_kind::excl_end : bound_kind::incl_end;
+            assert(!_stored_tombstone);
+            auto rt = range_tombstone(std::move(_opened_range_tombstone->ck),
+                _opened_range_tombstone->kind,
+                ck,
+                end_kind,
+                _opened_range_tombstone->tomb);
+            sstlog.trace("mp_row_consumer_m {}: push({})", this, rt);
+            _opened_range_tombstone->ck = std::move(ck);
+            _opened_range_tombstone->kind = was_non_full_key ? bound_kind::incl_start : bound_kind::excl_start;
+
+            if (maybe_push_range_tombstone(std::move(rt)) == proceed::no) {
+                _in_progress_row.emplace(std::move(key));
+                return consumer_m::retry_later{};
+            }
+        }
+
+        _in_progress_row.emplace(std::move(key));
+
+        switch (_mf_filter->apply(_in_progress_row->position())) {
+        case mutation_fragment_filter::result::emit:
+            sstlog.trace("mp_row_consumer_m {}: emit", this);
+            return consumer_m::do_proceed{};
+        case mutation_fragment_filter::result::ignore:
+            sstlog.trace("mp_row_consumer_m {}: ignore", this);
+            if (_mf_filter->is_current_range_changed()) {
+                return consumer_m::row_processing_result(consumer_m::retry_later{});
+            } else {
+                _in_progress_row.reset();
+                return consumer_m::row_processing_result(consumer_m::skip_row{});
+            }
+        case mutation_fragment_filter::result::store_and_finish:
+            sstlog.trace("mp_row_consumer_m {}: store_and_finish", this);
+            _reader->on_end_of_stream();
+            return consumer_m::retry_later{};
+        }
+        abort();
     }
 
     virtual proceed consume_row_marker_and_tombstone(
@@ -1082,12 +1115,11 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_static_row_start() override {
+    virtual consumer_m::row_processing_result consume_static_row_start() override {
         sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", this);
         _inside_static_row = true;
         _in_progress_static_row = static_row();
-        _cells.clear();
-        return proceed::yes;
+        return consumer_m::do_proceed{};
     }
 
     virtual proceed consume_column(const column_translation::column_info& column_info,
@@ -1221,6 +1253,7 @@ public:
             for (auto &&c : _cells) {
                 cells.apply(_schema->column_at(kind, c.id), std::move(c.val));
             }
+            _cells.clear();
         };
 
         if (_inside_static_row) {
@@ -1244,23 +1277,7 @@ public:
             if (!_cells.empty()) {
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
             }
-            if (_opened_range_tombstone) {
-                /* We have an opened range tombstone which means that the current row is spanned by that RT.
-                 */
-                auto ck = _in_progress_row->key();
-                bool was_non_full_key = clustering_key::make_full(*_schema, ck);
-                auto end_kind =  was_non_full_key ? bound_kind::excl_end : bound_kind::incl_end;
-                assert(!_stored_tombstone);
-                _stored_tombstone = range_tombstone(std::move(_opened_range_tombstone->ck),
-                                                              _opened_range_tombstone->kind,
-                                                              ck,
-                                                              end_kind,
-                                                              _opened_range_tombstone->tomb);
-                _opened_range_tombstone->ck = std::move(ck);
-                _opened_range_tombstone->kind = was_non_full_key ? bound_kind::incl_start : bound_kind::excl_start;
-            }
-            _stored_row = *std::exchange(_in_progress_row, {});
-            return proceed(push_ready_fragments() == proceed::yes && !_reader->is_buffer_full());
+            _reader->push_mutation_fragment(*std::exchange(_in_progress_row, {}));
         }
 
         return proceed(!_reader->is_buffer_full());
@@ -1300,6 +1317,7 @@ public:
         if (el == indexable_element::partition) {
             reset_for_new_partition();
         } else {
+            _in_progress_row.reset();
             _is_mutation_end = false;
         }
     }

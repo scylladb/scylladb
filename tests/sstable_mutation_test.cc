@@ -1326,20 +1326,6 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             auto before = index_accesses();
 
             {
-                auto slice = partition_slice_builder(*s).with_ranges({
-                    ss.make_ckey_range(0, 3),
-                    ss.make_ckey_range(5, 8)
-                }).build();
-
-                assert_that(ms.make_reader(s, query::full_partition_range, slice))
-                    .produces(m1)
-                    .produces(m2)
-                    .produces_end_of_stream();
-
-                BOOST_REQUIRE_EQUAL(index_accesses(), before);
-            }
-
-            {
                 assert_that(ms.make_reader(s))
                     .produces(m1)
                     .produces(m2)

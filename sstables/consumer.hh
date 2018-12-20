@@ -199,6 +199,16 @@ protected:
             return read_status::waiting;
         }
     }
+    data_consumer::processing_result skip(temporary_buffer<char>& data, uint32_t len) {
+        if (data.size() >= len) {
+            data.trim_front(len);
+            return proceed::yes;
+        } else {
+            auto left = len - data.size();
+            data.trim(0);
+            return skip_bytes{left};
+        }
+    }
     inline read_status read_short_length_bytes(temporary_buffer<char>& data, temporary_buffer<char>& where) {
         if (data.size() >= sizeof(uint16_t)) {
             _u16 = consume_be<uint16_t>(data);
@@ -404,11 +414,12 @@ public:
             // We received more data than we actually care about, so process
             // the beginning of the buffer, and return the rest to the stream
             auto segment = data.share(0, _remain);
+            _stream_position.position += _remain;
             auto ret = process(segment);
+            _stream_position.position -= segment.size();
             data.trim_front(_remain - segment.size());
             auto len = _remain - segment.size();
             _remain -= len;
-            _stream_position.position += len;
             if (_remain == 0 && ret == proceed::yes) {
                 verify_end_state();
             }
@@ -464,6 +475,9 @@ public:
         return fast_forward_to(begin, _stream_position.position + _remain);
     }
 
+    // Returns the offset of the first byte which has not been consumed yet.
+    // When called from state_processor::process_state() invoked by this consumer,
+    // returns the offset of the first byte after the buffer passed to process_state().
     uint64_t position() const {
         return _stream_position.position;
     }
