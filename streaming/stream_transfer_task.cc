@@ -182,16 +182,20 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         }();
 
         auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
-            return repeat([sink, si, got_error_from_peer] () mutable {
-                return si->reader(db::no_timeout).then([sink, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
-                    if (mf && !(*got_error_from_peer)) {
-                        frozen_mutation_fragment fmf = freeze(*s, *mf);
-                        auto size = fmf.representation().size();
-                        streaming::get_local_stream_manager().update_progress(si->plan_id, si->id.addr, streaming::progress_info::direction::OUT, size);
-                        return sink(fmf).then([] { return stop_iteration::no; });
-                    } else {
-                        return sink.close().then([] { return stop_iteration::yes; });
-                    }
+            return do_with(std::move(sink), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment>& sink) {
+                return repeat([&sink, si, got_error_from_peer] () mutable {
+                    return si->reader(db::no_timeout).then([&sink, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
+                        if (mf && !(*got_error_from_peer)) {
+                            frozen_mutation_fragment fmf = freeze(*s, *mf);
+                            auto size = fmf.representation().size();
+                            streaming::get_local_stream_manager().update_progress(si->plan_id, si->id.addr, streaming::progress_info::direction::OUT, size);
+                            return sink(fmf).then([] { return stop_iteration::no; });
+                        } else {
+                            return make_ready_future<stop_iteration>(stop_iteration::yes);
+                        }
+                    });
+                }).finally([&sink] () mutable {
+                    return sink.close();
                 });
             });
         }();
