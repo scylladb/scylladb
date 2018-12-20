@@ -97,6 +97,7 @@ struct write_stats {
     uint64_t background_write_bytes = 0;
     uint64_t queued_write_bytes = 0;
     uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
+    uint64_t throttled_base_writes = 0; // current number of base writes delayed due to view update backlog
     uint64_t background_writes_failed = 0;
 public:
     write_stats();

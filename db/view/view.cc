@@ -58,6 +58,7 @@
 #include "cql3/util.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
+#include "frozen_mutation.hh"
 #include "gms/inet_address.hh"
 #include "keys.hh"
 #include "locator/network_topology_strategy.hh"
@@ -226,10 +227,11 @@ public:
             , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
     }
 
-    void move_to(std::vector<mutation>& mutations) && {
+    void move_to(std::vector<frozen_mutation_and_schema>& mutations) && {
         auto& partitioner = dht::global_partitioner();
         std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
-            return mutation(_view, partitioner.decorate_key(*_view, std::move(m.first)), std::move(m.second));
+            auto mut = mutation(_view, partitioner.decorate_key(*_view, std::move(m.first)), std::move(m.second));
+            return frozen_mutation_and_schema{freeze(mut), std::move(_view)};
         });
     }
 
@@ -627,7 +629,7 @@ public:
             , _now(gc_clock::now()) {
     }
 
-    future<std::vector<mutation>> build();
+    future<std::vector<frozen_mutation_and_schema>> build();
 
 private:
     void generate_update(clustering_row&& update, stdx::optional<clustering_row>&& existing);
@@ -664,7 +666,7 @@ private:
     }
 };
 
-future<std::vector<mutation>> view_update_builder::build() {
+future<std::vector<frozen_mutation_and_schema>> view_update_builder::build() {
     return advance_all().then([this] (auto&& ignored) {
         assert(_update && _update->is_partition_start());
         _key = std::move(std::move(_update)->as_partition_start().key().key());
@@ -679,7 +681,7 @@ future<std::vector<mutation>> view_update_builder::build() {
             });
         });
     }).then([this] {
-        std::vector<mutation> mutations;
+        std::vector<frozen_mutation_and_schema> mutations;
         for (auto&& update : _view_updates) {
             std::move(update).move_to(mutations);
         }
@@ -787,7 +789,7 @@ future<stop_iteration> view_update_builder::on_results() {
     return stop();
 }
 
-future<std::vector<mutation>> generate_view_updates(
+future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_ptr>&& views_to_update,
         flat_mutation_reader&& updates,
@@ -924,16 +926,35 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 // to a modification of a single base partition, and apply them to the
 // appropriate paired replicas. This is done asynchronously - we do not wait
 // for the writes to complete.
-// FIXME: I dropped a lot of parameters the Cassandra version had,
-// we may need them back: writeCommitLog, baseComplete, queryStartNanoTime.
-future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats)
+future<> mutate_MV(
+        const dht::token& base_token,
+        std::vector<frozen_mutation_and_schema> view_updates,
+        db::view::stats& stats,
+        db::timeout_semaphore_units pending_view_updates)
 {
     auto fs = std::make_unique<std::vector<future<>>>();
-    for (auto& mut : mutations) {
-        auto view_token = mut.token();
-        auto& keyspace_name = mut.schema()->ks_name();
+    fs->reserve(view_updates.size());
+    auto& partitioner = dht::global_partitioner();
+    for (frozen_mutation_and_schema& mut : view_updates) {
+        auto view_token = partitioner.get_token(*mut.s, mut.fm.key(*mut.s));
+        auto& keyspace_name = mut.s->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
+        auto maybe_account_failure = [&stats, units = pending_view_updates.split(mut.fm.representation().size())] (
+                future<>&& f,
+                gms::inet_address target,
+                bool is_local,
+                size_t remotes) {
+            if (f.failed()) {
+                stats.view_updates_failed_local += is_local;
+                stats.view_updates_failed_remote += remotes;
+                auto ep = f.get_exception();
+                vlogger.error("Error applying view update to {}: {}", target, ep);
+                return make_exception_future<>(std::move(ep));
+            } else {
+                return make_ready_future<>();
+            }
+        };
         if (paired_endpoint) {
             // When paired endpoint is the local node, we can just apply
             // the mutation locally, unless there are pending endpoints, in
@@ -954,16 +975,13 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                 // send_to_endpoint() below updates statistics on pending
                 // writes but mutate_locally() doesn't, so we need to do that here.
                 ++stats.writes;
-                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).then_wrapped([&stats] (auto&& fut) {
+                auto mut_ptr = std::make_unique<frozen_mutation>(std::move(mut.fm));
+                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut.s, *mut_ptr).then_wrapped(
+                        [&stats,
+                         maybe_account_failure = std::move(maybe_account_failure),
+                         mut_ptr = std::move(mut_ptr)] (future<>&& f) {
                     --stats.writes;
-                    if (fut.failed()) {
-                        auto ep = fut.get_exception();
-                        vlogger.error("Error applying local view update: {}", ep);
-                        ++stats.view_updates_failed_local;
-                        return make_exception_future<>(std::move(ep));
-                    } else {
-                        return make_ready_future<>();
-                    }
+                    return maybe_account_failure(std::move(f), utils::fb_utilities::get_broadcast_address(), true, 0);
                 }));
             } else {
                 vlogger.debug("Sending view update to endpoint {}, with pending endpoints = {}", *paired_endpoint, pending_endpoints);
@@ -974,14 +992,17 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                 // to send the update there. Currently, we do this from *each* of
                 // the base replicas, but this is probably excessive - see
                 // See https://issues.apache.org/jira/browse/CASSANDRA-14262/
-                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(std::move(mut), *paired_endpoint, std::move(pending_endpoints), db::write_type::VIEW, stats)
-                        .handle_exception([paired_endpoint, is_endpoint_local, updates_pushed_remote, &stats] (auto ep) {
-                            stats.view_updates_failed_local += is_endpoint_local;
-                            stats.view_updates_failed_remote += updates_pushed_remote;
-                            vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
-                            return make_exception_future<>(std::move(ep));
-                        })
-                );
+                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(
+                        std::move(mut),
+                        *paired_endpoint,
+                        std::move(pending_endpoints),
+                        db::write_type::VIEW, stats).then_wrapped(
+                                [paired_endpoint,
+                                 is_endpoint_local,
+                                 updates_pushed_remote,
+                                 maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) mutable {
+                    return maybe_account_failure(std::move(f), std::move(*paired_endpoint), is_endpoint_local, updates_pushed_remote);
+                }));
             }
         } else if (!pending_endpoints.empty()) {
             // If there is no paired endpoint, it means there's a range movement going on (decommission or move),
@@ -1001,10 +1022,11 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                     std::move(mut),
                     target,
                     std::move(pending_endpoints),
-                    db::write_type::VIEW).handle_exception([target, updates_pushed_remote, &stats] (auto ep) {
-                stats.view_updates_failed_remote += updates_pushed_remote;
-                vlogger.error("Error applying view update to {}: {}", target, ep);
-                return make_exception_future<>(std::move(ep));
+                    db::write_type::VIEW).then_wrapped(
+                            [target,
+                             updates_pushed_remote,
+                             maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) {
+                return maybe_account_failure(std::move(f), std::move(target), false, updates_pushed_remote);
             }));
         }
     }
@@ -1619,6 +1641,23 @@ future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& v
         auto v = std::pair(std::move(ks_name), std::move(view_name));
         return builder._build_notifiers[std::move(v)].get_shared_future();
     });
+}
+
+update_backlog node_update_backlog::add_fetch(unsigned shard, update_backlog backlog) {
+    _backlogs[shard].backlog.store(backlog, std::memory_order_relaxed);
+    auto now = clock::now();
+    if (now >= _last_update.load(std::memory_order_relaxed) + _interval) {
+        _last_update.store(now, std::memory_order_relaxed);
+        auto new_max = boost::accumulate(
+                _backlogs,
+                update_backlog::no_backlog(),
+                [] (const update_backlog& lhs, const per_shard_backlog& rhs) {
+                    return std::max(lhs, rhs.load());
+                });
+        _max.store(new_max, std::memory_order_relaxed);
+        return new_max;
+    }
+    return std::max(backlog, _max.load(std::memory_order_relaxed));
 }
 
 } // namespace view

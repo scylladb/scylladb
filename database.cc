@@ -1122,12 +1122,14 @@ table::start() {
 future<>
 table::stop() {
     return _async_gate.close().then([this] {
-        return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
-            return _compaction_manager.remove(this).then([this] {
-                // Nest, instead of using when_all, so we don't lose any exceptions.
-                return _streaming_flush_gate.close();
-            }).then([this] {
-                return _sstable_deletion_gate.close();
+        return when_all(await_pending_writes(), await_pending_reads()).discard_result().finally([this] {
+            return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
+                return _compaction_manager.remove(this).then([this] {
+                    // Nest, instead of using when_all, so we don't lose any exceptions.
+                    return _streaming_flush_gate.close();
+                }).then([this] {
+                    return _sstable_deletion_gate.close();
+                });
             });
         });
     });
@@ -2353,6 +2355,9 @@ database::setup_metrics() {
                        sm::description("Counts sstables that survived the clustering key filtering. "
                                        "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
+        sm::make_derive("dropped_view_updates", _cf_stats.dropped_view_updates,
+                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. ")),
+
         sm::make_derive("total_writes", _stats->total_writes,
                        sm::description("Counts the total number of successful write operations performed by this shard.")),
 
@@ -2369,6 +2374,9 @@ database::setup_metrics() {
         sm::make_derive("total_reads_failed", _stats->total_reads_failed,
                        sm::description("Counts the total number of failed read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard.")),
+
+        sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().current; },
+                       sm::description("Holds the current size in bytes of the pending view updates for all tables")),
 
         sm::make_derive("querier_cache_lookups", _querier_cache.get_stats().lookups,
                        sm::description("Counts querier cache lookups (paging queries)")),
@@ -2962,6 +2970,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.large_partition_handler = lp_handler;
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
+    cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
 
     return cfg;
 }
@@ -3759,6 +3768,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.enable_metrics_reporting = _cfg->enable_keyspace_column_family_metrics();
 
     cfg.view_update_concurrency_semaphore = &_view_update_concurrency_sem;
+    cfg.view_update_concurrency_semaphore_limit = max_memory_pending_view_updates();
     return cfg;
 }
 
@@ -3856,6 +3866,8 @@ database::stop() {
         return parallel_for_each(_column_families, [this] (auto& val_pair) {
             return val_pair.second->stop();
         });
+    }).then([this] {
+        return _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
     }).then([this] {
         if (_commitlog != nullptr) {
             return _commitlog->release();
@@ -4476,6 +4488,14 @@ std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutati
     }));
 }
 
+static size_t memory_usage_of(const std::vector<frozen_mutation_and_schema>& ms) {
+    // Overhead of sending a view mutation, in terms of data structures used by the storage_proxy.
+    constexpr size_t base_overhead_bytes = 256;
+    return boost::accumulate(ms | boost::adaptors::transformed([] (const frozen_mutation_and_schema& m) {
+        return m.fm.representation().size();
+    }), size_t{base_overhead_bytes * ms.size()});
+}
+
 /**
  * Given some updates on the base table and the existing values for the rows affected by that update, generates the
  * mutations to be applied to the base table's views, and sends them to the paired view replicas.
@@ -4492,17 +4512,15 @@ std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutati
 future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         std::vector<view_ptr>&& views,
         mutation&& m,
-        flat_mutation_reader_opt existings,
-        db::timeout_clock::time_point timeout) const {
+        flat_mutation_reader_opt existings) const {
     auto base_token = m.token();
-    return db::view::generate_view_updates(base,
-                        std::move(views),
-                        flat_mutation_reader_from_mutations({std::move(m)}),
-                        std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (auto&& updates) mutable {
-        return seastar::get_units(*_config.view_update_concurrency_semaphore, 1, timeout).then(
-                [this, base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
-            db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats).handle_exception([units = std::move(units)] (auto ignored) { });
-        });
+    return db::view::generate_view_updates(
+            base,
+            std::move(views),
+            flat_mutation_reader_from_mutations({std::move(m)}),
+            std::move(existings)).then([this, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+        auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
+        db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units)).handle_exception([] (auto ignored) { });
     });
 }
 
@@ -4607,8 +4625,17 @@ future<> table::populate_views(
             schema,
             std::move(views),
             std::move(reader),
-            { }).then([base_token = std::move(base_token), this] (auto&& updates) {
-        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats);
+            { }).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+        size_t update_size = memory_usage_of(updates);
+        size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
+        return seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for).then(
+                [base_token = std::move(base_token),
+                 updates = std::move(updates),
+                 units_to_consume = update_size - units_to_wait_for,
+                 this] (db::timeout_semaphore_units&& units) mutable {
+            units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, units_to_consume));
+            return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units));
+        });
     });
 }
 

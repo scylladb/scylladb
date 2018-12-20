@@ -33,6 +33,7 @@
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
 #include "service/load_broadcaster.hh"
+#include "service/view_update_backlog_broker.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -625,7 +626,8 @@ int main(int ac, char** av) {
             service::storage_proxy::config spcfg;
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
             spcfg.available_memory = memory::stats().total_memory();
-            proxy.start(std::ref(db), spcfg).get();
+            static db::view::node_update_backlog node_backlog(smp::count, 10ms);
+            proxy.start(std::ref(db), spcfg, std::ref(node_backlog)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
@@ -778,6 +780,15 @@ int main(int ac, char** av) {
             cf_cache_hitrate_calculator.start(std::ref(db), std::ref(cf_cache_hitrate_calculator)).get();
             engine().at_exit([&cf_cache_hitrate_calculator] { return cf_cache_hitrate_calculator.stop(); });
             cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
+
+            supervisor::notify("starting view update backlog broker");
+            static sharded<service::view_update_backlog_broker> view_backlog_broker;
+            view_backlog_broker.start(std::ref(proxy), std::ref(gms::get_gossiper())).get();
+            view_backlog_broker.invoke_on_all(&service::view_update_backlog_broker::start).get();
+            engine().at_exit([] {
+                return view_backlog_broker.stop();
+            });
+
             api::set_server_cache(ctx);
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();

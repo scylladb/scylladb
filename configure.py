@@ -759,6 +759,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/tracing.idl.hh',
         'idl/consistency_level.idl.hh',
         'idl/cache_temperature.idl.hh',
+        'idl/view.idl.hh',
         ]
 
 scylla_tests_dependencies = scylla_core + idls + [
