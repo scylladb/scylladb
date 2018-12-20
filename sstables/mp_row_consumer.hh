@@ -1018,8 +1018,18 @@ public:
         if (!_mf_filter) {
             return {};
         }
-
-        return _mf_filter->fast_forward_to(std::move(r));
+        auto skip = _mf_filter->fast_forward_to(std::move(r));
+        if (skip) {
+            position_in_partition::less_compare less(*_schema);
+            // No need to skip using index if stored fragments are after the start of the range
+            if (_in_progress_row && !less(_in_progress_row->position(), *skip)) {
+                return {};
+            }
+            if (_stored_tombstone && !less(_stored_tombstone->position(), *skip)) {
+                return {};
+            }
+        }
+        return skip;
     }
 
     /*
