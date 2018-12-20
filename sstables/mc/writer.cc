@@ -1145,11 +1145,9 @@ void writer::write_static_row(const row& static_row) {
     write(_sst.get_version(), *_data_writer, flags);
     write(_sst.get_version(), *_data_writer, row_extended_flags::is_static);
 
+    write_vint(_tmp_bufs, 0); // as the static row always comes first, the previous row size is always zero
     write_cells(_tmp_bufs, column_kind::static_column, static_row, row_time_properties{}, has_complex_deletion);
-
-    uint64_t row_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(0);
-    write_vint(*_data_writer, row_body_size);
-    write_vint(*_data_writer, 0); // as the static row always comes first, the previous row size is always zero
+    write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
 
     _partition_header_length += (_data_writer->offset() - current_pos);
@@ -1198,11 +1196,11 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
 
     write_clustering_prefix(*_data_writer, _schema, clustered_row.key(), ephemerally_full_prefix{_schema.is_compact_table()});
 
+    write_vint(_tmp_bufs, prev_row_size);
     write_row_body(_tmp_bufs, clustered_row, has_complex_deletion);
 
-    uint64_t row_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(prev_row_size);
+    uint64_t row_body_size = _tmp_bufs.size();
     write_vint(*_data_writer, row_body_size);
-    write_vint(*_data_writer, prev_row_size);
     flush_tmp_bufs();
 
     // Collect statistics
@@ -1274,13 +1272,9 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
         }
     };
 
+    write_vint(_tmp_bufs, prev_row_size);
     write_marker_body(_tmp_bufs);
-
-    uint64_t marker_body_size = _tmp_bufs.size() + unsigned_vint::serialized_size(prev_row_size);
-
-    write_vint(*_data_writer, marker_body_size);
-    write_vint(*_data_writer, prev_row_size);
-
+    write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
 
     if (_schema.clustering_key_size()) {

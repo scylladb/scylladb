@@ -44,6 +44,8 @@
 #include "tombstone.hh"
 #include "m_format_read_helpers.hh"
 
+#include <variant>
+
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
 //
@@ -140,6 +142,18 @@ class consumer_m {
 public:
     using proceed = data_consumer::proceed;
 
+    // Causes the parser to return the control to the caller without advancing.
+    // Next time when the parser is called, the same consumer method will be called.
+    struct retry_later {};
+
+    // Causes the parser to proceed to the next element.
+    struct do_proceed {};
+
+    // Causes the parser to skip the whole row. consume_row_end() will not be called for the current row.
+    struct skip_row {};
+
+    using row_processing_result = std::variant<retry_later, do_proceed, skip_row>;
+
     consumer_m(reader_resource_tracker resource_tracker, const io_priority_class& pc)
     : _resource_tracker(resource_tracker)
     , _pc(pc) {
@@ -160,12 +174,12 @@ public:
     // proceed consuming more data.
     virtual proceed consume_partition_end() = 0;
 
-    virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
+    virtual row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
 
     virtual proceed consume_row_marker_and_tombstone(
             const sstables::liveness_info& info, tombstone tomb, tombstone shadowable_tomb) = 0;
 
-    virtual proceed consume_static_row_start() = 0;
+    virtual row_processing_result consume_static_row_start() = 0;
 
     virtual proceed consume_column(const sstables::column_translation::column_info& column_info,
                                    bytes_view cell_path,
@@ -575,7 +589,6 @@ private:
         CK_BLOCK_HEADER,
         CK_BLOCK2,
         CK_BLOCK_END,
-        CLUSTERING_ROW_CONSUME,
         ROW_BODY,
         ROW_BODY_SIZE,
         ROW_BODY_PREV_SIZE,
@@ -634,13 +647,29 @@ private:
 
     unfiltered_flags_m _flags{0};
     unfiltered_extended_flags_m _extended_flags{0};
+    uint64_t _next_row_offset;
     liveness_info _liveness;
     bool _is_first_unfiltered = true;
 
     std::vector<temporary_buffer<char>> _row_key;
 
-    boost::iterator_range<std::vector<column_translation::column_info>::const_iterator> _columns;
-    boost::dynamic_bitset<uint64_t> _columns_selector;
+    struct row_schema {
+        using column_range = boost::iterator_range<std::vector<column_translation::column_info>::const_iterator>;
+
+        // All columns for this kind of row inside column_translation of the current sstable
+        column_range _all_columns;
+
+        // Subrange of _all_columns which is yet to be processed for current row
+        column_range _columns;
+
+        // Represents the subset of _all_columns present in current row
+        boost::dynamic_bitset<uint64_t> _columns_selector; // size() == _columns.size()
+    };
+
+    row_schema _regular_row;
+    row_schema _static_row;
+    row_schema* _row;
+
     uint64_t _missing_columns_to_read;
 
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
@@ -673,34 +702,36 @@ private:
      */
     tombstone _left_range_tombstone;
     tombstone _right_range_tombstone;
-    void setup_columns(const std::vector<column_translation::column_info>& columns) {
-        _columns = boost::make_iterator_range(columns);
+    void start_row(row_schema& rs) {
+        _row = &rs;
+        _row->_columns = _row->_all_columns;
     }
-    bool is_current_column_present() {
-        return _columns_selector.test(_columns_selector.size() - _columns.size());
+    void setup_columns(row_schema& rs, const std::vector<column_translation::column_info>& columns) {
+        rs._all_columns = boost::make_iterator_range(columns);
+        rs._columns_selector = boost::dynamic_bitset<uint64_t>(columns.size());
     }
     void skip_absent_columns() {
-        size_t pos = _columns_selector.find_first();
+        size_t pos = _row->_columns_selector.find_first();
         if (pos == boost::dynamic_bitset<uint64_t>::npos) {
-            pos = _columns.size();
+            pos = _row->_columns.size();
         }
-        _columns.advance_begin(pos);
+        _row->_columns.advance_begin(pos);
     }
-    bool no_more_columns() { return _columns.empty(); }
+    bool no_more_columns() { return _row->_columns.empty(); }
     void move_to_next_column() {
-        size_t current_pos = _columns_selector.size() - _columns.size();
-        size_t next_pos = _columns_selector.find_next(current_pos);
-        size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _columns.size()
+        size_t current_pos = _row->_columns_selector.size() - _row->_columns.size();
+        size_t next_pos = _row->_columns_selector.find_next(current_pos);
+        size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _row->_columns.size()
                                                                                   : next_pos - current_pos;
-        _columns.advance_begin(jump_to_next);
+        _row->_columns.advance_begin(jump_to_next);
     }
-    bool is_column_simple() { return !_columns.front().is_collection; }
-    bool is_column_counter() { return _columns.front().is_counter; }
+    bool is_column_simple() { return !_row->_columns.front().is_collection; }
+    bool is_column_counter() { return _row->_columns.front().is_counter; }
     const column_translation::column_info& get_column_info() {
-        return _columns.front();
+        return _row->_columns.front();
     }
     std::optional<uint32_t> get_column_value_length() {
-        return _columns.front().value_length;
+        return _row->_columns.front().value_length;
     }
     void setup_ck(const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
         _row_key.clear();
@@ -742,7 +773,6 @@ public:
                 || _state == state::CLUSTERING_ROW
                 || _state == state::CK_BLOCK_HEADER
                 || _state == state::CK_BLOCK_END
-                || _state == state::CLUSTERING_ROW_CONSUME
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
                 || _state == state::ROW_BODY_DELETION_3
                 || _state == state::ROW_BODY_MISSING_COLUMNS_2
@@ -818,7 +848,7 @@ private:
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
                 _state = state::CLUSTERING_ROW;
-                setup_columns(_column_translation.regular_columns());
+                start_row(_regular_row);
                 _ck_size = _column_translation.clustering_column_value_fix_legths().size();
                 goto clustering_row_label;
             }
@@ -833,15 +863,14 @@ private:
             }
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
-                    setup_columns(_column_translation.static_columns());
+                    start_row(_static_row);
                     _is_first_unfiltered = false;
-                    _consumer.consume_static_row_start();
                     goto row_body_label;
                 } else {
                     throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
                 }
             }
-            setup_columns(_column_translation.regular_columns());
+            start_row(_regular_row);
             _ck_size = _column_translation.clustering_column_value_fix_legths().size();
         case state::CLUSTERING_ROW:
         clustering_row_label:
@@ -854,7 +883,7 @@ private:
                 if (_reading_range_tombstone_ck) {
                     goto range_tombstone_consume_ck_label;
                 } else {
-                    goto clustering_row_consume_label;
+                    goto row_body_label;
                 }
             }
             if (!should_read_block_header()) {
@@ -898,16 +927,6 @@ private:
             move_to_next_ck_block();
             _state = state::CK_BLOCK;
             goto ck_block_label;
-        case state::CLUSTERING_ROW_CONSUME:
-        clustering_row_consume_label:
-            {
-                auto ret = _consumer.consume_row_start(_row_key);
-                _row_key.clear();
-                _state = state::ROW_BODY;
-                if (ret == consumer_m::proceed::no) {
-                    return consumer_m::proceed::no;
-                }
-            }
         case state::ROW_BODY:
         row_body_label:
             if (read_unsigned_vint(data) != read_status::ready) {
@@ -915,13 +934,34 @@ private:
                 break;
             }
         case state::ROW_BODY_SIZE:
-            // Ignore the result
+            _next_row_offset = position() - data.size() + _u64;
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_PREV_SIZE;
                 break;
             }
         case state::ROW_BODY_PREV_SIZE:
+          {
             // Ignore the result
+            consumer_m::row_processing_result ret = _extended_flags.is_static()
+                ? _consumer.consume_static_row_start()
+                : _consumer.consume_row_start(_row_key);
+
+            if (std::holds_alternative<consumer_m::retry_later>(ret)) {
+                _state = state::ROW_BODY_PREV_SIZE;
+                return consumer_m::proceed::no;
+            } else if (std::holds_alternative<consumer_m::skip_row>(ret)) {
+                _state = state::FLAGS;
+                auto current_pos = position() - data.size();
+                return skip(data, _next_row_offset - current_pos);
+            }
+
+            if (_extended_flags.is_static()) {
+                if (_flags.has_timestamp() || _flags.has_ttl() || _flags.has_deletion()) {
+                    throw malformed_sstable_exception(format("Static row has unexpected flags: timestamp={}, ttl={}, deletion={}",
+                        _flags.has_timestamp(), _flags.has_ttl(), _flags.has_deletion()));
+                }
+                goto row_body_missing_columns_label;
+            }
             if (!_flags.has_timestamp()) {
                 _state = state::ROW_BODY_DELETION;
                 goto row_body_deletion_label;
@@ -930,6 +970,7 @@ private:
                 _state = state::ROW_BODY_TIMESTAMP;
                 break;
             }
+          }
         case state::ROW_BODY_TIMESTAMP:
             _liveness.set_timestamp(_u64);
             if (!_flags.has_ttl()) {
@@ -996,6 +1037,7 @@ private:
                 break;
             }
         case state::ROW_BODY_MISSING_COLUMNS:
+        row_body_missing_columns_label:
             if (!_flags.has_all_columns()) {
                 if (read_unsigned_vint(data) != read_status::ready) {
                     _state = state::ROW_BODY_MISSING_COLUMNS_2;
@@ -1003,8 +1045,7 @@ private:
                 }
                 goto row_body_missing_columns_2_label;
             } else {
-                _columns_selector = boost::dynamic_bitset<uint64_t>(_columns.size());
-                _columns_selector.set();
+                _row->_columns_selector.set();
             }
         case state::COLUMN:
         column_label:
@@ -1141,21 +1182,21 @@ private:
         case state::ROW_BODY_MISSING_COLUMNS_2:
         row_body_missing_columns_2_label: {
             uint64_t missing_column_bitmap_or_count = _u64;
-            if (_columns.size() < 64) {
-                _columns_selector.clear();
-                _columns_selector.append(missing_column_bitmap_or_count);
-                _columns_selector.flip();
-                _columns_selector.resize(_columns.size());
+            if (_row->_columns.size() < 64) {
+                _row->_columns_selector.clear();
+                _row->_columns_selector.append(missing_column_bitmap_or_count);
+                _row->_columns_selector.flip();
+                _row->_columns_selector.resize(_row->_columns.size());
                 skip_absent_columns();
                 goto column_label;
             }
-            _columns_selector.resize(_columns.size());
-            if (_columns.size() - missing_column_bitmap_or_count < _columns.size() / 2) {
-                _missing_columns_to_read = _columns.size() - missing_column_bitmap_or_count;
-                _columns_selector.reset();
+            _row->_columns_selector.resize(_row->_columns.size());
+            if (_row->_columns.size() - missing_column_bitmap_or_count < _row->_columns.size() / 2) {
+                _missing_columns_to_read = _row->_columns.size() - missing_column_bitmap_or_count;
+                _row->_columns_selector.reset();
             } else {
                 _missing_columns_to_read = missing_column_bitmap_or_count;
-                _columns_selector.set();
+                _row->_columns_selector.set();
             }
             goto row_body_missing_columns_read_columns_label;
         }
@@ -1171,7 +1212,7 @@ private:
                 break;
             }
         case state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2:
-            _columns_selector.flip(_u64);
+            _row->_columns_selector.flip(_u64);
             goto row_body_missing_columns_read_columns_label;
         case state::COMPLEX_COLUMN:
         complex_column_label:
@@ -1321,7 +1362,10 @@ public:
         , _column_translation(sst->get_column_translation(s, _header))
         , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
         , _liveness(_header)
-    { }
+    {
+        setup_columns(_regular_row, _column_translation.regular_columns());
+        setup_columns(_static_row, _column_translation.static_columns());
+    }
 
     void verify_end_state() {
         // If reading a partial row (i.e., when we have a clustering row
