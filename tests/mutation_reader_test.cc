@@ -1699,7 +1699,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     };
 
                     auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), delay, evict_paused_readers);
-                    return make_multishard_combining_reader(std::move(lifecycle_policy), *partitioner, s, range, slice, pc, trace_state, fwd_mr);
+                    auto mr = make_multishard_combining_reader(std::move(lifecycle_policy), *partitioner, s, range, slice, pc, trace_state, fwd_mr);
+                    if (fwd_sm == streamed_mutation::forwarding::yes) {
+                        return make_forwardable(std::move(mr));
+                    }
+                    return mr;
                 });
             };
         };
@@ -1707,18 +1711,18 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
         auto make_random_delay = [] (int from, int to) {
             return [gen = std::default_random_engine(std::random_device()()),
                     dist = std::uniform_int_distribution(from, to)] () mutable {
-                return seastar::sleep(std::chrono::milliseconds(dist(gen)));
+                return seastar::sleep(std::chrono::microseconds(dist(gen)));
             };
         };
 
         BOOST_TEST_MESSAGE("run_mutation_source_tests(delay=no_delay, evict_readers=false)");
-        run_mutation_source_tests(make_populate(test_reader_lifecycle_policy::no_delay, false), streamed_mutation::forwarding::no);
+        run_mutation_source_tests(make_populate(test_reader_lifecycle_policy::no_delay, false));
 
         BOOST_TEST_MESSAGE("run_mutation_source_tests(delay=random, evict_readers=false)");
-        run_mutation_source_tests(make_populate(make_random_delay(1, 10), false), streamed_mutation::forwarding::no);
+        run_mutation_source_tests(make_populate(make_random_delay(1, 10), false));
 
         BOOST_TEST_MESSAGE("run_mutation_source_tests(delay=random, evict_readers=true)");
-        run_mutation_source_tests(make_populate(make_random_delay(1, 10), true), streamed_mutation::forwarding::no);
+        run_mutation_source_tests(make_populate(make_random_delay(1, 10), true));
 
         return make_ready_future<>();
     }).get();
