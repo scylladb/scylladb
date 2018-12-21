@@ -27,7 +27,7 @@
 #include <boost/range/adaptors.hpp>
 #include "service/storage_service.hh"
 #include "utils/div_ceil.hh"
-#include "db/config.hh"
+#include "db/extensions.hh"
 #include "service/storage_proxy.hh"
 #include "gms/versioned_value.hh"
 #include "seastarx.hh"
@@ -310,7 +310,7 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             cfg.commitlog_segment_size_in_mb = resource_manager::hint_segment_size_in_mb;
             cfg.commitlog_total_space_in_mb = resource_manager::max_hints_per_ep_size_mb;
             cfg.fname_prefix = manager::FILENAME_PREFIX;
-            cfg.extensions = &_shard_manager.local_db().get_config().extensions();
+            cfg.extensions = &_shard_manager.local_db().extensions();
 
             return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
@@ -715,7 +715,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
             return flush_maybe().finally([this, ctx_ptr, buf = std::move(buf), rp, secs_since_file_mod, &fname] () mutable {
                 return send_one_hint(std::move(ctx_ptr), std::move(buf), rp, secs_since_file_mod, fname);
             });
-        }, _last_not_complete_rp.pos, &_db.get_config().extensions()).get0();
+        }, _last_not_complete_rp.pos, &_db.extensions()).get0();
 
         s->done().get();
     } catch (...) {
