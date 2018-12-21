@@ -1083,7 +1083,7 @@ public:
 
             if (maybe_push_range_tombstone(std::move(rt)) == proceed::no) {
                 _in_progress_row.emplace(std::move(key));
-                return consumer_m::retry_later{};
+                return consumer_m::row_processing_result::retry_later;
             }
         }
 
@@ -1092,19 +1092,19 @@ public:
         switch (_mf_filter->apply(_in_progress_row->position())) {
         case mutation_fragment_filter::result::emit:
             sstlog.trace("mp_row_consumer_m {}: emit", this);
-            return consumer_m::do_proceed{};
+            return consumer_m::row_processing_result::do_proceed;
         case mutation_fragment_filter::result::ignore:
             sstlog.trace("mp_row_consumer_m {}: ignore", this);
             if (_mf_filter->is_current_range_changed()) {
-                return consumer_m::row_processing_result(consumer_m::retry_later{});
+                return consumer_m::row_processing_result::retry_later;
             } else {
                 _in_progress_row.reset();
-                return consumer_m::row_processing_result(consumer_m::skip_row{});
+                return consumer_m::row_processing_result::skip_row;
             }
         case mutation_fragment_filter::result::store_and_finish:
             sstlog.trace("mp_row_consumer_m {}: store_and_finish", this);
             _reader->on_end_of_stream();
-            return consumer_m::retry_later{};
+            return consumer_m::row_processing_result::retry_later;
         }
         abort();
     }
@@ -1125,7 +1125,7 @@ public:
         sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", this);
         _inside_static_row = true;
         _in_progress_static_row = static_row();
-        return consumer_m::do_proceed{};
+        return consumer_m::row_processing_result::do_proceed;
     }
 
     virtual proceed consume_column(const column_translation::column_info& column_info,
