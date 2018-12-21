@@ -59,7 +59,7 @@
 #include "schema_registry.hh"
 #include "commitlog_entry.hh"
 #include "service/priority_manager.hh"
-#include "db/config.hh"
+#include "db/extensions.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 
@@ -223,7 +223,7 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
     }
 
     auto s = make_lw_shared<stats>();
-    auto& exts = _qp.local().db().local().get_config().extensions();
+    auto& exts = _qp.local().db().local().extensions();
 
     return db::commitlog::read_log_file(file, fname_prefix, service::get_local_commitlog_priority(),
             std::bind(&impl::process, this, s.get(), std::placeholders::_1,

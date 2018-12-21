@@ -125,6 +125,7 @@ class serializer;
 namespace db {
 class commitlog;
 class config;
+class extensions;
 class rp_handle;
 
 namespace system_keyspace {
@@ -1394,6 +1395,7 @@ public:
     const db::config& get_config() const {
         return *_cfg;
     }
+    const db::extensions& extensions() const;
 
     db::large_partition_handler* get_large_partition_handler() {
         return _large_partition_handler.get();

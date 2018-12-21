@@ -61,7 +61,7 @@
 #include "schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "validation.hh"
-#include "db/config.hh"
+#include "db/extensions.hh"
 #include "service/storage_service.hh"
 
 namespace cql3 {
@@ -152,7 +152,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
-    _properties.validate(proxy.get_db().local().get_config().extensions());
+    _properties.validate(proxy.get_db().local().extensions());
 
     if (_properties.use_compact_storage()) {
         throw exceptions::invalid_request_exception(format("Cannot use 'COMPACT STORAGE' when defining a materialized view"));
@@ -338,7 +338,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
             db::view::create_virtual_column(builder, def->name(), def->type);
         }
     }
-    _properties.properties()->apply_to_builder(builder, proxy.get_db().local().get_config().extensions());
+    _properties.properties()->apply_to_builder(builder, proxy.get_db().local().extensions());
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(
