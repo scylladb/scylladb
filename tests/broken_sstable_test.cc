@@ -82,6 +82,20 @@ SEASTAR_THREAD_TEST_CASE(incompatible_serialized_type) {
         sstable::version_types::mc);
 }
 
+SEASTAR_THREAD_TEST_CASE(invalid_boundary) {
+    schema_ptr s = schema_builder("test_ks", "test_t")
+                       .with_column("p", int32_type, column_kind::partition_key)
+                       .with_column("a", int32_type, column_kind::clustering_key)
+                       .with_column("b", int32_type, column_kind::clustering_key)
+                       .with_column("c", int32_type, column_kind::clustering_key)
+                       .with_column("r", int32_type, column_kind::regular_column)
+                       .build(schema_builder::compact_storage::no);
+    broken_sst("tests/sstables/invalid_boundary", 33, s,
+        "Corrupted range tombstone: invalid boundary type static_clustering in sstable "
+        "tests/sstables/invalid_boundary/mc-33-big-Data.db",
+        sstable::version_types::mc);
+}
+
 SEASTAR_THREAD_TEST_CASE(mismatched_timestamp) {
     schema_ptr s = schema_builder("test_ks", "test_table")
                        .with_column("key1", utf8_type, column_kind::partition_key)
