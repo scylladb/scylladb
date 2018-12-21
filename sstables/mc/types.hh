@@ -39,22 +39,29 @@ enum class bound_kind_m : uint8_t {
     excl_start = 7,
 };
 
-inline bound_kind to_bound_kind(bound_kind_m kind) {
-    assert (kind == bound_kind_m::incl_start ||
-            kind == bound_kind_m::incl_end ||
-            kind == bound_kind_m::excl_start ||
-            kind == bound_kind_m::excl_end);
-
-    using underlying_type = std::underlying_type_t<bound_kind_m>;
-    return bound_kind{static_cast<underlying_type>(kind)};
+inline constexpr bool is_bound_kind(bound_kind_m kind) {
+    switch (kind) {
+    case bound_kind_m::incl_start:
+    case bound_kind_m::incl_end:
+    case bound_kind_m::excl_start:
+    case bound_kind_m::excl_end:
+        return true;
+    default:
+        return false;
+    }
 }
 
-inline bound_kind_m to_bound_kind_m(bound_kind kind) {
-    using underlying_type = std::underlying_type_t<bound_kind>;
-    return bound_kind_m{static_cast<underlying_type>(kind)};
+inline constexpr bool is_boundary(bound_kind_m kind) {
+    switch (kind) {
+    case bound_kind_m::excl_end_incl_start:
+    case bound_kind_m::incl_end_excl_start:
+        return true;
+    default:
+        return false;
+    }
 }
 
-inline bool is_start(bound_kind_m kind) {
+inline constexpr bool is_start(bound_kind_m kind) {
     switch (kind) {
     case bound_kind_m::incl_start:
     case bound_kind_m::excl_end_incl_start:
@@ -66,30 +73,24 @@ inline bool is_start(bound_kind_m kind) {
     }
 }
 
-inline bool is_boundary(bound_kind_m kind) {
-    switch (kind) {
-    case bound_kind_m::excl_end_incl_start:
-    case bound_kind_m::incl_end_excl_start:
-        return true;
-    default:
-        return false;
-    }
+inline bound_kind to_bound_kind(bound_kind_m kind) {
+    assert(is_bound_kind(kind));
+    using underlying_type = std::underlying_type_t<bound_kind_m>;
+    return bound_kind{static_cast<underlying_type>(kind)};
 }
 
-inline constexpr bool is_in_bound_kind(bound_kind_m kind) {
-    return kind == bound_kind_m::incl_start
-            || kind == bound_kind_m::excl_start
-            || kind == bound_kind_m::incl_end
-            || kind == bound_kind_m::excl_end;
+inline bound_kind_m to_bound_kind_m(bound_kind kind) {
+    using underlying_type = std::underlying_type_t<bound_kind>;
+    return bound_kind_m{static_cast<underlying_type>(kind)};
 }
 
 inline bound_kind boundary_to_start_bound(bound_kind_m kind) {
-    assert(kind == bound_kind_m::incl_end_excl_start || kind == bound_kind_m::excl_end_incl_start);
+    assert(is_boundary(kind));
     return (kind == bound_kind_m::incl_end_excl_start) ? bound_kind::excl_start : bound_kind::incl_start;
 }
 
 inline bound_kind boundary_to_end_bound(bound_kind_m kind) {
-    assert(kind == bound_kind_m::incl_end_excl_start || kind == bound_kind_m::excl_end_incl_start);
+    assert(is_boundary(kind));
     return (kind == bound_kind_m::incl_end_excl_start) ? bound_kind::incl_end : bound_kind::excl_end;
 }
 

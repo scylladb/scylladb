@@ -235,7 +235,7 @@ private:
                 return position_in_partition::for_key(std::move(key));
             }
 
-            bound_kind rt_marker_kind = is_in_bound_kind(kind)
+            bound_kind rt_marker_kind = is_bound_kind(kind)
                     ? to_bound_kind(kind)
                     :(parsing_start_key ? boundary_to_start_bound : boundary_to_end_bound)(kind);
             return position_in_partition(position_in_partition::range_tag_t{}, rt_marker_kind, std::move(key));
