@@ -165,7 +165,9 @@ public:
     }
     virtual void release_mutation() override {
         for (auto&& m : _mutations) {
-            m.second.release();
+            if (m.second) {
+                m.second.release();
+            }
         }
     }
     dht::token& token() {
