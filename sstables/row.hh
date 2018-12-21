@@ -142,17 +142,17 @@ class consumer_m {
 public:
     using proceed = data_consumer::proceed;
 
-    // Causes the parser to return the control to the caller without advancing.
-    // Next time when the parser is called, the same consumer method will be called.
-    struct retry_later {};
+    enum class row_processing_result {
+        // Causes the parser to return the control to the caller without advancing.
+        // Next time when the parser is called, the same consumer method will be called.
+        retry_later,
 
-    // Causes the parser to proceed to the next element.
-    struct do_proceed {};
+        // Causes the parser to proceed to the next element.
+        do_proceed,
 
-    // Causes the parser to skip the whole row. consume_row_end() will not be called for the current row.
-    struct skip_row {};
-
-    using row_processing_result = std::variant<retry_later, do_proceed, skip_row>;
+        // Causes the parser to skip the whole row. consume_row_end() will not be called for the current row.
+        skip_row
+    };
 
     consumer_m(reader_resource_tracker resource_tracker, const io_priority_class& pc)
     : _resource_tracker(resource_tracker)
@@ -945,10 +945,10 @@ private:
                 ? _consumer.consume_static_row_start()
                 : _consumer.consume_row_start(_row_key);
 
-            if (std::holds_alternative<consumer_m::retry_later>(ret)) {
+            if (ret == consumer_m::row_processing_result::retry_later) {
                 _state = state::ROW_BODY_PREV_SIZE;
                 return consumer_m::proceed::no;
-            } else if (std::holds_alternative<consumer_m::skip_row>(ret)) {
+            } else if (ret == consumer_m::row_processing_result::skip_row) {
                 _state = state::FLAGS;
                 auto current_pos = position() - data.size();
                 return skip(data, _next_row_offset - current_pos);
