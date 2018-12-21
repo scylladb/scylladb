@@ -2237,6 +2237,10 @@ database::database(const db::config& cfg, database_config dbcfg)
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
 }
 
+const db::extensions& database::extensions() const {
+    return get_config().extensions();
+}
+
 void backlog_controller::adjust() {
     auto backlog = _current_backlog();
 
