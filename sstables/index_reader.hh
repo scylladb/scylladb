@@ -231,7 +231,7 @@ public:
             if (_promoted_index_size <= data_size) {
                 data.trim_front(_promoted_index_size);
             } else {
-                assert(data.empty());
+                data.trim(0);
                 return skip_bytes{_promoted_index_size - data_size};
             }
         }
