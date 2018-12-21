@@ -316,6 +316,7 @@ private:
                 }
                 if (read_16(data) != read_status::ready) {
                     ctx.state = state_m::CK_SIZE;
+                    return;
                 }
             case state_m::CK_SIZE:
                 if (_u16 < _s.clustering_key_size()) {
