@@ -129,6 +129,7 @@ protected:
     schema_ptr _schema;
 public:
     virtual ~mutation_holder() {}
+    // Can return a nullptr
     virtual lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) = 0;
     virtual bool is_shared() = 0;
     size_t size() const {
@@ -157,7 +158,7 @@ public:
             _mutations.emplace(m.first, std::move(fm));
         }
     }
-    lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) override {
+    virtual lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) override {
         return _mutations[ep];
     }
     virtual bool is_shared() override {
@@ -1977,7 +1978,11 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
     if (hints_enabled(type)) {
         db::hints::manager& hints_manager = hints_manager_for(type);
         return boost::count_if(targets, [this, &mh, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
-            return hints_manager.store_hint(target, mh->schema(), mh->get_mutation_for(target), tr_state);
+            auto m = mh->get_mutation_for(target);
+            if (!m) {
+                return 0;
+            }
+            return hints_manager.store_hint(target, mh->schema(), std::move(m), tr_state);
         });
     } else {
         return 0;
