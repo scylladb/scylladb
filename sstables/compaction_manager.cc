@@ -583,7 +583,11 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
         }
         column_family& cf = *task->compacting_cf;
         sstables::compaction_descriptor descriptor = sstables::compaction_descriptor(get_candidates(cf));
-        auto compacting = compacting_sstable_registration(this, descriptor.sstables);
+        auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
+        // Releases reference to cleaned sstable such that respective used disk space can be freed.
+        descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+            compacting->release_compacting(exhausted_sstables);
+        };
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
