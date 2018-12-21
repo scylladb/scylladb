@@ -44,7 +44,7 @@
 #include "service/migration_manager.hh"
 #include "validation.hh"
 #include "view_info.hh"
-#include "db/config.hh"
+#include "db/extensions.hh"
 
 namespace cql3 {
 
@@ -86,10 +86,10 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
         throw exceptions::invalid_request_exception("ALTER MATERIALIZED VIEW WITH invoked, but no parameters found");
     }
 
-    _properties->validate(proxy.get_db().local().get_config().extensions());
+    _properties->validate(proxy.get_db().local().extensions());
 
     auto builder = schema_builder(schema);
-    _properties->apply_to_builder(builder, proxy.get_db().local().get_config().extensions());
+    _properties->apply_to_builder(builder, proxy.get_db().local().extensions());
 
     if (builder.get_gc_grace_seconds() == 0) {
         throw exceptions::invalid_request_exception(
