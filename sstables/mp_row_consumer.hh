@@ -551,14 +551,14 @@ public:
         return consume_deleted_cell(col, timestamp, gc_clock::time_point(secs));
     }
 
-    proceed consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
+    proceed consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point local_deletion_time) {
         auto ret = flush_if_needed(col.is_static, col.clustering);
         if (_skip_in_progress) {
             return ret;
         }
 
         if (col.cell.size() == 0) {
-            row_marker rm(tombstone(timestamp, ttl));
+            row_marker rm(tombstone(timestamp, local_deletion_time));
             _in_progress->as_mutable_clustering_row().apply(rm);
             return ret;
         }
@@ -566,7 +566,7 @@ public:
             return ret;
         }
 
-        auto ac = atomic_cell::make_dead(timestamp, ttl);
+        auto ac = atomic_cell::make_dead(timestamp, local_deletion_time);
 
         bool is_multi_cell = col.collection_extra_data.size();
         if (is_multi_cell != col.cdef->is_multi_cell()) {
