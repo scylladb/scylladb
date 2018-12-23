@@ -50,6 +50,19 @@ public:
     static time_point now() {
         return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch())) + get_clocks_offset();
     }
+
+    static int32_t as_int32(duration d) {
+        auto count = d.count();
+        int32_t count_32 = static_cast<int32_t>(count);
+        if (count_32 != count) {
+            throw std::runtime_error("Duration too big");
+        }
+        return count_32;
+    }
+
+    static int32_t as_int32(time_point tp) {
+        return as_int32(tp.time_since_epoch());
+    }
 };
 
 using expiry_opt = std::optional<gc_clock::time_point>;
