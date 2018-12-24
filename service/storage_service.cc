@@ -1298,11 +1298,11 @@ future<> storage_service::stop_transport() {
         return seastar::async([&ss] {
             slogger.info("Stop transport: starts");
 
-            gms::stop_gossiping().get();
-            slogger.info("Stop transport: stop_gossiping done");
-
             ss.shutdown_client_servers().get();
             slogger.info("Stop transport: shutdown rpc and cql server done");
+
+            gms::stop_gossiping().get();
+            slogger.info("Stop transport: stop_gossiping done");
 
             ss.do_stop_ms().get();
             slogger.info("Stop transport: shutdown messaging_service done");
