@@ -1966,7 +1966,7 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
     }
 
     if (table_row.has("default_time_to_live")) {
-        builder.set_default_time_to_live(gc_clock::duration(table_row.get_nonnull<gc_clock::rep>("default_time_to_live")));
+        builder.set_default_time_to_live(gc_clock::duration(table_row.get_nonnull<int32_t>("default_time_to_live")));
     }
 
     if (table_row.has("extensions")) {

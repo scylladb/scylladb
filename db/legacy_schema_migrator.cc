@@ -410,7 +410,7 @@ public:
                 builder.set_caching_options(caching_options::from_sstring(td.get_as<sstring>("caching")));
             }
             if (td.has("default_time_to_live")) {
-                builder.set_default_time_to_live(gc_clock::duration(td.get_as<gc_clock::rep>("default_time_to_live")));
+                builder.set_default_time_to_live(gc_clock::duration(td.get_as<int32_t>("default_time_to_live")));
             }
             if (td.has("speculative_retry")) {
                 builder.set_speculative_retry(td.get_as<sstring>("speculative_retry"));
