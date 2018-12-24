@@ -1007,7 +1007,7 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
         return;
     }
 
-    uint64_t timestamp = marker.timestamp();
+    api::timestamp_type timestamp = marker.timestamp();
     _c_stats.update_timestamp(timestamp);
     write_delta_timestamp(writer, timestamp);
 
