@@ -1606,6 +1606,7 @@ void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, con
         uint32_t deletion_time_size = sizeof(uint32_t);
         uint32_t deletion_time = marker.deletion_time().time_since_epoch().count();
 
+        _c_stats.update_local_deletion_time(deletion_time);
         _c_stats.tombstone_histogram.update(deletion_time);
 
         write(_version, out, mask, timestamp, deletion_time_size, deletion_time);
@@ -1613,6 +1614,10 @@ void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, con
         column_mask mask = column_mask::expiration;
         uint32_t ttl = marker.ttl().count();
         uint32_t expiration = marker.expiry().time_since_epoch().count();
+
+        _c_stats.update_local_deletion_time(expiration);
+        _c_stats.tombstone_histogram.update(expiration);
+
         write(_version, out, mask, ttl, expiration, timestamp, value_length);
     } else {
         column_mask mask = column_mask::none;
