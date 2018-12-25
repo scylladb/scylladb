@@ -57,6 +57,13 @@ To save time -- for instance, to avoid compiling all unit tests -- you can also 
 $ ninja-build build/release/tests/schema_change_test
 ```
 
+Note that by default unit tests binaries are stripped so they can't be used with gdb or seastar-addr2line.
+To include debug information in the unit test binary, build the test binary with a `_g` suffix. For example,
+
+```bash
+$ ninja-build build/release/tests/schema_change_test_g
+```
+
 ### Unit testing
 
 Unit tests live in the `/tests` directory. Like with application source files, test sources and executables are specified manually in `configure.py` and need to be updated when changes are made.
