@@ -522,7 +522,7 @@ static indexed_columns get_indexed_columns_partitioned_by_atomicity(schema::cons
 // Used for writing SSTables in 'mc' format.
 class writer : public sstable_writer::writer_impl {
 private:
-    encoding_stats _enc_stats;
+    const encoding_stats _enc_stats;
     shard_id _shard; // Specifies which shard the new SStable will belong to.
     bool _compression_enabled = false;
     std::unique_ptr<file_writer> _data_writer;
