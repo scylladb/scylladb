@@ -21,22 +21,13 @@
 
 #pragma once
 
+#include <vector>
 #include "gms/inet_address.hh"
-#include <cstdint>
 
-namespace netw {
+future<> repair_init_messaging_service_handler();
 
-struct msg_addr {
-    gms::inet_address addr;
-    uint32_t cpu_id;
-    friend bool operator==(const msg_addr& x, const msg_addr& y);
-    friend bool operator<(const msg_addr& x, const msg_addr& y);
-    friend std::ostream& operator<<(std::ostream& os, const msg_addr& x);
-    struct hash {
-        size_t operator()(const msg_addr& id) const;
-    };
-    explicit msg_addr(gms::inet_address ip) : addr(ip), cpu_id(0) { }
-    msg_addr(gms::inet_address ip, uint32_t cpu) : addr(ip), cpu_id(cpu) { }
-};
+class repair_info;
 
-}
+future<> repair_cf_range_row_level(repair_info& ri,
+        sstring cf_name, dht::token_range range,
+        const std::vector<gms::inet_address>& all_peer_nodes);

@@ -31,7 +31,7 @@
 #include "database_fwd.hh"
 #include "flat_mutation_reader.hh"
 #include "utils/UUID.hh"
-
+#include "streaming/stream_plan.hh"
 
 class repair_exception : public std::exception {
 private:
@@ -116,6 +116,191 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
         const ::dht::token_range& range, repair_checksum rt);
 
+class repair_stats {
+public:
+    uint64_t round_nr = 0;
+    uint64_t round_nr_fast_path_already_synced = 0;
+    uint64_t round_nr_fast_path_same_combined_hashes= 0;
+    uint64_t round_nr_slow_path = 0;
+
+    uint64_t rpc_call_nr = 0;
+
+    uint64_t tx_hashes_nr = 0;
+    uint64_t rx_hashes_nr = 0;
+
+    uint64_t tx_row_nr = 0;
+    uint64_t rx_row_nr = 0;
+
+    uint64_t tx_row_bytes = 0;
+    uint64_t rx_row_bytes = 0;
+
+    std::map<gms::inet_address, uint64_t> row_from_disk_bytes;
+    std::map<gms::inet_address, uint64_t> row_from_disk_nr;
+
+    std::map<gms::inet_address, uint64_t> tx_row_nr_peer;
+    std::map<gms::inet_address, uint64_t> rx_row_nr_peer;
+
+    lowres_clock::time_point start_time = lowres_clock::now();
+
+public:
+    void add(const repair_stats& o);
+    sstring get_stats();
+};
+
+class repair_info {
+public:
+    seastar::sharded<database>& db;
+    sstring keyspace;
+    dht::token_range_vector ranges;
+    std::vector<sstring> cfs;
+    int id;
+    shard_id shard;
+    std::vector<sstring> data_centers;
+    std::vector<sstring> hosts;
+    size_t nr_failed_ranges = 0;
+    bool aborted = false;
+    // Map of peer -> <cf, ranges>
+    std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_in;
+    std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_out;
+    // FIXME: this "100" needs to be a parameter.
+    uint64_t target_partitions = 100;
+    // This affects how many ranges we put in a stream plan. The more the more
+    // memory we use to store the ranges in memory. However, it can reduce the
+    // total number of stream_plan we use for the repair.
+    size_t sub_ranges_to_stream = 10 * 1024;
+    size_t sp_index = 0;
+    size_t current_sub_ranges_nr_in = 0;
+    size_t current_sub_ranges_nr_out = 0;
+    int ranges_index = 0;
+    // Only allow one stream_plan in flight
+    semaphore sp_parallelism_semaphore{1};
+    lw_shared_ptr<streaming::stream_plan> _sp_in;
+    lw_shared_ptr<streaming::stream_plan> _sp_out;
+    repair_stats _stats;
+    bool _row_level_repair;
+    uint64_t _sub_ranges_nr = 0;
+public:
+    repair_info(seastar::sharded<database>& db_,
+            const sstring& keyspace_,
+            const dht::token_range_vector& ranges_,
+            const std::vector<sstring>& cfs_,
+            int id_,
+            const std::vector<sstring>& data_centers_,
+            const std::vector<sstring>& hosts_);
+    future<> do_streaming();
+    void check_failed_ranges();
+    future<> request_transfer_ranges(const sstring& cf,
+        const ::dht::token_range& range,
+        const std::vector<gms::inet_address>& neighbors_in,
+        const std::vector<gms::inet_address>& neighbors_out);
+    void abort();
+    void check_in_abort();
+    void update_statistics(const repair_stats& stats) {
+        _stats.add(stats);
+    }
+    bool row_level_repair() {
+        return _row_level_repair;
+    }
+};
+
+future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
+        const sstring& cf, const dht::token_range& range);
+
+// Represent a position of a mutation_fragment read from a flat mutation
+// reader. Repair nodes negotiate a small range identified by two
+// repair_sync_boundary to work on in each round.
+struct repair_sync_boundary {
+    dht::decorated_key pk;
+    position_in_partition position;
+    class tri_compare {
+        dht::ring_position_comparator _pk_cmp;
+        position_in_partition::tri_compare _position_cmp;
+    public:
+        tri_compare(const schema& s) : _pk_cmp(s), _position_cmp(s) { }
+        int operator()(const repair_sync_boundary& a, const repair_sync_boundary& b) const {
+            int ret = _pk_cmp(a.pk, b.pk);
+            if (ret == 0) {
+                ret = _position_cmp(a.position, b.position);
+            }
+            return ret;
+        }
+    };
+    friend std::ostream& operator<<(std::ostream& os, const repair_sync_boundary& x) {
+        return os << "{ " << x.pk << "," <<  x.position << " }";
+    }
+};
+
+// Hash of a repair row
+class repair_hash {
+public:
+    uint64_t hash = 0;
+    repair_hash() = default;
+    explicit repair_hash(uint64_t h) : hash(h) {
+    }
+    void clear() {
+        hash = 0;
+    }
+    void add(const repair_hash& other) {
+        hash ^= other.hash;
+    }
+    bool operator==(const repair_hash& x) const {
+        return x.hash == hash;
+    }
+    bool operator!=(const repair_hash& x) const {
+        return x.hash != hash;
+    }
+    bool operator<(const repair_hash& x) const {
+        return x.hash < hash;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const repair_hash& x) {
+        return os << x.hash;
+    }
+};
+
+// Return value of the REPAIR_GET_SYNC_BOUNDARY RPC verb
+struct get_sync_boundary_response {
+    std::optional<repair_sync_boundary> boundary;
+    repair_hash row_buf_combined_csum;
+    // The current size of the row buf
+    uint64_t row_buf_size;
+    // The number of bytes this verb read from disk
+    uint64_t new_rows_size;
+    // The number of rows this verb read from disk
+    uint64_t new_rows_nr;
+};
+
+struct node_repair_meta_id {
+    gms::inet_address ip;
+    uint32_t repair_meta_id;
+    bool operator==(const node_repair_meta_id& x) const {
+        return x.ip == ip && x.repair_meta_id == repair_meta_id;
+    }
+};
+
+// Represent a partition_key and frozen_mutation_fragments within the partition_key.
+class partition_key_and_mutation_fragments {
+    partition_key _key;
+    std::list<frozen_mutation_fragment> _mfs;
+public:
+    partition_key_and_mutation_fragments(partition_key key, std::list<frozen_mutation_fragment> mfs)
+        : _key(std::move(key))
+        , _mfs(std::move(mfs)) {
+    }
+    const partition_key& get_key() const { return _key; }
+    const std::list<frozen_mutation_fragment>& get_mutation_fragments() const { return _mfs; }
+    partition_key& get_key() { return _key; }
+    std::list<frozen_mutation_fragment>& get_mutation_fragments() { return _mfs; }
+    void push_mutation_fragment(frozen_mutation_fragment mf) { _mfs.push_back(std::move(mf)); }
+};
+
+using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
+
+enum class row_level_diff_detect_algorithm : uint8_t {
+    send_full_set,
+};
+
+std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo);
+
 namespace std {
 template<>
 struct hash<partition_checksum> {
@@ -125,4 +310,15 @@ struct hash<partition_checksum> {
         return h;
     }
 };
+
+template<>
+struct hash<repair_hash> {
+    size_t operator()(repair_hash h) const { return h.hash; }
+};
+
+template<>
+struct hash<node_repair_meta_id> {
+    size_t operator()(node_repair_meta_id id) const { return utils::tuple_hash()(id.ip, id.repair_meta_id); }
+};
+
 }

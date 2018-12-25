@@ -26,6 +26,7 @@
 #include "clustering_bounds_comparator.hh"
 #include "query-request.hh"
 
+#include <optional>
 #include <boost/icl/interval_set.hpp>
 
 inline
@@ -53,20 +54,26 @@ lexicographical_relation relation_for_upper_bound(composite_view v) {
     abort();
 }
 
+enum class bound_weight : int8_t {
+    before_all_prefixed = -1,
+    equal = 0,
+    after_all_prefixed = 1,
+};
+
 inline
-int position_weight(bound_kind k) {
+bound_weight position_weight(bound_kind k) {
     switch(k) {
     case bound_kind::excl_end:
     case bound_kind::incl_start:
-        return -1;
+        return bound_weight::before_all_prefixed;
     case bound_kind::incl_end:
     case bound_kind::excl_start:
-        return 1;
+        return bound_weight::after_all_prefixed;
     }
     abort();
 }
 
-enum class partition_region {
+enum class partition_region : uint8_t {
     partition_start,
     static_row,
     clustered,
@@ -77,19 +84,19 @@ class position_in_partition_view {
     friend class position_in_partition;
 
     partition_region _type;
-    int _bound_weight = 0;
+    bound_weight _bound_weight = bound_weight::equal;
     const clustering_key_prefix* _ck; // nullptr when _type != clustered
 public:
-    position_in_partition_view(partition_region type, int bound_weight, const clustering_key_prefix* ck)
+    position_in_partition_view(partition_region type, bound_weight weight, const clustering_key_prefix* ck)
         : _type(type)
-        , _bound_weight(bound_weight)
+        , _bound_weight(weight)
         , _ck(ck)
     { }
     bool is_before_key() const {
-        return _bound_weight < 0;
+        return _bound_weight == bound_weight::before_all_prefixed;
     }
     bool is_after_key() const {
-        return _bound_weight > 0;
+        return _bound_weight == bound_weight::after_all_prefixed;
     }
 private:
     // Returns placement of this position_in_partition relative to *_ck,
@@ -99,10 +106,10 @@ private:
         // includes just the prefix key or a range start which excludes just a prefix key.
         // In both cases we should return lexicographical_relation::before_all_strictly_prefixed here.
         // Refs #1446.
-        if (_bound_weight <= 0) {
-            return lexicographical_relation::before_all_prefixed;
-        } else {
+        if (_bound_weight == bound_weight::after_all_prefixed) {
             return lexicographical_relation::after_all_prefixed;
+        } else {
+            return lexicographical_relation::before_all_prefixed;
         }
     }
 public:
@@ -148,24 +155,24 @@ public:
     }
 
     static position_in_partition_view after_key(const clustering_key& ck) {
-        return {partition_region::clustered, 1, &ck};
+        return {partition_region::clustered, bound_weight::after_all_prefixed, &ck};
     }
 
     bool is_partition_start() const { return _type == partition_region::partition_start; }
     bool is_partition_end() const { return _type == partition_region::partition_end; }
     bool is_static_row() const { return _type == partition_region::static_row; }
-    bool is_clustering_row() const { return has_clustering_key() && !_bound_weight; }
+    bool is_clustering_row() const { return has_clustering_key() && _bound_weight == bound_weight::equal; }
     bool has_clustering_key() const { return _type == partition_region::clustered; }
 
     // Returns true if all fragments that can be seen for given schema have
     // positions >= than this. partition_start is ignored.
     bool is_before_all_fragments(const schema& s) const {
         return _type == partition_region::partition_start || _type == partition_region::static_row
-               || (_type == partition_region::clustered && !s.has_static_columns() && _bound_weight < 0 && key().is_empty(s));
+               || (_type == partition_region::clustered && !s.has_static_columns() && _bound_weight == bound_weight::before_all_prefixed && key().is_empty(s));
     }
 
     bool is_after_all_clustered_rows(const schema& s) const {
-        return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight > 0);
+        return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight == bound_weight::after_all_prefixed);
     }
 
     // Valid when >= before_all_clustered_rows()
@@ -175,13 +182,13 @@ public:
 
     // Can be called only when !is_static_row && !is_clustering_row().
     bound_view as_start_bound_view() const {
-        assert(_bound_weight != 0);
-        return bound_view(*_ck, _bound_weight < 0 ? bound_kind::incl_start : bound_kind::excl_start);
+        assert(_bound_weight != bound_weight::equal);
+        return bound_view(*_ck, _bound_weight == bound_weight::before_all_prefixed ? bound_kind::incl_start : bound_kind::excl_start);
     }
 
     bound_view as_end_bound_view() const {
-        assert(_bound_weight != 0);
-        return bound_view(*_ck, _bound_weight < 0 ? bound_kind::excl_end : bound_kind::incl_end);
+        assert(_bound_weight != bound_weight::equal);
+        return bound_view(*_ck, _bound_weight == bound_weight::before_all_prefixed ? bound_kind::excl_end : bound_kind::incl_end);
     }
 
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
@@ -190,8 +197,8 @@ public:
 
 class position_in_partition {
     partition_region _type;
-    int _bound_weight = 0;
-    stdx::optional<clustering_key_prefix> _ck;
+    bound_weight _bound_weight = bound_weight::equal;
+    std::optional<clustering_key_prefix> _ck;
 public:
     friend class clustering_interval_set;
     struct partition_start_tag_t { };
@@ -203,7 +210,11 @@ public:
     struct before_clustering_row_tag_t { };
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
-
+    partition_region get_type() const { return _type; }
+    bound_weight get_bound_weight() const { return _bound_weight; }
+    const std::optional<clustering_key_prefix>& get_clustering_key_prefix() const { return _ck; }
+    position_in_partition(partition_region type, bound_weight weight, std::optional<clustering_key_prefix> ck)
+        : _type(type), _bound_weight(weight), _ck(std::move(ck)) { }
     explicit position_in_partition(partition_start_tag_t) : _type(partition_region::partition_start) { }
     explicit position_in_partition(end_of_partition_tag_t) : _type(partition_region::partition_end) { }
     explicit position_in_partition(static_row_tag_t) : _type(partition_region::static_row) { }
@@ -211,13 +222,13 @@ public:
         : _type(partition_region::clustered), _ck(std::move(ck)) { }
     position_in_partition(after_clustering_row_tag_t, clustering_key_prefix ck)
         // FIXME: Use lexicographical_relation::before_strictly_prefixed here. Refs #1446
-        : _type(partition_region::clustered), _bound_weight(1), _ck(std::move(ck)) { }
+        : _type(partition_region::clustered), _bound_weight(bound_weight::after_all_prefixed), _ck(std::move(ck)) { }
     position_in_partition(after_clustering_row_tag_t, position_in_partition_view pos)
         : _type(partition_region::clustered)
-        , _bound_weight(pos._bound_weight ? pos._bound_weight : 1)
+        , _bound_weight(pos._bound_weight != bound_weight::equal ? pos._bound_weight : bound_weight::after_all_prefixed)
         , _ck(*pos._ck) { }
     position_in_partition(before_clustering_row_tag_t, clustering_key_prefix ck)
-        : _type(partition_region::clustered), _bound_weight(-1), _ck(std::move(ck)) { }
+        : _type(partition_region::clustered), _bound_weight(bound_weight::before_all_prefixed), _ck(std::move(ck)) { }
     position_in_partition(range_tag_t, bound_view bv)
         : _type(partition_region::clustered), _bound_weight(position_weight(bv.kind())), _ck(bv.prefix()) { }
     position_in_partition(range_tag_t, bound_kind kind, clustering_key_prefix&& prefix)
@@ -274,16 +285,16 @@ public:
     bool is_partition_start() const { return _type == partition_region::partition_start; }
     bool is_partition_end() const { return _type == partition_region::partition_end; }
     bool is_static_row() const { return _type == partition_region::static_row; }
-    bool is_clustering_row() const { return has_clustering_key() && !_bound_weight; }
+    bool is_clustering_row() const { return has_clustering_key() && _bound_weight == bound_weight::equal; }
     bool has_clustering_key() const { return _type == partition_region::clustered; }
 
     bool is_after_all_clustered_rows(const schema& s) const {
-        return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight > 0);
+        return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight == bound_weight::after_all_prefixed);
     }
 
     bool is_before_all_clustered_rows(const schema& s) const {
         return _type < partition_region::clustered
-               || (_type == partition_region::clustered && _ck->is_empty(s) && _bound_weight < 0);
+               || (_type == partition_region::clustered && _ck->is_empty(s) && _bound_weight == bound_weight::before_all_prefixed);
     }
 
     template<typename Hasher>
@@ -404,7 +415,7 @@ public:
             if (!a._ck) {
                 return 0;
             }
-            return _cmp(*a._ck, a._bound_weight, *b._ck, b._bound_weight);
+            return _cmp(*a._ck, int8_t(a._bound_weight), *b._ck, int8_t(b._bound_weight));
         }
     public:
         tri_compare(const schema& s) : _cmp(s) { }
@@ -485,7 +496,7 @@ inline
 bool no_clustering_row_between(const schema& s, position_in_partition_view a, position_in_partition_view b) {
     clustering_key_prefix::equality eq(s);
     if (a._ck && b._ck) {
-        return eq(*a._ck, *b._ck) && (a._bound_weight >= 0 || b._bound_weight <= 0);
+        return eq(*a._ck, *b._ck) && (a._bound_weight != bound_weight::before_all_prefixed || b._bound_weight != bound_weight::after_all_prefixed);
     } else {
         return !a._ck && !b._ck;
     }
@@ -588,8 +599,8 @@ public:
         query::clustering_row_ranges result;
         for (position_range r : *this) {
             result.push_back(query::clustering_range::make(
-                {r.start().key(), r.start()._bound_weight <= 0},
-                {r.end().key(), r.end()._bound_weight > 0}));
+                {r.start().key(), r.start()._bound_weight != bound_weight::after_all_prefixed},
+                {r.end().key(), r.end()._bound_weight == bound_weight::after_all_prefixed}));
         }
         return result;
     }

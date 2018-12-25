@@ -68,39 +68,6 @@ namespace streaming {
 
 logging::logger sslog("stream_session");
 
-/*
- * This reader takes a get_next_fragment generator that produces mutation_fragment_opt which is returned by
- * generating_reader.
- *
- */
-class generating_reader final : public flat_mutation_reader::impl {
-    std::function<future<mutation_fragment_opt> ()> _get_next_fragment;
-public:
-    generating_reader(schema_ptr s, std::function<future<mutation_fragment_opt> ()> get_next_fragment)
-        : impl(std::move(s)), _get_next_fragment(std::move(get_next_fragment))
-    { }
-    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            return _get_next_fragment().then([this] (mutation_fragment_opt mopt) {
-                if (!mopt) {
-                    _end_of_stream = true;
-                } else {
-                    push_mutation_fragment(std::move(*mopt));
-                }
-            });
-        });
-    }
-    virtual void next_partition() override {
-        throw std::bad_function_call();
-    }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
-    }
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
-    }
-};
-
 static auto get_stream_result_future(utils::UUID plan_id) {
     auto& sm = get_local_stream_manager();
     auto f = sm.get_sending_stream(plan_id);
@@ -235,7 +202,7 @@ void stream_session::init_messaging_service_handler() {
                         });
                     };
                     distribute_reader_and_consume_on_shards(s, dht::global_partitioner(),
-                        make_flat_mutation_reader<generating_reader>(s, std::move(get_next_mutation_fragment)),
+                        make_generating_reader(s, std::move(get_next_mutation_fragment)),
                         [cf_id, plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
                             auto& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
 

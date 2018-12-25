@@ -799,7 +799,7 @@ public:
         return _row;
     }
     position_in_partition_view position() const {
-        return position_in_partition_view(partition_region::clustered, _flags._after_ck - _flags._before_ck, &_key);
+        return position_in_partition_view(partition_region::clustered, bound_weight(_flags._after_ck - _flags._before_ck), &_key);
     }
 
     is_continuous continuous() const { return is_continuous(_flags._continuous); }

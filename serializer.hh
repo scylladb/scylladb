@@ -21,10 +21,13 @@
 #pragma once
 
 #include <vector>
+#include <unordered_set>
+#include <list>
 #include <array>
 #include <seastar/core/sstring.hh>
 #include <unordered_map>
 #include <experimental/optional>
+#include <optional>
 #include "enum_set.hh"
 #include "utils/managed_bytes.hh"
 #include "bytes_ostream.hh"

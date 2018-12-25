@@ -32,8 +32,8 @@ class xx_hasher {
     XXH64_state_t _state;
 
 public:
-    xx_hasher() noexcept {
-        XXH64_reset(&_state, 0);
+    explicit xx_hasher(uint64_t seed = 0) noexcept {
+        XXH64_reset(&_state, seed);
     }
 
     void update(const char* ptr, size_t length) {

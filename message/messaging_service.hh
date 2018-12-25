@@ -38,6 +38,9 @@
 #include "streaming/stream_reason.hh"
 #include "cache_temperature.hh"
 
+#include <list>
+#include <vector>
+#include <optional>
 #include <seastar/net/tls.hh>
 
 // forward declarations
@@ -117,7 +120,17 @@ enum class messaging_verb : int32_t {
     COUNTER_MUTATION = 23,
     MUTATION_FAILED = 24,
     STREAM_MUTATION_FRAGMENTS = 25,
-    LAST = 26,
+    REPAIR_ROW_LEVEL_START = 26,
+    REPAIR_ROW_LEVEL_STOP = 27,
+    REPAIR_GET_FULL_ROW_HASHES = 28,
+    REPAIR_GET_COMBINED_ROW_HASH = 29,
+    REPAIR_GET_SYNC_BOUNDARY = 30,
+    REPAIR_GET_ROW_DIFF = 31,
+    REPAIR_PUT_ROW_DIFF = 32,
+    REPAIR_GET_ESTIMATED_PARTITIONS= 33,
+    REPAIR_SET_ESTIMATED_PARTITIONS= 34,
+    REPAIR_GET_DIFF_ALGORITHMS = 35,
+    LAST = 36,
 };
 
 } // namespace netw
@@ -271,6 +284,56 @@ public:
     void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version)>&& func);
     void unregister_repair_checksum_range();
     future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, dht::token_range range, repair_checksum hash_version);
+
+    // Wrapper for REPAIR_GET_FULL_ROW_HASHES
+    void register_repair_get_full_row_hashes(std::function<future<std::unordered_set<repair_hash>> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func);
+    void unregister_repair_get_full_row_hashes();
+    future<std::unordered_set<repair_hash>> send_repair_get_full_row_hashes(msg_addr id, uint32_t repair_meta_id);
+
+    // Wrapper for REPAIR_GET_COMBINED_ROW_HASH
+    void register_repair_get_combined_row_hash(std::function<future<repair_hash> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary)>&& func);
+    void unregister_repair_get_combined_row_hash();
+    future<repair_hash> send_repair_get_combined_row_hash(msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary);
+
+    // Wrapper for REPAIR_GET_SYNC_BOUNDARY
+    void register_repair_get_sync_boundary(std::function<future<get_sync_boundary_response> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary)>&& func);
+    void unregister_repair_get_sync_boundary();
+    future<get_sync_boundary_response> send_repair_get_sync_boundary(msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary);
+
+    // Wrapper for REPAIR_GET_ROW_DIFF
+    void register_repair_get_row_diff(std::function<future<repair_rows_on_wire> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::unordered_set<repair_hash> set_diff, bool needs_all_rows)>&& func);
+    void unregister_repair_get_row_diff();
+    future<repair_rows_on_wire> send_repair_get_row_diff(msg_addr id, uint32_t repair_meta_id, std::unordered_set<repair_hash> set_diff, bool needs_all_rows);
+
+    // Wrapper for REPAIR_PUT_ROW_DIFF
+    void register_repair_put_row_diff(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, repair_rows_on_wire row_diff)>&& func);
+    void unregister_repair_put_row_diff();
+    future<> send_repair_put_row_diff(msg_addr id, uint32_t repair_meta_id, repair_rows_on_wire row_diff);
+
+    // Wrapper for REPAIR_ROW_LEVEL_START
+    void register_repair_row_level_start(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name)>&& func);
+    void unregister_repair_row_level_start();
+    future<> send_repair_row_level_start(msg_addr id, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name);
+
+    // Wrapper for REPAIR_ROW_LEVEL_STOP
+    void register_repair_row_level_stop(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range)>&& func);
+    void unregister_repair_row_level_stop();
+    future<> send_repair_row_level_stop(msg_addr id, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range);
+
+    // Wrapper for REPAIR_GET_ESTIMATED_PARTITIONS
+    void register_repair_get_estimated_partitions(std::function<future<uint64_t> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func);
+    void unregister_repair_get_estimated_partitions();
+    future<uint64_t> send_repair_get_estimated_partitions(msg_addr id, uint32_t repair_meta_id);
+
+    // Wrapper for REPAIR_SET_ESTIMATED_PARTITIONS
+    void register_repair_set_estimated_partitions(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, uint64_t estimated_partitions)>&& func);
+    void unregister_repair_set_estimated_partitions();
+    future<> send_repair_set_estimated_partitions(msg_addr id, uint32_t repair_meta_id, uint64_t estimated_partitions);
+
+    // Wrapper for REPAIR_GET_DIFF_ALGORITHMS
+    void register_repair_get_diff_algorithms(std::function<future<std::vector<row_level_diff_detect_algorithm>> (const rpc::client_info& cinfo)>&& func);
+    void unregister_repair_get_diff_algorithms();
+    future<std::vector<row_level_diff_detect_algorithm>> send_repair_get_diff_algorithms(msg_addr id);
 
     // Wrapper for GOSSIP_ECHO verb
     void register_gossip_echo(std::function<future<> ()>&& func);
