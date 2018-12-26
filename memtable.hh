@@ -157,9 +157,9 @@ private:
 
     public:
         encoding_stats_collector()
-            : timestamp(encoding_stats::timestamp_epoch, 0)
-            , min_local_deletion_time(encoding_stats::deletion_time_epoch)
-            , min_ttl(encoding_stats::ttl_epoch)
+            : timestamp(api::max_timestamp, 0)
+            , min_local_deletion_time(std::numeric_limits<int32_t>::max())
+            , min_ttl(std::numeric_limits<int32_t>::max())
         {}
 
         void update(atomic_cell_view cell) {
