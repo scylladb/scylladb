@@ -65,7 +65,7 @@ std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
     } else {
         out << "null";
     }
-    return out << "," << int8_t(pos._bound_weight) << "}";
+    return out << "," << int32_t(pos._bound_weight) << "}";
 }
 
 std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
