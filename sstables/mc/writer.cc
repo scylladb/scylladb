@@ -1024,6 +1024,7 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
     auto write_expiring_liveness_info = [this, &writer] (uint32_t ttl, uint64_t ldt) {
         _c_stats.update_ttl(ttl);
         _c_stats.update_local_deletion_time(ldt);
+        _c_stats.tombstone_histogram.update(ldt);
         write_delta_ttl(writer, ttl);
         write_delta_local_deletion_time(writer, ldt);
     };
@@ -1048,6 +1049,7 @@ void writer::write_collection(bytes_ostream& writer, const column_definition& cd
             if (mview.tomb) {
                 _c_stats.update_timestamp(dt.marked_for_delete_at);
                 _c_stats.update_local_deletion_time(dt.local_deletion_time);
+                _c_stats.tombstone_histogram.update(dt.local_deletion_time);
             }
         }
 
