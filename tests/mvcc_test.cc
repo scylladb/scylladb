@@ -182,6 +182,8 @@ public:
 
     // Call only when this container was constructed with a tracker
     mvcc_partition make_evictable(const mutation_partition& mp);
+    // Call only when this container was constructed without a tracker
+    mvcc_partition make_not_evictable(const mutation_partition& mp);
     logalloc::region& region() { return *_region; }
     cache_tracker* tracker() { return &*_tracker; }
     mutation_cleaner& cleaner() { return *_cleaner; }
@@ -299,6 +301,15 @@ mvcc_partition mvcc_container::make_evictable(const mutation_partition& mp) {
         logalloc::allocating_section as;
         return as(region(), [&] {
             return mvcc_partition(_schema, partition_entry::make_evictable(*_schema, mp), *this, true);
+        });
+    });
+}
+
+mvcc_partition mvcc_container::make_not_evictable(const mutation_partition& mp) {
+    return with_allocator(region().allocator(), [&] {
+        logalloc::allocating_section as;
+        return as(region(), [&] {
+            return mvcc_partition(_schema, partition_entry(mutation_partition(*_schema, mp)), *this, false);
         });
     });
 }
