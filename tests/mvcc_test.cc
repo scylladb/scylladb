@@ -212,6 +212,8 @@ public:
         : _s(s), _e(std::move(e)), _container(container), _evictable(evictable) {
     }
 
+    mvcc_partition(mvcc_partition&&) = default;
+
     ~mvcc_partition() {
         with_allocator(region().allocator(), [&] {
             _e = {};
