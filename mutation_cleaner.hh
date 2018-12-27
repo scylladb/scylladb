@@ -95,6 +95,7 @@ void mutation_cleaner_impl::merge_and_destroy(partition_snapshot& ps) noexcept {
     } else {
         // The snapshot must not be reachable by partitino_entry::read() after this,
         // which is ensured by slide_to_oldest() == stop_iteration::no.
+        ps.migrate(&_region, _cleaner);
         _worker_state->snapshots.push_front(ps);
         _worker_state->cv.signal();
     }
