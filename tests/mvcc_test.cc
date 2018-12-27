@@ -153,26 +153,45 @@ class mvcc_partition;
 
 // Together with mvcc_partition abstracts memory management details of dealing with MVCC.
 class mvcc_container {
-    cache_tracker _tracker;
     schema_ptr _schema;
+    std::optional<cache_tracker> _tracker;
+    std::optional<logalloc::region> _region_holder;
+    std::optional<mutation_cleaner> _cleaner_holder;
     partition_snapshot::phase_type _phase = partition_snapshot::min_phase;
     dirty_memory_manager _mgr;
-    real_dirty_memory_accounter _acc{_mgr, _tracker, 0};
+    std::optional<real_dirty_memory_accounter> _acc;
+    logalloc::region* _region;
+    mutation_cleaner* _cleaner;
 public:
-    mvcc_container(schema_ptr s) : _schema(s) {}
+    struct no_tracker {};
+    mvcc_container(schema_ptr s)
+        : _schema(s)
+        , _tracker(std::make_optional<cache_tracker>())
+        , _acc(std::make_optional<real_dirty_memory_accounter>(_mgr, *_tracker, 0))
+        , _region(&_tracker->region())
+        , _cleaner(&_tracker->cleaner())
+    { }
+    mvcc_container(schema_ptr s, no_tracker)
+        : _schema(s)
+        , _region_holder(std::make_optional<logalloc::region>())
+        , _cleaner_holder(std::make_optional<mutation_cleaner>(*_region_holder, nullptr))
+        , _region(&*_region_holder)
+        , _cleaner(&*_cleaner_holder)
+    { }
     mvcc_container(mvcc_container&&) = delete;
 
+    // Call only when this container was constructed with a tracker
     mvcc_partition make_evictable(const mutation_partition& mp);
-    logalloc::region& region() { return _tracker.region(); }
-    cache_tracker& tracker() { return _tracker; }
-    mutation_cleaner& cleaner() { return _tracker.cleaner(); }
+    logalloc::region& region() { return *_region; }
+    cache_tracker* tracker() { return &*_tracker; }
+    mutation_cleaner& cleaner() { return *_cleaner; }
     partition_snapshot::phase_type next_phase() { return ++_phase; }
     partition_snapshot::phase_type phase() const { return _phase; }
-    real_dirty_memory_accounter& accounter() { return _acc; }
+    real_dirty_memory_accounter& accounter() { return *_acc; }
 
     mutation_partition squashed(partition_snapshot_ptr& snp) {
         logalloc::allocating_section as;
-        return as(_tracker.region(), [&] {
+        return as(region(), [&] {
             return snp->squashed();
         });
     }
@@ -215,7 +234,7 @@ public:
         logalloc::allocating_section as;
         with_allocator(region().allocator(), [&] {
             as(region(), [&] {
-                _e.upgrade(_s, new_schema, _container.cleaner(), &_container.tracker());
+                _e.upgrade(_s, new_schema, _container.cleaner(), _container.tracker());
                 _s = new_schema;
             });
         });
@@ -224,7 +243,7 @@ public:
     partition_snapshot_ptr read() {
         logalloc::allocating_section as;
         return as(region(), [&] {
-            return _e.read(region(), _container.cleaner(), schema(), &_container.tracker(), _container.phase());
+            return _e.read(region(), _container.cleaner(), schema(), _container.tracker(), _container.phase());
         });
     }
 
@@ -241,7 +260,7 @@ void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_sc
         mutation_cleaner src_cleaner(region(), no_cache_tracker);
         auto c = as(region(), [&] {
             return _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, src_cleaner, as, region(),
-                _container.tracker(), _container.next_phase(), _container.accounter());
+                *_container.tracker(), _container.next_phase(), _container.accounter());
         });
         repeat([&] {
             return c.run();
