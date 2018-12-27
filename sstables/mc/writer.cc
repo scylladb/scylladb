@@ -610,8 +610,7 @@ private:
 
     void update_deletion_time_stats(deletion_time dt) {
         _c_stats.update_timestamp(dt.marked_for_delete_at);
-        _c_stats.update_local_deletion_time(dt.local_deletion_time);
-        _c_stats.tombstone_histogram.update(dt.local_deletion_time);
+        _c_stats.update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
     }
 
     uint64_t get_data_offset() const {
@@ -991,8 +990,7 @@ void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const colu
     _c_stats.update_timestamp(cell.timestamp());
     if (is_deleted) {
         auto ldt = cell.deletion_time().time_since_epoch().count();
-        _c_stats.update_local_deletion_time(ldt);
-        _c_stats.tombstone_histogram.update(ldt);
+        _c_stats.update_local_deletion_time_and_tombstone_histogram(ldt);
         _sst.get_stats().on_cell_tombstone_write();
         return;
     }
@@ -1001,11 +999,10 @@ void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const colu
         auto expiration = cell.expiry().time_since_epoch().count();
         auto ttl = cell.ttl().count();
         _c_stats.update_ttl(ttl);
-        _c_stats.update_local_deletion_time(expiration);
         // tombstone histogram is updated with expiration time because if ttl is longer
         // than gc_grace_seconds for all data, sstable will be considered fully expired
         // when actually nothing is expired.
-        _c_stats.tombstone_histogram.update(expiration);
+        _c_stats.update_local_deletion_time_and_tombstone_histogram(expiration);
     } else { // regular live cell
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     }
@@ -1023,8 +1020,7 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
 
     auto write_expiring_liveness_info = [this, &writer] (uint32_t ttl, uint64_t ldt) {
         _c_stats.update_ttl(ttl);
-        _c_stats.update_local_deletion_time(ldt);
-        _c_stats.tombstone_histogram.update(ldt);
+        _c_stats.update_local_deletion_time_and_tombstone_histogram(ldt);
         write_delta_ttl(writer, ttl);
         write_delta_local_deletion_time(writer, ldt);
     };
@@ -1048,8 +1044,7 @@ void writer::write_collection(bytes_ostream& writer, const column_definition& cd
             write_delta_deletion_time(writer, dt);
             if (mview.tomb) {
                 _c_stats.update_timestamp(dt.marked_for_delete_at);
-                _c_stats.update_local_deletion_time(dt.local_deletion_time);
-                _c_stats.tombstone_histogram.update(dt.local_deletion_time);
+                _c_stats.update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
             }
         }
 

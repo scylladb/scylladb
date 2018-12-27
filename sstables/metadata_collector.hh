@@ -99,6 +99,10 @@ struct column_stats {
     void update_local_deletion_time(int32_t value) {
         local_deletion_time_tracker.update(value);
     }
+    void update_local_deletion_time_and_tombstone_histogram(int32_t value) {
+        local_deletion_time_tracker.update(value);
+        tombstone_histogram.update(value);
+    }
     void update_ttl(int32_t value) {
         ttl_tracker.update(value);
     }
