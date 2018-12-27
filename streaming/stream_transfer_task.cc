@@ -170,9 +170,10 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                         auto status = std::get<0>(*status_opt);
                         *got_error_from_peer = status == -1;
                         sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id.addr, si->plan_id, si->cf_id, status);
-                        if (*got_error_from_peer) {
-                            throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id.addr, si->plan_id, si->cf_id));
-                        }
+                        // we've got an error from the other side, but we cannot just abandon rpc::source we
+                        // need to continue reading until EOS since this will signal that no more work
+                        // is left and rpc::source can be destroyed. The sender closes connection immediately
+                        // after sending the status, so EOS should arrive shortly.
                         return stop_iteration::no;
                     } else {
                         return stop_iteration::yes;
@@ -200,7 +201,11 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
             });
         }();
 
-        return when_all_succeed(std::move(source_op), std::move(sink_op));
+        return when_all_succeed(std::move(source_op), std::move(sink_op)).then([got_error_from_peer, si] {
+            if (*got_error_from_peer) {
+                throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id.addr, si->plan_id, si->cf_id));
+            }
+        });
     });
   });
 }
