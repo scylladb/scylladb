@@ -206,21 +206,21 @@ void stream_session::init_messaging_service_handler() {
                         [cf_id, plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
                             auto& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
 
-                            return check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([&cf, estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
-                                sstables::shared_sstable sst = use_view_update_path ? cf.make_streaming_staging_sstable() : cf.make_streaming_sstable_for_write();
+                            return check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
+                                sstables::shared_sstable sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
                                 schema_ptr s = reader.schema();
                                 sstables::sstable_writer_config sst_cfg;
-                                sst_cfg.large_partition_handler = cf.get_large_partition_handler();
+                                sst_cfg.large_partition_handler = cf->get_large_partition_handler();
                                 auto& pc = service::get_local_streaming_write_priority();
                                 return sst->write_components(std::move(reader), std::max(1ul, estimated_partitions), s, sst_cfg, {}, pc).then([sst] {
                                     return sst->open_data();
-                                }).then([&cf, sst] {
-                                    return cf.add_sstable_and_update_cache(sst);
-                                }).then([&cf, s, sst, use_view_update_path]() -> future<> {
+                                }).then([cf, sst] {
+                                    return cf->add_sstable_and_update_cache(sst);
+                                }).then([cf, s, sst, use_view_update_path]() mutable -> future<> {
                                     if (!use_view_update_path) {
                                         return make_ready_future<>();
                                     }
-                                    return _view_update_generator->local().register_staging_sstable(sst, cf.shared_from_this());
+                                    return _view_update_generator->local().register_staging_sstable(sst, std::move(cf));
                                 });
                             });
                         }
