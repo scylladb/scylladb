@@ -197,6 +197,12 @@ public:
             return snp->squashed();
         });
     }
+
+    // Merges other into this
+    void merge(mvcc_container& other) {
+        _region->merge(*other._region);
+        _cleaner->merge(*other._cleaner);
+    }
 };
 
 class mvcc_partition {
