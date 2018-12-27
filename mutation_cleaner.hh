@@ -26,6 +26,8 @@
 
 #include "utils/logalloc.hh"
 
+class mutation_cleaner;
+
 class mutation_cleaner_impl final {
     using snapshot_list = boost::intrusive::slist<partition_snapshot,
         boost::intrusive::member_hook<partition_snapshot, boost::intrusive::slist_member_hook<>, &partition_snapshot::_cleaner_hook>>;
@@ -38,6 +40,7 @@ class mutation_cleaner_impl final {
 private:
     logalloc::region& _region;
     cache_tracker* _tracker;
+    mutation_cleaner* _cleaner;
     partition_version_list _versions;
     lw_shared_ptr<worker> _worker_state;
     seastar::scheduling_group _scheduling_group;
@@ -46,9 +49,10 @@ private:
     stop_iteration merge_some() noexcept;
     void start_worker();
 public:
-    mutation_cleaner_impl(logalloc::region& r, cache_tracker* t, seastar::scheduling_group sg = seastar::current_scheduling_group())
+    mutation_cleaner_impl(logalloc::region& r, cache_tracker* t, mutation_cleaner* cleaner, seastar::scheduling_group sg = seastar::current_scheduling_group())
         : _region(r)
         , _tracker(t)
+        , _cleaner(cleaner)
         , _worker_state(make_lw_shared<worker>())
         , _scheduling_group(sg)
     {
@@ -109,8 +113,11 @@ class mutation_cleaner final {
     lw_shared_ptr<mutation_cleaner_impl> _impl;
 public:
     mutation_cleaner(logalloc::region& r, cache_tracker* t, seastar::scheduling_group sg = seastar::current_scheduling_group())
-        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, sg)) {
+        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, this, sg)) {
     }
+
+    mutation_cleaner(mutation_cleaner&&) = delete;
+    mutation_cleaner(const mutation_cleaner&) = delete;
 
     void set_scheduling_group(seastar::scheduling_group sg) {
         _impl->set_scheduling_group(sg);
