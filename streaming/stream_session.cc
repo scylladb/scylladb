@@ -143,7 +143,7 @@ static future<bool> check_needs_view_update_path(db::system_distributed_keyspace
     if (is_internal_keyspace(t.schema()->ks_name())) {
         return make_ready_future<bool>(false);
     }
-    if (reason == stream_reason::repair) {
+    if (reason == stream_reason::repair && !t.views().empty()) {
         return make_ready_future<bool>(true);
     }
     return do_with(t.views(), [&sys_dist_ks] (auto& views) {
