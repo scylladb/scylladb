@@ -541,69 +541,6 @@ future<> set_bootstrap_state(bootstrap_state state);
 
 #if 0
 
-    public static PaxosState loadPaxosState(ByteBuffer key, CFMetaData metadata)
-    {
-        String req = "SELECT * FROM system.%s WHERE row_key = ? AND cf_id = ?";
-        UntypedResultSet results = executeInternal(String.format(req, PAXOS), key, metadata.cfId);
-        if (results.isEmpty())
-            return new PaxosState(key, metadata);
-        UntypedResultSet.Row row = results.one();
-        Commit promised = row.has("in_progress_ballot")
-                        ? new Commit(key, row.getUUID("in_progress_ballot"), ArrayBackedSortedColumns.factory.create(metadata))
-                        : Commit.emptyCommit(key, metadata);
-        // either we have both a recently accepted ballot and update or we have neither
-        Commit accepted = row.has("proposal")
-                        ? new Commit(key, row.getUUID("proposal_ballot"), ColumnFamily.fromBytes(row.getBytes("proposal")))
-                        : Commit.emptyCommit(key, metadata);
-        // either most_recent_commit and most_recent_commit_at will both be set, or neither
-        Commit mostRecent = row.has("most_recent_commit")
-                          ? new Commit(key, row.getUUID("most_recent_commit_at"), ColumnFamily.fromBytes(row.getBytes("most_recent_commit")))
-                          : Commit.emptyCommit(key, metadata);
-        return new PaxosState(promised, accepted, mostRecent);
-    }
-
-    public static void savePaxosPromise(Commit promise)
-    {
-        String req = "UPDATE system.%s USING TIMESTAMP ? AND TTL ? SET in_progress_ballot = ? WHERE row_key = ? AND cf_id = ?";
-        executeInternal(String.format(req, PAXOS),
-                        UUIDGen.microsTimestamp(promise.ballot),
-                        paxosTtl(promise.update.metadata),
-                        promise.ballot,
-                        promise.key,
-                        promise.update.id());
-    }
-
-    public static void savePaxosProposal(Commit proposal)
-    {
-        executeInternal(String.format("UPDATE system.%s USING TIMESTAMP ? AND TTL ? SET proposal_ballot = ?, proposal = ? WHERE row_key = ? AND cf_id = ?", PAXOS),
-                        UUIDGen.microsTimestamp(proposal.ballot),
-                        paxosTtl(proposal.update.metadata),
-                        proposal.ballot,
-                        proposal.update.toBytes(),
-                        proposal.key,
-                        proposal.update.id());
-    }
-
-    private static int paxosTtl(CFMetaData metadata)
-    {
-        // keep paxos state around for at least 3h
-        return Math.max(3 * 3600, metadata.getGcGraceSeconds());
-    }
-
-    public static void savePaxosCommit(Commit commit)
-    {
-        // We always erase the last proposal (with the commit timestamp to no erase more recent proposal in case the commit is old)
-        // even though that's really just an optimization  since SP.beginAndRepairPaxos will exclude accepted proposal older than the mrc.
-        String cql = "UPDATE system.%s USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null, most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ? AND cf_id = ?";
-        executeInternal(String.format(cql, PAXOS),
-                        UUIDGen.microsTimestamp(commit.ballot),
-                        paxosTtl(commit.update.metadata),
-                        commit.ballot,
-                        commit.update.toBytes(),
-                        commit.key,
-                        commit.update.id());
-    }
-
     /**
      * Returns a RestorableMeter tracking the average read rate of a particular SSTable, restoring the last-seen rate
      * from values in system.sstable_activity if present.
