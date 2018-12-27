@@ -939,3 +939,39 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
         });
     });
 }
+
+// Reproducer of #4030
+SEASTAR_TEST_CASE(test_snapshot_merging_after_container_is_destroyed) {
+    return seastar::async([] {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        auto s = gen.schema();
+
+        mutation m1 = gen();
+        m1.partition().make_fully_continuous();
+
+        mutation m2 = gen();
+        m2.partition().make_fully_continuous();
+
+        auto c1 = std::make_unique<mvcc_container>(s, mvcc_container::no_tracker{});
+        auto c2 = std::make_unique<mvcc_container>(s, mvcc_container::no_tracker{});
+
+        auto e = std::make_unique<mvcc_partition>(c1->make_not_evictable(m1.partition()));
+        auto snap1 = e->read();
+
+        *e += m2;
+
+        auto snap2 = e->read();
+
+        while (!need_preempt()) {} // Ensure need_preempt() to force snapshot destruction to defer
+
+        snap1 = {};
+
+        c2->merge(*c1);
+
+        snap2 = {};
+        e.reset();
+        c1 = {};
+
+        c2->cleaner().drain().get();
+    });
+}
