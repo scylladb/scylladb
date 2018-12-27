@@ -1,3 +1,3 @@
 #!/bin/bash
 
-docker run --sig-proxy=true --rm -u "$(id -u):$(id -g)" --cap-add SYS_PTRACE -v "$PWD:$PWD" -w "$PWD" "$(<tools/toolchain/image)" "$@"
+docker run --sig-proxy=true --rm -u "$(id -u):$(id -g)" --cap-add SYS_PTRACE -v "$PWD:$PWD" -v /tmp:/tmp -w "$PWD" "$(<tools/toolchain/image)" "$@"
