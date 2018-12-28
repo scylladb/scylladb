@@ -127,12 +127,7 @@ struct range_estimates {
 };
 
 using view_name = std::pair<sstring, sstring>;
-struct view_build_progress {
-    view_name view;
-    dht::token first_token;
-    std::optional<dht::token> next_token;
-    shard_id cpu_id;
-};
+struct view_build_progress;
 
 extern schema_ptr hints();
 extern schema_ptr batchlog();

@@ -58,6 +58,8 @@
 #include "cql3/util.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
+#include "db/system_keyspace_view_types.hh"
+#include "db/system_keyspace.hh"
 #include "frozen_mutation.hh"
 #include "gms/inet_address.hh"
 #include "keys.hh"

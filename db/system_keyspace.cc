@@ -62,6 +62,7 @@
 #include "query_context.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
+#include "system_keyspace_view_types.hh"
 #include "schema_builder.hh"
 #include "md5_hasher.hh"
 #include "release.hh"

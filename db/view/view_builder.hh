@@ -22,7 +22,6 @@
 #pragma once
 
 #include "database_fwd.hh"
-#include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "keys.hh"
@@ -45,6 +44,14 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+
+namespace db::system_keyspace {
+
+using view_name = std::pair<sstring, sstring>;
+class view_build_progress;
+
+}
+
 
 namespace db::view {
 
