@@ -94,6 +94,8 @@ private:
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _initiated_streams;
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
     std::unordered_map<UUID, std::unordered_map<gms::inet_address, stream_bytes>> _stream_bytes;
+    uint64_t _total_incoming_bytes{0};
+    uint64_t _total_outgoing_bytes{0};
     semaphore _mutation_send_limiter{256};
     seastar::metrics::metric_groups _metrics;
 

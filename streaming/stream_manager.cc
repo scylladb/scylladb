@@ -54,11 +54,11 @@ stream_manager::stream_manager() {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("streaming", {
-        sm::make_derive("total_incoming_bytes", [this] { return get_progress_on_local_shard().bytes_received; },
-                        sm::description("This is a received bytes rate.")),
+        sm::make_derive("total_incoming_bytes", [this] { return _total_incoming_bytes; },
+                        sm::description("Total number of bytes received on this shard.")),
 
-        sm::make_derive("total_outgoing_bytes", [this] { return get_progress_on_local_shard().bytes_sent; },
-                        sm::description("This is a sent bytes rate.")),
+        sm::make_derive("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
+                        sm::description("Total number of bytes sent on this shard.")),
     });
 }
 
@@ -142,8 +142,10 @@ void stream_manager::update_progress(UUID cf_id, gms::inet_address peer, progres
     auto& sbytes = _stream_bytes[cf_id];
     if (dir == progress_info::direction::OUT) {
         sbytes[peer].bytes_sent += fm_size;
+        _total_outgoing_bytes += fm_size;
     } else {
         sbytes[peer].bytes_received += fm_size;
+        _total_incoming_bytes += fm_size;
     }
 }
 
