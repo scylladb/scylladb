@@ -49,7 +49,9 @@ future<> view_update_from_staging_generator::start() {
 future<> view_update_from_staging_generator::stop() {
     _as.request_abort();
     _pending_sstables.signal();
-    return std::move(_started);
+    return std::move(_started).then([this] {
+        _registration_sem.broken();
+    });
 }
 
 future<> view_update_from_staging_generator::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<table> table) {
