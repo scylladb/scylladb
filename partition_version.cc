@@ -171,11 +171,11 @@ tombstone partition_entry::partition_tombstone() const {
 }
 
 partition_snapshot::~partition_snapshot() {
-    with_allocator(_region.allocator(), [this] {
+    with_allocator(region().allocator(), [this] {
         if (_version && _version.is_unique_owner()) {
             auto v = &*_version;
             _version = {};
-            remove_or_mark_as_unique_owner(v, &_cleaner);
+            remove_or_mark_as_unique_owner(v, _cleaner);
         } else if (_entry) {
             _entry->_snapshot = nullptr;
         }
@@ -199,7 +199,7 @@ stop_iteration partition_snapshot::merge_partition_versions() {
             _version = partition_version_ref(*current);
         }
         while (auto prev = current->prev()) {
-            _region.allocator().invalidate_references();
+            region().allocator().invalidate_references();
             if (current->partition().apply_monotonically(*schema(), std::move(prev->partition()), _tracker, is_preemptible::yes) == stop_iteration::no) {
                 return stop_iteration::no;
             }

@@ -2415,6 +2415,9 @@ memory::reclaiming_result mutation_cleaner_impl::clear_some() noexcept {
 
 void mutation_cleaner_impl::merge(mutation_cleaner_impl& r) noexcept {
     _versions.splice(r._versions);
+    for (partition_snapshot& snp : r._worker_state->snapshots) {
+        snp.migrate(&_region, _cleaner);
+    }
     _worker_state->snapshots.splice(_worker_state->snapshots.end(), r._worker_state->snapshots);
     if (!_worker_state->snapshots.empty()) {
         _worker_state->cv.signal();
