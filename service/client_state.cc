@@ -249,10 +249,10 @@ auth::service* service::client_state::local_auth_service_copy(const service::cli
     return nullptr;
 }
 
-void service::client_state::set_keyspace(seastar::sharded<database>& db, sstring keyspace) {
+void service::client_state::set_keyspace(database& db, sstring keyspace) {
     // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
     // call set_keyspace() before calling login(), and we have to handle that.
-    if (_user && !db.local().has_keyspace(keyspace)) {
+    if (_user && !db.has_keyspace(keyspace)) {
         throw exceptions::invalid_request_exception(format("Keyspace '{}' does not exist", keyspace));
     }
     _keyspace = keyspace;
