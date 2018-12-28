@@ -1,3 +1,17 @@
 #!/bin/bash
 
-docker run --sig-proxy=true --rm -u "$(id -u):$(id -g)" --cap-add SYS_PTRACE -v "$PWD:$PWD" -v /tmp:/tmp -w "$PWD" "$(<tools/toolchain/image)" "$@"
+docker_args=()
+
+if [[ "$1" = -* ]]; then
+    while [[ "$1" != "--" && $# != 0 ]]; do
+	docker_args+=("$1")
+	shift
+    done
+    if [[ "$1" != "--" ]]; then
+	echo "Expected '--' to terminate docker flag list"
+	exit 1
+    fi
+    shift
+fi
+
+docker run --sig-proxy=true --rm -u "$(id -u):$(id -g)" --cap-add SYS_PTRACE -v "$PWD:$PWD" -v /tmp:/tmp -w "$PWD" "${docker_args[@]}" "$(<tools/toolchain/image)" "$@"

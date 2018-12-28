@@ -17,6 +17,13 @@ the working directory mounted:
     ./tools/toolchain/dbuild ./configure.py
     ./tools/toolchain/dbuild ninja
 
+You can adjust the `docker run` command by adding more flags before the
+command to be executed, separating the flags and the command with `--`.
+This can be useful to attach more volumes (for data or ccache) and to
+set environment variables:
+
+    ./tools/toolchain/dbuild -v /var/cache/ccache:/var/cache/ccache -- ninja
+
 ## Building the toolchain
 
 Run the command
