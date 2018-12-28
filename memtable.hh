@@ -162,17 +162,17 @@ private:
         void update(atomic_cell_view cell) {
             update_timestamp(cell.timestamp());
             if (cell.is_live_and_has_ttl()) {
-                update_ttl(cell.ttl().count());
-                update_local_deletion_time(cell.expiry().time_since_epoch().count());
+                update_ttl(cell.ttl());
+                update_local_deletion_time(cell.expiry());
             } else if (!cell.is_live()) {
-                update_local_deletion_time(cell.deletion_time().time_since_epoch().count());
+                update_local_deletion_time(cell.deletion_time());
             }
         }
 
         void update(tombstone tomb) {
             if (tomb) {
                 update_timestamp(tomb.timestamp);
-                update_local_deletion_time(tomb.deletion_time.time_since_epoch().count());
+                update_local_deletion_time(tomb.deletion_time);
             }
         }
 
@@ -207,11 +207,11 @@ private:
             update_timestamp(marker.timestamp());
             if (!marker.is_missing()) {
                 if (!marker.is_live()) {
-                    update_ttl(sstables::expired_liveness_ttl);
-                    update_local_deletion_time(marker.deletion_time().time_since_epoch().count());
+                    update_ttl(gc_clock::duration(sstables::expired_liveness_ttl));
+                    update_local_deletion_time(marker.deletion_time());
                 } else if (marker.is_expiring()) {
-                    update_ttl(marker.ttl().count());
-                    update_local_deletion_time(marker.expiry().time_since_epoch().count());
+                    update_ttl(marker.ttl());
+                    update_local_deletion_time(marker.expiry());
                 }
             }
         }

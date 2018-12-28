@@ -570,6 +570,10 @@ inline bool is_expired_liveness_ttl(int32_t ttl) {
     return ttl == expired_liveness_ttl;
 }
 
+inline bool is_expired_liveness_ttl(gc_clock::duration ttl) {
+    return is_expired_liveness_ttl(ttl.count());
+}
+
 // Corresponding to Cassandra's NO_DELETION_TIME
 constexpr static int32_t no_deletion_time = std::numeric_limits<int32_t>::max();
 
