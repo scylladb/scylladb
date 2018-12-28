@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (C) 2018 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+import argparse
+import os
+import json
+from functools import reduce
+import requests
+
+def scylla_api_get(item, params={}):
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    }
+
+    response = requests.get('http://127.0.0.1:10000/{}'.format(item), headers=headers, params=params)
+    return response
+
+def toppartitions(kscf, duration, list_size, capacity):
+    r = scylla_api_get('column_family/toppartitions/{}'.format(kscf), {
+        'duration': str(duration),
+        'list_size': str(list_size),
+        'capacity': str(capacity)})
+    return json.loads(r.text)
+
+def print_pks(title, map):
+    print(title)
+    w = reduce(lambda n, r: max(len(r['partition']), n), map, len('Partition')+3)
+    print(("  %-{}s%s".format(w)) % ('Partition', 'Count'))
+    for r in map:
+        print(("  %-{}s%s".format(w)) % (r['partition'], r['count']))
+    print()
+
+ap = argparse.ArgumentParser(description='Samples database reads and writes and reports the most active partitions in a specified table')
+ap.add_argument('-k', type=int,
+    default=10, dest='list_size',
+    help='The number of the top partitions to list (default: 10)')
+ap.add_argument('-s', type=int,
+    default=256, dest='capacity',
+    help='The capacity of stream summary (default: 256)')
+ap.add_argument('keyspace',
+    help='Name of keyspace')
+ap.add_argument('table',
+    help='Name of column family')
+ap.add_argument('duration', type=int,
+    help='Query duration in milliseconds')
+
+args = ap.parse_args()
+res = toppartitions("{}:{}".format(args.keyspace, args.table), args.duration, args.list_size, args.capacity)
+if res == {}:
+    print("(nothing reported)")
+    exit(1)
+print_pks("READ", res["read"])
+print_pks("WRITE", res["write"])
+exit(0)

@@ -362,6 +362,7 @@ scylla_tests = [
     'tests/top_k_test',
     'tests/utf8_test',
     'tests/small_vector_test',
+    'tests/data_listeners_test',
 ]
 
 perf_tests = [
@@ -581,6 +582,7 @@ scylla_core = (['database.cc',
                 'db/commitlog/commitlog.cc',
                 'db/commitlog/commitlog_replayer.cc',
                 'db/commitlog/commitlog_entry.cc',
+                'db/data_listeners.cc',
                 'db/hints/manager.cc',
                 'db/hints/resource_manager.cc',
                 'db/config.cc',

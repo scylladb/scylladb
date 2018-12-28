@@ -41,6 +41,8 @@
 #include "system.hh"
 #include "api/config.hh"
 
+logging::logger apilog("api");
+
 namespace api {
 
 static std::unique_ptr<reply> exception_reply(std::exception_ptr eptr) {

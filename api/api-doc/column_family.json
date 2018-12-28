@@ -612,6 +612,54 @@
          ]
       },
       {
+         "path":"/column_family/toppartitions/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Toppartitions query",
+               "type":"toppartitions_query_results",
+               "nickname":"toppartitions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"duration",
+                     "description":"Duration (in milliseconds) of monitoring operation",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"int",
+                     "paramType":"query"
+                  },
+                  {
+                    "name":"list_size",
+                    "description":"number of the top partitions to list",
+                    "required":false,
+                    "allowMultiple":false,
+                    "type":"int",
+                    "paramType":"query"
+                 },
+                 {
+                    "name":"capacity",
+                    "description":"capacity of stream summary: determines amount of resources used in query processing",
+                    "required":false,
+                    "allowMultiple":false,
+                    "type":"int",
+                    "paramType":"query"
+                 }
+              ]
+            }
+         ]
+      },
+      {
          "path":"/column_family/metrics/memtable_columns_count/",
          "operations":[
             {
@@ -2814,6 +2862,44 @@
             "type":{
                "type":"string",
                "description":"The column family type"
+            }
+         }
+      },
+      "toppartitions_record":{
+         "id":"toppartitions_record",
+         "description":"nodetool toppartitions query record",
+         "properties":{
+            "partition":{
+               "type":"string",
+               "description":"Partition key"
+            },
+            "count":{
+               "type":"long",
+               "description":"Number of read/write operations"
+            },
+            "error":{
+               "type":"long",
+               "description":"Indication of inaccuracy in counting PKs"
+            }
+         }
+      },
+      "toppartitions_query_results":{
+         "id":"toppartitions_query_results",
+         "description":"nodetool toppartitions query results",
+         "properties":{
+            "read":{
+               "type":"array",
+               "items":{
+                  "type":"toppartitions_record"
+               },
+               "description":"Read results"
+            },
+            "write":{
+               "type":"array",
+               "items":{
+                  "type":"toppartitions_record"
+               },
+               "description":"Write results"
             }
          }
       }

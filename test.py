@@ -123,6 +123,7 @@ boost_tests = [
     'top_k_test',
     'utf8_test',
     'small_vector_test',
+    'data_listeners_test',
 ]
 
 other_tests = [
