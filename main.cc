@@ -688,7 +688,7 @@ int main(int ac, char** av) {
                 auto paths = cl->get_segments_to_replay();
                 if (!paths.empty()) {
                     supervisor::notify("replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(qp).get0();
+                    auto rp = db::commitlog_replayer::create_replayer(db).get0();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
                     supervisor::notify("replaying commit log - flushing memtables");
                     db.invoke_on_all([] (database& db) {
