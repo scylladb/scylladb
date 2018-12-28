@@ -299,8 +299,8 @@ private:
     partition_version_ref _version;
     partition_entry* _entry;
     phase_type _phase;
-    logalloc::region& _region;
-    mutation_cleaner& _cleaner;
+    logalloc::region* _region;
+    mutation_cleaner* _cleaner;
     cache_tracker* _tracker;
     boost::intrusive::slist_member_hook<> _cleaner_hook;
     friend class partition_entry;
@@ -312,7 +312,7 @@ public:
                                 partition_entry* entry,
                                 cache_tracker* tracker, // non-null for evictable snapshots
                                 phase_type phase = default_phase)
-        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region), _cleaner(cleaner), _tracker(tracker) { }
+        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(&region), _cleaner(&cleaner), _tracker(tracker) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
@@ -344,12 +344,19 @@ public:
     // to the latest version.
     stop_iteration slide_to_oldest() noexcept;
 
+    // Must be called after snapshot's original region is merged into a different region
+    // before the original region is destroyed, unless the snapshot is destroyed earlier.
+    void migrate(logalloc::region* region, mutation_cleaner* cleaner) noexcept {
+        _region = region;
+        _cleaner = cleaner;
+    }
+
     ~partition_snapshot();
 
     partition_version_ref& version();
 
     change_mark get_change_mark() {
-        return {_region.reclaim_counter(), version_count()};
+        return {_region->reclaim_counter(), version_count()};
     }
 
     const partition_version_ref& version() const;
@@ -365,9 +372,9 @@ public:
     }
 
     const schema_ptr& schema() const { return _schema; }
-    logalloc::region& region() const { return _region; }
+    logalloc::region& region() const { return *_region; }
     cache_tracker* tracker() const { return _tracker; }
-    mutation_cleaner& cleaner() { return _cleaner; }
+    mutation_cleaner& cleaner() { return *_cleaner; }
 
     tombstone partition_tombstone() const;
     ::static_row static_row(bool digest_requested) const;
