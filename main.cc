@@ -653,7 +653,7 @@ int main(int ac, char** av) {
             db::system_keyspace::minimal_setup(db, qp);
 
             // schema migration, if needed, is also done on shard 0
-            db::legacy_schema_migrator::migrate(proxy, qp.local()).get();
+            db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
 
             supervisor::notify("loading sstables");
 
