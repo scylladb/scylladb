@@ -2038,8 +2038,7 @@ void components_writer::consume(tombstone t) {
         d.local_deletion_time = t.deletion_time.time_since_epoch().count();
         d.marked_for_delete_at = t.timestamp;
 
-        _sst._c_stats.update_local_deletion_time_and_tombstone_histogram(d.local_deletion_time);
-        _sst._c_stats.update_timestamp(d.marked_for_delete_at);
+        _sst._c_stats.update(d);
     } else {
         // Default values for live, undeleted rows.
         d.local_deletion_time = std::numeric_limits<int32_t>::max();

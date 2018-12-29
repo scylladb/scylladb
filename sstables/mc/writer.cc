@@ -608,11 +608,6 @@ private:
     void maybe_add_pi_block();
     void add_pi_block();
 
-    void update_deletion_time_stats(deletion_time dt) {
-        _c_stats.update_timestamp(dt.marked_for_delete_at);
-        _c_stats.update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
-    }
-
     uint64_t get_data_offset() const {
         if (_sst.has_component(component_type::CompressionInfo)) {
             // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
@@ -919,7 +914,7 @@ void writer::consume(tombstone t) {
     write(_sst.get_version(), *_data_writer, dt);
     _partition_header_length += (_data_writer->offset() - current_pos);
     if (t) {
-        update_deletion_time_stats(dt);
+        _c_stats.update(dt);
     }
 
     _pi_write_m.tomb = t;
@@ -1043,8 +1038,7 @@ void writer::write_collection(bytes_ostream& writer, const column_definition& cd
             auto dt = to_deletion_time(mview.tomb);
             write_delta_deletion_time(writer, dt);
             if (mview.tomb) {
-                _c_stats.update_timestamp(dt.marked_for_delete_at);
-                _c_stats.update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
+                _c_stats.update(dt);
             }
         }
 
@@ -1088,7 +1082,7 @@ void writer::write_row_body(bytes_ostream& writer, const clustering_row& row, bo
     write_liveness_info(writer, row.marker());
     auto write_tombstone_and_update_stats = [this, &writer] (const tombstone& t) {
         auto dt = to_deletion_time(t);
-        update_deletion_time_stats(dt);
+        _c_stats.update(dt);
         write_delta_deletion_time(writer, dt);
     };
     if (row.tomb().regular()) {
@@ -1277,11 +1271,11 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     auto write_marker_body = [this, &marker] (bytes_ostream& writer) {
         auto dt = to_deletion_time(marker.tomb);
         write_delta_deletion_time(writer, dt);
-        update_deletion_time_stats(dt);
+        _c_stats.update(dt);
         if (marker.boundary_tomb) {
             auto dt_boundary = to_deletion_time(*marker.boundary_tomb);
             write_delta_deletion_time(writer, dt_boundary);
-            update_deletion_time_stats(dt_boundary);
+            _c_stats.update(dt_boundary);
         }
     };
 

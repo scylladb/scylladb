@@ -106,6 +106,10 @@ struct column_stats {
     void update_ttl(int32_t value) {
         ttl_tracker.update(value);
     }
+    void update(const deletion_time& dt) {
+        update_timestamp(dt.marked_for_delete_at);
+        update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
+    }
 };
 
 class metadata_collector {
