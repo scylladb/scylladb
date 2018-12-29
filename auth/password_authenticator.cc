@@ -101,7 +101,7 @@ static const sstring update_row_query = format("UPDATE {} SET {} = ? WHERE {} = 
 static const sstring legacy_table_name{"credentials"};
 
 bool password_authenticator::legacy_metadata_exists() const {
-    return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
+    return _qp.db().has_schema(meta::AUTH_KS, legacy_table_name);
 }
 
 future<> password_authenticator::migrate_legacy_metadata() const {
@@ -156,7 +156,7 @@ future<> password_authenticator::start() {
 
          _stopped = do_after_system_ready(_as, [this] {
              return async([this] {
-                 wait_for_schema_agreement(_migration_manager, _qp.db().local(), _as).get0();
+                 wait_for_schema_agreement(_migration_manager, _qp.db(), _as).get0();
 
                  if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash).get0()) {
                      if (legacy_metadata_exists()) {

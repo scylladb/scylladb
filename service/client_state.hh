@@ -280,7 +280,7 @@ public:
     /// \return The shared_ptr created on a local shard pointing to the auth::authenticated_user object equal to the *orig._user.
     ::shared_ptr<auth::authenticated_user> local_user_copy(const service::client_state& orig) const;
 
-    void set_keyspace(seastar::sharded<database>& db, sstring keyspace);
+    void set_keyspace(database& db, sstring keyspace);
 
     void set_raw_keyspace(sstring new_keyspace) noexcept {
         _keyspace = std::move(new_keyspace);

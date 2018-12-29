@@ -150,7 +150,7 @@ mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<muta
 }
 
 mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
-    auto schema = _qp.db().local().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
     auto key = partition_key::from_singular(*schema, id);
     auto timestamp = api::new_timestamp();
     auto data = [this, &mutations] {
@@ -230,7 +230,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         std::vector<mutation>(),
         [this] (std::vector<mutation> mutations, std::experimental::optional<std::reference_wrapper<canonical_mutation>> fm) {
             if (fm) {
-                schema_ptr s = _qp.db().local().find_schema(fm.value().get().column_family_id());
+                schema_ptr s = _qp.db().find_schema(fm.value().get().column_family_id());
                 mutations.emplace_back(fm.value().get().to_mutation(s));
             }
             return mutations;
@@ -283,7 +283,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
                 return make_ready_future<>();
             }
             // delete batch
-            auto schema = _qp.db().local().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+            auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
             auto key = partition_key::from_singular(*schema, id);
             mutation m(schema, key);
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();

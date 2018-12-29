@@ -108,7 +108,7 @@ public:
                 }
             }
             return seastar::async([&keyspace_name, replication_factor, &qs, &args...] {
-                auto& db = cql3::get_local_query_processor().db().local();
+                auto& db = cql3::get_local_query_processor().db();
 
                 // Create a keyspace
                 if (!db.has_keyspace(keyspace_name)) {

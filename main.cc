@@ -653,7 +653,7 @@ int main(int ac, char** av) {
             db::system_keyspace::minimal_setup(db, qp);
 
             // schema migration, if needed, is also done on shard 0
-            db::legacy_schema_migrator::migrate(proxy, qp.local()).get();
+            db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
 
             supervisor::notify("loading sstables");
 
@@ -688,7 +688,7 @@ int main(int ac, char** av) {
                 auto paths = cl->get_segments_to_replay();
                 if (!paths.empty()) {
                     supervisor::notify("replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(qp).get0();
+                    auto rp = db::commitlog_replayer::create_replayer(db).get0();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
                     supervisor::notify("replaying commit log - flushing memtables");
                     db.invoke_on_all([] (database& db) {

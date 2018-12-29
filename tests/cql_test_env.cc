@@ -117,7 +117,7 @@ private:
 private:
     auto make_query_state() {
         if (_db->local().has_keyspace(ks_name)) {
-            _core_local.local().client_state.set_keyspace(*_db, ks_name);
+            _core_local.local().client_state.set_keyspace(_db->local(), ks_name);
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state);
     }

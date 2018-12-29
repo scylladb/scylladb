@@ -55,7 +55,7 @@ class storage_proxy;
 namespace db {
 namespace legacy_schema_migrator {
 
-future<> migrate(sharded<service::storage_proxy>&, cql3::query_processor&);
+future<> migrate(sharded<service::storage_proxy>&, sharded<database>& db, cql3::query_processor&);
 
 }
 }

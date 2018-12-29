@@ -93,15 +93,15 @@ api::timestamp_type query_processor::next_timestamp() {
     return _internal_state->next_timestamp();
 }
 
-query_processor::query_processor(service::storage_proxy& proxy, distributed<database>& db, query_processor::memory_config mcfg)
+query_processor::query_processor(service::storage_proxy& proxy, database& db, query_processor::memory_config mcfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
-        , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.local().get_config().permissions_validity_in_ms()),
+        , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.get_config().permissions_validity_in_ms()),
                                               std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry)),
-                                     std::chrono::milliseconds(_db.local().get_config().permissions_update_interval_in_ms()),
+                                     std::chrono::milliseconds(_db.get_config().permissions_update_interval_in_ms()),
                                      mcfg.authorized_prepared_cache_size, authorized_prepared_statements_cache_log) {
     namespace sm = seastar::metrics;
 
@@ -421,7 +421,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
         cf_stmt->prepare_keyspace(client_state);
     }
     ++_stats.prepare_invocations;
-    return statement->prepare(_db.local(), _cql_stats);
+    return statement->prepare(_db, _cql_stats);
 }
 
 ::shared_ptr<raw::parsed_statement>
@@ -480,7 +480,7 @@ query_options query_processor::make_internal_options(
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
-        auto np = parse_statement(query_string)->prepare(_db.local(), _cql_stats);
+        auto np = parse_statement(query_string)->prepare(_db, _cql_stats);
         np->statement->validate(_proxy, *_internal_state);
         p = std::move(np); // inserts it into map
     }
@@ -614,7 +614,7 @@ query_processor::process(
     if (cache) {
         return process(prepare_internal(query_string), cl, timeout_config, values);
     } else {
-        auto p = parse_statement(query_string)->prepare(_db.local(), _cql_stats);
+        auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
         p->statement->validate(_proxy, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
         return process(std::move(checked_weak_ptr), cl, timeout_config, values).finally([p = std::move(p)] {});

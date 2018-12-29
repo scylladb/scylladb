@@ -78,8 +78,8 @@ class migrator {
 public:
     static const std::unordered_set<sstring> legacy_schema_tables;
 
-    migrator(sharded<service::storage_proxy>& sp, cql3::query_processor& qp)
-                    : _sp(sp), _qp(qp) {
+    migrator(sharded<service::storage_proxy>& sp, sharded<database>& db, cql3::query_processor& qp)
+                    : _sp(sp), _db(db), _qp(qp) {
     }
     migrator(migrator&&) = default;
 
@@ -563,7 +563,7 @@ public:
         return parallel_for_each(legacy_schema_tables, [this](const sstring& cfname) {
             return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this, cfname](auto& tsf) {
                 auto with_snapshot = !_keyspaces.empty();
-                return _qp.db().invoke_on_all([&tsf, cfname, with_snapshot](database& db) {
+                return _db.invoke_on_all([&tsf, cfname, with_snapshot](database& db) {
                     return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); }, with_snapshot);
                 });
             });
@@ -616,6 +616,7 @@ public:
     }
 
     sharded<service::storage_proxy>& _sp;
+    sharded<database>& _db;
     cql3::query_processor& _qp;
     std::vector<keyspace> _keyspaces;
 };
@@ -634,7 +635,7 @@ const std::unordered_set<sstring> migrator::legacy_schema_tables = {
 }
 
 future<>
-db::legacy_schema_migrator::migrate(sharded<service::storage_proxy>& sp, cql3::query_processor& qp) {
-    return do_with(migrator(sp, qp), std::bind(&migrator::migrate, std::placeholders::_1));
+db::legacy_schema_migrator::migrate(sharded<service::storage_proxy>& sp, sharded<database>& db, cql3::query_processor& qp) {
+    return do_with(migrator(sp, db, qp), std::bind(&migrator::migrate, std::placeholders::_1));
 }
 

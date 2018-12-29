@@ -25,7 +25,7 @@
 
 future<> table_helper::setup_table() const {
     auto& qp = cql3::get_local_query_processor();
-    auto& db = qp.db().local();
+    auto& db = qp.db();
 
     if (db.has_schema(_keyspace, _name)) {
         return make_ready_future<>();

@@ -146,7 +146,7 @@ service::service(
 }
 
 future<> service::create_keyspace_if_missing() const {
-    auto& db = _qp.db().local();
+    auto& db = _qp.db();
 
     if (!db.has_keyspace(meta::AUTH_KS)) {
         std::map<sstring, sstring> opts{{"replication_factor", "1"}};
@@ -187,7 +187,7 @@ future<> service::stop() {
 }
 
 future<bool> service::has_existing_legacy_users() const {
-    if (!_qp.db().local().has_schema(meta::AUTH_KS, meta::USERS_CF)) {
+    if (!_qp.db().has_schema(meta::AUTH_KS, meta::USERS_CF)) {
         return make_ready_future<bool>(false);
     }
 
@@ -299,7 +299,7 @@ future<role_set> service::get_roles(stdx::string_view role_name) const {
 future<bool> service::exists(const resource& r) const {
     switch (r.kind()) {
         case resource_kind::data: {
-            const auto& db = _qp.db().local();
+            const auto& db = _qp.db();
 
             data_resource_view v(r);
             const auto keyspace = v.keyspace();

@@ -239,7 +239,7 @@ public:
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            _query_state.get_client_state().set_keyspace(_db, keyspace);
+            _query_state.get_client_state().set_keyspace(_db.local(), keyspace);
         });
     }
 
