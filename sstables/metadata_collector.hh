@@ -111,6 +111,15 @@ struct column_stats {
         update_timestamp(dt.marked_for_delete_at);
         update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
     }
+    void do_update(const tombstone& t) {
+        update_timestamp(t.timestamp);
+        update_local_deletion_time_and_tombstone_histogram(t.deletion_time.time_since_epoch().count());
+    }
+    void update(const tombstone& t) {
+        if (t) {
+            do_update(t);
+        }
+    }
 };
 
 class metadata_collector {
