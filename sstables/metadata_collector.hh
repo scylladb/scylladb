@@ -107,6 +107,7 @@ struct column_stats {
         ttl_tracker.update(value);
     }
     void update(const deletion_time& dt) {
+        assert(!dt.live());
         update_timestamp(dt.marked_for_delete_at);
         update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
     }
