@@ -61,6 +61,7 @@ extern logging::logger tracing_logger;
 
 class trace_state_ptr;
 class tracing;
+class backend_registry;
 
 enum class trace_type : uint8_t {
     NONE,
@@ -390,6 +391,7 @@ private:
     bool _slow_query_logging_enabled = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
+    const backend_registry& _backend_registry;
     sstring _tracing_backend_helper_class_name;
     seastar::metrics::metric_groups _metrics;
     double _trace_probability = 0.0; // keep this one for querying purposes
@@ -426,9 +428,9 @@ public:
         return !_down;
     }
 
-    static future<> create_tracing(sstring tracing_backend_helper_class_name);
+    static future<> create_tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
     static future<> start_tracing();
-    tracing(sstring tracing_backend_helper_class_name);
+    tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
     future<> start();

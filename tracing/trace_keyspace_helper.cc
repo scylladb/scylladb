@@ -41,6 +41,7 @@
 #include <seastar/core/metrics.hh>
 #include "types.hh"
 #include "tracing/trace_keyspace_helper.hh"
+#include "tracing/tracing_backend_registry.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 
@@ -435,7 +436,8 @@ std::unique_ptr<backend_session_state_base> trace_keyspace_helper::allocate_sess
     return std::make_unique<trace_keyspace_backend_sesssion_state>();
 }
 
-using registry = class_registrator<i_tracing_backend_helper, trace_keyspace_helper, tracing&>;
-static registry registrator1("trace_keyspace_helper");
+void register_tracing_keyspace_backend(backend_registry& tbr) {
+    tbr.register_backend<trace_keyspace_helper>("trace_keyspace_helper");
+}
 
 }

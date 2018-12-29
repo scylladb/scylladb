@@ -56,6 +56,7 @@
 #include <sys/resource.h>
 #include "disk-error-handler.hh"
 #include "tracing/tracing.hh"
+#include "tracing/tracing_backend_registry.hh"
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
 #include <seastar/net/dns.hh>
@@ -73,6 +74,12 @@ seastar::metrics::metric_groups app_metrics;
 using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
+
+namespace tracing {
+
+void register_tracing_keyspace_backend(backend_registry& br);
+
+}
 
 template<typename K, typename V, typename... Args, typename K2, typename V2 = V>
 V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, const V2& def = V()) {
@@ -486,7 +493,9 @@ int main(int ac, char** av) {
                 smp::invoke_on_all([] { engine().set_strict_dma(false); }).get();
             }
             supervisor::notify("creating tracing");
-            tracing::tracing::create_tracing("trace_keyspace_helper").get();
+            tracing::backend_registry tracing_backend_registry;
+            tracing::register_tracing_keyspace_backend(tracing_backend_registry);
+            tracing::tracing::create_tracing(tracing_backend_registry, "trace_keyspace_helper").get();
             supervisor::notify("creating snitch");
             i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
             // #293 - do not stop anything

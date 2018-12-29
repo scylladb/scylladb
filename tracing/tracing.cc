@@ -40,8 +40,8 @@
  */
 #include <seastar/core/metrics.hh>
 #include "tracing/tracing.hh"
-#include "utils/class_registrator.hh"
 #include "tracing/trace_state.hh"
+#include "tracing/tracing_backend_registry.hh"
 
 namespace tracing {
 
@@ -56,9 +56,10 @@ std::vector<sstring> trace_type_names = {
     "REPAIR"
 };
 
-tracing::tracing(sstring tracing_backend_helper_class_name)
+tracing::tracing(const backend_registry& br, sstring tracing_backend_helper_class_name)
         : _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", engine().cpu_id()))
+        , _backend_registry(br)
         , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
         , _gen(std::random_device()())
         , _slow_query_duration_threshold(default_slow_query_duraion_threshold)
@@ -97,8 +98,8 @@ tracing::tracing(sstring tracing_backend_helper_class_name)
     });
 }
 
-future<> tracing::create_tracing(sstring tracing_backend_class_name) {
-    return tracing_instance().start(std::move(tracing_backend_class_name));
+future<> tracing::create_tracing(const backend_registry& br, sstring tracing_backend_class_name) {
+    return tracing_instance().start(std::ref(br), std::move(tracing_backend_class_name));
 }
 
 future<> tracing::start_tracing() {
@@ -147,8 +148,8 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
 
 future<> tracing::start() {
     try {
-        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
-    } catch (no_such_class& e) {
+        _tracing_backend_helper_ptr = _backend_registry.create_backend(_tracing_backend_helper_class_name, *this);
+    } catch (no_such_tracing_backend& e) {
         tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
         throw;
     } catch (...) {
