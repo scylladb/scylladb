@@ -25,6 +25,10 @@
 #include "sstables/sstables.hh"
 #include "db/view/view_updating_consumer.hh"
 
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/semaphore.hh>
+
 namespace db::view {
 
 class view_update_from_staging_generator {
@@ -33,6 +37,7 @@ class view_update_from_staging_generator {
     service::storage_proxy& _proxy;
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
+    seastar::condition_variable _pending_sstables;
     semaphore _registration_sem{registration_queue_size};
     struct sstable_with_table {
         sstables::shared_sstable sst;

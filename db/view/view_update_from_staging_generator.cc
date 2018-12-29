@@ -23,18 +23,20 @@
 
 namespace db::view {
 
-
 future<> view_update_from_staging_generator::start() {
     _started = seastar::async([this]() mutable {
-        while (!_sstables_with_tables.empty()) {
-            auto& entry = _sstables_with_tables.front();
-            schema_ptr s = entry.t->schema();
-            if (_as.abort_requested()) {
-                return;
+        while (!_as.abort_requested()) {
+            if (_sstables_with_tables.empty()) {
+                _pending_sstables.wait().get();
             }
-            flat_mutation_reader staging_sstable_reader = entry.sst->read_rows_flat(s);
-            auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _proxy, entry.sst, _as), db::no_timeout);
-            if (result == stop_iteration::no) {
+            while (!_sstables_with_tables.empty()) {
+                auto& entry = _sstables_with_tables.front();
+                schema_ptr s = entry.t->schema();
+                flat_mutation_reader staging_sstable_reader = entry.sst->read_rows_flat(s);
+                auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _proxy, entry.sst, _as), db::no_timeout);
+                if (result == stop_iteration::yes) {
+                    break;
+                }
                 entry.t->move_sstable_from_staging_in_thread(entry.sst);
                 _registration_sem.signal();
                 _sstables_with_tables.pop_front();
@@ -46,21 +48,19 @@ future<> view_update_from_staging_generator::start() {
 
 future<> view_update_from_staging_generator::stop() {
     _as.request_abort();
-    return std::move(_started);
+    _pending_sstables.signal();
+    return std::move(_started).then([this] {
+        _registration_sem.broken();
+    });
 }
 
 future<> view_update_from_staging_generator::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<table> table) {
-    _sstables_with_tables.emplace_back(std::move(sst), std::move(table));
     if (_as.abort_requested()) {
         return make_ready_future<>();
     }
-    future<> restart = make_ready_future<>();
-    if (_started.available()) {
-        restart = start();
-    }
-    return restart.then([this] () {
-        return _registration_sem.wait(1);
-    });
+    _sstables_with_tables.emplace_back(std::move(sst), std::move(table));
+    _pending_sstables.signal();
+    return _registration_sem.wait(1);
 }
 
 }
