@@ -108,7 +108,7 @@ public:
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
     service::storage_proxy& _proxy;
-    distributed<database>& _db;
+    database& _db;
 
     struct stats {
         uint64_t prepare_invocations = 0;
@@ -141,11 +141,11 @@ public:
 
     static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::experimental::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, distributed<database>& db, memory_config mcfg);
+    query_processor(service::storage_proxy& proxy, database& db, memory_config mcfg);
 
     ~query_processor();
 
-    distributed<database>& db() {
+    database& db() {
         return _db;
     }
 

@@ -108,7 +108,7 @@ public:
                 }
             }
             return seastar::async([&keyspace_name, replication_factor, &qs, &args...] {
-                auto& db = cql3::get_local_query_processor().db().local();
+                auto& db = cql3::get_local_query_processor().db();
 
                 // Create a keyspace
                 if (!db.has_keyspace(keyspace_name)) {
@@ -119,7 +119,7 @@ public:
                     service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp, false).get();
                 }
 
-                qs.get_client_state().set_keyspace(cql3::get_local_query_processor().db().local(), keyspace_name);
+                qs.get_client_state().set_keyspace(cql3::get_local_query_processor().db(), keyspace_name);
 
 
                 // Create tables

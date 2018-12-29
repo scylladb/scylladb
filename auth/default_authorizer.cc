@@ -94,7 +94,7 @@ default_authorizer::~default_authorizer() {
 static const sstring legacy_table_name{"permissions"};
 
 bool default_authorizer::legacy_metadata_exists() const {
-    return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
+    return _qp.db().has_schema(meta::AUTH_KS, legacy_table_name);
 }
 
 future<bool> default_authorizer::any_granted() const {
@@ -160,7 +160,7 @@ future<> default_authorizer::start() {
                 _migration_manager).then([this] {
             _finished = do_after_system_ready(_as, [this] {
                 return async([this] {
-                    wait_for_schema_agreement(_migration_manager, _qp.db().local(), _as).get0();
+                    wait_for_schema_agreement(_migration_manager, _qp.db(), _as).get0();
 
                     if (legacy_metadata_exists()) {
                         if (!any_granted().get0()) {
