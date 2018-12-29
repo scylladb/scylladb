@@ -570,6 +570,9 @@ inline bool is_expired_liveness_ttl(uint32_t ttl) {
     return ttl == expired_liveness_ttl;
 }
 
+// Corresponding to Cassandra's NO_DELETION_TIME
+constexpr static int32_t no_deletion_time = std::numeric_limits<int32_t>::max();
+
 struct statistics {
     disk_array<uint32_t, std::pair<metadata_type, uint32_t>> offsets; // ordered by metadata_type
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
