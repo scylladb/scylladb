@@ -313,7 +313,7 @@ private:
             auto rp_range = as_ring_position_range(r);
             for (auto&& sstable : cf.select_sstables(rp_range)) {
                 count += sstable->estimated_keys_for_range(r);
-                hist.merge(sstable->get_stats_metadata().estimated_row_size);
+                hist.merge(sstable->get_stats_metadata().estimated_partition_size);
             }
         }
         return {cf.schema(), r.start, r.end, count, count > 0 ? hist.mean() : 0};

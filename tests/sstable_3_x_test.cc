@@ -3137,7 +3137,7 @@ static void validate_stats_metadata(schema_ptr s, sstable_assertions written_sst
     BOOST_REQUIRE(orig_stats.max_column_names.elements == written_stats.max_column_names.elements);
     BOOST_REQUIRE_EQUAL(orig_stats.columns_count, written_stats.columns_count);
     BOOST_REQUIRE_EQUAL(orig_stats.rows_count, written_stats.rows_count);
-    check_estimated_histogram(orig_stats.estimated_row_size, written_stats.estimated_row_size);
+    check_estimated_histogram(orig_stats.estimated_partition_size, written_stats.estimated_partition_size);
     check_estimated_histogram(orig_stats.estimated_cells_count, written_stats.estimated_cells_count);
 }
 

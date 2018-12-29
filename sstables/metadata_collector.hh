@@ -114,7 +114,7 @@ public:
     }
 private:
     // EH of 150 can track a max value of 1697806495183, i.e., > 1.5PB
-    utils::estimated_histogram _estimated_row_size{150};
+    utils::estimated_histogram _estimated_partition_size{150};
     // EH of 114 can track a max value of 2395318855, i.e., > 2B cells
     utils::estimated_histogram _estimated_cells_count{114};
     db::replay_position _replay_position;
@@ -159,8 +159,8 @@ public:
         _cardinality.offer_hashed(hashed);
     }
 
-    void add_row_size(uint64_t row_size) {
-        _estimated_row_size.add(row_size);
+    void add_partition_size(uint64_t partition_size) {
+        _estimated_partition_size.add(partition_size);
     }
 
     void add_cells_count(uint64_t cells_count) {
@@ -215,7 +215,7 @@ public:
         _timestamp_tracker.update(stats.timestamp_tracker);
         _local_deletion_time_tracker.update(stats.local_deletion_time_tracker);
         _ttl_tracker.update(stats.ttl_tracker);
-        add_row_size(stats.partition_size);
+        add_partition_size(stats.partition_size);
         add_cells_count(stats.cells_count);
         merge_tombstone_histogram(stats.tombstone_histogram);
         update_has_legacy_counter_shards(stats.has_legacy_counter_shards);
@@ -232,7 +232,7 @@ public:
     }
 
     void construct_stats(stats_metadata& m) {
-        m.estimated_row_size = std::move(_estimated_row_size);
+        m.estimated_partition_size = std::move(_estimated_partition_size);
         m.estimated_cells_count = std::move(_estimated_cells_count);
         m.position = _replay_position;
         m.min_timestamp = _timestamp_tracker.min();
