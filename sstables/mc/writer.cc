@@ -325,14 +325,20 @@ void write_delta_timestamp(W& out, api::timestamp_type timestamp, const encoding
 
 template <typename W>
 GCC6_CONCEPT(requires Writer<W>())
-void write_delta_ttl(W& out, int32_t ttl, const encoding_stats& enc_stats) {
-    write_unsigned_delta_vint(out, ttl, enc_stats.min_ttl);
+void write_delta_ttl(W& out, gc_clock::duration ttl, const encoding_stats& enc_stats) {
+    write_unsigned_delta_vint(out, ttl.count(), enc_stats.min_ttl);
 }
 
 template <typename W>
 GCC6_CONCEPT(requires Writer<W>())
 void write_delta_local_deletion_time(W& out, int32_t local_deletion_time, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, local_deletion_time, enc_stats.min_local_deletion_time);
+}
+
+template <typename W>
+GCC6_CONCEPT(requires Writer<W>())
+void write_delta_local_deletion_time(W& out, gc_clock::time_point ldt, const encoding_stats& enc_stats) {
+    write_unsigned_delta_vint(out, ldt.time_since_epoch().count(), enc_stats.min_local_deletion_time);
 }
 
 template <typename W>
@@ -617,10 +623,13 @@ private:
     void write_delta_timestamp(bytes_ostream& writer, api::timestamp_type timestamp) {
         sstables::mc::write_delta_timestamp(writer, timestamp, _enc_stats);
     }
-    void write_delta_ttl(bytes_ostream& writer, int32_t ttl) {
+    void write_delta_ttl(bytes_ostream& writer, gc_clock::duration ttl) {
         sstables::mc::write_delta_ttl(writer, ttl, _enc_stats);
     }
     void write_delta_local_deletion_time(bytes_ostream& writer, int32_t ldt) {
+        sstables::mc::write_delta_local_deletion_time(writer, ldt, _enc_stats);
+    }
+    void write_delta_local_deletion_time(bytes_ostream& writer, gc_clock::time_point ldt) {
         sstables::mc::write_delta_local_deletion_time(writer, ldt, _enc_stats);
     }
     void write_delta_deletion_time(bytes_ostream& writer, deletion_time dt) {
@@ -951,10 +960,10 @@ void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const colu
 
     if (!use_row_ttl) {
         if (is_deleted) {
-            write_delta_local_deletion_time(writer, cell.deletion_time().time_since_epoch().count());
+            write_delta_local_deletion_time(writer, cell.deletion_time());
         } else if (is_cell_expiring) {
-            write_delta_local_deletion_time(writer, cell.expiry().time_since_epoch().count());
-            write_delta_ttl(writer, cell.ttl().count());
+            write_delta_local_deletion_time(writer, cell.expiry());
+            write_delta_ttl(writer, cell.ttl());
         }
     }
 
@@ -1008,16 +1017,16 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
     _c_stats.update_timestamp(timestamp);
     write_delta_timestamp(writer, timestamp);
 
-    auto write_expiring_liveness_info = [this, &writer] (uint32_t ttl, uint64_t ldt) {
-        _c_stats.update_ttl(ttl);
-        _c_stats.update_local_deletion_time_and_tombstone_histogram(ldt);
+    auto write_expiring_liveness_info = [this, &writer] (gc_clock::duration ttl, gc_clock::time_point ldt) {
+        _c_stats.update_ttl(ttl.count());
+        _c_stats.update_local_deletion_time_and_tombstone_histogram(ldt.time_since_epoch().count());
         write_delta_ttl(writer, ttl);
         write_delta_local_deletion_time(writer, ldt);
     };
     if (!marker.is_live()) {
-        write_expiring_liveness_info(expired_liveness_ttl, marker.deletion_time().time_since_epoch().count());
+        write_expiring_liveness_info(gc_clock::duration(expired_liveness_ttl), marker.deletion_time());
     } else if (marker.is_expiring()) {
-        write_expiring_liveness_info(marker.ttl().count(), marker.expiry().time_since_epoch().count());
+        write_expiring_liveness_info(marker.ttl(), marker.expiry());
     } else {
         _c_stats.update_ttl(0);
         _c_stats.update_local_deletion_time(std::numeric_limits<int32_t>::max());
