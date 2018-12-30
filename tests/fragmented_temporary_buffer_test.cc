@@ -432,4 +432,25 @@ SEASTAR_THREAD_TEST_CASE(test_skip) {
         test(value1, value2, frag_buffer);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_remove_suffix) {
+    auto test = [&] (auto expected_value1, auto expected_value2, fragmented_temporary_buffer& ftb) {
+        using type1 = std::decay_t<decltype(expected_value1)>;
+        using type2 = std::decay_t<decltype(expected_value2)>;
+
+        BOOST_CHECK_EQUAL(ftb.size_bytes(), sizeof(type1) + sizeof(type2));
+        ftb.remove_suffix(sizeof(type2));
+        BOOST_CHECK_EQUAL(ftb.size_bytes(), sizeof(type1));
+        auto in = ftb.get_istream();
+        BOOST_CHECK_EQUAL(in.read<type1>(), expected_value1);
+        BOOST_CHECK_EQUAL(in.bytes_left(), 0);
+
+        ftb.remove_suffix(sizeof(type1));
+        BOOST_CHECK_EQUAL(ftb.size_bytes(), 0);
+    };
+
+    auto [ buffers, value1, value2 ] = get_buffers();
+    for (auto& frag_buffer : buffers) {
+        test(value1, value2, frag_buffer);
+    }
 }
