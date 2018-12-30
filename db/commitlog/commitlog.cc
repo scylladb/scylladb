@@ -1775,7 +1775,6 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
         size_t pos = 0;
         size_t next = 0;
         size_t start_off = 0;
-        size_t skip_to = 0;
         size_t file_size = 0;
         size_t corrupt_size = 0;
         bool eof = false;
@@ -1801,14 +1800,12 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
             return eof || next == pos;
         }
         future<> skip(size_t bytes) {
-            skip_to = pos + bytes;
-            return do_until([this] { return pos == skip_to || eof; }, [this, bytes] {
-                auto s = std::min<size_t>(4096, skip_to - pos);
-                // should eof be an error here?
-                return fin.read_exactly(s).then([this](auto buf) {
-                    this->advance(buf);
-                });
-            });
+            pos += bytes;
+            if (pos > file_size) {
+                eof = true;
+                pos = file_size;
+            }
+            return fin.skip(bytes);
         }
         future<> stop() {
             eof = true;
