@@ -187,6 +187,11 @@ private:
                     auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
                   item.as_collection_mutation().data.with_linearized([&] (bytes_view bv) {
                     auto mview = ctype->deserialize_mutation_form(bv);
+                    // Note: when some of the collection cells are dead and some are live
+                    // we need to encode a "live" deletion_time for the living ones.
+                    // It is not strictly required to update encoding_stats for the latter case
+                    // since { <int64_t>.min(), <int32_t>.max() } will not affect the encoding_stats
+                    // minimum values.  (See #4035)
                     update(mview.tomb);
                     for (auto& entry : mview.cells) {
                         update(entry.second);
