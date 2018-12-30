@@ -79,6 +79,10 @@ public:
         }
         _fragments.erase(_fragments.begin(), it);
     }
+
+    void remove_suffix(size_t n) noexcept {
+        _size_bytes -= n;
+    }
 };
 
 class fragmented_temporary_buffer::view {
