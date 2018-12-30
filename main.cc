@@ -66,6 +66,7 @@
 #include "sstables/sstables.hh"
 #include <db/view/view_update_from_staging_generator.hh>
 #include "gms/feature_service.hh"
+#include "distributed_loader.hh"
 
 seastar::metrics::metric_groups app_metrics;
 

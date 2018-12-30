@@ -76,6 +76,7 @@
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "auth/common.hh"
+#include "distributed_loader.hh"
 #include <seastar/core/metrics.hh>
 
 using token = dht::token;

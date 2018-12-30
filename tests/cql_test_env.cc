@@ -42,6 +42,7 @@
 #include "test_services.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/node_view_update_backlog.hh"
+#include "distributed_loader.hh"
 
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
