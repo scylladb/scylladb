@@ -77,7 +77,7 @@ protected:
         , _io_priority(iop)
         , _interval(interval)
         , _update_timer([this] { adjust(); })
-        , _control_points({{0,0}})
+        , _control_points()
         , _current_backlog(std::move(backlog))
         , _inflight_update(make_ready_future<>())
     {
@@ -125,7 +125,7 @@ public:
     flush_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) : backlog_controller(sg, iop, static_shares) {}
     flush_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
         : backlog_controller(sg, iop, std::move(interval),
-          std::vector<backlog_controller::control_point>({{soft_limit, 10}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 200} , {hard_dirty_limit, 1000}}),
+          std::vector<backlog_controller::control_point>({{0.0, 0.0}, {soft_limit, 10}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 200} , {hard_dirty_limit, 1000}}),
           std::move(current_dirty)
         )
     {}
@@ -139,7 +139,7 @@ public:
     compaction_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) : backlog_controller(sg, iop, static_shares) {}
     compaction_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(sg, iop, std::move(interval),
-          std::vector<backlog_controller::control_point>({{0.5, 10}, {1.5, 100} , {normalization_factor, 1000}}),
+          std::vector<backlog_controller::control_point>({{0.0, 50}, {1.5, 100} , {normalization_factor, 1000}}),
           std::move(current_backlog)
         )
     {}
