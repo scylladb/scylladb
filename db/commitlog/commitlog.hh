@@ -48,6 +48,7 @@
 #include "replay_position.hh"
 #include "commitlog_entry.hh"
 #include "db/timeout_clock.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 namespace seastar { class file; }
 
@@ -342,7 +343,7 @@ public:
     future<std::vector<sstring>> list_existing_segments() const;
     future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
 
-    typedef std::function<future<>(temporary_buffer<char>, replay_position)> commit_load_reader_func;
+    typedef std::function<future<>(fragmented_temporary_buffer, replay_position)> commit_load_reader_func;
 
     class segment_data_corruption_error: public std::runtime_error {
     public:
@@ -356,7 +357,7 @@ public:
         uint64_t _bytes;
     };
 
-    static future<std::unique_ptr<subscription<temporary_buffer<char>, replay_position>>> read_log_file(
+    static future<std::unique_ptr<subscription<fragmented_temporary_buffer, replay_position>>> read_log_file(
             const sstring&, const sstring&, seastar::io_priority_class read_io_prio_class, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);

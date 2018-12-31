@@ -361,6 +361,11 @@ static void write(Output& out, T value) {
     out.write(reinterpret_cast<const char*>(&v), sizeof(v));
 }
 
+template<typename T, typename Input>
+std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
+    return net::ntoh(in.template read<T>());
+}
+
 /*
  * A single commit log file on disk. Manages creation of the file and writing mutations to disk,
  * as well as tracking the last mutation position of any "dirty" CFs covered by the segment file. Segment
@@ -1754,7 +1759,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
-future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
+future<std::unique_ptr<subscription<fragmented_temporary_buffer, db::replay_position>>>
 db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
@@ -1768,7 +1773,7 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
     public:
         file f;
         descriptor d;
-        stream<temporary_buffer<char>, replay_position> s;
+        stream<fragmented_temporary_buffer, replay_position> s;
         input_stream<char> fin;
         input_stream<char> r;
         uint64_t id = 0;
@@ -1780,15 +1785,16 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
         bool eof = false;
         bool header = true;
         bool failed = false;
+        fragmented_temporary_buffer::reader frag_reader;
 
         work(file f, descriptor din, seastar::io_priority_class read_io_prio_class, position_type o = 0)
                 : f(f), d(din), fin(make_file_input_stream(f, 0, make_file_input_stream_options(read_io_prio_class))), start_off(o) {
         }
         work(work&&) = default;
 
-        bool advance(const temporary_buffer<char>& buf) {
-            pos += buf.size();
-            if (buf.size() == 0) {
+        bool advance(const fragmented_temporary_buffer& buf) {
+            pos += buf.size_bytes();
+            if (buf.size_bytes() == 0) {
                 eof = true;
             }
             return !eof;
@@ -1816,17 +1822,17 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
             return stop();
         }
         future<> read_header() {
-            return fin.read_exactly(segment::descriptor_header_size).then([this](temporary_buffer<char> buf) {
+            return frag_reader.read_exactly(fin, segment::descriptor_header_size).then([this](fragmented_temporary_buffer buf) {
                 if (!advance(buf)) {
                     // zero length file. accept it just to be nice.
                     return make_ready_future<>();
                 }
                 // Will throw if we got eof
-                data_input in(buf);
-                auto magic = in.read<uint32_t>();
-                auto ver = in.read<uint32_t>();
-                auto id = in.read<uint64_t>();
-                auto checksum = in.read<uint32_t>();
+                auto in = buf.get_istream();
+                auto magic = read<uint32_t>(in);
+                auto ver = read<uint32_t>(in);
+                auto id = read<uint64_t>(in);
+                auto checksum = read<uint32_t>(in);
 
                 if (magic == 0 && ver == 0 && id == 0 && checksum == 0) {
                     // let's assume this was an empty (pre-allocated)
@@ -1859,16 +1865,16 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
             });
         }
         future<> read_chunk() {
-            return fin.read_exactly(segment::segment_overhead_size).then([this](temporary_buffer<char> buf) {
+            return frag_reader.read_exactly(fin, segment::segment_overhead_size).then([this](fragmented_temporary_buffer buf) {
                 auto start = pos;
 
                 if (!advance(buf)) {
                     return make_ready_future<>();
                 }
 
-                data_input in(buf);
-                auto next = in.read<uint32_t>();
-                auto checksum = in.read<uint32_t>();
+                auto in = buf.get_istream();
+                auto next = read<uint32_t>(in);
+                auto checksum = read<uint32_t>(in);
 
                 if (next == 0 && checksum == 0) {
                     // in a pre-allocating world, this means eof
@@ -1911,17 +1917,16 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
                 return skip(next - pos);
             }
 
-            return fin.read_exactly(entry_header_size).then([this](temporary_buffer<char> buf) {
+            return frag_reader.read_exactly(fin, entry_header_size).then([this](fragmented_temporary_buffer buf) {
                 replay_position rp(id, position_type(pos));
 
                 if (!advance(buf)) {
                     return make_ready_future<>();
                 }
 
-                data_input in(buf);
-
-                auto size = in.read<uint32_t>();
-                auto checksum = in.read<uint32_t>();
+                auto in = buf.get_istream();
+                auto size = read<uint32_t>(in);
+                auto checksum = read<uint32_t>(in);
 
                 crc32_nbo crc;
                 crc.process(size);
@@ -1936,16 +1941,16 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
                     return skip(slack);
                 }
 
-                return fin.read_exactly(size - entry_header_size).then([this, size, crc = std::move(crc), rp](temporary_buffer<char> buf) mutable {
+                return frag_reader.read_exactly(fin, size - entry_header_size).then([this, size, crc = std::move(crc), rp](fragmented_temporary_buffer buf) mutable {
                     advance(buf);
 
-                    data_input in(buf);
-
+                    auto in = buf.get_istream();
                     auto data_size = size - segment::entry_overhead_size;
                     in.skip(data_size);
-                    auto checksum = in.read<uint32_t>();
+                    auto checksum = read<uint32_t>(in);
 
-                    crc.process_bytes(buf.get(), data_size);
+                    buf.remove_suffix(buf.size_bytes() - data_size);
+                    crc.process_fragmented(fragmented_temporary_buffer::view(buf));
 
                     if (crc.checksum() != checksum) {
                         // If we're getting a checksum error here, most likely the rest of
@@ -1956,7 +1961,7 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
                         return make_ready_future<>();
                     }
 
-                    return s.produce(buf.share(0, data_size), rp).handle_exception([this](auto ep) {
+                    return s.produce(std::move(buf), rp).handle_exception([this](auto ep) {
                         return this->fail();
                     });
                 });
@@ -2017,7 +2022,7 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
             w->s.set_exception(ep);
         });
 
-        return std::make_unique<subscription<temporary_buffer<char>, db::replay_position>>(std::move(ret));
+        return std::make_unique<subscription<fragmented_temporary_buffer, db::replay_position>>(std::move(ret));
     });
 }
 

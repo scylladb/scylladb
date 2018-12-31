@@ -59,6 +59,7 @@
 #include "commitlog_entry.hh"
 #include "service/priority_manager.hh"
 #include "db/extensions.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 
@@ -110,7 +111,7 @@ public:
         return _column_mappings.stop();
     }
 
-    future<> process(stats*, temporary_buffer<char> buf, replay_position rp) const;
+    future<> process(stats*, fragmented_temporary_buffer buf, replay_position rp) const;
     future<stats> recover(sstring file, const sstring& fname_prefix) const;
 
     typedef std::unordered_map<utils::UUID, replay_position> rp_map;
@@ -241,7 +242,7 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
     });
 }
 
-future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> buf, replay_position rp) const {
+future<> db::commitlog_replayer::impl::process(stats* s, fragmented_temporary_buffer buf, replay_position rp) const {
     try {
 
         commitlog_entry_reader cer(buf);
