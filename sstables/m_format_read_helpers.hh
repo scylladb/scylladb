@@ -85,9 +85,6 @@ inline gc_clock::duration parse_ttl(const serialization_header& header,
 }
 
 inline gc_clock::time_point parse_expiry(int64_t value) {
-    if (value > std::numeric_limits<gc_clock::duration::rep>::max()) {
-        throw malformed_sstable_exception(format("Too big expiry: {}", value));
-    }
     return gc_clock::time_point(gc_clock::duration(value));
 }
 

@@ -1006,8 +1006,8 @@ int compare_row_marker_for_merge(const row_marker& left, const row_marker& right
             // delegates to AbstractCell.reconcile() which compares values after
             // comparing timestamps, which in case of deleted cells will hold
             // serialized expiry.
-            return (uint32_t) left.deletion_time().time_since_epoch().count()
-                   < (uint32_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
+            return (uint64_t) left.deletion_time().time_since_epoch().count()
+                   < (uint64_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
         }
     }
     return 0;

@@ -1008,8 +1008,8 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
             // delegates to AbstractCell.reconcile() which compares values after
             // comparing timestamps, which in case of deleted cells will hold
             // serialized expiry.
-            return (uint32_t) left.deletion_time().time_since_epoch().count()
-                   < (uint32_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
+            return (uint64_t) left.deletion_time().time_since_epoch().count()
+                   < (uint64_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
         }
     }
     return 0;

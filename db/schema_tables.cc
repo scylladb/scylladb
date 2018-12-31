@@ -1499,8 +1499,8 @@ static void add_table_params_to_mutations(mutation& m, const clustering_key& cke
     m.set_clustered_cell(ckey, "bloom_filter_fp_chance", table->bloom_filter_fp_chance(), timestamp);
     m.set_clustered_cell(ckey, "comment", table->comment(), timestamp);
     m.set_clustered_cell(ckey, "dclocal_read_repair_chance", table->dc_local_read_repair_chance(), timestamp);
-    m.set_clustered_cell(ckey, "default_time_to_live", table->default_time_to_live().count(), timestamp);
-    m.set_clustered_cell(ckey, "gc_grace_seconds", table->gc_grace_seconds().count(), timestamp);
+    m.set_clustered_cell(ckey, "default_time_to_live", gc_clock::as_int32(table->default_time_to_live()), timestamp);
+    m.set_clustered_cell(ckey, "gc_grace_seconds", gc_clock::as_int32(table->gc_grace_seconds()), timestamp);
     m.set_clustered_cell(ckey, "max_index_interval", table->max_index_interval(), timestamp);
     m.set_clustered_cell(ckey, "memtable_flush_period_in_ms", table->memtable_flush_period(), timestamp);
     m.set_clustered_cell(ckey, "min_index_interval", table->min_index_interval(), timestamp);
