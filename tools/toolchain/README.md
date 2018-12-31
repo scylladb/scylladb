@@ -1,8 +1,8 @@
 # Official toolchain for ScyllaDB
 
 While we aim to build out-of-the-box on recent distributions, this isn't
-always possible and not everyone runs a recent distribution. For that reason
-a version-controlled toolchain it provided as a docker image.
+always possible and not everyone runs a recent distribution. For this reason
+a version-controlled toolchain is provided as a docker image.
 
 ## Obtaining the current toolchain
 
