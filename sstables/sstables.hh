@@ -268,6 +268,8 @@ public:
         const io_priority_class& pc = default_priority_class(),
         shard_id shard = engine().cpu_id());
 
+    encoding_stats get_encoding_stats_for_compaction() const;
+
     future<> seal_sstable(bool backup);
 
     static uint64_t get_estimated_key_count(const uint32_t size_at_full_sampling, const uint32_t min_index_interval) {

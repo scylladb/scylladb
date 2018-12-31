@@ -321,6 +321,7 @@ protected:
     uint64_t _estimated_partitions = 0;
     std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
+    encoding_stats_collector _stats_collector;
 protected:
     compaction(column_family& cf, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
         : _cf(cf)
@@ -329,6 +330,9 @@ protected:
         , _sstable_level(sstable_level)
     {
         _info->cf = &cf;
+        for (auto sst : sstables) {
+            _stats_collector.update(sst->get_encoding_stats_for_compaction());
+        }
         _cf.get_compaction_manager().register_compaction(_info);
     }
 
@@ -358,6 +362,10 @@ protected:
             return sst1->get_stats_metadata().max_timestamp < sst2->get_stats_metadata().max_timestamp;
         });
         return (*m)->get_stats_metadata().max_timestamp;
+    }
+
+    encoding_stats get_encoding_stats() const {
+        return _stats_collector.get();
     }
 public:
     compaction& operator=(const compaction&) = delete;
@@ -589,8 +597,7 @@ public:
             cfg.monitor = &_active_write_monitors.back();
             cfg.large_partition_handler = _cf.get_large_partition_handler();
             cfg.run_identifier = _run_identifier;
-            // TODO: calculate encoding_stats based on statistics of compacted sstables
-            _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, encoding_stats{}, priority));
+            _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, get_encoding_stats(), priority));
         }
         do_pending_replacements();
         return &*_writer;
@@ -824,8 +831,7 @@ public:
             cfg.max_sstable_size = _max_sstable_size;
             cfg.large_partition_handler = _cf.get_large_partition_handler();
             auto&& priority = service::get_local_compaction_priority();
-            // TODO: calculate encoding_stats based on statistics of compacted sstables
-            writer.emplace(sst->get_writer(*_cf.schema(), partitions_per_sstable(_shard), cfg, encoding_stats{}, priority, _shard));
+            writer.emplace(sst->get_writer(*_cf.schema(), partitions_per_sstable(_shard), cfg, get_encoding_stats(), priority, _shard));
         }
         return &*writer;
     }

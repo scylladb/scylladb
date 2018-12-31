@@ -76,6 +76,12 @@ public:
         min_ttl.update(ttl);
     }
 
+    void update(const encoding_stats& other) {
+        update_timestamp(other.min_timestamp);
+        update_local_deletion_time(other.min_local_deletion_time);
+        update_ttl(other.min_ttl);
+    }
+
     encoding_stats get() const {
         return { min_timestamp.get(), min_local_deletion_time.get(), min_ttl.get() };
     }
