@@ -79,6 +79,10 @@ public:
         }
         _fragments.erase(_fragments.begin(), it);
     }
+
+    void remove_suffix(size_t n) noexcept {
+        _size_bytes -= n;
+    }
 };
 
 class fragmented_temporary_buffer::view {
@@ -286,6 +290,20 @@ private:
         }
         return obj;
     }
+
+    [[gnu::noinline]] [[gnu::cold]]
+    void skip_slow(size_t n) noexcept {
+        auto left = std::min<size_t>(n, bytes_left());
+        while (left) {
+            auto this_length = std::min<size_t>(left, _current_end - _current_position);
+            left -= this_length;
+            if (left) {
+                next_fragment();
+            } else {
+                _current_position += this_length;
+            }
+        }
+    }
 public:
     struct default_exception_thrower {
         [[noreturn]] [[gnu::cold]]
@@ -304,6 +322,14 @@ public:
 
     size_t bytes_left() const noexcept {
         return _bytes_left ? _bytes_left - (_current_position - _current->get()) : 0;
+    }
+
+    void skip(size_t n) noexcept {
+        auto new_end = _current_position + n;
+        if (__builtin_expect(new_end > _current_end, false)) {
+            return skip_slow(n);
+        }
+        _current_position = new_end;
     }
 
     template<typename T, typename ExceptionThrower = default_exception_thrower>

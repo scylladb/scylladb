@@ -78,7 +78,7 @@ public:
 class commitlog_entry_reader {
     commitlog_entry _ce;
 public:
-    commitlog_entry_reader(const temporary_buffer<char>& buffer);
+    commitlog_entry_reader(const fragmented_temporary_buffer& buffer);
 
     const stdx::optional<column_mapping>& get_column_mapping() const { return _ce.mapping(); }
     const frozen_mutation& mutation() const & { return _ce.mutation(); }

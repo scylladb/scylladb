@@ -37,6 +37,7 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 #include "db/hints/resource_manager.hh"
 
 namespace service {
@@ -199,7 +200,7 @@ public:
             /// \param secs_since_file_mod last modification time stamp (in seconds since Epoch) of the current hints file
             /// \param fname name of the hints file this hint was read from
             /// \return future that resolves when next hint may be sent
-            future<> send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, temporary_buffer<char> buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
+            future<> send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
 
             /// \brief Send all hint from a single file and delete it after it has been successfully sent.
             /// Send all hints from the given file. If we failed to send the current segment we will pick up in the next
@@ -217,7 +218,7 @@ public:
             /// \param ctx_ptr pointer to the send context
             /// \param buf hints file entry
             /// \return The mutation object representing the original mutation stored in the hints file.
-            frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, temporary_buffer<char>& buf);
+            frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf);
 
             /// \brief Get a reference to the column_mapping object for a given frozen mutation.
             /// \param ctx_ptr pointer to the send context
