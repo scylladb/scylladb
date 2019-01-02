@@ -49,6 +49,9 @@ struct shard_config {
     sstring partitioner_name;
 };
 
+distributed<db::system_distributed_keyspace>* _sys_dist_ks;
+distributed<db::view::view_update_from_staging_generator>* _view_update_generator;
+
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
         row_level_diff_detect_algorithm::send_full_set,
@@ -1129,7 +1132,9 @@ public:
     }
 };
 
-future<> repair_init_messaging_service_handler() {
+future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_from_staging_generator>& view_update_generator) {
+    _sys_dist_ks = &sys_dist_ks;
+    _view_update_generator = &view_update_generator;
     return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
         ms.register_repair_get_full_row_hashes([] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");

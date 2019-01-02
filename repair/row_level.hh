@@ -23,8 +23,9 @@
 
 #include <vector>
 #include "gms/inet_address.hh"
+#include "db/system_distributed_keyspace.hh"
 
-future<> repair_init_messaging_service_handler();
+future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_from_staging_generator>& view_update_generator);
 
 class repair_info;
 
