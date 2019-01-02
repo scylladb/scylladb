@@ -36,6 +36,7 @@
 #include "partition_version.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_cleaner.hh"
+#include "sstables/types.hh"
 
 class frozen_mutation;
 
@@ -209,6 +210,7 @@ private:
             update_timestamp(marker.timestamp());
             if (!marker.is_missing()) {
                 if (!marker.is_live()) {
+                    min_ttl.update(sstables::expired_liveness_ttl);
                     min_local_deletion_time.update(marker.deletion_time().time_since_epoch().count());
                 } else if (marker.is_expiring()) {
                     min_ttl.update(marker.ttl().count());
