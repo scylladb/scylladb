@@ -191,6 +191,7 @@ void querier_cache::scan_cache_entries() {
     while (it != end && it->is_expired(now)) {
         ++_stats.time_based_evictions;
         --_stats.population;
+        _sem.unregister_inactive_read(it->get_inactive_handle());
         it = _entries.erase(it);
     }
 }
