@@ -487,6 +487,8 @@ private:
     utils::phased_barrier _pending_writes_phaser;
     // Corresponding phaser for in-progress reads.
     utils::phased_barrier _pending_reads_phaser;
+    // Corresponding phaser for in-progress streams
+    utils::phased_barrier _pending_streams_phaser;
 public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst);
     void move_sstable_from_staging_in_thread(sstables::shared_sstable sst);
@@ -860,6 +862,14 @@ public:
 
     future<> await_pending_reads() {
         return _pending_reads_phaser.advance_and_await();
+    }
+
+    utils::phased_barrier::operation stream_in_progress() {
+        return _pending_streams_phaser.start();
+    }
+
+    future<> await_pending_streams() {
+        return _pending_streams_phaser.advance_and_await();
     }
 
     void add_or_update_view(view_ptr v);
