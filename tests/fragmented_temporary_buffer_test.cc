@@ -441,11 +441,20 @@ SEASTAR_THREAD_TEST_CASE(test_remove_suffix) {
         BOOST_CHECK_EQUAL(ftb.size_bytes(), sizeof(type1) + sizeof(type2));
         ftb.remove_suffix(sizeof(type2));
         BOOST_CHECK_EQUAL(ftb.size_bytes(), sizeof(type1));
+
         auto in = ftb.get_istream();
         BOOST_CHECK_EQUAL(in.read<type1>(), expected_value1);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
+        BOOST_CHECK_THROW(in.read<char>(), std::out_of_range);
 
-        ftb.remove_suffix(sizeof(type1));
+        ftb.remove_suffix(sizeof(type1) - 1);
+        BOOST_CHECK_EQUAL(ftb.size_bytes(), 1);
+
+        auto v = fragmented_temporary_buffer::view(ftb);
+        v.remove_prefix(1);
+        BOOST_CHECK(v.empty());
+
+        ftb.remove_suffix(1);
         BOOST_CHECK_EQUAL(ftb.size_bytes(), 0);
     };
 

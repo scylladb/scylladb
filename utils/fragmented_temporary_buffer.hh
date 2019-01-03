@@ -80,8 +80,18 @@ public:
         _fragments.erase(_fragments.begin(), it);
     }
 
+    // Linear complexity, invalidates views and istreams
     void remove_suffix(size_t n) noexcept {
         _size_bytes -= n;
+        auto it = _fragments.rbegin();
+        while (it->size() < n) {
+            n -= it->size();
+            ++it;
+        }
+        if (n) {
+            it->trim(it->size() - n);
+        }
+        _fragments.erase(it.base(), _fragments.end());
     }
 };
 
