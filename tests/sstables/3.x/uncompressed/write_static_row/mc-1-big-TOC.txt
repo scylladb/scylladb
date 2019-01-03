@@ -4,4 +4,3 @@ TOC.txt
 Digest.crc32
 Index.db
 Data.db
-
