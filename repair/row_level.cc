@@ -32,6 +32,7 @@
 #include "utils/hash.hh"
 #include "service/storage_service.hh"
 #include "service/priority_manager.hh"
+#include "db/view/view_update_checks.hh"
 #include <seastar/util/bool_class.hh>
 #include <list>
 #include <vector>
@@ -48,6 +49,9 @@ struct shard_config {
     unsigned ignore_msb;
     sstring partitioner_name;
 };
+
+distributed<db::system_distributed_keyspace>* _sys_dist_ks;
+distributed<db::view::view_update_from_staging_generator>* _view_update_generator;
 
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
@@ -333,21 +337,27 @@ public:
             return _mq[node_idx]->pop_eventually();
         };
         _writer_done[node_idx] = distribute_reader_and_consume_on_shards(_schema, dht::global_partitioner(),
-            make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
-            [ks_name = this->_schema->ks_name(), cf_name = this->_schema->cf_name(), estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
-                column_family& cf = service::get_local_storage_service().db().local().find_column_family(ks_name, cf_name);
-                sstables::sstable_writer_config sst_cfg;
-                sst_cfg.large_partition_handler = cf.get_large_partition_handler();
-                sstables::shared_sstable sst = cf.make_streaming_sstable_for_write();
+                make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
+                [ks_name = this->_schema->ks_name(), cf_name = this->_schema->cf_name(), estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
+            table& t = service::get_local_storage_service().db().local().find_column_family(ks_name, cf_name);
+            return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, streaming::stream_reason::repair).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
+                sstables::shared_sstable sst = use_view_update_path ? t->make_streaming_staging_sstable() : t->make_streaming_sstable_for_write();
                 schema_ptr s = reader.schema();
+                sstables::sstable_writer_config sst_cfg;
+                sst_cfg.large_partition_handler = t->get_large_partition_handler();
                 auto& pc = service::get_local_streaming_write_priority();
                 return sst->write_components(std::move(reader), std::max(1ul, estimated_partitions), s, sst_cfg, {}, pc).then([sst] {
                     return sst->open_data();
-                }).then([&cf, sst] {
-                    return cf.add_sstable_and_update_cache(sst);
+                }).then([t, sst] {
+                    return t->add_sstable_and_update_cache(sst);
+                }).then([t, s, sst, use_view_update_path]() mutable -> future<> {
+                    if (!use_view_update_path) {
+                        return make_ready_future<>();
+                    }
+                    return _view_update_generator->local().register_staging_sstable(sst, std::move(t));
                 });
-            }
-        );
+            });
+        });
     }
 
     future<> do_write(unsigned node_idx, lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
@@ -1129,7 +1139,9 @@ public:
     }
 };
 
-future<> repair_init_messaging_service_handler() {
+future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_from_staging_generator>& view_update_generator) {
+    _sys_dist_ks = &sys_dist_ks;
+    _view_update_generator = &view_update_generator;
     return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
         ms.register_repair_get_full_row_hashes([] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");

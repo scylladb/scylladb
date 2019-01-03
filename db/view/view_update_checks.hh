@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 ScyllaDB
+ * Copyright (C) 2019 ScyllaDB
  */
 
 /*
@@ -21,14 +21,14 @@
 
 #pragma once
 
-#include <vector>
-#include "gms/inet_address.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "streaming/stream_reason.hh"
+#include <boost/range/adaptor/map.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
-future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_from_staging_generator>& view_update_generator);
+namespace db::view {
 
-class repair_info;
+future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_ks, const sstring& ks_name, const sstring& cf_name);
+future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const table& t, streaming::stream_reason reason);
 
-future<> repair_cf_range_row_level(repair_info& ri,
-        sstring cf_name, dht::token_range range,
-        const std::vector<gms::inet_address>& all_peer_nodes);
+}

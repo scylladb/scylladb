@@ -69,6 +69,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "view_info.hh"
+#include "view_update_checks.hh"
 
 using namespace std::chrono_literals;
 
@@ -1660,6 +1661,29 @@ update_backlog node_update_backlog::add_fetch(unsigned shard, update_backlog bac
         return new_max;
     }
     return std::max(backlog, _max.load(std::memory_order_relaxed));
+}
+
+future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_ks, const sstring& ks_name, const sstring& cf_name) {
+    return sys_dist_ks.view_status(ks_name, cf_name).then([] (std::unordered_map<utils::UUID, sstring>&& view_statuses) {
+        return boost::algorithm::any_of(view_statuses | boost::adaptors::map_values, [] (const sstring& view_status) {
+            return view_status == "STARTED";
+        });
+    });
+}
+
+future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const table& t, streaming::stream_reason reason) {
+    if (is_internal_keyspace(t.schema()->ks_name())) {
+        return make_ready_future<bool>(false);
+    }
+    if (reason == streaming::stream_reason::repair && !t.views().empty()) {
+        return make_ready_future<bool>(true);
+    }
+    return do_with(t.views(), [&sys_dist_ks] (auto& views) {
+        return map_reduce(views,
+                [&sys_dist_ks] (const view_ptr& view) { return check_view_build_ongoing(sys_dist_ks, view->ks_name(), view->cf_name()); },
+                false,
+                std::logical_or<bool>());
+    });
 }
 
 } // namespace view

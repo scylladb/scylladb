@@ -61,6 +61,7 @@
 #include "multishard_writer.hh"
 #include "sstables/sstables.hh"
 #include "db/system_keyspace.hh"
+#include "db/view/view_update_checks.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/map.hpp>
 
@@ -96,29 +97,6 @@ static auto get_session(utils::UUID plan_id, gms::inet_address from, const char*
         throw std::runtime_error(err);
     }
     return coordinator->get_or_create_session(from);
-}
-
-static future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_ks, const sstring& ks_name, const sstring& cf_name) {
-    return sys_dist_ks.view_status(ks_name, cf_name).then([] (std::unordered_map<utils::UUID, sstring>&& view_statuses) {
-        return boost::algorithm::any_of(view_statuses | boost::adaptors::map_values, [] (const sstring& view_status) {
-            return view_status == "STARTED";
-        });
-    });
-}
-
-static future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const table& t, stream_reason reason) {
-    if (is_internal_keyspace(t.schema()->ks_name())) {
-        return make_ready_future<bool>(false);
-    }
-    if (reason == stream_reason::repair && !t.views().empty()) {
-        return make_ready_future<bool>(true);
-    }
-    return do_with(t.views(), [&sys_dist_ks] (auto& views) {
-        return map_reduce(views,
-                [&sys_dist_ks] (const view_ptr& view) { return check_view_build_ongoing(sys_dist_ks, view->ks_name(), view->cf_name()); },
-                false,
-                std::logical_or<bool>());
-    });
 }
 
 void stream_session::init_messaging_service_handler() {
@@ -206,7 +184,7 @@ void stream_session::init_messaging_service_handler() {
                         [cf_id, plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
                             auto& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
 
-                            return check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
+                            return db::view::check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
                                 sstables::shared_sstable sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
                                 schema_ptr s = reader.schema();
                                 sstables::sstable_writer_config sst_cfg;

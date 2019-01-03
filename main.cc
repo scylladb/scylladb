@@ -770,7 +770,7 @@ int main(int ac, char** av) {
                     });
                 });
             }).get();
-            repair_init_messaging_service_handler().get();
+            repair_init_messaging_service_handler(sys_dist_ks, view_update_from_staging_generator).get();
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
