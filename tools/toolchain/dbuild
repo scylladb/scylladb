@@ -21,6 +21,8 @@ docker run \
        --cap-add SYS_PTRACE \
        -v "$PWD:$PWD" \
        -v /tmp:/tmp \
+       -v /etc/passwd:/etc/passwd:ro \
+       -v /etc/group:/etc/group:ro \
        -w "$PWD" \
        "${docker_args[@]}" \
        "$(<tools/toolchain/image)" \
