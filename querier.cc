@@ -274,14 +274,12 @@ static void insert_querier(
     memory_usage += q.memory_usage();
 
     if (memory_usage >= max_queriers_memory_usage) {
-        while (!entries.empty() && memory_usage >= max_queriers_memory_usage) {
-            auto it = entries.begin();
+        auto it = entries.begin();
+        while (it != entries.end() && memory_usage >= max_queriers_memory_usage) {
             memory_usage -= it->memory_usage();
-            auto ir = sem.unregister_inactive_read(it->get_inactive_handle());
-            ir->evict();
-            // querier_inactive_read::evict() updates resource_based_evictions,
-            // (and population) while we want memory_based_evictions:
-            --stats.resource_based_evictions;
+            sem.unregister_inactive_read(it->get_inactive_handle());
+            it = entries.erase(it);
+            --stats.population;
             ++stats.memory_based_evictions;
         }
     }

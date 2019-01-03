@@ -564,6 +564,10 @@ SEASTAR_THREAD_TEST_CASE(test_time_based_cache_eviction) {
         .misses()
         .no_drops()
         .time_based_evictions();
+
+    // There should be no inactive reads, the querier_cache should unregister
+    // the expired queriers.
+    BOOST_REQUIRE_EQUAL(t.get_semaphore().inactive_reads(), 0);
 }
 
 sstring make_string_blob(size_t size) {
@@ -598,6 +602,8 @@ SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
         t.produce_first_page_and_save_data_querier(i);
     }
 
+    const auto pop_before = t.get_semaphore().inactive_reads();
+
     // Should overflow the limit and trigger the eviction of the oldest entry.
     t.produce_first_page_and_save_data_querier(queriers_needed_to_fill_cache);
 
@@ -605,6 +611,10 @@ SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
         .misses()
         .no_drops()
         .memory_based_evictions();
+
+    // Since the last insert should have evicted an existing entry, we should
+    // have the same number of registered inactive reads.
+    BOOST_REQUIRE_EQUAL(t.get_semaphore().inactive_reads(), pop_before);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
