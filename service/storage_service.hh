@@ -498,6 +498,7 @@ public:
 private:
     void set_mode(mode m, bool log);
     void set_mode(mode m, sstring msg, bool log);
+    void mark_existing_views_as_built();
 public:
     void bootstrap(std::unordered_set<token> tokens);
 
