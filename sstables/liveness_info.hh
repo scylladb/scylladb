@@ -31,7 +31,6 @@
 namespace sstables {
 
 class liveness_info {
-    const serialization_header& _header;
     api::timestamp_type _timestamp;
     gc_clock::duration _ttl;
     gc_clock::time_point _local_deletion_time;
@@ -41,22 +40,19 @@ class liveness_info {
                || _local_deletion_time != gc_clock::time_point::max();
     }
 public:
-    explicit liveness_info(const serialization_header& header)
-        : _header(header)
-    { }
     void reset() {
         _timestamp = api::missing_timestamp;
         _ttl = gc_clock::duration::zero();
         _local_deletion_time = gc_clock::time_point::max();
     }
-    void set_timestamp(uint64_t delta) {
-        _timestamp = parse_timestamp(_header, delta);
+    void set_timestamp(api::timestamp_type timestamp) {
+        _timestamp = timestamp;
     }
-    void set_ttl(uint64_t delta) {
-        _ttl = parse_ttl(_header, delta);
+    void set_ttl(gc_clock::duration ttl) {
+        _ttl = ttl;
     }
-    void set_local_deletion_time(uint64_t delta) {
-        _local_deletion_time = parse_expiry(_header, delta);
+    void set_local_deletion_time(gc_clock::time_point local_deletion_time) {
+        _local_deletion_time = local_deletion_time;
     }
     api::timestamp_type timestamp() const { return _timestamp; }
     gc_clock::duration ttl() const { return _ttl; }
