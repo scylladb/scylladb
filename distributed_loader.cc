@@ -222,6 +222,9 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
                         if (s->is_counter() && !sst->has_scylla_component()) {
                             return make_exception_future<>(std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead."));
                         }
+                        if (s->is_view()) {
+                            return make_exception_future<>(std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead."));
+                        }
                         return sst->mutate_sstable_level(0);
                     }).then([&cf, sst, gen] {
                         return sst->create_links(cf._config.datadir, gen);
