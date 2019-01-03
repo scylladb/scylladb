@@ -1337,7 +1337,7 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
     with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
         auto& step = get_or_create_build_step(view->view_info()->base_id());
-        return step.base->await_pending_writes().then([this, &step] {
+        return when_all(step.base->await_pending_writes(), step.base->await_pending_streams()).discard_result().then([this, &step] {
             return flush_base(step.base, _as);
         }).then([this, view, &step] () mutable {
             // This resets the build step to the current token. It may result in views currently
