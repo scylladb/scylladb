@@ -1246,8 +1246,7 @@ public:
             consume_range_tombstone_start(std::move(ck), bound_kind::incl_start, std::move(start_tombstone));
             break;
         default:
-            throw sstables::malformed_sstable_exception(
-                    format("Corrupted range tombstone: invalid boundary type {}", kind));
+            assert(false && "Invalid boundary type");
         }
 
         return result;
