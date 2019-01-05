@@ -26,6 +26,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/scattered_message.hh>
+#include <seastar/core/sleep.hh>
 #include "log.hh"
 #include <thrift/server/TServer.h>
 #include <thrift/transport/TBufferTransports.h>
