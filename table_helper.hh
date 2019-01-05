@@ -103,17 +103,15 @@ public:
         }).discard_result();
     }
 
-    template <typename... Args>
-    static inline future<> setup_keyspace(const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, const Args&... args) {
+    static inline future<> setup_keyspace(const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
         if (engine().cpu_id() == 0) {
-            size_t n = sizeof...(args);
-            const table_helper* tables[sizeof...(args)] = {&args...};
+            size_t n = tables.size();
             for (size_t i = 0; i < n; ++i) {
                 if (tables[i]->_keyspace != keyspace_name) {
                     throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
                 }
             }
-            return seastar::async([&keyspace_name, replication_factor, &qs, &args...] {
+            return seastar::async([&keyspace_name, replication_factor, &qs, tables] {
                 auto& db = cql3::get_local_query_processor().db();
 
                 // Create a keyspace
@@ -129,8 +127,7 @@ public:
 
 
                 // Create tables
-                size_t n = sizeof...(args);
-                const table_helper* tables[sizeof...(args)] = {&args...};
+                size_t n = tables.size();
                 for (size_t i = 0; i < n; ++i) {
                     tables[i]->setup_table().get();
                 }
