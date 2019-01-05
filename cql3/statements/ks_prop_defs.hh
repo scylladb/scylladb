@@ -43,11 +43,11 @@
 
 #include "cql3/statements/property_definitions.hh"
 
-#include "database.hh"
-
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <experimental/optional>
+
+class keyspace_metadata;
 
 namespace cql3 {
 
