@@ -22,6 +22,7 @@
 
 #include "table_helper.hh"
 #include "cql3/statements/create_table_statement.hh"
+#include "database.hh"
 
 future<> table_helper::setup_table() const {
     auto& qp = cql3::get_local_query_processor();
