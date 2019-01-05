@@ -45,6 +45,7 @@
 #include "validation.hh"
 #include "view_info.hh"
 #include "db/extensions.hh"
+#include "database.hh"
 
 namespace cql3 {
 

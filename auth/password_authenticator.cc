@@ -56,6 +56,7 @@
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
+#include "database.hh"
 
 namespace auth {
 

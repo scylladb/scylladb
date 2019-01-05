@@ -78,6 +78,7 @@
 #include "view_info.hh"
 #include "cql_type_parser.hh"
 #include "db/timeout_clock.hh"
+#include "database.hh"
 
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;

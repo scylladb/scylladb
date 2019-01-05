@@ -51,6 +51,7 @@
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/util.hh"
 #include "db/config.hh"
+#include "database.hh"
 
 namespace cql3 {
 

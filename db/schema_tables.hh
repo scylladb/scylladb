@@ -45,10 +45,11 @@
 #include "schema.hh"
 #include "hashing.hh"
 #include "schema_mutations.hh"
-#include "database.hh"
 
 #include <vector>
 #include <map>
+
+class keyspace_metadata;
 
 namespace query {
 class result_set;

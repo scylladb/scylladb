@@ -26,6 +26,7 @@
 #include "cql3_type.hh"
 #include "cql3/util.hh"
 #include "ut_name.hh"
+#include "database.hh"
 
 namespace cql3 {
 
