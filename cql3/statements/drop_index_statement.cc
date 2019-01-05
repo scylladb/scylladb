@@ -44,6 +44,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "schema_builder.hh"
+#include "database.hh"
 
 namespace cql3 {
 

@@ -54,6 +54,7 @@
 #include "schema_builder.hh"
 #include "service/storage_service.hh"
 #include "db/extensions.hh"
+#include "database.hh"
 
 namespace cql3 {
 

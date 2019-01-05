@@ -38,6 +38,7 @@
 #include "mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "db/timeout_clock.hh"
+#include "database.hh"
 
 namespace db {
 

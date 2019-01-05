@@ -36,6 +36,7 @@
 #include "lister.hh"
 #include "db/timeout_clock.hh"
 #include "service/priority_manager.hh"
+#include "database.hh"
 
 using namespace std::literals::chrono_literals;
 

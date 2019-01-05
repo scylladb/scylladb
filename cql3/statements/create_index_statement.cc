@@ -48,6 +48,7 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "request_validations.hh"
+#include "database.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string/join.hpp>

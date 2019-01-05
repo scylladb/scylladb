@@ -50,6 +50,7 @@
 #include "gms/gossiper.hh"
 #include "view_info.hh"
 #include "schema_builder.hh"
+#include "database.hh"
 
 namespace service {
 

@@ -53,6 +53,7 @@
 #include "service/storage_service.hh"
 #include "message/messaging_service.hh"
 #include "dht/i_partitioner.hh"
+#include "database.hh"
 #include "log.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
