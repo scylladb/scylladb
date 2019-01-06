@@ -1147,6 +1147,38 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
     });
 }
 
+SEASTAR_TEST_CASE(test_time_overflow_with_default_ttl) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        auto cr = format("create table cf (p1 varchar primary key, i int) with default_time_to_live = {:d};", max_ttl.count());
+        return e.execute_cql(cr).discard_result().then([&e] {
+            auto q = format("insert into cf (p1, i) values ('key1', 1);");
+            return e.execute_cql(q).discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_time_overflow_using_ttl) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        auto cr = "create table cf (p1 varchar primary key, i int);";
+        return e.execute_cql(cr).discard_result().then([&e] {
+            auto q = format("insert into cf (p1, i) values ('key1', 1) using ttl {:d};", max_ttl.count());
+            return e.execute_cql(q).discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1);
+        }).then([&e] {
+            auto q = format("insert into cf (p1, i) values ('key2', 0);");
+            return e.execute_cql(q).discard_result();
+        }).then([&e] {
+            auto q = format("update cf using ttl {:d} set i = 2 where p1 = 'key2';", max_ttl.count());
+            return e.execute_cql(q).discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key2")}, {}, "i", 2);
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_batch) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
