@@ -96,18 +96,19 @@ struct column_stats {
     void update_timestamp(api::timestamp_type value) {
         timestamp_tracker.update(value);
     }
+
     void update_local_deletion_time(int32_t value) {
         local_deletion_time_tracker.update(value);
     }
     void update_local_deletion_time(gc_clock::time_point value) {
-        update_local_deletion_time(gc_clock::as_int32(value));
+        update_local_deletion_time(adjusted_local_deletion_time(value));
     }
     void update_local_deletion_time_and_tombstone_histogram(int32_t value) {
         local_deletion_time_tracker.update(value);
         tombstone_histogram.update(value);
     }
     void update_local_deletion_time_and_tombstone_histogram(gc_clock::time_point value) {
-        update_local_deletion_time_and_tombstone_histogram(gc_clock::as_int32(value));
+        update_local_deletion_time_and_tombstone_histogram(adjusted_local_deletion_time(value));
     }
     void update_ttl(int32_t value) {
         ttl_tracker.update(value);

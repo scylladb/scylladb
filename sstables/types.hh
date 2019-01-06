@@ -577,6 +577,14 @@ inline bool is_expired_liveness_ttl(gc_clock::duration ttl) {
 // Corresponding to Cassandra's NO_DELETION_TIME
 constexpr static int32_t no_deletion_time = std::numeric_limits<int32_t>::max();
 
+// Corresponding to Cassandra's MAX_DELETION_TIME
+constexpr static int32_t max_deletion_time = std::numeric_limits<int32_t>::max() - 1;
+
+inline int32_t adjusted_local_deletion_time(gc_clock::time_point local_deletion_time) {
+    int64_t ldt = local_deletion_time.time_since_epoch().count();
+    return static_cast<int32_t>(std::min(ldt, static_cast<int64_t>(max_deletion_time)));
+}
+
 struct statistics {
     disk_array<uint32_t, std::pair<metadata_type, uint32_t>> offsets; // ordered by metadata_type
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
