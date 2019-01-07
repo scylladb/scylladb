@@ -66,7 +66,7 @@ if [ ! -f "$RELOC_PKG" ]; then
 fi
 
 if [ -e debian ]; then
-    sudo rm -rf debian
+    rm -rf debian
 fi
 if is_debian_variant; then
     sudo apt-get -y update
