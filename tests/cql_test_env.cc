@@ -352,8 +352,14 @@ public:
             feature_service->start().get();
             auto stop_feature_service = defer([&] { feature_service->stop().get(); });
 
+            distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
+            distributed<service::migration_manager>& mm = service::get_migration_manager();
+            distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
+
+            auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_from_staging_generator>>();
+
             auto& ss = service::get_storage_service();
-            ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*feature_service)).get();
+            ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
@@ -378,10 +384,6 @@ public:
                 ss.enable_all_features();
             }).get();
 
-            distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
-            distributed<service::migration_manager>& mm = service::get_migration_manager();
-            distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
-
             service::storage_proxy::config spcfg;
             spcfg.available_memory = memory::stats().total_memory();
             db::view::node_update_backlog b(smp::count, 10ms);
@@ -401,6 +403,12 @@ public:
             bmcfg.write_request_timeout = 2s;
             bm.start(std::ref(qp), bmcfg).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
+
+            view_update_generator->start(std::ref(*db), std::ref(proxy));
+            view_update_generator->invoke_on_all(&db::view::view_update_from_staging_generator::start);
+            auto stop_view_update_generator = defer([view_update_generator] {
+                view_update_generator->stop().get();
+            });
 
             distributed_loader::init_system_keyspace(*db).get();
 
@@ -447,12 +455,6 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_from_staging_generator>>();
-            view_update_generator->start(std::ref(*db), std::ref(proxy));
-            view_update_generator->invoke_on_all(&db::view::view_update_from_staging_generator::start);
-            auto stop_view_update_generator = defer([view_update_generator] {
-                view_update_generator->stop().get();
-            });
             single_node_cql_env env(feature_service, db, auth_service, view_builder, view_update_generator);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
@@ -494,13 +496,14 @@ class storage_service_for_tests::impl {
     distributed<database> _db;
     sharded<auth::service> _auth_service;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
+    sharded<db::view::view_update_from_staging_generator> _view_update_generator;
 public:
     impl() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
         _feature_service.start().get();
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false).get();
-        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_feature_service)).get();
+        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service)).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();

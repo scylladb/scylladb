@@ -144,7 +144,7 @@ private:
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
 public:
-    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, gms::feature_service& feature_service);
+    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_from_staging_generator>&, gms::feature_service& feature_service);
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -734,6 +734,7 @@ private:
     serialized_action _replicate_action;
     serialized_action _update_pending_ranges_action;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<db::view::view_update_from_staging_generator>& _view_update_generator;
 private:
     /**
      * Replicates token_metadata contents on shard0 instance to other shards.
@@ -2298,7 +2299,7 @@ private:
 };
 
 future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<gms::feature_service>& feature_service);
+        sharded<db::view::view_update_from_staging_generator>& view_update_generator, sharded<gms::feature_service>& feature_service);
 future<> deinit_storage_service();
 
 }

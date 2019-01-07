@@ -130,7 +130,7 @@ int get_generation_number() {
 }
 
 storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        gms::feature_service& feature_service)
+        sharded<db::view::view_update_from_staging_generator>& view_update_generator, gms::feature_service& feature_service)
         : _feature_service(feature_service)
         , _db(db)
         , _auth_service(auth_service)
@@ -152,7 +152,8 @@ storage_service::storage_service(distributed<database>& db, sharded<auth::servic
         , _row_level_repair_feature(_feature_service, ROW_LEVEL_REPAIR)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
-        , _sys_dist_ks(sys_dist_ks) {
+        , _sys_dist_ks(sys_dist_ks)
+        , _view_update_generator(view_update_generator) {
     register_metrics();
     sstable_read_error.connect([this] { isolate_on_error(); });
     sstable_write_error.connect([this] { isolate_on_error(); });
@@ -3288,8 +3289,8 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
 }
 
 future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<gms::feature_service>& feature_service) {
-    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(feature_service));
+        sharded<db::view::view_update_from_staging_generator>& view_update_generator, sharded<gms::feature_service>& feature_service) {
+    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service));
 }
 
 future<> deinit_storage_service() {

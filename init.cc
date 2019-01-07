@@ -38,8 +38,8 @@ logging::logger startlog("init");
 // until proper shutdown is done.
 
 void init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<gms::feature_service>& feature_service) {
-    service::init_storage_service(db, auth_service, sys_dist_ks, feature_service).get();
+        sharded<db::view::view_update_from_staging_generator>& view_update_generator, sharded<gms::feature_service>& feature_service) {
+    service::init_storage_service(db, auth_service, sys_dist_ks, view_update_generator, feature_service).get();
     // #293 - do not stop anything
     //engine().at_exit([] { return service::deinit_storage_service(); });
 }

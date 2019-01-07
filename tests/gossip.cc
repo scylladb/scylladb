@@ -75,7 +75,8 @@ int main(int ac, char ** av) {
             sharded<gms::feature_service> feature_service;
             feature_service.start().get();
             sharded<db::system_distributed_keyspace> sys_dist_ks;
-            service::init_storage_service(db, auth_service, sys_dist_ks, feature_service).get();
+            sharded<db::view::view_update_from_staging_generator> view_update_generator;
+            service::init_storage_service(db, auth_service, sys_dist_ks, view_update_generator, feature_service).get();
             netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();
