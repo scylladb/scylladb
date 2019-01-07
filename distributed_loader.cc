@@ -33,6 +33,8 @@
 #include "service/priority_manager.hh"
 #include "auth/common.hh"
 #include "tracing/trace_keyspace_helper.hh"
+#include "db/view/view_update_from_staging_generator.hh"
+#include "db/view/view_update_checks.hh"
 #include <unordered_map>
 #include <boost/range/adaptor/map.hpp>
 
@@ -179,21 +181,22 @@ static future<std::vector<sstables::shared_sstable>> get_all_shared_sstables(dis
 
 // This function will iterate through upload directory in column family,
 // and will do the following for each sstable found:
-// 1) Mutate sstable level to 0.
-// 2) Create hard links to its components in column family dir.
-// 3) Remove all of its components in upload directory.
-// At the end, it's expected that upload dir is empty and all of its
-// previous content was moved to column family dir.
+// 1) Check if view updates need to be generated from this sstable. If so, leave it intact for now.
+// 2) Otherwise, mutate sstable level to 0.
+// 3) Create hard links to its components in column family dir.
+// 4) Remove all of its components in upload directory.
+// At the end, it's expected that upload dir contains only staging sstables
+// which need to wait until view updates are generated from them.
 //
 // Return a vector containing descriptor of sstables to be loaded.
 future<std::vector<sstables::entry_descriptor>>
-distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name, sstring cf_name) {
+distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, sstring ks_name, sstring cf_name) {
     struct work {
         std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
         std::vector<sstables::entry_descriptor> flushed;
     };
 
-    return do_with(work(), [&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] (work& work) {
+    return do_with(work(), [&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] (work& work) {
         auto& cf = db.local().find_column_family(ks_name, cf_name);
 
         return lister::scan_dir(fs::path(cf._config.datadir) / "upload", { directory_entry_type::regular },
@@ -204,18 +207,25 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
             }
             work.descriptors.emplace(comps.generation, std::move(comps));
             return make_ready_future<>();
-        }, &column_family::manifest_json_filter).then([&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name), &work] {
+        }, &column_family::manifest_json_filter).then([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name), &work] {
             work.flushed.reserve(work.descriptors.size());
 
-            return do_for_each(work.descriptors, [&db, ks_name, cf_name, &work] (auto& pair) {
+            return do_for_each(work.descriptors, [&db, &sys_dist_ks, ks_name, cf_name, &work] (auto& pair) {
                 return db.invoke_on(column_family::calculate_shard_from_sstable_generation(pair.first),
-                        [ks_name, cf_name, &work, comps = pair.second] (database& db) {
+                        [&sys_dist_ks, ks_name, cf_name, &work, comps = pair.second] (database& db) {
                     auto& cf = db.find_column_family(ks_name, cf_name);
 
                     auto sst = sstables::make_sstable(cf.schema(), cf._config.datadir + "/upload", comps.generation,
                         comps.version, comps.format, gc_clock::now(),
                         [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
                     auto gen = cf.calculate_generation_for_new_table();
+
+                    // If view updates need to be generated, leave them in upload/ directory,
+                    // so they will be treated as staging sstables.
+                  return db::view::check_needs_view_update_path(sys_dist_ks.local(), cf, streaming::stream_reason::repair).then([&cf, gen, sst, comps = comps, &work] (bool use_view_update_path) {
+                    if (use_view_update_path) {
+                        return make_ready_future<sstables::entry_descriptor>(std::move(comps));
+                    }
 
                     // Read toc content as it will be needed for moving and deleting a sstable.
                     return sst->read_toc().then([sst, s = cf.schema()] {
@@ -235,6 +245,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
                         comps.sstdir = cf._config.datadir;
                         return make_ready_future<sstables::entry_descriptor>(std::move(comps));
                     });
+                  });
                 }).then([&work] (sstables::entry_descriptor comps) mutable {
                     work.flushed.push_back(std::move(comps));
                     return make_ready_future<>();
@@ -418,7 +429,8 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
     });
 }
 
-future<> distributed_loader::load_new_sstables(distributed<database>& db, sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables) {
+future<> distributed_loader::load_new_sstables(distributed<database>& db, distributed<db::view::view_update_from_staging_generator>& view_update_generator,
+        sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables) {
     return parallel_for_each(new_tables, [&db] (auto comps) {
         auto cf_sstable_open = [comps] (column_family& cf, sstables::foreign_sstable_open_info info) {
             auto f = cf.open_sstable(std::move(info), comps.sstdir, comps.generation, comps.version, comps.format);
@@ -430,14 +442,17 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, sstrin
             });
         };
         return distributed_loader::open_sstable(db, comps, cf_sstable_open, service::get_local_compaction_priority());
-    }).then([&db, ks, cf] {
-        return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
+    }).then([&db, &view_update_generator, ks, cf] {
+        return db.invoke_on_all([&view_update_generator, ks = std::move(ks), cfname = std::move(cf)] (database& db) {
             auto& cf = db.find_column_family(ks, cfname);
-            return cf.get_row_cache().invalidate([&cf] () noexcept {
+            return cf.get_row_cache().invalidate([&view_update_generator, &cf] () noexcept {
                 // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
                 // atomically load all opened sstables into column family.
                 for (auto& sst : cf._sstables_opened_but_not_loaded) {
                     cf.load_sstable(sst, true);
+                    if (sst->requires_view_building()) {
+                        view_update_generator.local().register_staging_sstable(sst, cf.shared_from_this());
+                    }
                 }
                 cf._sstables_opened_but_not_loaded.clear();
                 cf.trigger_compaction();
