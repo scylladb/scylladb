@@ -222,30 +222,30 @@ distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::
 
                     // If view updates need to be generated, leave them in upload/ directory,
                     // so they will be treated as staging sstables.
-                  return db::view::check_needs_view_update_path(sys_dist_ks.local(), cf, streaming::stream_reason::repair).then([&cf, gen, sst, comps = comps, &work] (bool use_view_update_path) {
-                    if (use_view_update_path) {
-                        return make_ready_future<sstables::entry_descriptor>(std::move(comps));
-                    }
+                    return db::view::check_needs_view_update_path(sys_dist_ks.local(), cf, streaming::stream_reason::repair).then([&cf, gen, sst, comps = comps, &work] (bool use_view_update_path) {
+                        if (use_view_update_path) {
+                            return make_ready_future<sstables::entry_descriptor>(std::move(comps));
+                        }
 
-                    // Read toc content as it will be needed for moving and deleting a sstable.
-                    return sst->read_toc().then([sst, s = cf.schema()] {
-                        if (s->is_counter() && !sst->has_scylla_component()) {
-                            return make_exception_future<>(std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead."));
-                        }
-                        if (s->is_view()) {
-                            return make_exception_future<>(std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead."));
-                        }
-                        return sst->mutate_sstable_level(0);
-                    }).then([&cf, sst, gen] {
-                        return sst->create_links(cf._config.datadir, gen);
-                    }).then([sst] {
-                        return sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir());
-                    }).then([sst, &cf, gen, comps = comps, &work] () mutable {
-                        comps.generation = gen;
-                        comps.sstdir = cf._config.datadir;
-                        return make_ready_future<sstables::entry_descriptor>(std::move(comps));
+                        // Read toc content as it will be needed for moving and deleting a sstable.
+                        return sst->read_toc().then([sst, s = cf.schema()] {
+                            if (s->is_counter() && !sst->has_scylla_component()) {
+                                return make_exception_future<>(std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead."));
+                            }
+                            if (s->is_view()) {
+                                return make_exception_future<>(std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead."));
+                            }
+                            return sst->mutate_sstable_level(0);
+                        }).then([&cf, sst, gen] {
+                            return sst->create_links(cf._config.datadir, gen);
+                        }).then([sst] {
+                            return sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir());
+                        }).then([sst, &cf, gen, comps = comps, &work] () mutable {
+                            comps.generation = gen;
+                            comps.sstdir = cf._config.datadir;
+                            return make_ready_future<sstables::entry_descriptor>(std::move(comps));
+                        });
                     });
-                  });
                 }).then([&work] (sstables::entry_descriptor comps) mutable {
                     work.flushed.push_back(std::move(comps));
                     return make_ready_future<>();
