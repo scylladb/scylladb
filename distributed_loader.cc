@@ -421,7 +421,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
 future<> distributed_loader::load_new_sstables(distributed<database>& db, sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables) {
     return parallel_for_each(new_tables, [&db] (auto comps) {
         auto cf_sstable_open = [comps] (column_family& cf, sstables::foreign_sstable_open_info info) {
-            auto f = cf.open_sstable(std::move(info), cf._config.datadir, comps.generation, comps.version, comps.format);
+            auto f = cf.open_sstable(std::move(info), comps.sstdir, comps.generation, comps.version, comps.format);
             return f.then([&cf] (sstables::shared_sstable sst) mutable {
                 if (sst) {
                     cf._sstables_opened_but_not_loaded.push_back(sst);
