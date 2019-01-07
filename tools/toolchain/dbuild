@@ -1,5 +1,7 @@
 #!/bin/bash
 
+here="$(realpath $(dirname "$0"))"
+toplevel="$(realpath "$here/../..")"
 group_args=()
 docker_args=()
 
@@ -26,10 +28,11 @@ docker run \
        "${group_args[@]}" \
        --cap-add SYS_PTRACE \
        -v "$PWD:$PWD" \
+       -v "$toplevel:$toplevel" \
        -v /tmp:/tmp \
        -v /etc/passwd:/etc/passwd:ro \
        -v /etc/group:/etc/group:ro \
        -w "$PWD" \
        "${docker_args[@]}" \
-       "$(<tools/toolchain/image)" \
+       "$(<"$here/image")" \
        "$@"
