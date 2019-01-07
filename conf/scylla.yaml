@@ -242,6 +242,9 @@ batch_size_fail_threshold_in_kb: 50
 
 # The directory where hints files are stored if hinted handoff is enabled.
 # hints_directory: /var/lib/scylla/hints
+ 
+# The directory where hints files are stored for materialized-view updates
+# view_hints_directory: /var/lib/scylla/view_hints
 
 # See https://docs.scylladb.com/architecture/anti-entropy/hinted-handoff
 # May either be "true" or "false" to enable globally, or contain a list

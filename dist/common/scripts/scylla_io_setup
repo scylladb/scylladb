@@ -81,7 +81,7 @@ if __name__ == "__main__":
             data_dirs = cfg["data_file_directories"]
 
             default_path = '/var/lib/scylla/'
-            for t in [ "commitlog", "hints", "saved_caches" ]:
+            for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
                 key = "%s_directory" % t
                 if key in cfg:
                     data_dirs += [ cfg[key] ]

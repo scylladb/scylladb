@@ -404,6 +404,8 @@ def get_scylla_dirs():
         raise Exception("{}: at least one directory has to be set in 'data_file_directory'".format(scylla_yaml_name))
     if 'commitlog_directory' not in y or not y['commitlog_directory']:
         raise Exception("{}: 'commitlog_directory' has to be set".format(scylla_yaml_name))
+    if 'view_hints_directory' not in y or not y['view_hints_directory']:
+        raise Exception("{}: 'view_hints_directory' has to be set".format(scylla_yaml_name))
 
     dirs = []
     dirs.extend(y['data_file_directories'])

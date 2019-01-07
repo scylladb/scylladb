@@ -155,6 +155,9 @@ public:
     val(hints_directory, sstring, "/var/lib/scylla/hints", Used,   \
             "The directory where hints files are stored if hinted handoff is enabled."   \
     )                                           \
+    val(view_hints_directory, sstring, "/var/lib/scylla/view_hints", Used,   \
+            "The directory where materialized-view updates are stored while a view replica is unreachable."   \
+    )                                           \
     val(saved_caches_directory, sstring, "/var/lib/scylla/saved_caches", Unused, \
             "The directory location where table key and row caches are stored."  \
     )                                                   \
