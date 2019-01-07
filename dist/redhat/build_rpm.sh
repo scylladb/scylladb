@@ -91,12 +91,6 @@ fi
 if [ ! -f /usr/bin/git ]; then
     pkg_install git
 fi
-if [ ! -f /usr/bin/wget ]; then
-    pkg_install wget
-fi
-if [ ! -f /usr/bin/yum-builddep ]; then
-    pkg_install yum-utils
-fi
 if [ ! -f /usr/bin/pystache ]; then
     if is_redhat_variant; then
         sudo yum install -y python2-pystache || sudo yum install -y pystache
