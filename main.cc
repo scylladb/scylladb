@@ -550,7 +550,7 @@ int main(int ac, char** av) {
                     directories.insert(std::move(shard_dir));
                 }
             }
-            boost::filesystem::path view_pending_updates_base_dir = boost::filesystem::path(db.local().get_config().data_file_directories()[0]) / "view_pending_updates";
+            boost::filesystem::path view_pending_updates_base_dir = boost::filesystem::path(db.local().get_config().view_hints_directory());
             sstring view_pending_updates_base_dir_str = view_pending_updates_base_dir.native();
             dirs.touch_and_lock(view_pending_updates_base_dir_str).get();
             directories.insert(view_pending_updates_base_dir_str);
@@ -732,7 +732,7 @@ int main(int ac, char** av) {
             if (hinted_handoff_enabled) {
                 db::hints::manager::rebalance(cfg->hints_directory()).get();
             }
-            db::hints::manager::rebalance(cfg->data_file_directories()[0] + "/view_pending_updates").get();
+            db::hints::manager::rebalance(cfg->view_hints_directory()).get();
 
             proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
                 local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), service::get_local_storage_service().shared_from_this());

@@ -319,6 +319,7 @@ public:
             }
             cfg->commitlog_directory() = data_dir.path + "/commitlog.dir";
             cfg->hints_directory() = data_dir.path + "/hints.dir";
+            cfg->view_hints_directory() = data_dir.path + "/view_hints.dir";
             cfg->num_tokens() = 256;
             cfg->ring_delay_ms() = 500;
             cfg->experimental() = true;
@@ -326,10 +327,10 @@ public:
             boost::filesystem::create_directories((data_dir.path + "/system").c_str());
             boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
             boost::filesystem::create_directories(cfg->hints_directory().c_str());
-            boost::filesystem::create_directories((data_dir.path + "/view_pending_updates").c_str());
+            boost::filesystem::create_directories(cfg->view_hints_directory().c_str());
             for (unsigned i = 0; i < smp::count; ++i) {
                 boost::filesystem::create_directories((cfg->hints_directory() + "/" + std::to_string(i)).c_str());
-                boost::filesystem::create_directories((data_dir.path + "/view_pending_updates/" + std::to_string(i)).c_str());
+                boost::filesystem::create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
 
             const gms::inet_address listen("127.0.0.1");

@@ -66,7 +66,7 @@ You can use Docker volumes to improve performance of Scylla.
 Create a Scylla data directory ``/var/lib/scylla`` on the host, which is used by Scylla container to store all data:
 
 ```console
-$ sudo mkdir -p /var/lib/scylla/data /var/lib/scylla/commitlog /var/lib/scylla/hints
+$ sudo mkdir -p /var/lib/scylla/data /var/lib/scylla/commitlog /var/lib/scylla/hints /var/lib/scylla/view_hints
 ```
 
 Launch Scylla using Docker's ``--volume`` command line option to mount the created host directory as a data volume in the container and disable Scylla's developer mode to run I/O tuning before starting up the Scylla node.
