@@ -403,7 +403,7 @@ tracker& shard_tracker() {
     return tracker_instance;
 }
 
-struct segment {
+struct alignas(segment_size) segment {
     static constexpr int size_shift = segment_size_shift;
     using size_type = std::conditional_t<(size_shift < 16), uint16_t, uint32_t>;
     static constexpr size_t size = segment_size;
@@ -801,7 +801,7 @@ class segment_pool {
         explicit segment_deleter(segment_pool* pool) : _pool(pool) {}
         void operator()(segment* seg) const noexcept {
             if (seg) {
-                ::free(seg);
+                delete seg;
                 _pool->_std_memory_available += segment::size;
             }
         }
@@ -820,7 +820,7 @@ public:
             if (_std_memory_available < segment::size) {
                 throw std::bad_alloc();
             }
-            std::unique_ptr<segment, segment_deleter> seg{new (with_alignment(segment::size)) segment, segment_deleter(this)};
+            std::unique_ptr<segment, segment_deleter> seg{new segment, segment_deleter(this)};
             _std_memory_available -= segment::size;
             _free_segments.push(std::move(seg));
         }
