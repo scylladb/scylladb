@@ -756,6 +756,8 @@ public:
     add_options(boost::program_options::options_description_easy_init&);
 
     const db::extensions& extensions() const;
+
+    static const sstring default_tls_priority;
 private:
     template<typename T>
     struct log_legacy_value : public named_value<T, value_status::Used> {

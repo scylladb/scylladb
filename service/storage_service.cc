@@ -2106,6 +2106,7 @@ future<> storage_service::start_native_transport() {
                     auto cred = std::make_shared<seastar::tls::credentials_builder>();
 
                     cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
+                    cred->set_priority_string(db::config::default_tls_priority);
 
                     if (ceo.count("priority_string")) {
                         cred->set_priority_string(ceo.at("priority_string"));

@@ -102,6 +102,8 @@ db::config::config()
 db::config::~config()
 {}
 
+const sstring db::config::default_tls_priority("SECURE128:-VERS-TLS1.0");
+
 namespace utils {
 
 template<>
