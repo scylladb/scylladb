@@ -34,6 +34,8 @@
 #include <boost/iterator/iterator_facade.hpp>
 #include <boost/container/static_vector.hpp>
 
+logging::logger slogger("mc_writer");
+
 namespace sstables {
 namespace mc {
 
@@ -750,7 +752,11 @@ void writer::maybe_set_pi_first_clustering(const writer::clustering_info& info) 
 static deletion_time to_deletion_time(tombstone t) {
     deletion_time dt;
     if (t) {
-        dt.local_deletion_time = gc_clock::as_int32(t.deletion_time);
+        int32_t ldt = adjusted_local_deletion_time(t.deletion_time);
+        if (ldt != t.deletion_time.time_since_epoch().count()) {
+            slogger.warn("Capping tombstone local_deletion_time {} to max {}", t.deletion_time.time_since_epoch().count(), ldt);
+        }
+        dt.local_deletion_time = ldt;
         dt.marked_for_delete_at = t.timestamp;
     } else {
         // Default values for live, non-deleted rows.
