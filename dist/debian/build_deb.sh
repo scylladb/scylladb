@@ -82,7 +82,7 @@ fi
 if [ ! -f /usr/bin/python ]; then
     pkg_install python
 fi
-if [ ! -f /usr/sbin/debuild ]; then
+if [ ! -f /usr/bin/debuild ]; then
     pkg_install devscripts
 fi
 if [ ! -f /usr/bin/dh_testdir ]; then
