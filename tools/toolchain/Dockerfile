@@ -6,7 +6,7 @@ RUN dnf -y install 'dnf-command(copr)' \
     && dnf -y copr enable scylladb/toolchain \
     && dnf -y install ccache \
     && /bin/bash -x ./install-dependencies.sh && dnf -y update \
-    && sed -i 's/^\(%wheel.*\)ALL/\1NOPASSWD: ALL/' /etc/sudoers \
+    && echo 'ALL ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers \
     && cp system-auth /etc/pam.d \
     && echo 'Defaults !requiretty' >> /etc/sudoers
 
