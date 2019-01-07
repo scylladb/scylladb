@@ -105,6 +105,8 @@ void init_ms_fd_gossiper(sharded<gms::feature_service>& features
             creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
         }
 
+        creds->set_priority_string(db::config::default_tls_priority);
+
         if (!ms_tls_prio.empty()) {
             creds->set_priority_string(ms_tls_prio);
         }
