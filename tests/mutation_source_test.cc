@@ -32,6 +32,7 @@
 #include "mutation_rebuilder.hh"
 #include "random-utils.hh"
 #include "cql3/cql3_type.hh"
+#include "make_random_string.hh"
 #include <boost/algorithm/string/join.hpp>
 
 // partitions must be sorted by decorated key
@@ -586,7 +587,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
 
     for (auto&& key : keys) {
         mutation m(s, key);
-        sstring val(sstring::initialized_later(), 1024);
+        sstring val = make_random_string(1024);
         for (auto i : boost::irange(0u, ckeys_per_part)) {
             table.add_row(m, table.make_ckey(next_ckey + i), val);
         }
