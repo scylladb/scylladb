@@ -39,7 +39,7 @@
 
 #include "cql3/statements/create_type_statement.hh"
 #include "prepared_statement.hh"
-
+#include "database.hh"
 #include "service/migration_manager.hh"
 
 namespace cql3 {

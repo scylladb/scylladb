@@ -43,6 +43,7 @@
 #include "boost/range/adaptor/map.hpp"
 
 #include "service/migration_manager.hh"
+#include "database.hh"
 
 namespace cql3 {
 

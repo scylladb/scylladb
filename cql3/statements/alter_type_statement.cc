@@ -42,6 +42,7 @@
 #include "prepared_statement.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
+#include "database.hh"
 #include "boost/range/adaptor/map.hpp"
 #include "stdx.hh"
 

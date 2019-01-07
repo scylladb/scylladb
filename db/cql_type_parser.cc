@@ -86,6 +86,10 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
     return cql->get_type();
 }
 
+data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& type) {
+    return parse(keyspace, type, {});
+}
+
 class db::cql_type_parser::raw_builder::impl {
 public:
     impl(sstring ks_name)

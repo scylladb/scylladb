@@ -34,6 +34,10 @@
 
 namespace sstables {
 
+class index_sampling_state;
+class compression;
+class metadata_collector;
+
 class file_writer {
     output_stream<char> _out;
     writer_offset_tracker _offset;

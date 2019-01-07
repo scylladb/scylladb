@@ -84,6 +84,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
 #include "multishard_mutation_query.hh"
+#include "database.hh"
 
 namespace service {
 

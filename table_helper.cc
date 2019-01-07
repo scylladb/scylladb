@@ -22,6 +22,7 @@
 
 #include "table_helper.hh"
 #include "cql3/statements/create_table_statement.hh"
+#include "database.hh"
 
 future<> table_helper::setup_table() const {
     auto& qp = cql3::get_local_query_processor();
@@ -80,4 +81,46 @@ future<> table_helper::cache_table_info(service::query_state& qs) {
             throw bad_column_family(_keyspace, _name);
         }
     });
+}
+
+future<> table_helper::insert(service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
+    return cache_table_info(qs).then([this, &qs, opt_maker = std::move(opt_maker)] () mutable {
+        return do_with(opt_maker(), [this, &qs] (auto& opts) {
+            return _insert_stmt->execute(service::get_storage_proxy().local(), qs, opts);
+        });
+    }).discard_result();
+}
+
+future<> table_helper::setup_keyspace(const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+    if (engine().cpu_id() == 0) {
+        size_t n = tables.size();
+        for (size_t i = 0; i < n; ++i) {
+            if (tables[i]->_keyspace != keyspace_name) {
+                throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
+            }
+        }
+        return seastar::async([&keyspace_name, replication_factor, &qs, tables] {
+            auto& db = cql3::get_local_query_processor().db();
+
+            // Create a keyspace
+            if (!db.has_keyspace(keyspace_name)) {
+                std::map<sstring, sstring> opts;
+                opts["replication_factor"] = replication_factor;
+                auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
+                // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments. See issue #2129.
+                service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp, false).get();
+            }
+
+            qs.get_client_state().set_keyspace(cql3::get_local_query_processor().db(), keyspace_name);
+
+
+            // Create tables
+            size_t n = tables.size();
+            for (size_t i = 0; i < n; ++i) {
+                tables[i]->setup_table().get();
+            }
+        });
+    } else {
+        return make_ready_future<>();
+    }
 }

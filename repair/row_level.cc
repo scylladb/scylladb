@@ -33,6 +33,8 @@
 #include "service/storage_service.hh"
 #include "service/priority_manager.hh"
 #include "db/view/view_update_checks.hh"
+#include "db/view/view_update_from_staging_generator.hh"
+#include "database.hh"
 #include <seastar/util/bool_class.hh>
 #include <list>
 #include <vector>

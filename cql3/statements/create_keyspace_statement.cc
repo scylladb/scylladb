@@ -41,7 +41,7 @@
 
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "prepared_statement.hh"
-
+#include "database.hh"
 #include "service/migration_manager.hh"
 
 #include <regex>

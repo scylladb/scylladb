@@ -53,6 +53,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "service/storage_service.hh"
+#include "database.hh"
 #include <seastar/core/execution_stage.hh>
 
 namespace cql3 {

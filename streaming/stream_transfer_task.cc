@@ -54,6 +54,7 @@
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_set.hpp>
 #include "sstables/sstables.hh"
+#include "database.hh"
 
 namespace streaming {
 

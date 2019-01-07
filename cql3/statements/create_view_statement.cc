@@ -63,6 +63,7 @@
 #include "validation.hh"
 #include "db/extensions.hh"
 #include "service/storage_service.hh"
+#include "database.hh"
 
 namespace cql3 {
 

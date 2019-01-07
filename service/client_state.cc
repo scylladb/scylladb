@@ -50,6 +50,7 @@
 #include "db/schema_tables.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "storage_service.hh"
+#include "database.hh"
 
 void service::client_state::set_login(::shared_ptr<auth::authenticated_user> user) {
     if (user == nullptr) {

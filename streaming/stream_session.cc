@@ -62,6 +62,7 @@
 #include "sstables/sstables.hh"
 #include "db/system_keyspace.hh"
 #include "db/view/view_update_checks.hh"
+#include "db/view/view_update_from_staging_generator.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/map.hpp>
 

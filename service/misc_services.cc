@@ -44,6 +44,7 @@
 #include "gms/application_state.hh"
 #include "service/storage_service.hh"
 #include "service/view_update_backlog_broker.hh"
+#include "database.hh"
 
 #include <cstdlib>
 

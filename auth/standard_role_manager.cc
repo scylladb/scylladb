@@ -39,6 +39,7 @@
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "utils/class_registrator.hh"
+#include "database.hh"
 
 namespace auth {
 

@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/ks_prop_defs.hh"
+#include "database.hh"
 
 namespace cql3 {
 

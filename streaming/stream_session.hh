@@ -54,11 +54,16 @@
 #include "streaming/session_info.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
-#include "db/view/view_update_from_staging_generator.hh"
 #include "db/system_distributed_keyspace.hh"
 #include <map>
 #include <vector>
 #include <memory>
+
+namespace db::view {
+
+class view_update_from_staging_generator;
+
+}
 
 namespace streaming {
 

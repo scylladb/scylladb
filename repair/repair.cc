@@ -32,6 +32,7 @@
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
+#include "database.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>

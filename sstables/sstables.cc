@@ -73,6 +73,7 @@
 #include "db/config.hh"
 #include "sstables/random_access_reader.hh"
 #include "utils/UUID_gen.hh"
+#include "database.hh"
 #include <boost/algorithm/string/predicate.hpp>
 
 thread_local disk_error_signal_type sstable_read_error;

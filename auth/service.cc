@@ -41,6 +41,7 @@
 #include "log.hh"
 #include "service/migration_listener.hh"
 #include "utils/class_registrator.hh"
+#include "database.hh"
 
 namespace auth {
 
