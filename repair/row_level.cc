@@ -122,17 +122,23 @@ public:
         : _schema(s), _hasher(h) { }
 
     void hash(const mutation_fragment& mf) {
-        if (mf.is_static_row()) {
-            consume(mf.as_static_row());
-        } else if (mf.is_clustering_row()) {
-            consume(mf.as_clustering_row());
-        } else if (mf.is_range_tombstone()) {
-            consume(mf.as_range_tombstone());
-        } else if (mf.is_partition_start()) {
-            consume(mf.as_partition_start());
-        } else {
-            throw std::runtime_error("Wrong type to consume");
-        }
+        mf.visit(seastar::make_visitor(
+            [&] (const clustering_row& cr) {
+                consume(cr);
+            },
+            [&] (const static_row& sr) {
+                consume(sr);
+            },
+            [&] (const range_tombstone& rt) {
+                consume(rt);
+            },
+            [&] (const partition_start& ps) {
+                consume(ps);
+            },
+            [&] (const partition_end& pe) {
+                throw std::runtime_error("partition_end is not expected");
+            }
+        ));
     }
 
 private:
