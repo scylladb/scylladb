@@ -39,7 +39,7 @@ enum class bound_kind_m : uint8_t {
     excl_start = 7,
 };
 
-inline constexpr bool is_bound_kind(bound_kind_m kind) {
+inline bool is_bound_kind(bound_kind_m kind) {
     switch (kind) {
     case bound_kind_m::incl_start:
     case bound_kind_m::incl_end:
@@ -51,7 +51,7 @@ inline constexpr bool is_bound_kind(bound_kind_m kind) {
     }
 }
 
-inline constexpr bool is_boundary(bound_kind_m kind) {
+inline bool is_boundary(bound_kind_m kind) {
     switch (kind) {
     case bound_kind_m::excl_end_incl_start:
     case bound_kind_m::incl_end_excl_start:
@@ -61,7 +61,7 @@ inline constexpr bool is_boundary(bound_kind_m kind) {
     }
 }
 
-inline constexpr bool is_start(bound_kind_m kind) {
+inline bool is_start(bound_kind_m kind) {
     switch (kind) {
     case bound_kind_m::incl_start:
     case bound_kind_m::excl_end_incl_start:
