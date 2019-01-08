@@ -288,10 +288,10 @@ std::unordered_set<token> get_replace_tokens() {
     return ret;
 }
 
-std::experimental::optional<UUID> get_replace_node() {
+std::optional<UUID> get_replace_node() {
     auto replace_node = get_local_storage_service().db().local().get_config().replace_node();
     if (replace_node.empty()) {
-        return std::experimental::nullopt;
+        return std::nullopt;
     }
     try {
         return utils::UUID(replace_node);
@@ -1306,7 +1306,7 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
     _lifecycle_subscribers.erase(std::remove(_lifecycle_subscribers.begin(), _lifecycle_subscribers.end(), subscriber), _lifecycle_subscribers.end());
 }
 
-static stdx::optional<future<>> drain_in_progress;
+static std::optional<future<>> drain_in_progress;
 
 future<> storage_service::stop_transport() {
     return run_with_no_api_lock([] (storage_service& ss) {
@@ -1806,9 +1806,9 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         return std::move(f0).then_wrapped([host] (auto f) {
             if (f.failed()) {
                 f.ignore_ready_future();
-                return std::pair<gms::inet_address, stdx::optional<utils::UUID>>(host, stdx::nullopt);
+                return std::pair<gms::inet_address, std::optional<utils::UUID>>(host, std::nullopt);
             }
-            return std::pair<gms::inet_address, stdx::optional<utils::UUID>>(host, f.get0());
+            return std::pair<gms::inet_address, std::optional<utils::UUID>>(host, f.get0());
         });
     }, std::move(results), [] (auto results, auto host_and_version) {
         auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;
@@ -2383,7 +2383,7 @@ future<> storage_service::removenode(sstring host_id_string) {
             gossiper.advertise_token_removed(endpoint, host_id).get();
 
             ss._replicating_nodes.clear();
-            ss._removing_node = std::experimental::nullopt;
+            ss._removing_node = std::nullopt;
         });
     });
 }
@@ -3166,7 +3166,7 @@ future<> storage_service::force_remove_completion() {
                         ss.excise(tokens_set, endpoint);
                     }
                     ss._replicating_nodes.clear();
-                    ss._removing_node = std::experimental::nullopt;
+                    ss._removing_node = std::nullopt;
                 } else {
                     slogger.warn("No tokens to force removal on, call 'removenode' first");
                 }

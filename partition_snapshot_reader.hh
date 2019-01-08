@@ -78,7 +78,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             });
         }
         void refresh_state(const query::clustering_range& ck_range,
-                           const stdx::optional<position_in_partition>& last_row,
+                           const std::optional<position_in_partition>& last_row,
                            range_tombstone_stream& range_tombstones) {
             _clustering_rows.clear();
 
@@ -164,7 +164,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         // new range range_tombstones will be populated with all relevant
         // tombstones.
         mutation_fragment_opt next_row(const query::clustering_range& ck_range,
-                                       const stdx::optional<position_in_partition>& last_row,
+                                       const std::optional<position_in_partition>& last_row,
                                        range_tombstone_stream& range_tombstones) {
             return in_alloc_section([&] () -> mutation_fragment_opt {
                 auto mark = _snapshot->get_change_mark();
@@ -203,7 +203,7 @@ private:
     query::clustering_row_ranges::const_iterator _current_ck_range;
     query::clustering_row_ranges::const_iterator _ck_range_end;
 
-    stdx::optional<position_in_partition> _last_entry;
+    std::optional<position_in_partition> _last_entry;
     mutation_fragment_opt _next_row;
     range_tombstone_stream _range_tombstones;
 
@@ -258,7 +258,7 @@ private:
             if (mfopt) {
                 emplace_mutation_fragment(std::move(*mfopt));
             } else {
-                _last_entry = stdx::nullopt;
+                _last_entry = std::nullopt;
                 _current_ck_range = std::next(_current_ck_range);
                 on_new_range();
             }

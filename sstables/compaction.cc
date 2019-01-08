@@ -74,7 +74,7 @@ logging::logger clogger("compaction");
 static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
     auto timestamp = api::max_timestamp;
-    stdx::optional<utils::hashed_key> hk;
+    std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, cf.compacted_undeleted_sstables())) {
         if (compacting_set.count(sst)) {
             continue;
@@ -346,9 +346,9 @@ protected:
         }
     }
 
-    void finish_new_sstable(stdx::optional<sstable_writer>& writer, shared_sstable& sst) {
+    void finish_new_sstable(std::optional<sstable_writer>& writer, shared_sstable& sst) {
         writer->consume_end_of_stream();
-        writer = stdx::nullopt;
+        writer = std::nullopt;
         sst->open_data().get0();
         _info->end_size += sst->bytes_on_disk();
     }
@@ -518,8 +518,8 @@ class regular_compaction : public compaction {
     std::optional<sstable_set::incremental_selector> _selector;
     // sstable being currently written.
     shared_sstable _sst;
-    stdx::optional<sstable_writer> _writer;
-    stdx::optional<compaction_weight_registration> _weight_registration;
+    std::optional<sstable_writer> _writer;
+    std::optional<compaction_weight_registration> _weight_registration;
     mutable compaction_read_monitor_generator _monitor_generator;
     std::deque<compaction_write_monitor> _active_write_monitors = {};
     utils::UUID _run_identifier = utils::make_random_uuid();
@@ -733,7 +733,7 @@ public:
 
 
 class resharding_compaction final : public compaction {
-    std::vector<std::pair<shared_sstable, stdx::optional<sstable_writer>>> _output_sstables;
+    std::vector<std::pair<shared_sstable, std::optional<sstable_writer>>> _output_sstables;
     shard_id _shard; // shard of current sstable writer
     std::function<shared_sstable(shard_id)> _sstable_creator;
     compaction_backlog_tracker _resharding_backlog_tracker;

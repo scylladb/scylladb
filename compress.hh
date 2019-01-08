@@ -29,7 +29,6 @@
 #include <seastar/core/sstring.hh>
 
 #include "exceptions/exceptions.hh"
-#include "stdx.hh"
 
 
 class compressor {
@@ -73,7 +72,7 @@ public:
     }
 
     // to cheaply bridge sstable compression options / maps
-    using opt_string = stdx::optional<sstring>;
+    using opt_string = std::optional<sstring>;
     using opt_getter = std::function<opt_string(const sstring&)>;
 
     static shared_ptr<compressor> create(const sstring& name, const opt_getter&);
@@ -103,8 +102,8 @@ public:
     static const sstring CRC_CHECK_CHANCE;
 private:
     compressor_ptr _compressor;
-    std::experimental::optional<int> _chunk_length;
-    std::experimental::optional<double> _crc_check_chance;
+    std::optional<int> _chunk_length;
+    std::optional<double> _crc_check_chance;
 public:
     compression_parameters();
     compression_parameters(compressor_ptr);

@@ -31,7 +31,6 @@
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/lambda/bind.hpp>
 #include "seastarx.hh"
-#include "stdx.hh"
 
 namespace bi = boost::intrusive;
 
@@ -71,7 +70,7 @@ private:
     private:
         loading_shared_values& _parent;
         key_type _key;
-        stdx::optional<value_type> _val;
+        std::optional<value_type> _val;
         shared_promise<> _loaded;
 
     public:

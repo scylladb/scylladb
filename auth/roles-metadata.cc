@@ -36,7 +36,7 @@ namespace meta {
 
 namespace roles_table {
 
-stdx::string_view creation_query() {
+std::string_view creation_query() {
     static const sstring instance = sprint(
             "CREATE TABLE %s ("
             "  %s text PRIMARY KEY,"
@@ -51,7 +51,7 @@ stdx::string_view creation_query() {
     return instance;
 }
 
-stdx::string_view qualified_name() noexcept {
+std::string_view qualified_name() noexcept {
     static const sstring instance = AUTH_KS + "." + sstring(name);
     return instance;
 }

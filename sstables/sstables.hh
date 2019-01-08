@@ -111,11 +111,11 @@ class index_reader;
 bool supports_correct_non_compound_range_tombstones();
 
 struct sstable_writer_config {
-    std::experimental::optional<size_t> promoted_index_block_size;
+    std::optional<size_t> promoted_index_block_size;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
     bool leave_unsealed = false;
-    stdx::optional<db::replay_position> replay_position;
+    std::optional<db::replay_position> replay_position;
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
     db::large_partition_handler* large_partition_handler;
@@ -433,7 +433,7 @@ public:
         utils::filter_ptr filter;
         sstables::summary summary;
         sstables::statistics statistics;
-        stdx::optional<sstables::scylla_metadata> scylla_metadata;
+        std::optional<sstables::scylla_metadata> scylla_metadata;
     };
 private:
     size_t sstable_buffer_size = default_buffer_size;
@@ -460,8 +460,8 @@ private:
     db_clock::time_point _data_file_write_time;
     std::vector<nonwrapping_range<bytes_view>> _clustering_components_ranges;
     std::vector<unsigned> _shards;
-    stdx::optional<dht::decorated_key> _first;
-    stdx::optional<dht::decorated_key> _last;
+    std::optional<dht::decorated_key> _first;
+    std::optional<dht::decorated_key> _last;
     utils::UUID _run_identifier;
     utils::observable<sstable&> _on_closed;
 
@@ -484,7 +484,7 @@ private:
         uint64_t block_next_start_offset;
         bytes block_first_colname;
         bytes block_last_colname;
-        std::experimental::optional<range_tombstone_accumulator> tombstone_accumulator;
+        std::optional<range_tombstone_accumulator> tombstone_accumulator;
         const schema* schemap;
         size_t desired_block_size;
     } _pi_write;
@@ -627,7 +627,7 @@ private:
             const std::vector<bytes_view>& column_names,
             composite::eoc marker = composite::eoc::none);
 
-    stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
+    std::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
 
     std::vector<unsigned> compute_shards_for_this_sstable() const;
     template <typename Components>

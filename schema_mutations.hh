@@ -48,10 +48,10 @@ public:
     schema_mutations(canonical_mutation columnfamilies,
                      canonical_mutation columns,
                      bool is_view,
-                     stdx::optional<canonical_mutation> indices,
-                     stdx::optional<canonical_mutation> dropped_columns,
-                     stdx::optional<canonical_mutation> scylla_tables,
-                     stdx::optional<canonical_mutation> view_virtual_columns);
+                     std::optional<canonical_mutation> indices,
+                     std::optional<canonical_mutation> dropped_columns,
+                     std::optional<canonical_mutation> scylla_tables,
+                     std::optional<canonical_mutation> view_virtual_columns);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;
@@ -95,26 +95,26 @@ public:
         return canonical_mutation(_columns);
     }
 
-    stdx::optional<canonical_mutation> view_virtual_columns_canonical_mutation() const {
+    std::optional<canonical_mutation> view_virtual_columns_canonical_mutation() const {
         if (_view_virtual_columns) {
             return canonical_mutation(*_view_virtual_columns);
         }
         return {};
     }
 
-    stdx::optional<canonical_mutation> indices_canonical_mutation() const {
+    std::optional<canonical_mutation> indices_canonical_mutation() const {
         if (_indices) {
             return canonical_mutation(*_indices);
         }
         return {};
     }
-    stdx::optional<canonical_mutation> dropped_columns_canonical_mutation() const {
+    std::optional<canonical_mutation> dropped_columns_canonical_mutation() const {
         if (_dropped_columns) {
             return canonical_mutation(*_dropped_columns);
         }
         return {};
     }
-    stdx::optional<canonical_mutation> scylla_tables_canonical_mutation() const {
+    std::optional<canonical_mutation> scylla_tables_canonical_mutation() const {
         if (_scylla_tables) {
             return canonical_mutation(*_scylla_tables);
         }

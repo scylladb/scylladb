@@ -24,7 +24,7 @@
 #include "bytes_ostream.hh"
 #include "digest_algorithm.hh"
 #include "query-request.hh"
-#include <experimental/optional>
+#include <optional>
 #include <seastar/util/bool_class.hh>
 #include "seastarx.hh"
 
@@ -309,19 +309,19 @@ using short_read = bool_class<short_read_tag>;
 
 class result {
     bytes_ostream _w;
-    stdx::optional<result_digest> _digest;
-    stdx::optional<uint32_t> _row_count;
+    std::optional<result_digest> _digest;
+    std::optional<uint32_t> _row_count;
     api::timestamp_type _last_modified = api::missing_timestamp;
     short_read _short_read;
     query::result_memory_tracker _memory_tracker;
-    stdx::optional<uint32_t> _partition_count;
+    std::optional<uint32_t> _partition_count;
 public:
     class builder;
     class partition_writer;
     friend class result_merger;
 
     result();
-    result(bytes_ostream&& w, short_read sr, stdx::optional<uint32_t> c, stdx::optional<uint32_t> pc,
+    result(bytes_ostream&& w, short_read sr, std::optional<uint32_t> c, std::optional<uint32_t> pc,
            result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _row_count(c)
@@ -331,8 +331,8 @@ public:
     {
         w.reduce_chunk_count();
     }
-    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified,
-           short_read sr, stdx::optional<uint32_t> c, stdx::optional<uint32_t> pc, result_memory_tracker memory_tracker = { })
+    result(bytes_ostream&& w, std::optional<result_digest> d, api::timestamp_type last_modified,
+           short_read sr, std::optional<uint32_t> c, std::optional<uint32_t> pc, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _digest(d)
         , _row_count(c)
@@ -352,11 +352,11 @@ public:
         return _w;
     }
 
-    const stdx::optional<result_digest>& digest() const {
+    const std::optional<result_digest>& digest() const {
         return _digest;
     }
 
-    const stdx::optional<uint32_t>& row_count() const {
+    const std::optional<uint32_t>& row_count() const {
         return _row_count;
     }
 
@@ -368,7 +368,7 @@ public:
         return _short_read;
     }
 
-    const stdx::optional<uint32_t>& partition_count() const {
+    const std::optional<uint32_t>& partition_count() const {
         return _partition_count;
     }
 

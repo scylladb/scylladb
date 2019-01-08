@@ -46,7 +46,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/net/api.hh>
 
-#include <experimental/optional>
+#include <optional>
 #include <stdexcept>
 
 namespace cql_transport {
@@ -100,9 +100,9 @@ public:
     const change_type change;
     const target_type target;
     const sstring keyspace;
-    const std::experimental::optional<sstring> table_or_type_or_function;
+    const std::optional<sstring> table_or_type_or_function;
 
-    schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::experimental::optional<sstring>& table_or_type_or_function_);
+    schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::optional<sstring>& table_or_type_or_function_);
 
     schema_change(const change_type change_, const sstring keyspace_);
 };

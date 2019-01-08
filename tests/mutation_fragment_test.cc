@@ -326,7 +326,7 @@ SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view_in_a
             .set_is_dense(true)
             .build();
 
-        auto make_ck = [&] (int ck1, stdx::optional<int> ck2 = stdx::nullopt) {
+        auto make_ck = [&] (int ck1, std::optional<int> ck2 = std::nullopt) {
             std::vector<data_value> cells;
             cells.push_back(data_value(ck1));
             if (ck2) {

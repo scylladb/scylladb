@@ -26,7 +26,6 @@
 
 #include "mutation_reader.hh"
 #include <seastar/core/future-util.hh>
-#include "stdx.hh"
 #include "flat_mutation_reader.hh"
 
 

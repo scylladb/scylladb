@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include <experimental/string_view>
+#include <string_view>
 #include <unordered_map>
 
 #include <seastar/core/distributed.hh>
@@ -132,14 +132,14 @@ public:
     static const sstring CQL_VERSION;
 
     static prepared_cache_key_type compute_id(
-            const std::experimental::string_view& query_string,
+            const std::string_view& query_string,
             const sstring& keyspace);
 
     static prepared_cache_key_type compute_thrift_id(
-            const std::experimental::string_view& query_string,
+            const std::string_view& query_string,
             const sstring& keyspace);
 
-    static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::experimental::string_view& query);
+    static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
     query_processor(service::storage_proxy& proxy, database& db, memory_config mcfg);
 
@@ -196,7 +196,7 @@ public:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process(
-            const std::experimental::string_view& query_string,
+            const std::string_view& query_string,
             service::query_state& query_state,
             query_options& options);
 
@@ -280,7 +280,7 @@ public:
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
-            const std::experimental::string_view& query,
+            const std::string_view& query,
             const service::client_state& client_state);
 
     friend class migration_subscriber;
@@ -372,7 +372,7 @@ private:
     template <typename ResultMsgType, typename KeyGenerator, typename IdGetter>
     ::shared_ptr<cql_transport::messages::result_message::prepared>
     get_stored_prepared_statement_one(
-            const std::experimental::string_view& query_string,
+            const std::string_view& query_string,
             const sstring& keyspace,
             KeyGenerator&& key_gen,
             IdGetter&& id_getter) {
@@ -387,7 +387,7 @@ private:
 
     ::shared_ptr<cql_transport::messages::result_message::prepared>
     get_stored_prepared_statement(
-            const std::experimental::string_view& query_string,
+            const std::string_view& query_string,
             const sstring& keyspace,
             bool for_thrift);
 };
@@ -420,11 +420,11 @@ public:
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
 
 private:
-    void remove_invalid_prepared_statements(sstring ks_name, std::experimental::optional<sstring> cf_name);
+    void remove_invalid_prepared_statements(sstring ks_name, std::optional<sstring> cf_name);
 
     bool should_invalidate(
             sstring ks_name,
-            std::experimental::optional<sstring> cf_name,
+            std::optional<sstring> cf_name,
             ::shared_ptr<cql_statement> statement);
 };
 

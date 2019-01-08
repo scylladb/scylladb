@@ -24,10 +24,11 @@
 #include <vector>
 #include <boost/test/unit_test.hpp>
 #include <seastar/util/variant_utils.hh>
+#include <variant>
 
 template<typename Comparator, typename... T>
 class total_order_check {
-    using element = boost::variant<T...>;
+    using element = std::variant<T...>;
     std::vector<std::vector<element>> _data;
     Comparator _cmp;
 private:

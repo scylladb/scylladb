@@ -108,7 +108,7 @@ template<>
 void config_file::named_value<db::config::seed_provider_type,
                 db::config::value_status::Used>::add_command_line_option(
                 boost::program_options::options_description_easy_init& init,
-                const stdx::string_view& name, const stdx::string_view& desc) {
+                const std::string_view& name, const std::string_view& desc) {
     init((hyphenate(name) + "-class-name").data(),
                     value_ex(&_value.class_name)->notifier(
                                     [this](auto&&) {_source = config_source::CommandLine;}),

@@ -988,7 +988,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
         // lexicographical order (N.B. this is NOT token order!). We need
         // to avoid outputting the same partition key twice, but luckily in
         // the sorted order, these will be adjacent.
-        stdx::optional<dht::decorated_key> last_dk;
+        std::optional<dht::decorated_key> last_dk;
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             std::vector<bytes> pk_columns;
@@ -1394,7 +1394,7 @@ shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
         out << join(", ", cols);
     }
     // Note that cf_name may need to be quoted, just like column names above.
-    out << " FROM " << util::maybe_quote(cf_name.to_string()) << " WHERE " << where_clause << " ALLOW FILTERING";
+    out << " FROM " << util::maybe_quote(sstring(cf_name)) << " WHERE " << where_clause << " ALLOW FILTERING";
     return do_with_parser(out.str(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 

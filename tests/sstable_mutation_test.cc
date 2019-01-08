@@ -1359,7 +1359,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
     };
 
     // Choose min from several random keys
-    stdx::optional<dht::decorated_key> large_key;
+    std::optional<dht::decorated_key> large_key;
     for (int i = 0; i < 10; ++i) {
         auto pk = ss.make_pkey(make_pkey_text(large_key_pad_size));
         if (!large_key || pk.less_compare(*s, *large_key)) {

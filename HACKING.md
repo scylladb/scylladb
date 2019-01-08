@@ -24,7 +24,9 @@ Running `./install-dependencies.sh` (as root) installs the appropriate packages 
 
 ### Build system
 
-**Note**: Compiling Scylla requires, conservatively, 2 GB of memory per native thread, and up to 3 GB per native thread while linking.
+**Note**: Compiling Scylla requires, conservatively, 2 GB of memory per native
+thread, and up to 3 GB per native thread while linking. GCC >= 8.1.1. is
+required.
 
 Scylla is built with [Ninja](https://ninja-build.org/), a low-level rule-based system. A Python script, `configure.py`, generates a Ninja file (`build.ninja`) based on configuration options.
 

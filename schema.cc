@@ -247,7 +247,7 @@ schema::raw_schema::raw_schema(utils::UUID id)
     : _id(id)
 { }
 
-schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_info)
+schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info)
     : _raw(raw)
     , _offsets([this] {
         if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
@@ -335,7 +335,7 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
     }
 }
 
-schema::schema(std::experimental::optional<utils::UUID> id,
+schema::schema(std::optional<utils::UUID> id,
     sstring ks_name,
     sstring cf_name,
     std::vector<column> partition_key,
@@ -367,7 +367,7 @@ schema::schema(std::experimental::optional<utils::UUID> id,
         build_columns(regular_columns, column_kind::regular_column);
 
         return raw;
-    }(), stdx::nullopt)
+    }(), std::nullopt)
 {}
 
 schema::schema(const schema& o)
@@ -484,7 +484,7 @@ const index_options_map& index_metadata::options() const {
 }
 
 sstring index_metadata::get_default_index_name(const sstring& cf_name,
-                                               std::experimental::optional<sstring> root) {
+                                               std::optional<sstring> root) {
     if (root) {
         return cf_name + "_" + root.value() + "_idx";
     }
@@ -657,7 +657,7 @@ bool thrift_schema::is_dynamic() const {
 }
 
 schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
-        std::experimental::optional<utils::UUID> id, data_type rct)
+        std::optional<utils::UUID> id, data_type rct)
         : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
 {
     _raw._ks_name = ks_name;
@@ -1193,7 +1193,7 @@ schema::position(const column_definition& column) const {
     return clustering_key_size();
 }
 
-stdx::optional<index_metadata> schema::find_index_noname(const index_metadata& target) const {
+std::optional<index_metadata> schema::find_index_noname(const index_metadata& target) const {
     const auto& it = boost::find_if(_raw._indices_by_name, [&] (auto&& e) {
         return e.second.equals_noname(target);
     });

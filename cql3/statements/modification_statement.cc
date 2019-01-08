@@ -208,7 +208,7 @@ class prefetch_data_builder {
     update_parameters::prefetch_data& _data;
     const query::partition_slice& _ps;
     schema_ptr _schema;
-    std::experimental::optional<partition_key> _pkey;
+    std::optional<partition_key> _pkey;
 private:
     void add_cell(update_parameters::prefetch_data::row& cells, const column_definition& def, const std::optional<query::result_bytes_view>& cell) {
         if (cell) {

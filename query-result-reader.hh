@@ -72,7 +72,7 @@ public:
     result_row_view(ser::qr_row_view v) : _v(v) {}
 
     class iterator_type {
-        using cells_vec = std::vector<std::experimental::optional<ser::qr_cell_view>>;
+        using cells_vec = std::vector<std::optional<ser::qr_cell_view>>;
         cells_vec _cells;
         cells_vec::iterator _i;
     public:
@@ -205,12 +205,12 @@ public:
         return std::make_tuple(ps.size(), rows);
     }
 
-    std::tuple<partition_key, stdx::optional<clustering_key>>
+    std::tuple<partition_key, std::optional<clustering_key>>
     get_last_partition_and_clustering_key() const {
         auto ps = _v.partitions();
         auto& p = ps.back();
         auto rs = p.rows();
-        return { p.key().value(), !rs.empty() ? rs.back().key() : stdx::optional<clustering_key>() };
+        return { p.key().value(), !rs.empty() ? rs.back().key() : std::optional<clustering_key>() };
     }
 };
 

@@ -43,7 +43,7 @@ public:
     { }
 
     flat_reader_assertions& produces_partition_start(const dht::decorated_key& dk,
-                                                     stdx::optional<tombstone> tomb = stdx::nullopt) {
+                                                     std::optional<tombstone> tomb = std::nullopt) {
         BOOST_TEST_MESSAGE(format("Expecting partition start with key {}", dk));
         auto mfopt = read_next();
         if (!mfopt) {
@@ -329,7 +329,7 @@ public:
         return produces(m);
     }
 
-    flat_reader_assertions& produces(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+    flat_reader_assertions& produces(const mutation& m, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
         if (!mo) {
             BOOST_FAIL(format("Expected {}, but got end of stream, at: {}", m, seastar::current_backtrace()));
@@ -382,7 +382,7 @@ public:
                                       mutation_fragment::printer(*_reader.schema(), *previous_partition), mutation_fragment::printer(*_reader.schema(), *mfo)));
                 }
                 previous_partition = std::move(mfo);
-                previous_fragment = stdx::nullopt;
+                previous_fragment = std::nullopt;
                 inside_partition = true;
             } else if (mfo->is_end_of_partition()) {
                 BOOST_REQUIRE(inside_partition);
@@ -428,7 +428,7 @@ public:
         });
     }
 
-    flat_reader_assertions& produces_compacted(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+    flat_reader_assertions& produces_compacted(const mutation& m, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
         BOOST_REQUIRE(bool(mo));
         memory::disable_failure_guard dfg;

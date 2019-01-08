@@ -24,9 +24,8 @@
 #include "types.hh"
 #include "bytes.hh"
 
-#include <boost/variant.hpp>
-
-#include <experimental/optional>
+#include <optional>
+#include <variant>
 
 #include <seastar/util/variant_utils.hh>
 
@@ -44,7 +43,7 @@ struct unset_value {
 ///
 /// \see raw_value
 struct raw_value_view {
-    boost::variant<fragmented_temporary_buffer::view, null_value, unset_value> _data;
+    std::variant<fragmented_temporary_buffer::view, null_value, unset_value> _data;
 
     raw_value_view(null_value&& data)
         : _data{std::move(data)}
@@ -66,32 +65,32 @@ public:
         return raw_value_view{view};
     }
     bool is_null() const {
-        return _data.which() == 1;
+        return std::holds_alternative<null_value>(_data);
     }
     bool is_unset_value() const {
-        return _data.which() == 2;
+        return std::holds_alternative<unset_value>(_data);
     }
     bool is_value() const {
-        return _data.which() == 0;
+        return std::holds_alternative<fragmented_temporary_buffer::view>(_data);
     }
     std::optional<fragmented_temporary_buffer::view> data() const {
-        if (_data.which() == 0) {
-            return boost::get<fragmented_temporary_buffer::view>(_data);
+        if (auto pdata = std::get_if<fragmented_temporary_buffer::view>(&_data)) {
+            return *pdata;
         }
         return {};
     }
     explicit operator bool() const {
-        return _data.which() == 0;
+        return is_value();
     }
     const fragmented_temporary_buffer::view* operator->() const {
-        return &boost::get<fragmented_temporary_buffer::view>(_data);
+        return &std::get<fragmented_temporary_buffer::view>(_data);
     }
     const fragmented_temporary_buffer::view& operator*() const {
-        return boost::get<fragmented_temporary_buffer::view>(_data);
+        return std::get<fragmented_temporary_buffer::view>(_data);
     }
 
     bool operator==(const raw_value_view& other) const {
-        if (_data.which() != other._data.which()) {
+        if (_data.index() != other._data.index()) {
             return false;
         }
         if (is_value() && **this != *other) {
@@ -124,7 +123,7 @@ public:
 /// protocol. A raw value can hold either a null value, an unset value, or a byte
 /// blob that represents the value.
 class raw_value {
-    boost::variant<bytes, null_value, unset_value> _data;
+    std::variant<bytes, null_value, unset_value> _data;
 
     raw_value(null_value&& data)
         : _data{std::move(data)}
@@ -167,32 +166,32 @@ public:
         return make_null();
     }
     bool is_null() const {
-        return _data.which() == 1;
+        return std::holds_alternative<null_value>(_data);
     }
     bool is_unset_value() const {
-        return _data.which() == 2;
+        return std::holds_alternative<unset_value>(_data);
     }
     bool is_value() const {
-        return _data.which() == 0;
+        return std::holds_alternative<bytes>(_data);
     }
     bytes_opt data() const {
-        if (_data.which() == 0) {
-            return boost::get<bytes>(_data);
+        if (auto pdata = std::get_if<bytes>(&_data)) {
+            return *pdata;
         }
         return {};
     }
     explicit operator bool() const {
-        return _data.which() == 0;
+        return is_value();
     }
     const bytes* operator->() const {
-        return &boost::get<bytes>(_data);
+        return &std::get<bytes>(_data);
     }
     const bytes& operator*() const {
-        return boost::get<bytes>(_data);
+        return std::get<bytes>(_data);
     }
     raw_value_view to_view() const {
-        switch (_data.which()) {
-        case 0:  return raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{boost::get<bytes>(_data)}));
+        switch (_data.index()) {
+        case 0:  return raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{std::get<bytes>(_data)}));
         case 1:  return raw_value_view::make_null();
         default: return raw_value_view::make_unset_value();
         }

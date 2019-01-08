@@ -161,8 +161,8 @@ struct simple_type_impl : concrete_type<T> {
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const {
         return false;
     }
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
-        return std::experimental::nullopt;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
+        return std::nullopt;
     }
 };
 
@@ -1031,7 +1031,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         if (hours_end == std::string::npos) {
             throw marshal_exception(format_error);
         }
-        int64_t hours = std::stol(s.substr(0, hours_end).to_string());
+        int64_t hours = std::stol(sstring(s.substr(0, hours_end)));
         if (hours < 0 || hours >= 24) {
             throw marshal_exception(format("Hour out of bounds ({:d}).", hours));
         }
@@ -1039,7 +1039,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         if (minutes_end == std::string::npos) {
             throw marshal_exception(format_error);
         }
-        int64_t minutes = std::stol(s.substr(hours_end + 1, hours_end-minutes_end).to_string());
+        int64_t minutes = std::stol(sstring(s.substr(hours_end + 1, hours_end-minutes_end)));
         if (minutes < 0 || minutes >= 60) {
             throw marshal_exception(format("Minute out of bounds ({:d}).", minutes));
         }
@@ -1047,13 +1047,13 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         if (seconds_end == std::string::npos) {
             seconds_end = s.length();
         }
-        int64_t seconds = std::stol(s.substr(minutes_end + 1, minutes_end-seconds_end).to_string());
+        int64_t seconds = std::stol(sstring(s.substr(minutes_end + 1, minutes_end-seconds_end)));
         if (seconds < 0 || seconds >= 60) {
             throw marshal_exception(format("Second out of bounds ({:d}).", seconds));
         }
         int64_t nanoseconds = 0;
         if (seconds_end < s.length()) {
-            nanoseconds = std::stol(s.substr(seconds_end + 1).to_string());
+            nanoseconds = std::stol(sstring(s.substr(seconds_end + 1)));
             nanoseconds *= std::pow(10, 9-(s.length() - (seconds_end + 1)));
             if (nanoseconds < 0 || nanoseconds >= 1000 * 1000 * 1000) {
                 throw marshal_exception(format("Nanosecond out of bounds ({:d}).", nanoseconds));
@@ -1754,8 +1754,8 @@ public:
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
         return false;
     }
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
-        return std::experimental::nullopt;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
+        return std::nullopt;
     }
 };
 
@@ -1813,7 +1813,7 @@ public:
         counter_type months, days, nanoseconds;
         std::tie(months, days, nanoseconds) = deserialize_counters(v);
 
-        auto check_counter_range = [] (counter_type value, auto counter_value_type_instance, stdx::string_view counter_name) {
+        auto check_counter_range = [] (counter_type value, auto counter_value_type_instance, std::string_view counter_name) {
             using counter_value_type = decltype(counter_value_type_instance);
 
             if (static_cast<counter_value_type>(value) != value) {
@@ -1987,7 +1987,7 @@ struct empty_type_impl : abstract_type {
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
         return false;
     }
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         // Can't happen
         abort();
     }
@@ -2477,14 +2477,14 @@ map_type_impl::references_user_type(const sstring& keyspace, const bytes& name) 
     return _keys->references_user_type(keyspace, name) || _values->references_user_type(keyspace, name);
 }
 
-std::experimental::optional<data_type>
+std::optional<data_type>
 map_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
     auto k = _keys->update_user_type(updated);
     auto v = _values->update_user_type(updated);
     if (!k && !v) {
-        return std::experimental::nullopt;
+        return std::nullopt;
     }
-    return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+    return std::make_optional(static_pointer_cast<const abstract_type>(
         get_instance(k ? *k : _keys, v ? *v : _values, _is_multi_cell)));
 }
 
@@ -2673,7 +2673,7 @@ collection_type_impl::merge(collection_mutation_view a, collection_mutation_view
     };
     // applied to a tombstone, returns a predicate checking whether a cell is killed by
     // the tombstone
-    auto cell_killed = [] (const std::experimental::optional<tombstone>& t) {
+    auto cell_killed = [] (const std::optional<tombstone>& t) {
         return [&t] (const element_type& e) {
             if (!t) {
                 return false;
@@ -2730,7 +2730,7 @@ collection_type_impl::difference(collection_mutation_view a, collection_mutation
 bytes_opt
 collection_type_impl::reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const {
     if (!v) {
-        return std::experimental::nullopt;
+        return std::nullopt;
     }
     auto val = deserialize(*v, from);
     bytes ret(bytes::initialized_later(), serialized_size(get_value_ptr(val)));  // FIXME: serialized_size want @to
@@ -2996,14 +2996,14 @@ set_type_impl::references_user_type(const sstring& keyspace, const bytes& name) 
     return _elements->references_user_type(keyspace, name);
 }
 
-std::experimental::optional<data_type>
+std::optional<data_type>
 set_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
     auto e = _elements->update_user_type(updated);
     if (e) {
-        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+        return std::make_optional(static_pointer_cast<const abstract_type>(
             get_instance(std::move(*e), _is_multi_cell)));
     }
-    return std::experimental::nullopt;
+    return std::nullopt;
 }
 
 bool set_type_impl::references_duration() const {
@@ -3220,14 +3220,14 @@ list_type_impl::references_user_type(const sstring& keyspace, const bytes& name)
     return _elements->references_user_type(keyspace, name);
 }
 
-std::experimental::optional<data_type>
+std::optional<data_type>
 list_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
     auto e = _elements->update_user_type(updated);
     if (e) {
-        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+        return std::make_optional(static_pointer_cast<const abstract_type>(
             get_instance(std::move(*e), _is_multi_cell)));
     }
-    return std::experimental::nullopt;
+    return std::nullopt;
 }
 
 bool list_type_impl::references_duration() const {
@@ -3369,7 +3369,7 @@ static std::vector<sstring_view> split_field_strings(sstring_view v) {
 static std::string unescape(sstring_view s) {
     static thread_local std::regex escaped_colon_re("\\\\:");
     static thread_local std::regex escaped_at_re("\\\\@");
-    std::string result = s.to_string();
+    std::string result(s);
     result = std::regex_replace(result, escaped_colon_re, ":");
     result = std::regex_replace(result, escaped_at_re, "@");
     return std::move(result);
@@ -3483,9 +3483,9 @@ tuple_type_impl::references_user_type(const sstring& keyspace, const bytes& name
     return std::any_of(_types.begin(), _types.end(), [&](auto&& dt) { return dt->references_user_type(keyspace, name); });
 }
 
-static std::experimental::optional<std::vector<data_type>>
+static std::optional<std::vector<data_type>>
 update_types(const std::vector<data_type> types, const user_type updated) {
-    std::experimental::optional<std::vector<data_type>> new_types = std::experimental::nullopt;
+    std::optional<std::vector<data_type>> new_types = std::nullopt;
     for (uint32_t i = 0; i < types.size(); ++i) {
         auto&& ut = types[i]->update_user_type(updated);
         if (ut) {
@@ -3498,14 +3498,14 @@ update_types(const std::vector<data_type> types, const user_type updated) {
     return new_types;
 }
 
-std::experimental::optional<data_type>
+std::optional<data_type>
 tuple_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
     auto new_types = update_types(_types, updated);
     if (new_types) {
-        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+        return std::make_optional(static_pointer_cast<const abstract_type>(
             get_instance(std::move(*new_types))));
     }
-    return std::experimental::nullopt;
+    return std::nullopt;
 }
 
 bool tuple_type_impl::references_duration() const {
@@ -3552,17 +3552,17 @@ user_type_impl::references_user_type(const sstring& keyspace, const bytes& name)
         || tuple_type_impl::references_user_type(keyspace, name);
 }
 
-std::experimental::optional<data_type>
+std::optional<data_type>
 user_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
     if (_keyspace == updated->_keyspace && _name == updated->_name) {
-        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(updated));
+        return std::make_optional(static_pointer_cast<const abstract_type>(updated));
     }
     auto new_types = update_types(_types, updated);
     if (new_types) {
-        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+        return std::make_optional(static_pointer_cast<const abstract_type>(
             get_instance(_keyspace, _name, _field_names, *new_types)));
     }
-    return std::experimental::nullopt;
+    return std::nullopt;
 }
 
 size_t
@@ -3793,7 +3793,7 @@ std::ostream& operator<<(std::ostream& out, const data_value& v) {
  */
 namespace {
 
-using bytes_opt = std::experimental::optional<bytes>;
+using bytes_opt = std::optional<bytes>;
 
 template<typename ToType, typename FromType>
 std::function<data_value(data_value)> make_castas_fctn_simple() {

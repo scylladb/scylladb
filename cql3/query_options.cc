@@ -46,12 +46,12 @@ namespace cql3 {
 
 thread_local const query_options::specific_options query_options::specific_options::DEFAULT{-1, {}, {}, api::missing_timestamp};
 
-thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, infinite_timeout_config, std::experimental::nullopt,
+thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, infinite_timeout_config, std::nullopt,
     std::vector<cql3::raw_value_view>(), false, query_options::specific_options::DEFAULT, cql_serialization_format::latest()};
 
 query_options::query_options(db::consistency_level consistency,
                            const ::timeout_config& timeout_config,
-                           std::experimental::optional<std::vector<sstring_view>> names,
+                           std::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
                            bool skip_metadata,
@@ -70,7 +70,7 @@ query_options::query_options(db::consistency_level consistency,
 
 query_options::query_options(db::consistency_level consistency,
                              const ::timeout_config& timeout_config,
-                             std::experimental::optional<std::vector<sstring_view>> names,
+                             std::optional<std::vector<sstring_view>> names,
                              std::vector<cql3::raw_value> values,
                              bool skip_metadata,
                              specific_options options,
@@ -89,7 +89,7 @@ query_options::query_options(db::consistency_level consistency,
 
 query_options::query_options(db::consistency_level consistency,
                              const ::timeout_config& timeout_config,
-                             std::experimental::optional<std::vector<sstring_view>> names,
+                             std::optional<std::vector<sstring_view>> names,
                              std::vector<cql3::raw_value_view> value_views,
                              bool skip_metadata,
                              specific_options options,

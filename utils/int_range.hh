@@ -34,12 +34,12 @@ unsigned cardinality(const int_range& r) {
 }
 
 inline
-unsigned cardinality(const stdx::optional<int_range>& ropt) {
+unsigned cardinality(const std::optional<int_range>& ropt) {
     return ropt ? cardinality(*ropt) : 0;
 }
 
 inline
-stdx::optional<int_range> intersection(const int_range& a, const int_range& b) {
+std::optional<int_range> intersection(const int_range& a, const int_range& b) {
     auto int_tri_cmp = [] (int x, int y) {
         return x < y ? -1 : (x > y ? 1 : 0);
     };

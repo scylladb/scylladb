@@ -1056,7 +1056,7 @@ std::unordered_set<sstring> database::get_initial_tokens() {
     return tokens;
 }
 
-std::experimental::optional<gms::inet_address> database::get_replace_address() {
+std::optional<gms::inet_address> database::get_replace_address() {
     auto& cfg = get_config();
     sstring replace_address = cfg.replace_address();
     sstring replace_address_first_boot = cfg.replace_address_first_boot();
@@ -1066,9 +1066,9 @@ std::experimental::optional<gms::inet_address> database::get_replace_address() {
         } else if (!replace_address_first_boot.empty()) {
             return gms::inet_address(replace_address_first_boot);
         }
-        return std::experimental::nullopt;
+        return std::nullopt;
     } catch (...) {
-        return std::experimental::nullopt;
+        return std::nullopt;
     }
 }
 
@@ -1503,7 +1503,7 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
 }
 
 sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,
-                                           std::experimental::optional<sstring> index_name_root) const
+                                           std::optional<sstring> index_name_root) const
 {
     auto existing_names = existing_index_names(ks_name);
     auto base_name = index_metadata::get_default_index_name(cf_name, index_name_root);

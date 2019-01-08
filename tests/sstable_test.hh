@@ -660,7 +660,7 @@ protected:
 
     future<> _remove(directory_entry de) {
         sstring t = _path + "/" + de.name;
-        return engine().file_type(t).then([t] (std::experimental::optional<directory_entry_type> det) {
+        return engine().file_type(t).then([t] (std::optional<directory_entry_type> det) {
             auto f = make_ready_future<>();
 
             if (!det) {

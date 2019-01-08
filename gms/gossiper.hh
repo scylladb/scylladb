@@ -53,7 +53,7 @@
 #include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
 #include <boost/algorithm/string.hpp>
-#include <experimental/optional>
+#include <optional>
 #include <algorithm>
 #include <chrono>
 #include <set>
@@ -416,7 +416,7 @@ public:
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const;
 
     // Use with caution, copies might be expensive (see #764)
-    stdx::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const;
+    std::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const;
 
     // removes ALL endpoint states; should only be called after shadow gossip
     future<> reset_endpoint_state_map();
@@ -427,7 +427,7 @@ public:
 
     utils::UUID get_host_id(inet_address endpoint);
 
-    std::experimental::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
+    std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
 
     /**
      * determine which endpoint started up earlier
@@ -561,7 +561,7 @@ public:
     future<> wait_for_gossip_to_settle();
     future<> wait_for_range_setup();
 private:
-    future<> wait_for_gossip(std::chrono::milliseconds, stdx::optional<int32_t> = {});
+    future<> wait_for_gossip(std::chrono::milliseconds, std::optional<int32_t> = {});
 
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;

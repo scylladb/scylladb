@@ -37,7 +37,7 @@
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
-    std::experimental::optional<dht::token> last_token;
+    std::optional<dht::token> last_token;
     for (auto&& p : partitions) {
         const dht::decorated_key& key = p.decorated_key();
         if (last_token && key.token() == *last_token) {
@@ -378,11 +378,11 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
         flat_mutation_reader fwd_reader =
             ms.make_reader(m.schema(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
 
-        stdx::optional<mutation_rebuilder> builder{};
+        std::optional<mutation_rebuilder> builder{};
         struct consumer {
             schema_ptr _s;
-            stdx::optional<mutation_rebuilder>& _builder;
-            consumer(schema_ptr s, stdx::optional<mutation_rebuilder>& builder)
+            std::optional<mutation_rebuilder>& _builder;
+            consumer(schema_ptr s, std::optional<mutation_rebuilder>& builder)
                 : _s(std::move(s))
                 , _builder(builder) { }
 
@@ -1022,7 +1022,7 @@ static void test_clustering_slices(populate_fn populate) {
         .with_column("v", bytes_type)
         .build();
 
-    auto make_ck = [&] (int ck1, stdx::optional<int> ck2 = stdx::nullopt, stdx::optional<int> ck3 = stdx::nullopt) {
+    auto make_ck = [&] (int ck1, std::optional<int> ck2 = std::nullopt, std::optional<int> ck3 = std::nullopt) {
         std::vector<data_value> components;
         components.push_back(data_value(ck1));
         if (ck2) {

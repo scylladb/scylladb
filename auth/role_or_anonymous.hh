@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <experimental/string_view>
+#include <string_view>
 #include <functional>
 #include <iosfwd>
 #include <optional>
@@ -29,7 +29,6 @@
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
-#include "stdx.hh"
 
 namespace auth {
 
@@ -38,7 +37,7 @@ public:
     std::optional<sstring> name{};
 
     role_or_anonymous() = default;
-    role_or_anonymous(stdx::string_view name) : name(name) {
+    role_or_anonymous(std::string_view name) : name(name) {
     }
 };
 

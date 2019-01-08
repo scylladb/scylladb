@@ -1830,7 +1830,7 @@ class mutation_querier {
     ser::qr_partition__static_row__cells<bytes_ostream> _static_cells_wr;
     bool _live_data_in_static_row{};
     uint32_t _live_clustering_rows = 0;
-    stdx::optional<ser::qr_partition__rows<bytes_ostream>> _rows_wr;
+    std::optional<ser::qr_partition__rows<bytes_ostream>> _rows_wr;
     bool _short_reads_allowed;
 private:
     void query_static_row(const row& r, tombstone current_tombstone);
@@ -1966,8 +1966,8 @@ uint32_t mutation_querier::consume_end_of_stream() {
 class query_result_builder {
     const schema& _schema;
     query::result::builder& _rb;
-    stdx::optional<query::result::partition_writer> _pw;
-    stdx::optional<mutation_querier> _mutation_consumer;
+    std::optional<query::result::partition_writer> _pw;
+    std::optional<mutation_querier> _mutation_consumer;
     stop_iteration _stop;
     stop_iteration _short_read_allowed;
 public:

@@ -29,13 +29,11 @@
 
 #include <map>
 #include <vector>
-#include <experimental/optional>
+#include <optional>
 
 #include "bytes.hh"
 #include "bytes_ostream.hh"
 #include "serializer.hh"
-
-#include "stdx.hh"
 
 struct simple_compound {
     // TODO: change this to test for #905
@@ -76,7 +74,7 @@ std::ostream& operator<<(std::ostream& os, const simple_compound& sc)
 }
 
 struct compound_with_optional {
-    stdx::optional<simple_compound> first;
+    std::optional<simple_compound> first;
     simple_compound second;
 
     bool operator==(const compound_with_optional& other) const {

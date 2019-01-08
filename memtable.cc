@@ -22,7 +22,6 @@
 #include "memtable.hh"
 #include "database.hh"
 #include "frozen_mutation.hh"
-#include "stdx.hh"
 #include "partition_snapshot_reader.hh"
 #include "schema_upgrader.hh"
 #include "partition_builder.hh"
@@ -165,7 +164,7 @@ class iterator_reader {
     lw_shared_ptr<memtable> _memtable;
     schema_ptr _schema;
     const dht::partition_range* _range;
-    stdx::optional<dht::decorated_key> _last;
+    std::optional<dht::decorated_key> _last;
     memtable::partitions_type::iterator _i;
     memtable::partitions_type::iterator _end;
     uint64_t _last_reclaim_counter;
@@ -246,7 +245,7 @@ protected:
         return *_memtable;
     };
 
-    std::experimental::optional<dht::partition_range> get_delegate_range() {
+    std::optional<dht::partition_range> get_delegate_range() {
         // We cannot run concurrently with row_cache::update().
         if (_memtable->is_flushed()) {
             return _last ? _range->split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : *_range;
@@ -272,8 +271,8 @@ protected:
 };
 
 class scanning_reader final : public flat_mutation_reader::impl, private iterator_reader {
-    stdx::optional<dht::partition_range> _delegate_range;
-    stdx::optional<flat_mutation_reader> _delegate;
+    std::optional<dht::partition_range> _delegate_range;
+    std::optional<flat_mutation_reader> _delegate;
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
     mutation_reader::forwarding _fwd_mr;
@@ -524,7 +523,7 @@ public:
                 return stop_iteration(is_buffer_full());
             }, timeout).then([this] {
                 if (_partition_reader->is_end_of_stream() && _partition_reader->is_buffer_empty()) {
-                    _partition_reader = stdx::nullopt;
+                    _partition_reader = std::nullopt;
                 }
             });
         });
@@ -532,7 +531,7 @@ public:
     virtual void next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
-            _partition_reader = stdx::nullopt;
+            _partition_reader = std::nullopt;
         }
     }
     virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) override {

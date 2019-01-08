@@ -37,11 +37,11 @@ namespace cache {
 class autoupdating_underlying_reader final {
     row_cache& _cache;
     read_context& _read_context;
-    stdx::optional<flat_mutation_reader> _reader;
+    std::optional<flat_mutation_reader> _reader;
     utils::phased_barrier::phase_type _reader_creation_phase;
     dht::partition_range _range = { };
-    stdx::optional<dht::decorated_key> _last_key;
-    stdx::optional<dht::decorated_key> _new_last_key;
+    std::optional<dht::decorated_key> _last_key;
+    std::optional<dht::decorated_key> _new_last_key;
 public:
     autoupdating_underlying_reader(row_cache& cache, read_context& context)
         : _cache(cache)
@@ -140,7 +140,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
 
     mutation_source_opt _underlying_snapshot;
     dht::partition_range _sm_range;
-    stdx::optional<dht::decorated_key> _key;
+    std::optional<dht::decorated_key> _key;
     row_cache::phase_type _phase;
 public:
     read_context(row_cache& cache,

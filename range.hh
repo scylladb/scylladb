@@ -21,10 +21,9 @@
 
 #pragma once
 
-#include "stdx.hh"
 #include <list>
 #include <vector>
-#include <experimental/optional>
+#include <optional>
 #include <iosfwd>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/sliced.hpp>
@@ -60,7 +59,7 @@ class nonwrapping_range;
 template<typename T>
 class wrapping_range {
     template <typename U>
-    using optional = std::experimental::optional<U>;
+    using optional = std::optional<U>;
 public:
     using bound = range_bound<T>;
 
@@ -341,25 +340,25 @@ public:
         wrapping_range right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
     }
-    // Create a sub-range including values greater than the split_point. Returns stdx::nullopt if
+    // Create a sub-range including values greater than the split_point. Returns std::nullopt if
     // split_point is after the end (but not included in the range, in case of wraparound ranges)
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    stdx::optional<wrapping_range<T>> split_after(const T& split_point, Comparator&& cmp) const {
+    std::optional<wrapping_range<T>> split_after(const T& split_point, Comparator&& cmp) const {
         if (contains(split_point, std::forward<Comparator>(cmp))
                 && (!end() || cmp(split_point, end()->value()) != 0)) {
             return wrapping_range(bound(split_point, false), end());
         } else if (end() && cmp(split_point, end()->value()) >= 0) {
-            // whether to return stdx::nullopt or the full range is not
+            // whether to return std::nullopt or the full range is not
             // well-defined for wraparound ranges; we return nullopt
             // if split_point is after the end.
-            return stdx::nullopt;
+            return std::nullopt;
         } else {
             return *this;
         }
     }
     template<typename Bound, typename Transformer, typename U = transformed_type<Transformer>>
-    static stdx::optional<typename wrapping_range<U>::bound> transform_bound(Bound&& b, Transformer&& transformer) {
+    static std::optional<typename wrapping_range<U>::bound> transform_bound(Bound&& b, Transformer&& transformer) {
         if (b) {
             return { { transformer(std::forward<Bound>(b).value().value()), b->is_inclusive() } };
         };
@@ -429,7 +428,7 @@ std::ostream& operator<<(std::ostream& out, const wrapping_range<U>& r) {
 template<typename T>
 class nonwrapping_range {
     template <typename U>
-    using optional = std::experimental::optional<U>;
+    using optional = std::optional<U>;
 public:
     using bound = range_bound<T>;
 
@@ -546,11 +545,11 @@ public:
         return std::make_pair(std::move(left), std::move(right));
     }
     // Create a sub-range including values greater than the split_point. If split_point is after
-    // the end, returns stdx::nullopt.
+    // the end, returns std::nullopt.
     template<typename Comparator>
-    stdx::optional<nonwrapping_range> split_after(const T& split_point, Comparator&& cmp) const {
+    std::optional<nonwrapping_range> split_after(const T& split_point, Comparator&& cmp) const {
         if (end() && cmp(split_point, end()->value()) >= 0) {
-            return stdx::nullopt;
+            return std::nullopt;
         } else if (start() && cmp(split_point, start()->value()) < 0) {
             return *this;
         } else {
@@ -558,9 +557,9 @@ public:
         }
     }
     // Creates a new sub-range which is the intersection of this range and a range starting with "start".
-    // If there is no overlap, returns stdx::nullopt.
+    // If there is no overlap, returns std::nullopt.
     template<typename Comparator>
-    stdx::optional<nonwrapping_range> trim_front(stdx::optional<bound>&& start, Comparator&& cmp) const {
+    std::optional<nonwrapping_range> trim_front(std::optional<bound>&& start, Comparator&& cmp) const {
         return intersection(nonwrapping_range(std::move(start), {}), cmp);
     }
     // Transforms this range into a new range of a different value type
@@ -674,7 +673,7 @@ public:
 
     // Returns the intersection between this range and other.
     template<typename Comparator>
-    stdx::optional<nonwrapping_range> intersection(const nonwrapping_range& other, Comparator&& cmp) const {
+    std::optional<nonwrapping_range> intersection(const nonwrapping_range& other, Comparator&& cmp) const {
         auto p = std::minmax(_range, other._range, [&cmp] (auto&& a, auto&& b) {
             return wrapping_range<T>::less_than(a.start_bound(), b.start_bound(), cmp);
         });

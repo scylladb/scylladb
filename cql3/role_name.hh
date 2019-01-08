@@ -41,13 +41,12 @@
 
 #pragma once
 
-#include <experimental/string_view>
+#include <string_view>
 #include <iosfwd>
 
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
-#include "stdx.hh"
 
 namespace cql3 {
 
@@ -59,7 +58,7 @@ class role_name final {
 public:
     role_name(sstring name, preserve_role_case);
 
-    stdx::string_view to_string() const noexcept {
+    std::string_view to_string() const noexcept {
         return _name;
     }
 };

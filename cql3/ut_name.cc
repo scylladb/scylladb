@@ -44,7 +44,7 @@
 namespace cql3 {
 
 ut_name::ut_name(shared_ptr<column_identifier> ks_name, ::shared_ptr<column_identifier> ut_name)
-    : _ks_name{!ks_name ? std::experimental::nullopt : std::experimental::optional<sstring>{ks_name->to_string()}}
+    : _ks_name{!ks_name ? std::nullopt : std::optional<sstring>{ks_name->to_string()}}
     , _ut_name{ut_name}
 { }
 
@@ -53,7 +53,7 @@ bool ut_name::has_keyspace() const {
 }
 
 void ut_name::set_keyspace(sstring keyspace) {
-    _ks_name = std::experimental::optional<sstring>{keyspace};
+    _ks_name = std::optional<sstring>{keyspace};
 }
 
 const sstring& ut_name::get_keyspace() const {

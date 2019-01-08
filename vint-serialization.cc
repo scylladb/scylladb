@@ -41,8 +41,6 @@
 
 #include "vint-serialization.hh"
 
-#include "stdx.hh"
-
 #include <seastar/core/bitops.hh>
 
 #include <algorithm>

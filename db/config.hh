@@ -771,7 +771,7 @@ private:
         }
         // do not add to boost::options. We only care about yaml config
         void add_command_line_option(boost::program_options::options_description_easy_init&,
-                        const stdx::string_view&, const stdx::string_view&) override {}
+                        const std::string_view&, const std::string_view&) override {}
     };
 
     log_legacy_value<seastar::log_level> default_log_level;

@@ -869,7 +869,7 @@ future<> sstable::read_toc() {
                 throw malformed_sstable_exception("SSTable too big: " + to_sstring(size) + " bytes", file_path);
             }
 
-            std::experimental::string_view buf(bufptr.get(), size);
+            std::string_view buf(bufptr.get(), size);
             std::vector<sstring> comps;
 
             boost::split(comps , buf, boost::is_any_of("\n"));
@@ -1781,8 +1781,8 @@ void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min
 }
 
 void seal_summary(summary& s,
-        std::experimental::optional<key>&& first_key,
-        std::experimental::optional<key>&& last_key,
+        std::optional<key>&& first_key,
+        std::optional<key>&& last_key,
         const index_sampling_state& state) {
     s.header.size = s.entries.size();
     s.header.size_at_full_sampling = sstable::get_size_at_full_sampling(state.partition_count, s.header.min_index_interval);
@@ -1881,8 +1881,8 @@ class components_writer {
     uint64_t _max_sstable_size;
     bool _tombstone_written;
     // Remember first and last keys, which we need for the summary file.
-    stdx::optional<key> _first_key, _last_key;
-    stdx::optional<key> _partition_key;
+    std::optional<key> _first_key, _last_key;
+    std::optional<key> _partition_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
     db::large_partition_handler* _large_partition_handler;
@@ -2202,7 +2202,7 @@ class sstable_writer_k_l : public sstable_writer::writer_impl {
     bool _leave_unsealed;
     bool _compression_enabled;
     std::unique_ptr<file_writer> _writer;
-    stdx::optional<components_writer> _components_writer;
+    std::optional<components_writer> _components_writer;
     shard_id _shard; // Specifies which shard new sstable will belong to.
     write_monitor* _monitor;
     bool _correctly_serialize_non_compound_range_tombstones;
@@ -2297,7 +2297,7 @@ void sstable_writer_k_l::consume_end_of_stream()
     _monitor->on_data_write_completed();
 
     _components_writer->consume_end_of_stream();
-    _components_writer = stdx::nullopt;
+    _components_writer = std::nullopt;
     finish_file_writer();
     _sst.write_summary(_pc);
     _sst.write_filter(_pc);
@@ -2412,7 +2412,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         summary& _summary;
         index_sampling_state _state;
     public:
-        std::experimental::optional<key> first_key, last_key;
+        std::optional<key> first_key, last_key;
 
         summary_generator(summary& s) : _summary(s) {
             _state.summary_byte_cost = summary_byte_cost();
@@ -2995,7 +2995,7 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
  * Returns a pair of positions [p1, p2) in the summary file corresponding to entries
  * covered by the specified range, or a disengaged optional if no such pair exists.
  */
-stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const dht::token_range& range) {
+std::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const dht::token_range& range) {
     auto entries_size = _components->summary.entries.size();
     auto search = [this](bool before, const dht::token& token) {
         auto kind = before ? key::kind::before_all_keys : key::kind::after_all_keys;
@@ -3008,7 +3008,7 @@ stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ra
         left = search(range.start()->is_inclusive(), range.start()->value());
         if (left == entries_size) {
             // left is past the end of the sampling.
-            return stdx::nullopt;
+            return std::nullopt;
         }
     }
     uint64_t right = entries_size;
@@ -3016,13 +3016,13 @@ stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ra
         right = search(!range.end()->is_inclusive(), range.end()->value());
         if (right == 0) {
             // The first key is strictly greater than right.
-            return stdx::nullopt;
+            return std::nullopt;
         }
     }
     if (left < right) {
-        return stdx::optional<std::pair<uint64_t, uint64_t>>(stdx::in_place_t(), left, right);
+        return std::optional<std::pair<uint64_t, uint64_t>>(std::in_place_t(), left, right);
     }
-    return stdx::nullopt;
+    return std::nullopt;
 }
 
 std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const dht::token_range& range) {

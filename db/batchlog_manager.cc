@@ -219,7 +219,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 
         return map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
             return system_keyspace::get_truncated_at(fm.column_family_id()).then([written_at, &fm] (db_clock::time_point t) ->
-                    std::experimental::optional<std::reference_wrapper<canonical_mutation>> {
+                    std::optional<std::reference_wrapper<canonical_mutation>> {
                 if (written_at > t) {
                     return { std::ref(fm) };
                 } else {
@@ -228,7 +228,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             });
         },
         std::vector<mutation>(),
-        [this] (std::vector<mutation> mutations, std::experimental::optional<std::reference_wrapper<canonical_mutation>> fm) {
+        [this] (std::vector<mutation> mutations, std::optional<std::reference_wrapper<canonical_mutation>> fm) {
             if (fm) {
                 schema_ptr s = _qp.db().find_schema(fm.value().get().column_family_id());
                 mutations.emplace_back(fm.value().get().to_mutation(s));

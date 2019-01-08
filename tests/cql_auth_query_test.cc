@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <experimental/string_view>
+#include <string_view>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -36,14 +36,13 @@
 #include "cql3/statements/create_role_statement.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
-#include "stdx.hh"
 #include "seastarx.hh"
 #include "service/client_state.hh"
 #include "tests/cql_test_env.hh"
 #include "tests/test-utils.hh"
 
-static const auto alice = stdx::string_view("alice");
-static const auto bob = stdx::string_view("bob");
+static const auto alice = std::string_view("alice");
+static const auto bob = std::string_view("bob");
 
 static db::config db_config_with_auth() {
     db::config config;
@@ -60,14 +59,14 @@ static db::config db_config_with_auth() {
 // These functions must be called inside Seastar threads.
 //
 
-static void create_user_if_not_exists(cql_test_env& env, stdx::string_view user_name) {
+static void create_user_if_not_exists(cql_test_env& env, std::string_view user_name) {
     env.execute_cql(format("CREATE USER IF NOT EXISTS {} WITH PASSWORD '{}'", user_name, user_name)).get();
 }
 
 // Invoke `f` as though the user indicated with `user_name` had logged in. The current logged in user is restored after
 // `f` is invoked.
 template <typename Function>
-static void with_user(cql_test_env& env, stdx::string_view user_name, Function&& f) {
+static void with_user(cql_test_env& env, std::string_view user_name, Function&& f) {
     auto& cs = env.local_client_state();
     auto old_user = cs.user();
 
@@ -86,8 +85,8 @@ static void with_user(cql_test_env& env, stdx::string_view user_name, Function&&
 template <class Function>
 void verify_unauthorized_then_ok(
         cql_test_env& env,
-        stdx::string_view user_name,
-        stdx::string_view cql_query,
+        std::string_view user_name,
+        std::string_view cql_query,
         Function&& resolve) {
     const auto cql_query_string = sstring(cql_query);
 
@@ -275,9 +274,9 @@ SEASTAR_TEST_CASE(revoke_role_restrictions) {
 ///
 static void verify_default_permissions(
         cql_test_env& env,
-        stdx::string_view user,
-        stdx::string_view grant_query,
-        stdx::string_view creation_query,
+        std::string_view user,
+        std::string_view grant_query,
+        std::string_view creation_query,
         const auth::resource& r) {
     create_user_if_not_exists(env, user);
     env.execute_cql(sstring(grant_query)).get0();

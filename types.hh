@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <experimental/optional>
+#include <optional>
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
 #include "data/cell.hh"
@@ -49,7 +49,6 @@
 #include <seastar/util/backtrace.hh>
 #include "hashing.hh"
 #include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
-#include "stdx.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 
 class tuple_type_impl;
@@ -383,9 +382,9 @@ public:
     data_value(boost::multiprecision::cpp_int);
     data_value(big_decimal);
     data_value(cql_duration);
-    explicit data_value(std::experimental::optional<bytes>);
+    explicit data_value(std::optional<bytes>);
     template <typename NativeType>
-    data_value(std::experimental::optional<NativeType>);
+    data_value(std::optional<NativeType>);
     template <typename NativeType>
     data_value(const std::unordered_set<NativeType>&);
 
@@ -504,7 +503,7 @@ public:
         return equals(*other);
     }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const = 0;
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const = 0;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const = 0;
     virtual bool references_duration() const {
         return false;
     }
@@ -693,8 +692,8 @@ protected:
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
         return false;
     }
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
-        return std::experimental::nullopt;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
+        return std::nullopt;
     }
 protected:
     data_value make_value(std::unique_ptr<native_type> value) const {
@@ -727,7 +726,7 @@ inline bool operator!=(const data_value& x, const data_value& y)
     return !(x == y);
 }
 
-using bytes_view_opt = std::experimental::optional<bytes_view>;
+using bytes_view_opt = std::optional<bytes_view>;
 
 static inline
 bool optional_less_compare(data_type t, bytes_view_opt e1, bytes_view_opt e2) {
@@ -1024,7 +1023,7 @@ public:
         return _underlying_type->references_user_type(keyspace, name);
     }
 
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
         return _underlying_type->update_user_type(updated);
     }
 
@@ -1086,7 +1085,7 @@ public:
             cql_serialization_format sf);
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
     virtual bool references_duration() const override;
 };
 
@@ -1128,7 +1127,7 @@ public:
     bytes serialize_partially_deserialized_form(
             const std::vector<bytes_view>& v, cql_serialization_format sf) const;
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
     virtual bool references_duration() const override;
 };
 
@@ -1168,7 +1167,7 @@ public:
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
     virtual bool references_duration() const override;
 };
 
@@ -1388,7 +1387,7 @@ to_bytes_opt(bytes_view_opt bv) {
     if (bv) {
         return to_bytes(*bv);
     }
-    return std::experimental::nullopt;
+    return std::nullopt;
 }
 
 inline
@@ -1397,7 +1396,7 @@ as_bytes_view_opt(const bytes_opt& bv) {
     if (bv) {
         return bytes_view{*bv};
     }
-    return std::experimental::nullopt;
+    return std::nullopt;
 }
 
 // FIXME: make more explicit
@@ -1508,7 +1507,7 @@ read_simple_bytes(bytes_view& v, size_t n) {
 }
 
 template<typename T>
-std::experimental::optional<T> read_simple_opt(bytes_view& v) {
+std::optional<T> read_simple_opt(bytes_view& v) {
     if (v.empty()) {
         return {};
     }
@@ -1594,7 +1593,7 @@ public:
     }
 private:
     void parse() {
-        _current = std::experimental::nullopt;
+        _current = std::nullopt;
         if (_v.empty()) {
             return;
         }
@@ -1667,7 +1666,7 @@ public:
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     virtual bool is_tuple() const override { return true; }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
     virtual bool references_duration() const override;
 private:
     bool check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const;
@@ -1708,7 +1707,7 @@ public:
     virtual bool equals(const abstract_type& other) const override;
     virtual bool is_user_type() const override { return true; }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
-    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 private:
     static sstring make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types);
 };
@@ -1719,12 +1718,12 @@ using user_type = shared_ptr<const user_type_impl>;
 using tuple_type = shared_ptr<const tuple_type_impl>;
 
 inline
-data_value::data_value(std::experimental::optional<bytes> v)
+data_value::data_value(std::optional<bytes> v)
         : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<bytes>())) {
 }
 
 template <typename NativeType>
-data_value::data_value(std::experimental::optional<NativeType> v)
+data_value::data_value(std::optional<NativeType> v)
         : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<NativeType>())) {
 }
 

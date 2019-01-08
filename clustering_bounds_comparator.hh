@@ -142,7 +142,7 @@ public:
     }
     template<template<typename> typename R>
     GCC6_CONCEPT( requires Range<R, clustering_key_prefix_view> )
-    static stdx::optional<typename R<clustering_key_prefix_view>::bound> to_range_bound(const bound_view& bv) {
+    static std::optional<typename R<clustering_key_prefix_view>::bound> to_range_bound(const bound_view& bv) {
         if (&bv._prefix.get() == &_empty_prefix) {
             return {};
         }

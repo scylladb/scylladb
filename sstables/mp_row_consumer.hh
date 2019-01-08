@@ -239,7 +239,7 @@ private:
             }
         }
     };
-    std::experimental::optional<collection_mutation> _pending_collection = {};
+    std::optional<collection_mutation> _pending_collection = {};
 
     collection_mutation& pending_collection(const column_definition *cdef) {
         assert(cdef->is_multi_cell() && "frozen set should behave like a cell\n");

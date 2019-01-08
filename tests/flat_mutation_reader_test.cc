@@ -199,7 +199,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
 
             fms.clear();
 
-            stdx::optional<bool> fragmented;
+            std::optional<bool> fragmented;
             fragment_and_freeze(flat_mutation_reader_from_mutations({ mutation(m) }), [&] (auto fm, bool frag) {
                 BOOST_REQUIRE(!fragmented || *fragmented == frag);
                 *fragmented = frag;
@@ -509,7 +509,7 @@ struct flat_stream_consumer {
     skip_after_first_fragment _skip_partition;
     skip_after_first_partition _skip_stream;
     std::vector<mutation> _mutations;
-    stdx::optional<position_in_partition> _previous_position;
+    std::optional<position_in_partition> _previous_position;
     bool _inside_partition = false;
 private:
     void verify_order(position_in_partition_view pos) {
@@ -571,7 +571,7 @@ public:
     stop_iteration consume_end_of_partition() {
         BOOST_REQUIRE(_inside_partition);
         BOOST_REQUIRE_GE(_mutations.size(), 1);
-        _previous_position = stdx::nullopt;
+        _previous_position = std::nullopt;
         _inside_partition = false;
         return stop_iteration(bool(_skip_stream));
     }

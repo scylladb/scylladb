@@ -36,14 +36,14 @@
 
 #include <optional>
 #include <vector>
-#include <experimental/optional>
+#include <optional>
 
 namespace db {
 
 schema_ptr view_build_status() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS, std::experimental::make_optional(id))
+        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS, std::make_optional(id))
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)

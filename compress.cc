@@ -95,7 +95,7 @@ shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& opti
         return create(i->second, [&options](const sstring& key) -> opt_string {
             auto i = options.find(key);
             if (i == options.end()) {
-                return std::experimental::nullopt;
+                return std::nullopt;
             }
             return { i->second };
         });

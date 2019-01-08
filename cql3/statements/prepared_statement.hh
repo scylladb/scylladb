@@ -50,7 +50,7 @@
 
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>
-#include <experimental/optional>
+#include <optional>
 #include <vector>
 
 namespace cql3 {

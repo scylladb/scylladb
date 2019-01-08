@@ -227,7 +227,7 @@ private:
 
     std::unordered_set<inet_address> _replicating_nodes;
 
-    std::experimental::optional<inet_address> _removing_node;
+    std::optional<inet_address> _removing_node;
 
     /* Are we starting this node in bootstrap mode? */
     bool _is_bootstrap_mode;

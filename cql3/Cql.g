@@ -115,7 +115,7 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
 // problem.  It is up to the user to ensure it is actually assigned to. 
 template <typename T>
 struct uninitialized {
-    std::experimental::optional<T> _val;
+    std::optional<T> _val;
     uninitialized() = default;
     uninitialized(const uninitialized&) = default;
     uninitialized(uninitialized&&) = default;
@@ -242,7 +242,7 @@ struct uninitialized {
         return res;
     }
 
-    bool convert_boolean_literal(stdx::string_view s) {
+    bool convert_boolean_literal(std::string_view s) {
         std::string lower_s(s.size(), '\0');
         std::transform(s.cbegin(), s.cend(), lower_s.begin(), &::tolower);
         return lower_s == "true";

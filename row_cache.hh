@@ -377,7 +377,7 @@ private:
     mutation_source_opt _prev_snapshot;
 
     // Positions >= than this are using _prev_snapshot, the rest is using _underlying.
-    stdx::optional<dht::ring_position> _prev_snapshot_pos;
+    std::optional<dht::ring_position> _prev_snapshot_pos;
 
     snapshot_source _snapshot_source;
 
@@ -401,7 +401,7 @@ private:
     void clear_now() noexcept;
 
     struct previous_entry_pointer {
-        stdx::optional<dht::decorated_key> _key;
+        std::optional<dht::decorated_key> _key;
 
         previous_entry_pointer() = default; // Represents dht::ring_position_view::min()
         previous_entry_pointer(dht::decorated_key key) : _key(std::move(key)) {};

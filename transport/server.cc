@@ -306,9 +306,9 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) {
     return v3;
 }
 
-future<std::experimental::optional<cql_binary_frame_v3>>
+future<std::optional<cql_binary_frame_v3>>
 cql_server::connection::read_frame() {
-    using ret_type = std::experimental::optional<cql_binary_frame_v3>;
+    using ret_type = std::optional<cql_binary_frame_v3>;
     if (!_version) {
         // We don't know the frame size before reading the first frame,
         // so read just one byte, and then read the rest of the frame.
@@ -387,7 +387,7 @@ future<cql_server::connection::processing_result>
                 break;
         }
 
-        const auto user = [&client_state]() -> stdx::optional<auth::authenticated_user> {
+        const auto user = [&client_state]() -> std::optional<auth::authenticated_user> {
             const auto user = client_state.user();
             if (!user) {
                 return {};
@@ -555,7 +555,7 @@ void cql_server::connection::update_client_state(processing_result& response) {
 }
 
 future<> cql_server::connection::process_request() {
-    return read_frame().then_wrapped([this] (future<std::experimental::optional<cql_binary_frame_v3>>&& v) {
+    return read_frame().then_wrapped([this] (future<std::optional<cql_binary_frame_v3>>&& v) {
         auto maybe_frame = std::get<0>(v.get());
         if (!maybe_frame) {
             // eof
@@ -790,7 +790,7 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, req
 
 future<response_type> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state client_state_)
 {
-    auto query = in.read_long_string_view().to_string();
+    auto query = sstring(in.read_long_string_view());
 
     tracing::add_query(client_state_.get_trace_state(), query);
     tracing::begin(client_state_.get_trace_state(), "Preparing CQL3 query", client_state_.get_client_address());
@@ -845,7 +845,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, r
         std::vector<cql3::raw_value_view> values;
         in.read_value_view_list(_version, values);
         auto consistency = in.read_consistency();
-        q_state->options = std::make_unique<cql3::query_options>(consistency, timeout_config(), std::experimental::nullopt, values, false,
+        q_state->options = std::make_unique<cql3::query_options>(consistency, timeout_config(), std::nullopt, values, false,
                                                                  cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
     } else {
         q_state->options = in.read_options(_version, _cql_serialization_format, this->timeout_config());

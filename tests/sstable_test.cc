@@ -969,12 +969,12 @@ SEASTAR_TEST_CASE(promoted_index_read) {
 
 // Use an empty string for ck1, ck2, or both, for unbounded ranges.
 static query::partition_slice make_partition_slice(const schema& s, sstring ck1, sstring ck2) {
-    std::experimental::optional<query::clustering_range::bound> b1;
+    std::optional<query::clustering_range::bound> b1;
     if (!ck1.empty()) {
         b1.emplace(clustering_key_prefix::from_single_value(
                 s, utf8_type->decompose(ck1)));
     }
-    std::experimental::optional<query::clustering_range::bound> b2;
+    std::optional<query::clustering_range::bound> b2;
     if (!ck2.empty()) {
         b2.emplace(clustering_key_prefix::from_single_value(
                 s, utf8_type->decompose(ck2)));

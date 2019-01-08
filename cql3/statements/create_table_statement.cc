@@ -64,7 +64,7 @@ create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
                                                ::shared_ptr<cf_prop_defs> properties,
                                                bool if_not_exists,
                                                column_set_type static_columns,
-                                               const stdx::optional<utils::UUID>& id)
+                                               const std::optional<utils::UUID>& id)
     : schema_altering_statement{name}
     , _use_compact_storage(false)
     , _static_columns{static_columns}
@@ -205,7 +205,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
     auto stmt = ::make_shared<create_table_statement>(_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
 
-    std::experimental::optional<std::map<bytes, data_type>> defined_multi_cell_collections;
+    std::optional<std::map<bytes, data_type>> defined_multi_cell_collections;
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
         ::shared_ptr<cql3_type> pt = entry.second->prepare(db, keyspace());

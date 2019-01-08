@@ -90,7 +90,7 @@ class streamed_mutation_freezer {
     bool _reversed;
 
     tombstone _partition_tombstone;
-    stdx::optional<static_row> _sr;
+    std::optional<static_row> _sr;
     std::deque<clustering_row> _crs;
     range_tombstone_list _rts;
 public:

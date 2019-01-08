@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <experimental/string_view>
+#include <string_view>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -33,7 +33,6 @@
 
 #include "auth/resource.hh"
 #include "seastarx.hh"
-#include "stdx.hh"
 
 namespace auth {
 
@@ -60,21 +59,21 @@ public:
 
 class role_already_exists : public roles_argument_exception {
 public:
-    explicit role_already_exists(stdx::string_view role_name)
+    explicit role_already_exists(std::string_view role_name)
             : roles_argument_exception(format("Role {} already exists.", role_name)) {
     }
 };
 
 class nonexistant_role : public roles_argument_exception {
 public:
-    explicit nonexistant_role(stdx::string_view role_name)
+    explicit nonexistant_role(std::string_view role_name)
             : roles_argument_exception(format("Role {} doesn't exist.", role_name)) {
     }
 };
 
 class role_already_included : public roles_argument_exception {
 public:
-    role_already_included(stdx::string_view grantee_name, stdx::string_view role_name)
+    role_already_included(std::string_view grantee_name, std::string_view role_name)
             : roles_argument_exception(
                       format("{} already includes role {}.", grantee_name, role_name)) {
     }
@@ -82,7 +81,7 @@ public:
 
 class revoke_ungranted_role : public roles_argument_exception {
 public:
-    revoke_ungranted_role(stdx::string_view revokee_name, stdx::string_view role_name)
+    revoke_ungranted_role(std::string_view revokee_name, std::string_view role_name)
             : roles_argument_exception(
                       format("{} was not granted role {}, so it cannot be revoked.", revokee_name, role_name)) {
     }
@@ -104,7 +103,7 @@ class role_manager {
 public:
     virtual ~role_manager() = default;
 
-    virtual stdx::string_view qualified_java_name() const noexcept = 0;
+    virtual std::string_view qualified_java_name() const noexcept = 0;
 
     virtual const resource_set& protected_resources() const = 0;
 
@@ -115,17 +114,17 @@ public:
     ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
     ///
-    virtual future<> create(stdx::string_view role_name, const role_config&) const = 0;
+    virtual future<> create(std::string_view role_name, const role_config&) const = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> drop(stdx::string_view role_name) const = 0;
+    virtual future<> drop(std::string_view role_name) const = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> alter(stdx::string_view role_name, const role_config_update&) const = 0;
+    virtual future<> alter(std::string_view role_name, const role_config_update&) const = 0;
 
     ///
     /// Grant `role_name` to `grantee_name`.
@@ -135,7 +134,7 @@ public:
     /// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
     /// create a cycle.
     ///
-    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) const = 0;
+    virtual future<> grant(std::string_view grantee_name, std::string_view role_name) const = 0;
 
     ///
     /// Revoke `role_name` from `revokee_name`.
@@ -144,26 +143,26 @@ public:
     ///
     /// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
     ///
-    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) const = 0;
+    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name) const = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<role_set> query_granted(stdx::string_view grantee, recursive_role_query) const = 0;
+    virtual future<role_set> query_granted(std::string_view grantee, recursive_role_query) const = 0;
 
     virtual future<role_set> query_all() const = 0;
 
-    virtual future<bool> exists(stdx::string_view role_name) const = 0;
+    virtual future<bool> exists(std::string_view role_name) const = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<bool> is_superuser(stdx::string_view role_name) const = 0;
+    virtual future<bool> is_superuser(std::string_view role_name) const = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<bool> can_login(stdx::string_view role_name) const = 0;
+    virtual future<bool> can_login(std::string_view role_name) const = 0;
 };
 
 }

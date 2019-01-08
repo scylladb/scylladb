@@ -44,7 +44,7 @@
 #include <iosfwd>
 #include <boost/functional/hash.hpp>
 #include <boost/range/algorithm/find.hpp>
-#include <experimental/optional>
+#include <optional>
 #include <string.h>
 #include "types.hh"
 #include "compound.hh"
@@ -167,7 +167,7 @@ private:
     seal_delayed_fn_type _seal_delayed_fn;
     std::function<schema_ptr()> _current_schema;
     dirty_memory_manager* _dirty_memory_manager;
-    std::experimental::optional<shared_promise<>> _flush_coalescing;
+    std::optional<shared_promise<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
 public:
     memtable_list(
@@ -438,7 +438,7 @@ private:
     // the read lock, and the ones that wish to stop that process will take the write lock.
     rwlock _sstables_lock;
     mutable row_cache _cache; // Cache covers only sstables.
-    std::experimental::optional<int64_t> _sstable_generation = {};
+    std::optional<int64_t> _sstable_generation = {};
 
     db::replay_position _highest_rp;
     db::replay_position _lowest_allowed_rp;
@@ -1350,7 +1350,7 @@ public:
     bool has_schema(const sstring& ks_name, const sstring& cf_name) const;
     std::set<sstring> existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude = sstring()) const;
     sstring get_available_index_name(const sstring& ks_name, const sstring& cf_name,
-                                     std::experimental::optional<sstring> index_name_root) const;
+                                     std::optional<sstring> index_name_root) const;
     schema_ptr find_indexed_table(const sstring& ks_name, const sstring& index_name) const;
     future<> stop();
     unsigned shard_of(const dht::token& t);
@@ -1426,7 +1426,7 @@ public:
     }
 
     std::unordered_set<sstring> get_initial_tokens();
-    std::experimental::optional<gms::inet_address> get_replace_address();
+    std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
     reader_concurrency_semaphore& user_read_concurrency_sem() {
         return _read_concurrency_sem;

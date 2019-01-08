@@ -27,14 +27,14 @@ class range_bound {
 
 template<typename T>
 class range {
-    std::experimental::optional<range_bound<T>> start();
-    std::experimental::optional<range_bound<T>> end();
+    std::optional<range_bound<T>> start();
+    std::optional<range_bound<T>> end();
     bool is_singular();
 };
 
 template<typename T>
 class nonwrapping_range {
-    std::experimental::optional<range_bound<T>> start();
-    std::experimental::optional<range_bound<T>> end();
+    std::optional<range_bound<T>> start();
+    std::optional<range_bound<T>> end();
     bool is_singular();
 };

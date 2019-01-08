@@ -31,7 +31,6 @@
 #include "../compress.hh"
 #include "compress.hh"
 #include "unimplemented.hh"
-#include "stdx.hh"
 #include "segmented_compress_params.hh"
 #include "utils/class_registrator.hh"
 
@@ -275,7 +274,7 @@ local_compression::local_compression(const compression& c)
                     return sstring(o.value.value.begin(), o.value.value.end());
                 }
             }
-            return std::experimental::nullopt;
+            return std::nullopt;
         });
     }())
 {}
@@ -343,7 +342,7 @@ GCC6_CONCEPT(
     requires ChecksumUtils<ChecksumType>
 )
 class compressed_file_data_source_impl : public data_source_impl {
-    stdx::optional<input_stream<char>> _input_stream;
+    std::optional<input_stream<char>> _input_stream;
     sstables::compression* _compression_metadata;
     sstables::compression::segmented_offsets::accessor _offsets;
     sstables::local_compression _compression;

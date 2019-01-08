@@ -41,7 +41,7 @@ std::vector<inet_address> local_strategy::calculate_natural_endpoints(const toke
 void local_strategy::validate_options() const {
 }
 
-std::experimental::optional<std::set<sstring>> local_strategy::recognized_options() const {
+std::optional<std::set<sstring>> local_strategy::recognized_options() const {
     // LocalStrategy doesn't expect any options.
     return {};
 }

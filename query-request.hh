@@ -22,7 +22,7 @@
 
 #pragma once
 
-#include <experimental/optional>
+#include <optional>
 
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
@@ -178,7 +178,7 @@ public:
     partition_slice slice;
     uint32_t row_limit;
     gc_clock::time_point timestamp;
-    std::experimental::optional<tracing::trace_info> trace_info;
+    std::optional<tracing::trace_info> trace_info;
     uint32_t partition_limit; // The maximum number of live partitions to return.
     // The "query_uuid" field is useful in pages queries: It tells the replica
     // that when it finishes the read request prematurely, i.e., reached the
@@ -200,7 +200,7 @@ public:
                  partition_slice slice,
                  uint32_t row_limit = max_rows,
                  gc_clock::time_point now = gc_clock::now(),
-                 std::experimental::optional<tracing::trace_info> ti = std::experimental::nullopt,
+                 std::optional<tracing::trace_info> ti = std::nullopt,
                  uint32_t partition_limit = max_partitions,
                  utils::UUID query_uuid = utils::UUID(),
                  bool is_first_page = false,

@@ -79,7 +79,7 @@ static auto get_stream_result_future(utils::UUID plan_id) {
     return f;
 }
 
-static auto get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::experimental::optional<utils::UUID> cf_id = {}) {
+static auto get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<utils::UUID> cf_id = {}) {
     if (cf_id) {
         sslog.debug("[Stream #{}] GOT {} from {}: cf_id={}", plan_id, verb, from, *cf_id);
     } else {
@@ -168,7 +168,7 @@ void stream_session::init_messaging_service_handler() {
                 return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, cf_id, source, reason] (schema_ptr s) mutable {
                     auto sink = ms().make_sink_for_stream_mutation_fragments(source);
                     auto get_next_mutation_fragment = [source, plan_id, from, s] () mutable {
-                        return source().then([plan_id, from, s] (stdx::optional<std::tuple<frozen_mutation_fragment>> fmf_opt) mutable {
+                        return source().then([plan_id, from, s] (std::optional<std::tuple<frozen_mutation_fragment>> fmf_opt) mutable {
                             if (fmf_opt) {
                                 frozen_mutation_fragment& fmf = std::get<0>(fmf_opt.value());
                                 auto sz = fmf.representation().size();

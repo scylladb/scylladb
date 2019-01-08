@@ -54,12 +54,12 @@ namespace tracing {
 logging::logger trace_state_logger("trace_state");
 
 struct trace_state::params_values {
-    std::experimental::optional<std::unordered_set<gms::inet_address>> batchlog_endpoints;
-    std::experimental::optional<api::timestamp_type> user_timestamp;
+    std::optional<std::unordered_set<gms::inet_address>> batchlog_endpoints;
+    std::optional<api::timestamp_type> user_timestamp;
     std::vector<sstring> queries;
-    std::experimental::optional<db::consistency_level> cl;
-    std::experimental::optional<db::consistency_level> serial_cl;
-    std::experimental::optional<int32_t> page_size;
+    std::optional<db::consistency_level> cl;
+    std::optional<db::consistency_level> serial_cl;
+    std::optional<int32_t> page_size;
     std::vector<prepared_checked_weak_ptr> prepared_statements;
 };
 
@@ -82,7 +82,7 @@ void trace_state::set_consistency_level(db::consistency_level val) {
     _params_ptr->cl.emplace(val);
 }
 
-void trace_state::set_optional_serial_consistency_level(const std::experimental::optional<db::consistency_level>& val) {
+void trace_state::set_optional_serial_consistency_level(const std::optional<db::consistency_level>& val) {
     if (val) {
         _params_ptr->serial_cl.emplace(*val);
     }

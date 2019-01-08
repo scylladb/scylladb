@@ -430,7 +430,7 @@ public:
     // Assumes the snapshot is evictable and not populated by means other than ensure_entry_if_complete().
     // Subsequent calls to ensure_entry_if_complete() must be given strictly monotonically increasing
     // positions unless iterators are invalidated across the calls.
-    stdx::optional<ensure_result> ensure_entry_if_complete(position_in_partition_view pos) {
+    std::optional<ensure_result> ensure_entry_if_complete(position_in_partition_view pos) {
         position_in_partition::less_compare less(_schema);
         if (!iterators_valid() || less(position(), pos)) {
             auto has_entry = maybe_advance_to(pos);
@@ -440,11 +440,11 @@ public:
             position_in_partition::equal_compare eq(_schema);
             if (eq(position(), pos)) {
                 if (dummy()) {
-                    return stdx::nullopt;
+                    return std::nullopt;
                 }
                 return ensure_entry_in_latest();
             } else if (!continuous()) {
-                return stdx::nullopt;
+                return std::nullopt;
             }
         }
         auto&& rows = _snp.version()->partition().clustered_rows();

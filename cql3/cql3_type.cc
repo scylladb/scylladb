@@ -178,7 +178,7 @@ public:
             : _name(std::move(name)) {
     }
 
-    virtual std::experimental::optional<sstring> keyspace() const override {
+    virtual std::optional<sstring> keyspace() const override {
         return _name.get_keyspace();
     }
 
@@ -280,9 +280,9 @@ cql3_type::raw::is_counter() const {
     return false;
 }
 
-std::experimental::optional<sstring>
+std::optional<sstring>
 cql3_type::raw::keyspace() const {
-    return std::experimental::nullopt;
+    return std::nullopt;
 }
 
 void

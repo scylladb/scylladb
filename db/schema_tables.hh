@@ -180,9 +180,9 @@ future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distri
 
 future<std::vector<mutation>> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
-schema_ptr create_table_from_mutations(const schema_ctxt&, schema_mutations, std::experimental::optional<table_schema_version> version = {});
+schema_ptr create_table_from_mutations(const schema_ctxt&, schema_mutations, std::optional<table_schema_version> version = {});
 
-view_ptr create_view_from_mutations(const schema_ctxt&, schema_mutations, std::experimental::optional<table_schema_version> version = {});
+view_ptr create_view_from_mutations(const schema_ctxt&, schema_mutations, std::optional<table_schema_version> version = {});
 
 future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 

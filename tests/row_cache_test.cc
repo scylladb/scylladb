@@ -322,7 +322,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_range_open) {
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
-    std::experimental::optional<dht::token> last_token;
+    std::optional<dht::token> last_token;
     for (auto&& p : partitions) {
         const dht::decorated_key& key = p.decorated_key();
         if (last_token && key.token() == *last_token) {
@@ -1441,7 +1441,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
             auto m12 = m1 + m2;
 
-            stdx::optional<flat_mutation_reader> mt1_reader_opt;
+            std::optional<flat_mutation_reader> mt1_reader_opt;
             if (with_active_memtable_reader) {
                 mt1_reader_opt = mt1->make_flat_reader(s);
                 mt1_reader_opt->set_max_buffer_size(1);
@@ -2171,7 +2171,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
 
             populate_range(cache, population_range);
             auto rd1_v1 = assert_that(make_reader(population_range));
-            stdx::optional<flat_mutation_reader> snap;
+            std::optional<flat_mutation_reader> snap;
 
             try {
                 auto mt = make_lw_shared<memtable>(cache.schema());

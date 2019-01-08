@@ -526,7 +526,7 @@ private:
     uint64_t _partition_header_length = 0;
     uint64_t _prev_row_start = 0;
     std::optional<key> _partition_key;
-    stdx::optional<key> _first_key, _last_key;
+    std::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
     bytes_ostream _tmp_bufs;

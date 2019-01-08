@@ -1029,7 +1029,7 @@ if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' % (seastar_ldflags),
-                  '--c++-dialect=gnu++1z', '--optflags=%s' % (modes['release']['opt']), ]
+                  '--c++-dialect=gnu++17', '--use-std-optional-variant-stringview=1', '--optflags=%s' % (modes['release']['opt']), ]
 
 libdeflate_cflags = seastar_cflags
 

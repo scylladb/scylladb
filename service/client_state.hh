@@ -119,7 +119,7 @@ private:
     auth::service* _auth_service{nullptr};
 
     // Only set for "request copy"
-    stdx::optional<api::timestamp_type> _request_ts;
+    std::optional<api::timestamp_type> _request_ts;
 
 public:
     struct internal_tag {};

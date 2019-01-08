@@ -33,7 +33,7 @@ class dirty_memory_manager;
 
 class sstable_write_permit final {
     friend class dirty_memory_manager;
-    stdx::optional<semaphore_units<>> _permit;
+    std::optional<semaphore_units<>> _permit;
 
     sstable_write_permit() noexcept = default;
     explicit sstable_write_permit(semaphore_units<>&& units) noexcept

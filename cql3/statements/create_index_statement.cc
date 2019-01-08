@@ -242,7 +242,7 @@ create_index_statement::announce_migration(service::storage_proxy& proxy, bool i
     }
     sstring accepted_name = _index_name;
     if (accepted_name.empty()) {
-        std::experimental::optional<sstring> index_name_root;
+        std::optional<sstring> index_name_root;
         if (targets.size() == 1) {
            index_name_root = targets[0]->column->to_string();
         }

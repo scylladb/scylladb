@@ -23,7 +23,7 @@
 
 #include "abstract_replication_strategy.hh"
 
-#include <experimental/optional>
+#include <optional>
 #include <set>
 
 // forward declaration since database.hh includes this file
@@ -50,7 +50,7 @@ public:
 
     virtual void validate_options() const override;
 
-    virtual std::experimental::optional<std::set<sstring>> recognized_options() const override;
+    virtual std::optional<std::set<sstring>> recognized_options() const override;
 };
 
 }

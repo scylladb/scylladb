@@ -23,14 +23,13 @@
 
 #include "auth/role_manager.hh"
 
-#include <experimental/string_view>
+#include <string_view>
 #include <unordered_set>
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 
-#include "stdx.hh"
 #include "seastarx.hh"
 
 namespace cql3 {
@@ -43,7 +42,7 @@ class migration_manager;
 
 namespace auth {
 
-stdx::string_view standard_role_manager_name() noexcept;
+std::string_view standard_role_manager_name() noexcept;
 
 class standard_role_manager final : public role_manager {
     cql3::query_processor& _qp;
@@ -58,7 +57,7 @@ public:
             , _stopped(make_ready_future<>()) {
     }
 
-    virtual stdx::string_view qualified_java_name() const noexcept override;
+    virtual std::string_view qualified_java_name() const noexcept override;
 
     virtual const resource_set& protected_resources() const override;
 
@@ -66,25 +65,25 @@ public:
 
     virtual future<> stop() override;
 
-    virtual future<> create(stdx::string_view role_name, const role_config&) const override;
+    virtual future<> create(std::string_view role_name, const role_config&) const override;
 
-    virtual future<> drop(stdx::string_view role_name) const override;
+    virtual future<> drop(std::string_view role_name) const override;
 
-    virtual future<> alter(stdx::string_view role_name, const role_config_update&) const override;
+    virtual future<> alter(std::string_view role_name, const role_config_update&) const override;
 
-    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) const override;
+    virtual future<> grant(std::string_view grantee_name, std::string_view role_name) const override;
 
-    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) const override;
+    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name) const override;
 
-    virtual future<role_set> query_granted(stdx::string_view grantee_name, recursive_role_query) const override;
+    virtual future<role_set> query_granted(std::string_view grantee_name, recursive_role_query) const override;
 
     virtual future<role_set> query_all() const override;
 
-    virtual future<bool> exists(stdx::string_view role_name) const override;
+    virtual future<bool> exists(std::string_view role_name) const override;
 
-    virtual future<bool> is_superuser(stdx::string_view role_name) const override;
+    virtual future<bool> is_superuser(std::string_view role_name) const override;
 
-    virtual future<bool> can_login(stdx::string_view role_name) const override;
+    virtual future<bool> can_login(std::string_view role_name) const override;
 
 private:
     enum class membership_change { add, remove };
@@ -97,9 +96,9 @@ private:
 
     future<> create_default_role_if_missing() const;
 
-    future<> create_or_replace(stdx::string_view role_name, const role_config&) const;
+    future<> create_or_replace(std::string_view role_name, const role_config&) const;
 
-    future<> modify_membership(stdx::string_view role_name, stdx::string_view grantee_name, membership_change) const;
+    future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change) const;
 };
 
 }

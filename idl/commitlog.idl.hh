@@ -20,6 +20,6 @@
  */
 
 class commitlog_entry [[writable]] {
-    std::experimental::optional<column_mapping> mapping();
+    std::optional<column_mapping> mapping();
     frozen_mutation mutation();
 };

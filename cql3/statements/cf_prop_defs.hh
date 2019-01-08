@@ -86,11 +86,11 @@ public:
     static constexpr int32_t DEFAULT_MIN_INDEX_INTERVAL = 128;
     static constexpr int32_t DEFAULT_MAX_INDEX_INTERVAL = 2048;
 private:
-    std::experimental::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
+    std::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
     void validate(const db::extensions&);
     std::map<sstring, sstring> get_compaction_options() const;
-    stdx::optional<std::map<sstring, sstring>> get_compression_options() const;
+    std::optional<std::map<sstring, sstring>> get_compression_options() const;
 #if 0
     public CachingOptions getCachingOptions() throws SyntaxException, ConfigurationException
     {
@@ -110,7 +110,7 @@ public:
 #endif
     int32_t get_default_time_to_live() const;
     int32_t get_gc_grace_seconds() const;
-    stdx::optional<utils::UUID> get_id() const;
+    std::optional<utils::UUID> get_id() const;
 
     void apply_to_builder(schema_builder& builder, const db::extensions&);
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;

@@ -23,12 +23,11 @@
 
 #include <boost/intrusive/set.hpp>
 #include <boost/range/algorithm.hpp>
-#include <experimental/optional>
+#include <optional>
 #include "hashing.hh"
 #include "keys.hh"
 #include "tombstone.hh"
 #include "clustering_bounds_comparator.hh"
-#include "stdx.hh"
 #include "position_in_partition.hh"
 
 namespace bi = boost::intrusive;
@@ -139,7 +138,7 @@ public:
     // The start bounds of this and src are required to be equal. The start bound
     // of this is not changed. The start bound of the remainder (if there is any)
     // is larger than the end bound of this.
-    stdx::optional<range_tombstone> apply(const schema& s, range_tombstone&& src);
+    std::optional<range_tombstone> apply(const schema& s, range_tombstone&& src);
 
     // Intersects the range of this tombstone with [pos, +inf) and replaces
     // the range of the tombstone if there is an overlap.

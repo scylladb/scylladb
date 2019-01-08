@@ -595,8 +595,8 @@ size_t summary_byte_cost();
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval);
 
 void seal_summary(summary& s,
-    std::experimental::optional<key>&& first_key,
-    std::experimental::optional<key>&& last_key,
+    std::optional<key>&& first_key,
+    std::optional<key>&& last_key,
     const index_sampling_state& state);
 
 void seal_statistics(sstable_version_types, statistics&, metadata_collector&,

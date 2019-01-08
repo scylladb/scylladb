@@ -429,12 +429,12 @@ public:
         _left = length;
         return repeat_until_value([this, length, &in] {
             if (!_left) {
-                return make_ready_future<stdx::optional<fragmented_temporary_buffer>>(fragmented_temporary_buffer(std::move(_fragments), length));
+                return make_ready_future<std::optional<fragmented_temporary_buffer>>(fragmented_temporary_buffer(std::move(_fragments), length));
             }
             return in.read_up_to(_left).then([this] (temporary_buffer<char> buf) {
                 _left -= buf.size();
                 _fragments.emplace_back(std::move(buf));
-                return stdx::optional<fragmented_temporary_buffer>();
+                return std::optional<fragmented_temporary_buffer>();
             });
         });
     }

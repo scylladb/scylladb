@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include <experimental/string_view>
+#include <string_view>
 #include <functional>
 #include <optional>
 #include <stdexcept>
@@ -54,7 +54,6 @@
 #include "auth/permission.hh"
 #include "auth/resource.hh"
 #include "seastarx.hh"
-#include "stdx.hh"
 
 namespace auth {
 
@@ -117,14 +116,14 @@ public:
     ///
     /// \throws \ref unsupported_authorization_operation if granting permissions is not supported.
     ///
-    virtual future<> grant(stdx::string_view role_name, permission_set, const resource&) const = 0;
+    virtual future<> grant(std::string_view role_name, permission_set, const resource&) const = 0;
 
     ///
     /// Revoke a set of permissions from a role for a particular \ref resource.
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
     ///
-    virtual future<> revoke(stdx::string_view role_name, permission_set, const resource&) const = 0;
+    virtual future<> revoke(std::string_view role_name, permission_set, const resource&) const = 0;
 
     ///
     /// Query for all directly granted permissions.
@@ -138,7 +137,7 @@ public:
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
     ///
-    virtual future<> revoke_all(stdx::string_view role_name) const = 0;
+    virtual future<> revoke_all(std::string_view role_name) const = 0;
 
     ///
     /// Revoke all permissions granted to any role for a particular resource.

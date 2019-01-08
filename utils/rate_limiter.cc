@@ -26,7 +26,7 @@ utils::rate_limiter::rate_limiter(size_t rate)
     if (_units_per_s != 0) {
         _timer.set_callback(std::bind(&rate_limiter::on_timer, this));
         _timer.arm(lowres_clock::now() + std::chrono::seconds(1),
-                std::experimental::optional<lowres_clock::duration> {
+                std::optional<lowres_clock::duration> {
                         std::chrono::seconds(1) });
     }
 }

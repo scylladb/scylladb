@@ -300,17 +300,17 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
         m3.set_clustered_cell(ck3, to_bytes("col"), data_value(bytes(bytes::initialized_later(), 8)), next_timestamp());
 
         mt->apply(m1);
-        stdx::optional<flat_reader_assertions> rd1 = assert_that(mt->make_flat_reader(s));
+        std::optional<flat_reader_assertions> rd1 = assert_that(mt->make_flat_reader(s));
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer().get();
 
         mt->apply(m2);
-        stdx::optional<flat_reader_assertions> rd2 = assert_that(mt->make_flat_reader(s));
+        std::optional<flat_reader_assertions> rd2 = assert_that(mt->make_flat_reader(s));
         rd2->set_max_buffer_size(1);
         rd2->fill_buffer().get();
 
         mt->apply(m3);
-        stdx::optional<flat_reader_assertions> rd3 = assert_that(mt->make_flat_reader(s));
+        std::optional<flat_reader_assertions> rd3 = assert_that(mt->make_flat_reader(s));
         rd3->set_max_buffer_size(1);
         rd3->fill_buffer().get();
 

@@ -76,8 +76,8 @@ protected:
     bool _exhausted = false;
     uint32_t _max;
 
-    std::experimental::optional<partition_key> _last_pkey;
-    std::experimental::optional<clustering_key> _last_ckey;
+    std::optional<partition_key> _last_pkey;
+    std::optional<clustering_key> _last_ckey;
 
     schema_ptr _schema;
     shared_ptr<const cql3::selection::selection> _selection;
@@ -86,7 +86,7 @@ protected:
     lw_shared_ptr<query::read_command> _cmd;
     dht::partition_range_vector _ranges;
     paging_state::replicas_per_token_range _last_replicas;
-    std::experimental::optional<db::read_repair_decision> _query_read_repair_decision;
+    std::optional<db::read_repair_decision> _query_read_repair_decision;
 public:
     query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,

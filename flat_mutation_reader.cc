@@ -87,7 +87,7 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
             if (is_buffer_full()) {
                 return stop_iteration::yes;
             }
-            push_mutation_fragment(std::move(*std::exchange(_partition_end, stdx::nullopt)));
+            push_mutation_fragment(std::move(*std::exchange(_partition_end, std::nullopt)));
             return stop_iteration::no;
         }
         future<stop_iteration> consume_partition_from_source(db::timeout_clock::time_point timeout) {
@@ -143,7 +143,7 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
                     _mutation_fragments.pop();
                 }
                 _range_tombstones.clear();
-                _partition_end = stdx::nullopt;
+                _partition_end = std::nullopt;
                 _source->next_partition();
             }
         }

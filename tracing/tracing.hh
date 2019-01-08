@@ -642,7 +642,7 @@ private:
      *
      * @return TRUE if conditions are allowing creating a new tracing session
      */
-    bool may_create_new_session(const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt) {
+    bool may_create_new_session(const std::optional<utils::UUID>& session_id = std::nullopt) {
         // Don't create a session if its records are likely to be dropped
         if (!have_records_budget(exp_trace_events_per_session) || _active_sessions >= max_pending_sessions + write_event_sessions_threshold) {
             if (session_id) {

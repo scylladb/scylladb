@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include <experimental/optional>
+#include <optional>
 
 #include "bytes.hh"
 #include "keys.hh"
@@ -59,19 +59,19 @@ public:
 
 private:
     partition_key _partition_key;
-    std::experimental::optional<clustering_key> _clustering_key;
+    std::optional<clustering_key> _clustering_key;
     uint32_t _remaining;
     utils::UUID _query_uuid;
     replicas_per_token_range _last_replicas;
-    std::experimental::optional<db::read_repair_decision> _query_read_repair_decision;
+    std::optional<db::read_repair_decision> _query_read_repair_decision;
 
 public:
     paging_state(partition_key pk,
-            std::experimental::optional<clustering_key> ck,
+            std::optional<clustering_key> ck,
             uint32_t rem,
             utils::UUID reader_recall_uuid,
             replicas_per_token_range last_replicas,
-            std::experimental::optional<db::read_repair_decision> query_read_repair_decision);
+            std::optional<db::read_repair_decision> query_read_repair_decision);
 
     void set_partition_key(partition_key pk) {
         _partition_key = std::move(pk);
@@ -94,7 +94,7 @@ public:
     /**
      * Clustering key in last partition. I.e. first, next, row
      */
-    const std::experimental::optional<clustering_key>& get_clustering_key() const {
+    const std::optional<clustering_key>& get_clustering_key() const {
         return _clustering_key;
     }
     /**
@@ -146,7 +146,7 @@ public:
      * used for all pages, if the replica is skipped for one or more pages the
      * saved reader has to be dropped.
      */
-    std::experimental::optional<db::read_repair_decision> get_query_read_repair_decision() const {
+    std::optional<db::read_repair_decision> get_query_read_repair_decision() const {
         return _query_read_repair_decision;
     }
 

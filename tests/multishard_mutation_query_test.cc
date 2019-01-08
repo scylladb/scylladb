@@ -126,7 +126,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         auto [s, _] = create_test_cf(env);
         (void)_;
 
-        auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), 7, gc_clock::now(), stdx::nullopt, query::max_partitions,
+        auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), 7, gc_clock::now(), std::nullopt, query::max_partitions,
                 utils::make_random_uuid(), true);
 
         query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, std::numeric_limits<uint64_t>::max()).get();
@@ -172,7 +172,7 @@ read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, siz
     const auto max_size = std::numeric_limits<uint64_t>::max();
     const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
     std::vector<mutation> results;
-    auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), page_size, gc_clock::now(), stdx::nullopt, query::max_partitions,
+    auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), page_size, gc_clock::now(), std::nullopt, query::max_partitions,
             query_uuid, true);
 
     // First page is special, needs to have `is_first_page` set.

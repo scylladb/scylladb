@@ -44,14 +44,14 @@
 #include "function_name.hh"
 #include "types.hh"
 #include <vector>
-#include <experimental/optional>
+#include <optional>
 
 namespace cql3 {
 namespace functions {
 
 class function {
 public:
-    using opt_bytes = std::experimental::optional<bytes>;
+    using opt_bytes = std::optional<bytes>;
     virtual ~function() {}
     virtual const function_name& name() const = 0;
     virtual const std::vector<data_type>& arg_types() const = 0;

@@ -72,7 +72,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     async_schema_loader _loader; // valid when state == LOADING
     shared_promise<schema_ptr> _schema_promise; // valid when state == LOADING
 
-    std::experimental::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
+    std::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
     // valid when state == LOADED
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
     const ::schema* _schema = nullptr;

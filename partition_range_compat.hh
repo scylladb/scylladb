@@ -27,7 +27,6 @@
 #include "range.hh"
 #include "dht/i_partitioner.hh"
 #include "query-request.hh"
-#include "stdx.hh"
 
 namespace compat {
 
@@ -114,11 +113,11 @@ unwrap(std::vector<wrapping_range<dht::token>>&& v) {
 }
 
 
-class one_or_two_partition_ranges : public std::pair<dht::partition_range, stdx::optional<dht::partition_range>> {
-    using pair = std::pair<dht::partition_range, stdx::optional<dht::partition_range>>;
+class one_or_two_partition_ranges : public std::pair<dht::partition_range, std::optional<dht::partition_range>> {
+    using pair = std::pair<dht::partition_range, std::optional<dht::partition_range>>;
 public:
     explicit one_or_two_partition_ranges(dht::partition_range&& f)
-        : pair(std::move(f), stdx::nullopt) {
+        : pair(std::move(f), std::nullopt) {
     }
     explicit one_or_two_partition_ranges(dht::partition_range&& f, dht::partition_range&& s)
         : pair(std::move(f), std::move(s)) {

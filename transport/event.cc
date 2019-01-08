@@ -79,7 +79,7 @@ event::status_change event::status_change::node_down(const gms::inet_address& ho
     return status_change{status_type::DOWN, ipv4_addr{host.raw_addr(), port}};
 }
 
-event::schema_change::schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::experimental::optional<sstring>& table_or_type_or_function_)
+event::schema_change::schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::optional<sstring>& table_or_type_or_function_)
     : event{event_type::SCHEMA_CHANGE}
     , change{change_}
     , target{target_}
@@ -94,7 +94,7 @@ event::schema_change::schema_change(const change_type change_, const target_type
 }
 
 event::schema_change::schema_change(const change_type change_, const sstring keyspace_)
-    : schema_change{change_, target_type::KEYSPACE, keyspace_, std::experimental::optional<sstring>{}}
+    : schema_change{change_, target_type::KEYSPACE, keyspace_, std::optional<sstring>{}}
 { }
 
 }

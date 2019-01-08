@@ -296,8 +296,8 @@ class query_pager::query_result_visitor : public Base {
 public:
     uint32_t total_rows = 0;
     uint32_t dropped_rows = 0;
-    std::experimental::optional<partition_key> last_pkey;
-    std::experimental::optional<clustering_key> last_ckey;
+    std::optional<partition_key> last_pkey;
+    std::optional<clustering_key> last_ckey;
 
     query_result_visitor(Base&& v) : Base(std::move(v)) { }
 

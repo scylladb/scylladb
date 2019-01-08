@@ -28,7 +28,7 @@
 #include "schema.hh"
 #include "mutation.hh"
 
-#include <experimental/optional>
+#include <optional>
 #include <stdexcept>
 
 namespace query {
@@ -67,13 +67,13 @@ public:
     }
     // Look up a deserialized row cell value by column name; throws no_such_column on error.
     template<typename T>
-    std::experimental::optional<T>
+    std::optional<T>
     get(const sstring& column_name) const {
         auto&& value = get_data_value(column_name);
         if (value.is_null()) {
-            return std::experimental::nullopt;
+            return std::nullopt;
         }
-        return std::experimental::optional<T>{value_cast<T>(value)};
+        return std::optional<T>{value_cast<T>(value)};
     }
     // throws no_such_column or null_column_value on error
     template<typename T>

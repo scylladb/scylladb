@@ -67,7 +67,7 @@ struct writable_variants stub [[writable]] {
 };
 
 struct compound_with_optional {
-    std::experimental::optional<simple_compound> first;
+    std::optional<simple_compound> first;
     simple_compound second;
 };
 
@@ -84,5 +84,5 @@ struct empty_struct { };
 struct empty_final_struct final { };
 
 struct just_a_variant stub [[writable]] {
-    boost::variant<writable_simple_compound, simple_compound> variant;
+    std::variant<writable_simple_compound, simple_compound> variant;
 };

@@ -199,7 +199,7 @@ std::istream& std::operator>>(std::istream& is, std::vector<seastar::sstring>& r
 }
 template std::istream& std::operator>>(std::istream&, std::unordered_map<seastar::sstring, seastar::sstring>&);
 
-sstring utils::hyphenate(const stdx::string_view& v) {
+sstring utils::hyphenate(const std::string_view& v) {
     sstring result(v.begin(), v.end());
     std::replace(result.begin(), result.end(), '_', '-');
     return result;
@@ -270,7 +270,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
 
         auto i = std::find_if(_cfgs.begin(), _cfgs.end(), [&label](const config_src& cfg) { return cfg.name() == label; });
         if (i == _cfgs.end()) {
-            h(label, "Unknown option", stdx::nullopt);
+            h(label, "Unknown option", std::nullopt);
             continue;
         }
 

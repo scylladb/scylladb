@@ -459,17 +459,17 @@ BOOST_AUTO_TEST_CASE(test_compound_type_compare) {
 }
 
 template <typename T>
-std::experimental::optional<T>
+std::optional<T>
 extract(data_value a) {
     if (a.is_null()) {
-        return std::experimental::nullopt;
+        return std::nullopt;
     } else {
-        return std::experimental::make_optional(value_cast<T>(a));
+        return std::make_optional(value_cast<T>(a));
     }
 }
 
 template <typename T>
-using opt = std::experimental::optional<T>;
+using opt = std::optional<T>;
 
 BOOST_AUTO_TEST_CASE(test_tuple) {
     auto t = tuple_type_impl::get_instance({int32_type, long_type, utf8_type});
@@ -498,7 +498,7 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
     };
     auto v1 = c_type(int32_t(1), int64_t(2), sstring("abc"));
     BOOST_REQUIRE(v1 == round_trip(v1));
-    auto v2 = c_type(int32_t(1), int64_t(2), std::experimental::nullopt);
+    auto v2 = c_type(int32_t(1), int64_t(2), std::nullopt);
     BOOST_REQUIRE(v2 == round_trip(v2));
     auto b1 = c_to_bytes(v1);
     auto b2 = c_to_bytes(v2);

@@ -636,7 +636,7 @@ leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring,
 }
 
 int32_t
-leveled_compaction_strategy::calculate_max_sstable_size_in_mb(stdx::optional<sstring> option_value) const {
+leveled_compaction_strategy::calculate_max_sstable_size_in_mb(std::optional<sstring> option_value) const {
     using namespace cql3::statements;
     auto max_size = property_definitions::to_int(SSTABLE_SIZE_OPTION, option_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
 

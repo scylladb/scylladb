@@ -147,7 +147,7 @@ class per_destination_mutation : public mutation_holder {
     std::unordered_map<gms::inet_address, lw_shared_ptr<const frozen_mutation>> _mutations;
     dht::token _token;
 public:
-    per_destination_mutation(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>& mutations) {
+    per_destination_mutation(const std::unordered_map<gms::inet_address, std::optional<mutation>>& mutations) {
         for (auto&& m : mutations) {
             lw_shared_ptr<const frozen_mutation> fm;
             if (m.second) {
@@ -583,7 +583,7 @@ void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) 
 }
 
 
-void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_address from, stdx::optional<db::view::update_backlog> backlog) {
+void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_address from, std::optional<db::view::update_backlog> backlog) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second->get_trace_state(), "Got a response from /{}", from);
@@ -596,7 +596,7 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
     maybe_update_view_backlog_of(std::move(from), std::move(backlog));
 }
 
-void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count, stdx::optional<db::view::update_backlog> backlog) {
+void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second->get_trace_state(), "Got {} failures from /{}", count, from);
@@ -609,7 +609,7 @@ void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms
     maybe_update_view_backlog_of(std::move(from), std::move(backlog));
 }
 
-void storage_proxy::maybe_update_view_backlog_of(gms::inet_address replica, stdx::optional<db::view::update_backlog> backlog) {
+void storage_proxy::maybe_update_view_backlog_of(gms::inet_address replica, std::optional<db::view::update_backlog> backlog) {
     if (backlog) {
         auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         _view_update_backlogs[replica] = {std::move(*backlog), now};
@@ -1017,7 +1017,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
 }
 
 storage_proxy::response_id_type
-storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state) {
+storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state) {
     std::unordered_set<gms::inet_address> endpoints(m.size());
     boost::copy(m | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
     auto mh = std::make_unique<per_destination_mutation>(m);
@@ -1064,7 +1064,7 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
 }
 
 future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl,
-                                     stdx::optional<clock_type::time_point> timeout_opt) {
+                                     std::optional<clock_type::time_point> timeout_opt) {
     return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
         // it is better to send first and hint afterwards to reduce latency
@@ -1237,7 +1237,7 @@ future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistenc
 template<typename Range>
 future<>
 storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state,
-                               stdx::optional<clock_type::time_point> timeout_opt) {
+                               std::optional<clock_type::time_point> timeout_opt) {
     if (boost::empty(mutations)) {
         return make_ready_future<>();
     }
@@ -1404,7 +1404,7 @@ future<> storage_proxy::send_to_endpoint(
     utils::latency_counter lc;
     lc.start();
 
-    stdx::optional<clock_type::time_point> timeout;
+    std::optional<clock_type::time_point> timeout;
     db::consistency_level cl;
     if (type == db::write_type::VIEW) {
         // View updates use consistency level ANY in order to fall back to hinted handoff in case of a failed update.
@@ -1555,7 +1555,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         lw_shared_ptr<const frozen_mutation> m = handler.get_mutation_for(coordinator);
 
         if (!m || (handler.is_counter() && coordinator == my_address)) {
-            got_response(response_id, coordinator, stdx::nullopt);
+            got_response(response_id, coordinator, std::nullopt);
         } else {
             if (!handler.read_repair_write()) {
                 ++stats.writes_attempts.get_ep_stat(coordinator);
@@ -1572,7 +1572,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
         f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
             ++stats.writes_errors.get_ep_stat(coordinator);
-            p->got_failure_response(response_id, coordinator, forward_size + 1, stdx::nullopt);
+            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt);
             try {
                 std::rethrow_exception(eptr);
             } catch(rpc::closed_error&) {
@@ -1740,7 +1740,7 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
     }
 #endif
 
-future<> storage_proxy::schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
+future<> storage_proxy::schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
     if (diffs.empty()) {
         return make_ready_future<>();
     }
@@ -1914,10 +1914,10 @@ class data_read_resolver : public abstract_read_resolver {
     };
     struct version {
         gms::inet_address from;
-        stdx::optional<partition> par;
+        std::optional<partition> par;
         bool reached_end;
         bool reached_partition_end;
-        version(gms::inet_address from_, stdx::optional<partition> par_, bool reached_end, bool reached_partition_end)
+        version(gms::inet_address from_, std::optional<partition> par_, bool reached_end, bool reached_partition_end)
                 : from(std::move(from_)), par(std::move(par_)), reached_end(reached_end), reached_partition_end(reached_partition_end) {}
     };
     struct mutation_and_live_row_count {
@@ -1978,7 +1978,7 @@ class data_read_resolver : public abstract_read_resolver {
     bool _all_reached_end = true;
     query::short_read _is_short_read;
     std::vector<reply> _data_results;
-    std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> _diffs;
+    std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> _diffs;
 private:
     void on_timeout() override {
         fail_request(std::make_exception_ptr(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0)));
@@ -2034,7 +2034,7 @@ private:
         const partition* last_partition = nullptr;
         // Versions are in the reversed order.
         for (auto&& pv : versions) {
-            const stdx::optional<partition>& p = pv[replica].par;
+            const std::optional<partition>& p = pv[replica].par;
             if (p) {
                 last_partition = &p.value();
                 break;
@@ -2080,7 +2080,7 @@ private:
                                                       const std::vector<std::vector<version>>& versions, bool is_reversed) {
         bool short_reads_allowed = cmd.slice.options.contains<query::partition_slice::option::allow_short_read>();
         primary_key::less_compare cmp(s, is_reversed);
-        stdx::optional<primary_key> shortest_read;
+        std::optional<primary_key> shortest_read;
         auto num_replicas = versions[0].size();
         for (uint32_t i = 0; i < num_replicas; ++i) {
             if (versions.front()[i].reached_end) {
@@ -2207,7 +2207,7 @@ public:
     bool all_reached_end() const {
         return _all_reached_end;
     }
-    stdx::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit, uint32_t original_per_partition_limit,
+    std::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit, uint32_t original_per_partition_limit,
             uint32_t original_partition_limit) {
         assert(_data_results.size());
 
@@ -2266,7 +2266,7 @@ public:
                     r.result->partitions().pop_back();
                 } else {
                     // put empty partition for destination without result
-                    v.emplace_back(r.from, stdx::optional<partition>(), r.reached_end, true);
+                    v.emplace_back(r.from, std::optional<partition>(), r.reached_end, true);
                 }
             }
 
@@ -2307,7 +2307,7 @@ public:
                           ? m.partition().difference(schema, v.par->mut().unfreeze(schema).partition())
                           : mutation_partition(*schema, m.partition());
                 auto it = _diffs[m.token()].find(v.from);
-                std::experimental::optional<mutation> mdiff;
+                std::optional<mutation> mdiff;
                 if (!diff.empty()) {
                     has_diff = true;
                     mdiff = mutation(schema, m.decorated_key(), std::move(diff));
@@ -2334,7 +2334,7 @@ public:
             }
             // filter out partitions with empty diffs
             for (auto it = _diffs.begin(); it != _diffs.end();) {
-                if (boost::algorithm::none_of(it->second | boost::adaptors::map_values, std::mem_fn(&std::experimental::optional<mutation>::operator bool))) {
+                if (boost::algorithm::none_of(it->second | boost::adaptors::map_values, std::mem_fn(&std::optional<mutation>::operator bool))) {
                     it = _diffs.erase(it);
                 } else {
                     ++it;
@@ -3661,7 +3661,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 
 void storage_proxy::init_messaging_service() {
     auto& ms = netw::get_local_messaging_service();
-    ms.register_counter_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info) {
+    ms.register_counter_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
         tracing::trace_state_ptr trace_state_ptr;
@@ -3685,7 +3685,7 @@ void storage_proxy::init_messaging_service() {
             });
         });
     });
-    ms.register_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::experimental::optional<tracing::trace_info>> trace_info) {
+    ms.register_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
 

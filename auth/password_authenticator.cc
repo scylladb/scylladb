@@ -185,7 +185,7 @@ future<> password_authenticator::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});
 }
 
-db::consistency_level password_authenticator::consistency_for_user(stdx::string_view role_name) {
+db::consistency_level password_authenticator::consistency_for_user(std::string_view role_name) {
     if (role_name == DEFAULT_USER_NAME) {
         return db::consistency_level::QUORUM;
     }
@@ -254,7 +254,7 @@ future<authenticated_user> password_authenticator::authenticate(
     });
 }
 
-future<> password_authenticator::create(stdx::string_view role_name, const authentication_options& options) const {
+future<> password_authenticator::create(std::string_view role_name, const authentication_options& options) const {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -266,7 +266,7 @@ future<> password_authenticator::create(stdx::string_view role_name, const authe
             {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result();
 }
 
-future<> password_authenticator::alter(stdx::string_view role_name, const authentication_options& options) const {
+future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options) const {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -283,7 +283,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
             {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result();
 }
 
-future<> password_authenticator::drop(stdx::string_view name) const {
+future<> password_authenticator::drop(std::string_view name) const {
     static const sstring query = format("DELETE {} FROM {} WHERE {} = ?",
             SALTED_HASH,
             meta::roles_table::qualified_name(),
@@ -295,7 +295,7 @@ future<> password_authenticator::drop(stdx::string_view name) const {
             {sstring(name)}).discard_result();
 }
 
-future<custom_options> password_authenticator::query_custom_options(stdx::string_view role_name) const {
+future<custom_options> password_authenticator::query_custom_options(std::string_view role_name) const {
     return make_ready_future<custom_options>();
 }
 

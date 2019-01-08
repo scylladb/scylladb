@@ -305,7 +305,7 @@ private:
     Json::Value _root;
     Json::Value _tg_properties;
     std::string _current_dir;
-    stdx::optional<std::pair<sstring, sstring>> _static_param; // .first = name, .second = description
+    std::optional<std::pair<sstring, sstring>> _static_param; // .first = name, .second = description
     std::unordered_map<std::string, uint32_t> _test_count;
     struct metadata {
         std::string version;
@@ -356,7 +356,7 @@ public:
     }
 
     void write_common_test_group(const std::string& name, const std::string& message, const dataset& ds) {
-        _static_param = stdx::nullopt;
+        _static_param = std::nullopt;
         _test_count.clear();
         _root = Json::Value{Json::objectValue};
         _tg_properties = Json::Value{Json::objectValue};
@@ -886,9 +886,9 @@ public:
         auto value = data_value(make_blob(cfg.value_size));
         auto& value_cdef = *s->get_column_definition("value");
         auto pk = partition_key::from_single_value(*s, data_value(0).serialize());
-        return [this, s, ck = 0, n_ck = n_rows(cfg), &value_cdef, value, pk] () mutable -> stdx::optional<mutation> {
+        return [this, s, ck = 0, n_ck = n_rows(cfg), &value_cdef, value, pk] () mutable -> std::optional<mutation> {
             if (ck == n_ck) {
-                return stdx::nullopt;
+                return std::nullopt;
             }
             auto ts = api::new_timestamp();
             mutation m(s, pk);
@@ -908,9 +908,9 @@ public:
     generator_fn make_generator(schema_ptr s, const table_config& cfg) override {
         auto value = data_value(make_blob(cfg.value_size));
         auto& value_cdef = *s->get_column_definition("value");
-        return [s, pk = 0, n_pk = n_partitions(cfg), &value_cdef, value] () mutable -> stdx::optional<mutation> {
+        return [s, pk = 0, n_pk = n_partitions(cfg), &value_cdef, value] () mutable -> std::optional<mutation> {
             if (pk == n_pk) {
-                return stdx::nullopt;
+                return std::nullopt;
             }
             auto ts = api::new_timestamp();
             mutation m(s, partition_key::from_single_value(*s, data_value(pk).serialize()));
@@ -993,11 +993,11 @@ static unsigned cardinality(int_range r) {
     return r.end()->value() - r.start()->value() + r.start()->is_inclusive() + r.end()->is_inclusive() - 1;
 }
 
-static unsigned cardinality(stdx::optional<int_range> ropt) {
+static unsigned cardinality(std::optional<int_range> ropt) {
     return ropt ? cardinality(*ropt) : 0;
 }
 
-static stdx::optional<int_range> intersection(int_range a, int_range b) {
+static std::optional<int_range> intersection(int_range a, int_range b) {
     auto int_tri_cmp = [] (int x, int y) {
         return x < y ? -1 : (x > y ? 1 : 0);
     };

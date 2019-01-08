@@ -57,7 +57,7 @@
 #include <utility>
 #include <vector>
 #include <set>
-#include <experimental/optional>
+#include <optional>
 
 namespace cql3 {
 
@@ -90,13 +90,13 @@ class create_table_statement : public schema_altering_statement {
     column_set_type _static_columns;
     const ::shared_ptr<cf_prop_defs> _properties;
     const bool _if_not_exists;
-    stdx::optional<utils::UUID> _id;
+    std::optional<utils::UUID> _id;
 public:
     create_table_statement(::shared_ptr<cf_name> name,
                            ::shared_ptr<cf_prop_defs> properties,
                            bool if_not_exists,
                            column_set_type static_columns,
-                           const stdx::optional<utils::UUID>& id);
+                           const std::optional<utils::UUID>& id);
 
     virtual future<> check_access(const service::client_state& state) override;
 

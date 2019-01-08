@@ -66,20 +66,20 @@ public:
 
         const int32_t page_size;
         const ::shared_ptr<service::pager::paging_state> state;
-        const std::experimental::optional<db::consistency_level> serial_consistency;
+        const std::optional<db::consistency_level> serial_consistency;
         const api::timestamp_type timestamp;
     };
 private:
     const db::consistency_level _consistency;
     const timeout_config& _timeout_config;
-    const std::experimental::optional<std::vector<sstring_view>> _names;
+    const std::optional<std::vector<sstring_view>> _names;
     std::vector<cql3::raw_value> _values;
     std::vector<cql3::raw_value_view> _value_views;
     mutable bytes_ostream _temporaries;
     const bool _skip_metadata;
     const specific_options _options;
     cql_serialization_format _cql_serialization_format;
-    std::experimental::optional<std::vector<query_options>> _batch_options;
+    std::optional<std::vector<query_options>> _batch_options;
 
 private:
     /**
@@ -106,14 +106,14 @@ public:
 
     explicit query_options(db::consistency_level consistency,
                            const timeout_config& timeouts,
-                           std::experimental::optional<std::vector<sstring_view>> names,
+                           std::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value> values,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf);
     explicit query_options(db::consistency_level consistency,
                            const timeout_config& timeouts,
-                           std::experimental::optional<std::vector<sstring_view>> names,
+                           std::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
                            bool skip_metadata,
@@ -121,7 +121,7 @@ public:
                            cql_serialization_format sf);
     explicit query_options(db::consistency_level consistency,
                            const timeout_config& timeouts,
-                           std::experimental::optional<std::vector<sstring_view>> names,
+                           std::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value_view> value_views,
                            bool skip_metadata,
                            specific_options options,
@@ -187,7 +187,7 @@ public:
     }
 
     /**  Serial consistency for conditional updates. */
-    std::experimental::optional<db::consistency_level> get_serial_consistency() const {
+    std::optional<db::consistency_level> get_serial_consistency() const {
         return get_specific_options().serial_consistency;
     }
 
@@ -222,7 +222,7 @@ public:
     }
 
 
-    const std::experimental::optional<std::vector<sstring_view>>& get_names() const noexcept {
+    const std::optional<std::vector<sstring_view>>& get_names() const noexcept {
         return _names;
     }
 

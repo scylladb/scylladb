@@ -77,7 +77,7 @@ void simple_strategy::validate_options() const {
     validate_replication_factor(it->second);
 }
 
-std::experimental::optional<std::set<sstring>>simple_strategy::recognized_options() const {
+std::optional<std::set<sstring>>simple_strategy::recognized_options() const {
     return {{ "replication_factor" }};
 }
 

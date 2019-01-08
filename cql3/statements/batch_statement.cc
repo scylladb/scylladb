@@ -171,7 +171,7 @@ void batch_statement::validate()
                         | boost::adaptors::uniqued) != 1))) {
         throw exceptions::invalid_request_exception("Batch with conditions cannot span multiple tables");
     }
-    std::experimental::optional<bool> raw_counter;
+    std::optional<bool> raw_counter;
     for (auto& s : _statements) {
         if (raw_counter && s.statement->is_raw_counter_shard_write() != *raw_counter) {
             throw exceptions::invalid_request_exception("Cannot mix raw and regular counter statements in batch");
@@ -397,8 +397,8 @@ std::unique_ptr<prepared_statement>
 batch_statement::prepare(database& db, cql_stats& stats) {
     auto&& bound_names = get_bound_variables();
 
-    stdx::optional<sstring> first_ks;
-    stdx::optional<sstring> first_cf;
+    std::optional<sstring> first_ks;
+    std::optional<sstring> first_cf;
     bool have_multiple_cfs = false;
 
     std::vector<cql3::statements::batch_statement::single_statement> statements;

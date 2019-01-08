@@ -48,7 +48,7 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
     struct empty_state { };
     return delay_until_system_ready(as).then([&as, func = std::move(func)] () mutable {
         return exponential_backoff_retry::do_until_value(1s, 1min, as, [func = std::move(func)] {
-            return func().then_wrapped([] (auto&& f) -> stdx::optional<empty_state> {
+            return func().then_wrapped([] (auto&& f) -> std::optional<empty_state> {
                 if (f.failed()) {
                     auth_log.info("Auth task failed with error, rescheduling: {}", f.get_exception());
                     return { };
@@ -60,9 +60,9 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
 }
 
 future<> create_metadata_table_if_missing(
-        stdx::string_view table_name,
+        std::string_view table_name,
         cql3::query_processor& qp,
-        stdx::string_view cql,
+        std::string_view cql,
         ::service::migration_manager& mm) {
     auto& db = qp.db();
 

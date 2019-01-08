@@ -210,7 +210,7 @@ public:
         template<typename Consumer>
         struct consumer_adapter {
             flat_mutation_reader::impl& _reader;
-            stdx::optional<dht::decorated_key> _decorated_key;
+            std::optional<dht::decorated_key> _decorated_key;
             Consumer _consumer;
             consumer_adapter(flat_mutation_reader::impl& reader, Consumer c)
                     : _reader(reader)

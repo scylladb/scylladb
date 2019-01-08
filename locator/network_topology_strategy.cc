@@ -268,9 +268,9 @@ void network_topology_strategy::validate_options() const {
     }
 }
 
-std::experimental::optional<std::set<sstring>> network_topology_strategy::recognized_options() const {
+std::optional<std::set<sstring>> network_topology_strategy::recognized_options() const {
     // We explicitely allow all options
-    return std::experimental::nullopt;
+    return std::nullopt;
 }
 
 using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const sstring&, token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;

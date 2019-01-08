@@ -163,7 +163,7 @@ BOOST_AUTO_TEST_CASE(test_adjacent_ranges_with_differing_timestamps_are_not_merg
 
 static bool no_overlap(const range_tombstone_list& l) {
     bound_view::tri_compare cmp(*s);
-    stdx::optional<range_tombstone> prev;
+    std::optional<range_tombstone> prev;
     for (const range_tombstone& r : l) {
         if (prev) {
             if (cmp(prev->end_bound(), r.start_bound()) >= 0) {

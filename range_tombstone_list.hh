@@ -26,6 +26,7 @@
 #include "position_in_partition.hh"
 #include "utils/preempt.hh"
 #include <iosfwd>
+#include <variant>
 
 class range_tombstone_list final {
     using range_tombstones_type = range_tombstone::container_type;
@@ -53,7 +54,7 @@ class range_tombstone_list final {
     };
     class reverter {
     private:
-        using op = boost::variant<erase_undo_op, insert_undo_op, update_undo_op>;
+        using op = std::variant<erase_undo_op, insert_undo_op, update_undo_op>;
         std::vector<op> _ops;
         const schema& _s;
     protected:

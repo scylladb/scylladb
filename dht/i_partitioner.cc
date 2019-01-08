@@ -287,7 +287,7 @@ unsigned shard_of(const token& t) {
     return global_partitioner().shard_of(t);
 }
 
-stdx::optional<dht::token_range>
+std::optional<dht::token_range>
 selective_token_range_sharder::next() {
     if (_done) {
         return {};
@@ -308,7 +308,7 @@ selective_token_range_sharder::next() {
     return {};
 }
 
-stdx::optional<ring_position_range_and_shard>
+std::optional<ring_position_range_and_shard>
 ring_position_range_sharder::next(const schema& s) {
     if (_done) {
         return {};
@@ -345,7 +345,7 @@ ring_position_exponential_sharder::ring_position_exponential_sharder(partition_r
         : ring_position_exponential_sharder(global_partitioner(), std::move(pr)) {
 }
 
-stdx::optional<ring_position_exponential_sharder_result>
+std::optional<ring_position_exponential_sharder_result>
 ring_position_exponential_sharder::next(const schema& s) {
     auto ret = ring_position_exponential_sharder_result{};
     ret.per_shard_ranges.reserve(std::min(_spans_per_iteration, _partitioner.shard_count()));
@@ -383,10 +383,10 @@ ring_position_exponential_sharder::next(const schema& s) {
         ret.per_shard_ranges.push_back(std::move(this_shard_result));
     }
     if (ret.per_shard_ranges.empty()) {
-        return stdx::nullopt;
+        return std::nullopt;
     }
     _spans_per_iteration *= 2;
-    return stdx::make_optional(std::move(ret));
+    return std::make_optional(std::move(ret));
 }
 
 
@@ -399,20 +399,20 @@ ring_position_exponential_vector_sharder::ring_position_exponential_vector_shard
     }
 }
 
-stdx::optional<ring_position_exponential_vector_sharder_result>
+std::optional<ring_position_exponential_vector_sharder_result>
 ring_position_exponential_vector_sharder::next(const schema& s) {
     if (!_current_sharder) {
-        return stdx::nullopt;
+        return std::nullopt;
     }
     while (true) {  // yuch
         auto ret = _current_sharder->next(s);
         if (ret) {
             auto augmented = ring_position_exponential_vector_sharder_result{std::move(*ret), _element};
-            return stdx::make_optional(std::move(augmented));
+            return std::make_optional(std::move(augmented));
         }
         if (_ranges.empty()) {
-            _current_sharder = stdx::nullopt;
-            return stdx::nullopt;
+            _current_sharder = std::nullopt;
+            return std::nullopt;
         }
         _current_sharder.emplace(_ranges.front());
         _ranges.pop_front();
@@ -427,17 +427,17 @@ ring_position_range_vector_sharder::ring_position_range_vector_sharder(dht::part
     next_range();
 }
 
-stdx::optional<ring_position_range_and_shard_and_element>
+std::optional<ring_position_range_and_shard_and_element>
 ring_position_range_vector_sharder::next(const schema& s) {
     if (!_current_sharder) {
-        return stdx::nullopt;
+        return std::nullopt;
     }
     auto range_and_shard = _current_sharder->next(s);
     while (!range_and_shard && _current_range != _ranges.end()) {
         next_range();
         range_and_shard = _current_sharder->next(s);
     }
-    auto ret = stdx::optional<ring_position_range_and_shard_and_element>();
+    auto ret = std::optional<ring_position_range_and_shard_and_element>();
     if (range_and_shard) {
         ret.emplace(std::move(*range_and_shard), _current_range - _ranges.begin() - 1);
     }
@@ -534,7 +534,7 @@ int ring_position_comparator::operator()(sstables::decorated_key_view a, ring_po
 
 dht::partition_range
 to_partition_range(dht::token_range r) {
-    using bound_opt = std::experimental::optional<dht::partition_range::bound>;
+    using bound_opt = std::optional<dht::partition_range::bound>;
     auto start = r.start()
                  ? bound_opt(dht::ring_position(r.start()->value(),
                                                 r.start()->is_inclusive()

@@ -21,7 +21,7 @@
 
 #define BOOST_TEST_MODULE core
 
-#include <experimental/string_view>
+#include <string_view>
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/shared_ptr.hh>
@@ -30,7 +30,6 @@
 #include "cql3/role_options.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/util.hh"
-#include "stdx.hh"
 
 //
 // These tests verify that all excepted variations of CQL syntax related to access-control ("auth") functionality are
@@ -54,7 +53,7 @@ using modifier_rule_ptr = void (cql3_parser::CqlParser::*)(T&);
 /// Assert that the CQL fragment is valid syntax (does not throw an exception) and return the parsed value.
 ///
 template <typename T>
-static T test_valid(stdx::string_view cql_fragment, producer_rule_ptr<T> rule) {
+static T test_valid(std::string_view cql_fragment, producer_rule_ptr<T> rule) {
     T v;
     BOOST_REQUIRE_NO_THROW(v = cql3::util::do_with_parser(cql_fragment, std::mem_fn(rule)));
     return v;
@@ -65,7 +64,7 @@ static T test_valid(stdx::string_view cql_fragment, producer_rule_ptr<T> rule) {
 /// rule.
 ///
 template <typename T>
-void test_valid(stdx::string_view cql_fragment, modifier_rule_ptr<T> rule, T& v) {
+void test_valid(std::string_view cql_fragment, modifier_rule_ptr<T> rule, T& v) {
     BOOST_REQUIRE_NO_THROW(
             cql3::util::do_with_parser(cql_fragment, [rule, &v](cql3_parser::CqlParser& parser) {
                 (parser.*rule)(v);
@@ -76,13 +75,13 @@ void test_valid(stdx::string_view cql_fragment, modifier_rule_ptr<T> rule, T& v)
 
 template <typename T>
 static auto make_tester(producer_rule_ptr<T> rule) {
-    return [rule](stdx::string_view cql_fragment) {
+    return [rule](std::string_view cql_fragment) {
         return test_valid(cql_fragment, rule);
     };
 }
 template <typename T>
 static auto make_tester(modifier_rule_ptr<T> rule) {
-    return [rule](stdx::string_view cql_fragment, T& v) {
+    return [rule](std::string_view cql_fragment, T& v) {
         test_valid(cql_fragment, rule, v);
     };
 }
@@ -91,7 +90,7 @@ static auto make_tester(modifier_rule_ptr<T> rule) {
 /// Assert that the semicolon-terminated CQL query is valid syntax, and return the parsed statement.
 ///
 static ::shared_ptr<cql3::statements::raw::parsed_statement>
-test_valid(stdx::string_view cql_query) {
+test_valid(std::string_view cql_query) {
     return test_valid(cql_query, &cql3_parser::CqlParser::query);
 }
 

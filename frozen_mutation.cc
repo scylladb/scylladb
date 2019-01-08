@@ -169,10 +169,10 @@ frozen_mutation streamed_mutation_freezer::consume_end_of_stream() {
 
 class fragmenting_mutation_freezer {
     const schema& _schema;
-    stdx::optional<partition_key> _key;
+    std::optional<partition_key> _key;
 
     tombstone _partition_tombstone;
-    stdx::optional<static_row> _sr;
+    std::optional<static_row> _sr;
     std::deque<clustering_row> _crs;
     range_tombstone_list _rts;
 

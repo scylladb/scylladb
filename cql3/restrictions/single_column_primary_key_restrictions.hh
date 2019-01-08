@@ -272,7 +272,7 @@ private:
 
             if (r->is_slice()) {
                 if (cartesian_product_is_empty(vec_of_values)) {
-                    auto read_bound = [r, &options, this] (statements::bound b) -> std::experimental::optional<range_bound> {
+                    auto read_bound = [r, &options, this] (statements::bound b) -> std::optional<range_bound> {
                         if (!r->has_bound(b)) {
                             return {};
                         }

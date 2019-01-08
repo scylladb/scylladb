@@ -388,7 +388,7 @@ public:
         clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
         auto slice = query::partition_slice(std::move(clustering_ranges), { }, std::move(regular_columns), opts,
                 std::move(specific_ranges), cql_serialization_format::internal());
-        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), row_limit, gc_clock::now(), stdx::nullopt, partition_limit);
+        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), row_limit, gc_clock::now(), std::nullopt, partition_limit);
     }
 
     static future<> do_get_paged_slice(
@@ -400,7 +400,7 @@ public:
             const ::timeout_config& timeout_config,
             std::vector<KeySlice>& output) {
         auto cmd = make_paged_read_cmd(*schema, column_limit, start_column, range);
-        stdx::optional<partition_key> start_key;
+        std::optional<partition_key> start_key;
         auto end = range[0].end();
         if (start_column && !schema->thrift().is_dynamic()) {
             // For static CFs, we must first query for a specific key so as to consume the remainder
@@ -958,7 +958,7 @@ public:
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
-            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), _timeout_config, stdx::nullopt, std::vector<cql3::raw_value_view>(),
+            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), _timeout_config, std::nullopt, std::vector<cql3::raw_value_view>(),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
             auto f = _query_processor.local().process(query, _query_state, *opts);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
@@ -1037,7 +1037,7 @@ public:
             std::transform(values.begin(), values.end(), std::back_inserter(bytes_values), [](auto&& s) {
                 return cql3::raw_value::make_value(to_bytes(s));
             });
-            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), _timeout_config, stdx::nullopt, std::move(bytes_values),
+            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), _timeout_config, std::nullopt, std::move(bytes_values),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
             auto f = _query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
@@ -1190,12 +1190,12 @@ private:
         def.__set_durable_writes(meta->durable_writes());
         return std::move(def);
     }
-    static stdx::optional<index_metadata> index_metadata_from_thrift(const ColumnDef& def) {
-        stdx::optional<sstring> idx_name;
-        stdx::optional<std::unordered_map<sstring, sstring>> idx_opts;
-        stdx::optional<index_metadata_kind> idx_type;
+    static std::optional<index_metadata> index_metadata_from_thrift(const ColumnDef& def) {
+        std::optional<sstring> idx_name;
+        std::optional<std::unordered_map<sstring, sstring>> idx_opts;
+        std::optional<index_metadata_kind> idx_type;
         if (def.__isset.index_type) {
-            idx_type = [&def]() -> stdx::optional<index_metadata_kind> {
+            idx_type = [&def]() -> std::optional<index_metadata_kind> {
                 switch (def.index_type) {
                     case IndexType::type::KEYS: return index_metadata_kind::keys;
                     case IndexType::type::COMPOSITES: return index_metadata_kind::composites;
@@ -1215,7 +1215,7 @@ private:
         }
         return {};
     }
-    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::experimental::optional<utils::UUID> id = { }) {
+    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::optional<utils::UUID> id = { }) {
         thrift_validation::validate_cf_def(cf_def);
         schema_builder builder(ks_name, cf_def.name, id);
         schema_builder::default_names names(builder);
@@ -1392,11 +1392,11 @@ private:
     }
     static range<clustering_key_prefix> make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
         using bound = range<clustering_key_prefix>::bound;
-        stdx::optional<bound> start_bound;
+        std::optional<bound> start_bound;
         if (!start.empty()) {
             start_bound = make_clustering_bound(s, to_bytes_view(start), composite::eoc::end);
         }
-        stdx::optional<bound> end_bound;
+        std::optional<bound> end_bound;
         if (!end.empty()) {
             end_bound = make_clustering_bound(s, to_bytes_view(end), composite::eoc::start);
         }
@@ -1412,11 +1412,11 @@ private:
     }
     static range<bytes> make_range(const std::string& start, const std::string& end) {
         using bound = range<bytes>::bound;
-        stdx::optional<bound> start_bound;
+        std::optional<bound> start_bound;
         if (!start.empty()) {
             start_bound = bound(to_bytes(start));
         }
-        stdx::optional<bound> end_bound;
+        std::optional<bound> end_bound;
         if (!end.empty()) {
             end_bound = bound(to_bytes(end));
         }
@@ -1769,11 +1769,11 @@ private:
     }
     static range_tombstone make_range_tombstone(const schema& s, const SliceRange& range, tombstone tomb) {
         using bound = query::clustering_range::bound;
-        stdx::optional<bound> start_bound;
+        std::optional<bound> start_bound;
         if (!range.start.empty()) {
             start_bound = make_clustering_bound(s, to_bytes_view(range.start), composite::eoc::end);
         }
-        stdx::optional<bound> end_bound;
+        std::optional<bound> end_bound;
         if (!range.finish.empty()) {
             end_bound = make_clustering_bound(s, to_bytes_view(range.finish), composite::eoc::start);
         }

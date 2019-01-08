@@ -43,7 +43,7 @@
 
 #include "cql3/cf_name.hh"
 
-#include <experimental/optional>
+#include <optional>
 
 #include "parsed_statement.hh"
 

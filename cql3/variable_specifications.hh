@@ -44,7 +44,7 @@
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
 
-#include <experimental/optional>
+#include <optional>
 #include <vector>
 
 namespace cql3 {

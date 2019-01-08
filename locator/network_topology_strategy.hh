@@ -41,7 +41,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "exceptions/exceptions.hh"
 
-#include <experimental/optional>
+#include <optional>
 #include <set>
 
 namespace locator {
@@ -76,7 +76,7 @@ protected:
 
     virtual void validate_options() const override;
 
-    virtual std::experimental::optional<std::set<sstring>> recognized_options() const override;
+    virtual std::optional<std::set<sstring>> recognized_options() const override;
 
 private:
     // map: data centers -> replication factor

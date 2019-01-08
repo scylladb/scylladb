@@ -181,14 +181,14 @@ inline typed_value_ex<std::vector<T>>* value_ex(std::vector<T>* v) {
 
 }
 
-sstring hyphenate(const stdx::string_view&);
+sstring hyphenate(const std::string_view&);
 
 }
 
 template<typename T, utils::config_file::value_status S>
 void utils::config_file::named_value<T, S>::add_command_line_option(
                 boost::program_options::options_description_easy_init& init,
-                const stdx::string_view& name, const stdx::string_view& desc) {
+                const std::string_view& name, const std::string_view& desc) {
     // NOTE. We are not adding default values. We could, but must in that case manually (in some way) geenrate the textual
     // version, since the available ostream operators for things like pairs and collections don't match what we can deal with parser-wise.
     // See removed ostream operators above.

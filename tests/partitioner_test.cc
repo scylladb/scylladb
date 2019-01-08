@@ -707,11 +707,11 @@ dht::partition_range
 normalize(dht::partition_range pr) {
     auto start = pr.start();
     if (start && start->value().token() == dht::minimum_token()) {
-        start = stdx::nullopt;
+        start = std::nullopt;
     }
     auto end = pr.end();
     if (end && end->value().token() == dht::maximum_token()) {
-        end = stdx::nullopt;
+        end = std::nullopt;
     }
     return dht::partition_range(start, end);
 };
@@ -855,7 +855,7 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
     auto t3 = token_from_long(int64_t(1));
     auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
     auto make_bound = [] (dht::ring_position rp) {
-        return stdx::make_optional(range_bound<dht::ring_position>(std::move(rp)));
+        return std::make_optional(range_bound<dht::ring_position>(std::move(rp)));
     };
     auto some_murmur3_ranges = {
             dht::partition_range::make_open_ended_both_sides(),
@@ -932,7 +932,7 @@ static int test_split(int N, int K) {
         if (c == 0) {
             BOOST_REQUIRE(range.start() == r.start());
         } else {
-            std::experimental::optional<dht::token_range::bound> e({prev_range.end()->value(), !prev_range.end()->is_inclusive()});
+            std::optional<dht::token_range::bound> e({prev_range.end()->value(), !prev_range.end()->is_inclusive()});
             BOOST_REQUIRE(range.start() == e);
         }
         prev_range = range;

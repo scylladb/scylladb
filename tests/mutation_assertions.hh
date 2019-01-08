@@ -36,13 +36,13 @@ public:
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
     mutation_partition_assertion& is_equal_to(const mutation_partition& other,
-            const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+            const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         return is_equal_to(*_schema, other, ck_ranges);
     }
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
     mutation_partition_assertion& is_equal_to(const schema& s, const mutation_partition& other,
-            const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+            const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         if (ck_ranges) {
             mutation_partition_assertion(_schema, _m.sliced(*_schema, *ck_ranges))
                 .is_equal_to(s, other.sliced(s, *ck_ranges));
@@ -99,7 +99,7 @@ public:
     { }
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
-    mutation_assertion& is_equal_to(const mutation& other, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+    mutation_assertion& is_equal_to(const mutation& other, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         if (ck_ranges) {
             mutation_assertion(_m.sliced(*ck_ranges)).is_equal_to(other.sliced(*ck_ranges));
             return *this;

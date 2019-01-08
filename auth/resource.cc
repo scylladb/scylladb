@@ -61,7 +61,7 @@ std::ostream& operator<<(std::ostream& os, resource_kind kind) {
     return os;
 }
 
-static const std::unordered_map<resource_kind, stdx::string_view> roots{
+static const std::unordered_map<resource_kind, std::string_view> roots{
         {resource_kind::data, "data"},
         {resource_kind::role, "roles"}};
 
@@ -109,16 +109,16 @@ resource::resource(resource_kind kind, utils::small_vector<sstring, 3> parts) : 
     _parts.insert(_parts.end(), std::make_move_iterator(parts.begin()), std::make_move_iterator(parts.end()));
 }
 
-resource::resource(data_resource_t, stdx::string_view keyspace) : resource(resource_kind::data) {
+resource::resource(data_resource_t, std::string_view keyspace) : resource(resource_kind::data) {
     _parts.emplace_back(keyspace);
 }
 
-resource::resource(data_resource_t, stdx::string_view keyspace, stdx::string_view table) : resource(resource_kind::data) {
+resource::resource(data_resource_t, std::string_view keyspace, std::string_view table) : resource(resource_kind::data) {
     _parts.emplace_back(keyspace);
     _parts.emplace_back(table);
 }
 
-resource::resource(role_resource_t, stdx::string_view role) : resource(resource_kind::role) {
+resource::resource(role_resource_t, std::string_view role) : resource(resource_kind::role) {
     _parts.emplace_back(role);
 }
 
@@ -174,7 +174,7 @@ data_resource_view::data_resource_view(const resource& r) : _resource(r) {
     }
 }
 
-std::optional<stdx::string_view> data_resource_view::keyspace() const {
+std::optional<std::string_view> data_resource_view::keyspace() const {
     if (_resource._parts.size() == 1) {
         return {};
     }
@@ -182,7 +182,7 @@ std::optional<stdx::string_view> data_resource_view::keyspace() const {
     return _resource._parts[1];
 }
 
-std::optional<stdx::string_view> data_resource_view::table() const {
+std::optional<std::string_view> data_resource_view::table() const {
     if (_resource._parts.size() <= 2) {
         return {};
     }
@@ -211,7 +211,7 @@ role_resource_view::role_resource_view(const resource& r) : _resource(r) {
     }
 }
 
-std::optional<stdx::string_view> role_resource_view::role() const {
+std::optional<std::string_view> role_resource_view::role() const {
     if (_resource._parts.size() == 1) {
         return {};
     }
@@ -231,9 +231,9 @@ std::ostream& operator<<(std::ostream& os, const role_resource_view& v) {
     return os;
 }
 
-resource parse_resource(stdx::string_view name) {
-    static const std::unordered_map<stdx::string_view, resource_kind> reverse_roots = [] {
-        std::unordered_map<stdx::string_view, resource_kind> result;
+resource parse_resource(std::string_view name) {
+    static const std::unordered_map<std::string_view, resource_kind> reverse_roots = [] {
+        std::unordered_map<std::string_view, resource_kind> result;
 
         for (const auto& pair : roots) {
             result.emplace(pair.second, pair.first);

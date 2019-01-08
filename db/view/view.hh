@@ -28,7 +28,6 @@
 #include "schema.hh"
 #include "mutation_fragment.hh"
 #include "flat_mutation_reader.hh"
-#include "stdx.hh"
 
 #include <seastar/core/semaphore.hh>
 

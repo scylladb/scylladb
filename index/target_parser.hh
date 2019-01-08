@@ -61,7 +61,7 @@ struct target_parser {
         return *result;
     }
 
-    static stdx::optional<std::pair<const column_definition*, cql3::statements::index_target::target_type>>
+    static std::optional<std::pair<const column_definition*, cql3::statements::index_target::target_type>>
     parse(schema_ptr schema, const sstring& target)
     {
         using namespace cql3::statements;
@@ -81,7 +81,7 @@ struct target_parser {
 
         auto column = schema->get_column_definition(utf8_type->decompose(column_name));
         if (!column) {
-            return stdx::nullopt;
+            return std::nullopt;
         }
         return std::make_pair(column, target_type);
     }

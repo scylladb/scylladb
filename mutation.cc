@@ -228,7 +228,7 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reade
     // r.is_buffer_empty() is always false at this point
     struct adapter {
         schema_ptr _s;
-        stdx::optional<mutation_rebuilder> _builder;
+        std::optional<mutation_rebuilder> _builder;
         adapter(schema_ptr s) : _s(std::move(s)) { }
 
         void consume_new_partition(const dht::decorated_key& dk) {

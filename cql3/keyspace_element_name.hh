@@ -44,7 +44,7 @@
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
-#include <experimental/optional>
+#include <optional>
 
 namespace cql3 {
 
@@ -55,7 +55,7 @@ class keyspace_element_name {
     /**
      * The keyspace name as stored internally.
      */
-    std::experimental::optional<sstring> _ks_name = std::experimental::nullopt;
+    std::optional<sstring> _ks_name = std::nullopt;
 
 public:
     /**

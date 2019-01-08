@@ -171,7 +171,7 @@ class partition_end {
 };
 
 class mutation_fragment stub [[writable]] {
-    boost::variant<clustering_row, static_row, range_tombstone,
+    std::variant<clustering_row, static_row, range_tombstone,
                    partition_start, partition_end> fragment;
 };
 

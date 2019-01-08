@@ -37,6 +37,8 @@
 #include "mutation_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
 
+#include <variant>
+
 /*
  * ===================
  * ====== Utils ======
@@ -84,16 +86,16 @@ static query::partition_slice make_slice(std::vector<query::clustering_range> ra
 }
 
 struct expected_fragment {
-    boost::variant<int, range_tombstone> f;
+    std::variant<int, range_tombstone> f;
 
     expected_fragment(int row_key) : f(row_key) { }
     expected_fragment(range_tombstone rt) : f(rt) { }
 
     void check(flat_reader_assertions& r, const query::clustering_row_ranges& ranges) {
-        if (f.which() == 0) {
-            r.produces_row_with_key(make_ck(boost::get<int>(f)));
+        if (f.index() == 0) {
+            r.produces_row_with_key(make_ck(std::get<int>(f)));
         } else {
-            r.produces_range_tombstone(boost::get<range_tombstone>(f), ranges);
+            r.produces_range_tombstone(std::get<range_tombstone>(f), ranges);
         }
     }
 };

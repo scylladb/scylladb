@@ -44,7 +44,7 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"
-#include <experimental/optional>
+#include <optional>
 #include <boost/range/iterator_range.hpp>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
@@ -237,7 +237,7 @@ public:
     void update_normal_tokens(std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
-    std::experimental::optional<inet_address> get_endpoint(const token& token) const;
+    std::optional<inet_address> get_endpoint(const token& token) const;
     std::vector<token> get_tokens(const inet_address& addr) const;
     const std::unordered_map<token, inet_address>& get_token_to_endpoint() const {
         return _token_to_endpoint_map;
@@ -274,7 +274,7 @@ public:
     }
 
     boost::iterator_range<tokens_iterator> ring_range(
-        const std::experimental::optional<dht::partition_range::bound>& start, bool include_min = false) const;
+        const std::optional<dht::partition_range::bound>& start, bool include_min = false) const;
 
     topology& get_topology() {
         return _topology;
@@ -470,7 +470,7 @@ public:
     std::optional<UUID> get_host_id_if_known(inet_address endpoint) const;
 
     /** Return the end-point for a unique host ID */
-    std::experimental::optional<inet_address> get_endpoint_for_host_id(UUID host_id) const;
+    std::optional<inet_address> get_endpoint_for_host_id(UUID host_id) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
     const std::unordered_map<inet_address, utils::UUID>& get_endpoint_to_host_id_map_for_reading() const;

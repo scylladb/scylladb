@@ -164,7 +164,7 @@ struct reader_id {
 class validating_consumer {
     table& _t;
     reader_id _id;
-    stdx::optional<sstring> _value;
+    std::optional<sstring> _value;
     size_t _row_count = 0;
     size_t _key = 0;
     std::vector<api::timestamp_type> _writetimes;

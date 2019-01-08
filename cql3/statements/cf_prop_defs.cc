@@ -145,7 +145,7 @@ std::map<sstring, sstring> cf_prop_defs::get_compaction_options() const {
     return std::map<sstring, sstring>{};
 }
 
-stdx::optional<std::map<sstring, sstring>> cf_prop_defs::get_compression_options() const {
+std::optional<std::map<sstring, sstring>> cf_prop_defs::get_compression_options() const {
     auto compression_options = get_map(KW_COMPRESSION);
     if (compression_options) {
         return { compression_options.value() };
@@ -163,13 +163,13 @@ int32_t cf_prop_defs::get_gc_grace_seconds() const
     return get_int(KW_GCGRACESECONDS, DEFAULT_GC_GRACE_SECONDS);
 }
 
-stdx::optional<utils::UUID> cf_prop_defs::get_id() const {
+std::optional<utils::UUID> cf_prop_defs::get_id() const {
     auto id = get_simple(KW_ID);
     if (id) {
         return utils::UUID(*id);
     }
 
-    return stdx::nullopt;
+    return std::nullopt;
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder, const db::extensions& exts) {
@@ -189,7 +189,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, const db::extension
         builder.set_gc_grace_seconds(get_int(KW_GCGRACESECONDS, builder.get_gc_grace_seconds()));
     }
 
-    std::experimental::optional<sstring> tmp_value = {};
+    std::optional<sstring> tmp_value = {};
     if (has_property(KW_COMPACTION)) {
         if (get_compaction_options().count(KW_MINCOMPACTIONTHRESHOLD)) {
             tmp_value = get_compaction_options().at(KW_MINCOMPACTIONTHRESHOLD);

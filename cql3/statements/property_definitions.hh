@@ -45,7 +45,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
 
-#include <experimental/optional>
+#include <optional>
 #include <unordered_map>
 #include <algorithm>
 #include <cctype>
@@ -78,9 +78,9 @@ public:
     void validate(const std::set<sstring>& keywords, const std::set<sstring>& exts = {}, const std::set<sstring>& obsolete = {});
 
 protected:
-    std::experimental::optional<sstring> get_simple(const sstring& name) const;
+    std::optional<sstring> get_simple(const sstring& name) const;
 
-    std::experimental::optional<std::map<sstring, sstring>> get_map(const sstring& name) const;
+    std::optional<std::map<sstring, sstring>> get_map(const sstring& name) const;
 
     void remove_from_map_if_exists(const sstring& name, const sstring& key);
 public:
@@ -94,14 +94,14 @@ public:
     // Return a property value, typed as a double
     double get_double(sstring key, double default_value) const;
 
-    static double to_double(sstring key, std::experimental::optional<sstring> value, double default_value);
+    static double to_double(sstring key, std::optional<sstring> value, double default_value);
 
     // Return a property value, typed as an Integer
     int32_t get_int(sstring key, int32_t default_value) const;
 
-    static int32_t to_int(sstring key, std::experimental::optional<sstring> value, int32_t default_value);
+    static int32_t to_int(sstring key, std::optional<sstring> value, int32_t default_value);
 
-    static long to_long(sstring key, std::experimental::optional<sstring> value, long default_value);
+    static long to_long(sstring key, std::optional<sstring> value, long default_value);
 };
 
 }

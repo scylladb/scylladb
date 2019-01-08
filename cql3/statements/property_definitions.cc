@@ -81,10 +81,10 @@ void property_definitions::validate(const std::set<sstring>& keywords, const std
     }
 }
 
-std::experimental::optional<sstring> property_definitions::get_simple(const sstring& name) const {
+std::optional<sstring> property_definitions::get_simple(const sstring& name) const {
     auto it = _properties.find(name);
     if (it == _properties.end()) {
-        return std::experimental::nullopt;
+        return std::nullopt;
     }
     try {
         return std::get<sstring>(it->second);
@@ -93,10 +93,10 @@ std::experimental::optional<sstring> property_definitions::get_simple(const sstr
     }
 }
 
-std::experimental::optional<std::map<sstring, sstring>> property_definitions::get_map(const sstring& name) const {
+std::optional<std::map<sstring, sstring>> property_definitions::get_map(const sstring& name) const {
     auto it = _properties.find(name);
     if (it == _properties.end()) {
-        return std::experimental::nullopt;
+        return std::nullopt;
     }
     try {
         return std::get<map_type>(it->second);
@@ -136,7 +136,7 @@ double property_definitions::get_double(sstring key, double default_value) const
     return to_double(key, value, default_value);
 }
 
-double property_definitions::to_double(sstring key, std::experimental::optional<sstring> value, double default_value) {
+double property_definitions::to_double(sstring key, std::optional<sstring> value, double default_value) {
     if (value) {
         auto val = value.value();
         try {
@@ -155,7 +155,7 @@ int32_t property_definitions::get_int(sstring key, int32_t default_value) const 
     return to_int(key, value, default_value);
 }
 
-int32_t property_definitions::to_int(sstring key, std::experimental::optional<sstring> value, int32_t default_value) {
+int32_t property_definitions::to_int(sstring key, std::optional<sstring> value, int32_t default_value) {
     if (value) {
         auto val = value.value();
         try {
@@ -168,7 +168,7 @@ int32_t property_definitions::to_int(sstring key, std::experimental::optional<ss
     }
 }
 
-long property_definitions::to_long(sstring key, std::experimental::optional<sstring> value, long default_value) {
+long property_definitions::to_long(sstring key, std::optional<sstring> value, long default_value) {
     if (value) {
         auto val = value.value();
         try {

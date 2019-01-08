@@ -28,7 +28,7 @@
 
 big_decimal::big_decimal(sstring_view text)
 {
-    std::string str = text.to_string();
+    std::string str(text);
     static const std::regex big_decimal_re("^([\\+\\-]?)([0-9]*)(\\.([0-9]*))?([eE]([\\+\\-]?[0-9]+))?");
     std::smatch sm;
     if (!std::regex_match(str, sm, big_decimal_re)) {

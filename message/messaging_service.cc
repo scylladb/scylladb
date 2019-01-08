@@ -83,7 +83,6 @@
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
 #include "idl/view.dist.impl.hh"
 #include "partition_range_compat.hh"
-#include "stdx.hh"
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "frozen_mutation.hh"
@@ -598,7 +597,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
     rpc::client_options opts;
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
-    opts.keepalive = std::experimental::optional<net::tcp_keepalive_params>({60s, 60s, 10});
+    opts.keepalive = std::optional<net::tcp_keepalive_params>({60s, 60s, 10});
     if (must_compress) {
         opts.compressor_factory = &compressor_factory;
     }
@@ -881,25 +880,25 @@ future<std::vector<frozen_mutation>> messaging_service::send_migration_request(m
 }
 
 void messaging_service::register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
-    inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::experimental::optional<tracing::trace_info>> trace_info)>&& func) {
+    inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func) {
     register_handler(this, netw::messaging_verb::MUTATION, std::move(func));
 }
 void messaging_service::unregister_mutation() {
     _rpc->unregister_handler(netw::messaging_verb::MUTATION);
 }
 future<> messaging_service::send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
-    inet_address reply_to, unsigned shard, response_id_type response_id, std::experimental::optional<tracing::trace_info> trace_info) {
+    inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), std::move(shard), std::move(response_id), std::move(trace_info));
 }
 
-void messaging_service::register_counter_mutation(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info)>&& func) {
+void messaging_service::register_counter_mutation(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info)>&& func) {
     register_handler(this, netw::messaging_verb::COUNTER_MUTATION, std::move(func));
 }
 void messaging_service::unregister_counter_mutation() {
     _rpc->unregister_handler(netw::messaging_verb::COUNTER_MUTATION);
 }
-future<> messaging_service::send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info) {
+future<> messaging_service::send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
     return send_message_timeout<void>(this, messaging_verb::COUNTER_MUTATION, std::move(id), timeout, std::move(fms), cl, std::move(trace_info));
 }
 

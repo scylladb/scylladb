@@ -21,11 +21,10 @@
 
 #include "utils/UUID.hh"
 #include "token_metadata.hh"
-#include <experimental/optional>
+#include <optional>
 #include "locator/snitch_base.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "log.hh"
-#include "stdx.hh"
 #include "partition_range_compat.hh"
 #include <unordered_map>
 #include <algorithm>
@@ -165,10 +164,10 @@ const token& token_metadata::first_token(const token& start) const {
     return _sorted_tokens[first_token_index(start)];
 }
 
-std::experimental::optional<inet_address> token_metadata::get_endpoint(const token& token) const {
+std::optional<inet_address> token_metadata::get_endpoint(const token& token) const {
     auto it = _token_to_endpoint_map.find(token);
     if (it == _token_to_endpoint_map.end()) {
-        return std::experimental::nullopt;
+        return std::nullopt;
     } else {
         return it->second;
     }
@@ -230,7 +229,7 @@ std::optional<utils::UUID> token_metadata::get_host_id_if_known(inet_address end
     return it->second;
 }
 
-std::experimental::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_id) const {
+std::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_id) const {
     auto beg = _endpoint_to_host_id_map.cbegin();
     auto end = _endpoint_to_host_id_map.cend();
     auto it = std::find_if(beg, end, [host_id] (auto x) {
@@ -258,7 +257,7 @@ void token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
 
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata::ring_range(
-    const std::experimental::optional<dht::partition_range::bound>& start,
+    const std::optional<dht::partition_range::bound>& start,
     bool include_min) const
 {
     auto r = ring_range(start ? start->value().token() : dht::minimum_token(), include_min);

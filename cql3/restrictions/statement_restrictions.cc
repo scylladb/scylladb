@@ -33,8 +33,6 @@
 #include "cql3/single_column_relation.hh"
 #include "cql3/constants.hh"
 
-#include "stdx.hh"
-
 namespace cql3 {
 namespace restrictions {
 
@@ -627,7 +625,7 @@ bool single_column_restriction::IN::is_satisfied_by(bytes_view data, const query
 
 static query::range<bytes_view> to_range(const term_slice& slice, const query_options& options) {
     using range_type = query::range<bytes_view>;
-    auto extract_bound = [&] (statements::bound bound) -> stdx::optional<range_type::bound> {
+    auto extract_bound = [&] (statements::bound bound) -> std::optional<range_type::bound> {
         if (!slice.has_bound(bound)) {
             return { };
         }

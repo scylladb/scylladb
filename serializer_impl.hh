@@ -567,33 +567,6 @@ struct serializer<std::optional<T>> {
     }
 };
 
-template<typename T>
-struct serializer<std::experimental::optional<T>> {
-    template<typename Input>
-    static std::experimental::optional<T> read(Input& in) {
-        std::experimental::optional<T> v;
-        auto b = deserialize(in, boost::type<bool>());
-        if (b) {
-            v = deserialize(in, boost::type<T>());
-        }
-        return v;
-    }
-    template<typename Output>
-    static void write(Output& out, const std::experimental::optional<T>& v) {
-        serialize(out, bool(v));
-        if (v) {
-            serialize(out, v.value());
-        }
-    }
-    template<typename Input>
-    static void skip(Input& in) {
-        auto present = deserialize(in, boost::type<bool>());
-        if (present) {
-            serializer<T>::skip(in);
-        }
-    }
-};
-
 template<>
 struct serializer<sstring> {
     template<typename Input>

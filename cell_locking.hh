@@ -63,7 +63,7 @@ class partition_cells_range {
 public:
     class iterator {
         const mutation_partition& _mp;
-        stdx::optional<mutation_partition::rows_type::const_iterator> _position;
+        std::optional<mutation_partition::rows_type::const_iterator> _position;
         cells_range _current;
     public:
         explicit iterator(const mutation_partition& mp)

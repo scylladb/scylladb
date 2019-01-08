@@ -660,7 +660,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 s->full_slice(),
                 1,
                 gc_clock::now(),
-                stdx::nullopt,
+                std::nullopt,
                 1,
                 utils::make_random_uuid());
 
@@ -694,7 +694,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 s->full_slice(),
                 1,
                 gc_clock::now(),
-                stdx::nullopt,
+                std::nullopt,
                 1,
                 utils::make_random_uuid());
 

@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include <experimental/string_view>
+#include <string_view>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -54,7 +54,6 @@
 
 #include "auth/permission.hh"
 #include "seastarx.hh"
-#include "stdx.hh"
 #include "utils/hash.hh"
 #include "utils/small_vector.hh"
 
@@ -62,7 +61,7 @@ namespace auth {
 
 class invalid_resource_name : public std::invalid_argument {
 public:
-    explicit invalid_resource_name(stdx::string_view name)
+    explicit invalid_resource_name(std::string_view name)
             : std::invalid_argument(format("The resource name '{}' is invalid.", name)) {
     }
 };
@@ -106,9 +105,9 @@ public:
     /// A root resource of a particular kind.
     ///
     explicit resource(resource_kind);
-    resource(data_resource_t, stdx::string_view keyspace);
-    resource(data_resource_t, stdx::string_view keyspace, stdx::string_view table);
-    resource(role_resource_t, stdx::string_view role);
+    resource(data_resource_t, std::string_view keyspace);
+    resource(data_resource_t, std::string_view keyspace, std::string_view table);
+    resource(role_resource_t, std::string_view role);
 
     resource_kind kind() const noexcept {
         return _kind;
@@ -132,7 +131,7 @@ private:
 
     friend bool operator<(const resource&, const resource&);
     friend bool operator==(const resource&, const resource&);
-    friend resource parse_resource(stdx::string_view);
+    friend resource parse_resource(std::string_view);
 };
 
 bool operator<(const resource&, const resource&);
@@ -167,9 +166,9 @@ public:
     ///
     explicit data_resource_view(const resource& r);
 
-    std::optional<stdx::string_view> keyspace() const;
+    std::optional<std::string_view> keyspace() const;
 
-    std::optional<stdx::string_view> table() const;
+    std::optional<std::string_view> table() const;
 };
 
 std::ostream& operator<<(std::ostream&, const data_resource_view&);
@@ -188,7 +187,7 @@ public:
     ///
     explicit role_resource_view(const resource&);
 
-    std::optional<stdx::string_view> role() const;
+    std::optional<std::string_view> role() const;
 };
 
 std::ostream& operator<<(std::ostream&, const role_resource_view&);
@@ -198,20 +197,20 @@ std::ostream& operator<<(std::ostream&, const role_resource_view&);
 ///
 /// \throws \ref invalid_resource_name when the name is malformed.
 ///
-resource parse_resource(stdx::string_view name);
+resource parse_resource(std::string_view name);
 
 const resource& root_data_resource();
 
-inline resource make_data_resource(stdx::string_view keyspace) {
+inline resource make_data_resource(std::string_view keyspace) {
     return resource(data_resource_t{}, keyspace);
 }
-inline resource make_data_resource(stdx::string_view keyspace, stdx::string_view table) {
+inline resource make_data_resource(std::string_view keyspace, std::string_view table) {
     return resource(data_resource_t{}, keyspace, table);
 }
 
 const resource& root_role_resource();
 
-inline resource make_role_resource(stdx::string_view role) {
+inline resource make_role_resource(std::string_view role) {
     return resource(role_resource_t{}, role);
 }
 

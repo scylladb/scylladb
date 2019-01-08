@@ -45,7 +45,7 @@
 
 namespace auth {
 
-authenticated_user::authenticated_user(stdx::string_view name)
+authenticated_user::authenticated_user(std::string_view name)
         : name(sstring(name)) {
 }
 

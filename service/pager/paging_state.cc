@@ -57,11 +57,11 @@
 #include "message/messaging_service.hh"
 
 service::pager::paging_state::paging_state(partition_key pk,
-        std::experimental::optional<clustering_key> ck,
+        std::optional<clustering_key> ck,
         uint32_t rem,
         utils::UUID query_uuid,
         replicas_per_token_range last_replicas,
-        std::experimental::optional<db::read_repair_decision> query_read_repair_decision)
+        std::optional<db::read_repair_decision> query_read_repair_decision)
     : _partition_key(std::move(pk))
     , _clustering_key(std::move(ck))
     , _remaining(rem)

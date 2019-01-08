@@ -144,7 +144,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
                     .with_column("v3", bytes_type)
                     .build();
 
-            auto s2 = schema_builder("ks", "table", stdx::make_optional(s1->id()))
+            auto s2 = schema_builder("ks", "table", std::make_optional(s1->id()))
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v1", bytes_type)
                     .with_column("v2", bytes_type)
@@ -275,7 +275,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
             auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
 
-            auto s2 = schema_builder("ks", "table1", stdx::make_optional(s1->id()))
+            auto s2 = schema_builder("ks", "table1", std::make_optional(s1->id()))
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .without_column("v1", bytes_type, api::new_timestamp())
                     .build();
@@ -289,12 +289,12 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
             // Add a new v1 and drop it
             {
-                auto s3 = schema_builder("ks", "table1", stdx::make_optional(s1->id()))
+                auto s3 = schema_builder("ks", "table1", std::make_optional(s1->id()))
                         .with_column("pk", bytes_type, column_kind::partition_key)
                         .with_column("v1", list_type_impl::get_instance(int32_type, true))
                         .build();
 
-                auto s4 = schema_builder("ks", "table1", stdx::make_optional(s1->id()))
+                auto s4 = schema_builder("ks", "table1", std::make_optional(s1->id()))
                         .with_column("pk", bytes_type, column_kind::partition_key)
                         .without_column("v1", list_type_impl::get_instance(int32_type, true), api::new_timestamp())
                         .build();

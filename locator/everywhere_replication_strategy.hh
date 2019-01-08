@@ -39,7 +39,7 @@
 #pragma once
 
 #include "locator/abstract_replication_strategy.hh"
-#include <experimental/optional>
+#include <optional>
 
 namespace locator {
 class everywhere_replication_strategy : public abstract_replication_strategy {
@@ -53,9 +53,9 @@ public:
 
     virtual void validate_options() const override { /* noop */ }
 
-    std::experimental::optional<std::set<sstring>> recognized_options() const override {
+    std::optional<std::set<sstring>> recognized_options() const override {
         // We explicitely allow all options
-        return std::experimental::nullopt;
+        return std::nullopt;
     }
 
     virtual size_t get_replication_factor() const override {

@@ -230,7 +230,7 @@ public:
                      * in which case it should not be dense. However, we can limit our margin of error by assuming we are
                      * in the latter case only if the comparator is exactly CompositeType(UTF8Type).
                      */
-                    stdx::optional<column_id> max_cl_idx;
+                    std::optional<column_id> max_cl_idx;
                     const cql3::untyped_result_set::row * regular = nullptr;
                     for (auto& row : *columns) {
                         auto kind_str = row.get_as<sstring>("type");
@@ -324,7 +324,7 @@ public:
                     }
                 }
 
-                stdx::optional<index_metadata_kind> index_kind;
+                std::optional<index_metadata_kind> index_kind;
                 sstring index_name;
                 index_options_map options;
                 if (row.has("index_type")) {

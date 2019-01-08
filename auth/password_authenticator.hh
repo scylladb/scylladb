@@ -61,7 +61,7 @@ class password_authenticator : public authenticator {
     seastar::abort_source _as;
 
 public:
-    static db::consistency_level consistency_for_user(stdx::string_view role_name);
+    static db::consistency_level consistency_for_user(std::string_view role_name);
 
     password_authenticator(cql3::query_processor&, ::service::migration_manager&);
 
@@ -81,13 +81,13 @@ public:
 
     virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override;
 
-    virtual future<> create(stdx::string_view role_name, const authentication_options& options) const override;
+    virtual future<> create(std::string_view role_name, const authentication_options& options) const override;
 
-    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) const override;
+    virtual future<> alter(std::string_view role_name, const authentication_options& options) const override;
 
-    virtual future<> drop(stdx::string_view role_name) const override;
+    virtual future<> drop(std::string_view role_name) const override;
 
-    virtual future<custom_options> query_custom_options(stdx::string_view role_name) const override;
+    virtual future<custom_options> query_custom_options(std::string_view role_name) const override;
 
     virtual const resource_set& protected_resources() const override;
 

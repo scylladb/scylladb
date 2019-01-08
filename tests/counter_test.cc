@@ -168,7 +168,7 @@ atomic_cell_view get_counter_cell(mutation& m) {
     BOOST_REQUIRE_EQUAL(mp.clustered_rows().calculate_size(), 1);
     const auto& cells = mp.clustered_rows().begin()->row().cells();
     BOOST_REQUIRE_EQUAL(cells.size(), 1);
-    stdx::optional<atomic_cell_view> acv;
+    std::optional<atomic_cell_view> acv;
     cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
         acv = ac_o_c.as_atomic_cell(m.schema()->regular_column_at(id));
     });
@@ -180,7 +180,7 @@ atomic_cell_view get_static_counter_cell(mutation& m) {
     auto& mp = m.partition();
     const auto& cells = mp.static_row();
     BOOST_REQUIRE_EQUAL(cells.size(), 1);
-    stdx::optional<atomic_cell_view> acv;
+    std::optional<atomic_cell_view> acv;
     cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
         acv = ac_o_c.as_atomic_cell(m.schema()->static_column_at(id));
     });
@@ -581,7 +581,7 @@ SEASTAR_TEST_CASE(test_shards_compatible_with_1_7_4) {
 
         verify_shard_order(cv);
 
-        stdx::optional<counter_id> previous;
+        std::optional<counter_id> previous;
         counter_id::less_compare_1_7_4 cmp;
         for (auto&& cs : cv.shards_compatible_with_1_7_4()) {
             if (previous) {

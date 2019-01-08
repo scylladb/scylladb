@@ -42,7 +42,7 @@ future<directory_entry> lister::guarantee_type(directory_entry de) {
         return make_ready_future<directory_entry>(std::move(de));
     } else {
         auto f = engine().file_type((_dir / de.name.c_str()).native());
-        return f.then([dir = _dir, de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
+        return f.then([dir = _dir, de = std::move(de)] (std::optional<directory_entry_type> t) mutable {
             // If some FS error occures - return an exceptional future
             if (!t) {
                 return make_exception_future<directory_entry>(std::runtime_error(format("Failed to get {} type.", (dir / de.name.c_str()).native())));

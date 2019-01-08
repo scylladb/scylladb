@@ -94,7 +94,7 @@ public:
             encoded_row.write(row_sstring.c_str(), row_sstring.size());
         }
         encoded_row.write("}", 1);
-        return encoded_row.linearize().to_string();
+        return bytes(encoded_row.linearize());
     }
 
     virtual const function_name& name() const override {

@@ -77,7 +77,7 @@ public:
         virtual bool is_counter() const;
         virtual bool is_duration() const;
         virtual bool references_user_type(const sstring&) const;
-        virtual std::experimental::optional<sstring> keyspace() const;
+        virtual std::optional<sstring> keyspace() const;
         virtual void freeze();
         virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata>) = 0;
         virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace);
@@ -130,7 +130,7 @@ public:
         kind::DURATION>;
     using kind_enum_set = enum_set<kind_enum>;
 private:
-    std::experimental::optional<kind_enum_set::prepared> _kind;
+    std::optional<kind_enum_set::prepared> _kind;
     static shared_ptr<cql3_type> make(sstring name, data_type type, kind kind_) {
         return make_shared<cql3_type>(std::move(name), std::move(type), kind_);
     }

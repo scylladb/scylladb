@@ -27,7 +27,7 @@ namespace functions {
 
 namespace {
 
-using bytes_opt = std::experimental::optional<bytes>;
+using bytes_opt = std::optional<bytes>;
 
 class castas_function_for : public cql3::functions::native_scalar_function {
     castas_fctn _func;

@@ -24,7 +24,7 @@
 
 #include <unordered_map>
 #include <iosfwd>
-#include <experimental/string_view>
+#include <string_view>
 
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
@@ -33,7 +33,6 @@
 #include <seastar/core/future.hh>
 
 #include "seastarx.hh"
-#include "stdx.hh"
 
 namespace seastar { class file; }
 namespace YAML { class Node; }
@@ -60,24 +59,24 @@ public:
     };
 
     struct config_src {
-        stdx::string_view _name, _desc;
+        std::string_view _name, _desc;
     public:
-        config_src(stdx::string_view name, stdx::string_view desc)
+        config_src(std::string_view name, std::string_view desc)
             : _name(name)
             , _desc(desc)
         {}
         virtual ~config_src() {}
 
-        const stdx::string_view & name() const {
+        const std::string_view & name() const {
             return _name;
         }
-        const stdx::string_view & desc() const {
+        const std::string_view & desc() const {
             return _desc;
         }
 
         virtual void add_command_line_option(
-                        bpo::options_description_easy_init&, const stdx::string_view&,
-                        const stdx::string_view&) = 0;
+                        bpo::options_description_easy_init&, const std::string_view&,
+                        const std::string_view&) = 0;
         virtual void set_value(const YAML::Node&) = 0;
         virtual value_status status() const = 0;
         virtual config_source source() const = 0;
@@ -87,14 +86,14 @@ public:
     struct named_value : public config_src {
     private:
         friend class config;
-        stdx::string_view _name, _desc;
+        std::string_view _name, _desc;
         T _value = T();
         config_source _source = config_source::None;
     public:
         typedef T type;
         typedef named_value<T, S> MyType;
 
-        named_value(stdx::string_view name, const T& t = T(), stdx::string_view desc = {})
+        named_value(std::string_view name, const T& t = T(), std::string_view desc = {})
             : config_src(name, desc)
             , _value(t)
         {}
@@ -126,7 +125,7 @@ public:
         }
 
         void add_command_line_option(bpo::options_description_easy_init&,
-                        const stdx::string_view&, const stdx::string_view&) override;
+                        const std::string_view&, const std::string_view&) override;
         void set_value(const YAML::Node&) override;
     };
 
@@ -157,7 +156,7 @@ public:
      * If invalid, it is invalid. Otherwise, a parse error.
      *
      */
-    using error_handler = std::function<void(const sstring&, const sstring&, stdx::optional<value_status>)>;
+    using error_handler = std::function<void(const sstring&, const sstring&, std::optional<value_status>)>;
 
     void read_from_yaml(const sstring&, error_handler = {});
     void read_from_yaml(const char *, error_handler = {});

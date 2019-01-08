@@ -48,7 +48,7 @@
 #include <cmath>
 #include <list>
 #include <map>
-#include <experimental/optional>
+#include <optional>
 
 
 namespace gms {
@@ -128,7 +128,7 @@ private:
         return DEFAULT_MAX_PAUSE;
     }
 
-    std::experimental::optional<arrival_window::clk::time_point> _last_interpret;
+    std::optional<arrival_window::clk::time_point> _last_interpret;
     arrival_window::clk::time_point _last_paused;
 
 public:

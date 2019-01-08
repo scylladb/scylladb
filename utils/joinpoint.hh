@@ -22,7 +22,7 @@
 #pragma once
 
 #include <memory>
-#include <experimental/optional>
+#include <optional>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_ptr.hh>
 
@@ -78,7 +78,7 @@ private:
     shard_id _shard;
     semaphore _enter;
     semaphore _wait;
-    std::experimental::optional<T> _value;
+    std::optional<T> _value;
 };
 
 /**

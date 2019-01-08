@@ -45,7 +45,6 @@
 #include "types.hh"
 #include "keys.hh"
 #include "utils/managed_bytes.hh"
-#include "stdx.hh"
 #include <memory>
 #include <random>
 #include <utility>
@@ -228,7 +227,7 @@ public:
     }
 };
 
-using decorated_key_opt = std::experimental::optional<decorated_key>;
+using decorated_key_opt = std::optional<decorated_key>;
 
 class i_partitioner {
 protected:
@@ -431,7 +430,7 @@ private:
     friend class ring_position_comparator;
     dht::token _token;
     token_bound _token_bound; // valid when !_key
-    std::experimental::optional<partition_key> _key;
+    std::optional<partition_key> _key;
 public:
     static ring_position min() {
         return { minimum_token(), token_bound::start };
@@ -464,10 +463,10 @@ public:
 
     ring_position(dht::token token, partition_key key)
         : _token(std::move(token))
-        , _key(std::experimental::make_optional(std::move(key)))
+        , _key(std::make_optional(std::move(key)))
     { }
 
-    ring_position(dht::token token, token_bound bound, std::experimental::optional<partition_key> key)
+    ring_position(dht::token token, token_bound bound, std::optional<partition_key> key)
         : _token(std::move(token))
         , _token_bound(bound)
         , _key(std::move(key))
@@ -475,12 +474,12 @@ public:
 
     ring_position(const dht::decorated_key& dk)
         : _token(dk._token)
-        , _key(std::experimental::make_optional(dk._key))
+        , _key(std::make_optional(dk._key))
     { }
 
     ring_position(dht::decorated_key&& dk)
         : _token(std::move(dk._token))
-        , _key(std::experimental::make_optional(std::move(dk._key)))
+        , _key(std::make_optional(std::move(dk._key)))
     { }
 
     const dht::token& token() const {
@@ -497,7 +496,7 @@ public:
         return _key ? 0 : static_cast<int>(_token_bound);
     }
 
-    const std::experimental::optional<partition_key>& key() const {
+    const std::optional<partition_key>& key() const {
         return _key;
     }
 
@@ -704,7 +703,7 @@ public:
             : ring_position_range_sharder(global_partitioner(), std::move(rrp)) {}
     ring_position_range_sharder(const i_partitioner& partitioner, nonwrapping_range<ring_position> rrp)
             : _partitioner(partitioner), _range(std::move(rrp)) {}
-    stdx::optional<ring_position_range_and_shard> next(const schema& s);
+    std::optional<ring_position_range_and_shard> next(const schema& s);
 };
 
 struct ring_position_range_and_shard_and_element : ring_position_range_and_shard {
@@ -727,11 +726,11 @@ class ring_position_exponential_sharder {
     unsigned _spans_per_iteration = 1;
     unsigned _first_shard = 0;
     unsigned _next_shard = 0;
-    std::vector<stdx::optional<token>> _last_ends; // index = shard
+    std::vector<std::optional<token>> _last_ends; // index = shard
 public:
     explicit ring_position_exponential_sharder(partition_range pr);
     explicit ring_position_exponential_sharder(const i_partitioner& partitioner, partition_range pr);
-    stdx::optional<ring_position_exponential_sharder_result> next(const schema& s);
+    std::optional<ring_position_exponential_sharder_result> next(const schema& s);
 };
 
 struct ring_position_exponential_vector_sharder_result : ring_position_exponential_sharder_result {
@@ -745,18 +744,18 @@ struct ring_position_exponential_vector_sharder_result : ring_position_exponenti
 // sets per-shard sub-ranges.  May be non-exponential when moving from one ring position range to another.
 class ring_position_exponential_vector_sharder {
     std::deque<nonwrapping_range<ring_position>> _ranges;
-    stdx::optional<ring_position_exponential_sharder> _current_sharder;
+    std::optional<ring_position_exponential_sharder> _current_sharder;
     unsigned _element = 0;
 public:
     explicit ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>&& ranges);
-    stdx::optional<ring_position_exponential_vector_sharder_result> next(const schema& s);
+    std::optional<ring_position_exponential_vector_sharder_result> next(const schema& s);
 };
 
 class ring_position_range_vector_sharder {
     using vec_type = dht::partition_range_vector;
     vec_type _ranges;
     vec_type::iterator _current_range;
-    stdx::optional<ring_position_range_sharder> _current_sharder;
+    std::optional<ring_position_range_sharder> _current_sharder;
 private:
     void next_range() {
         if (_current_range != _ranges.end()) {
@@ -766,7 +765,7 @@ private:
 public:
     explicit ring_position_range_vector_sharder(dht::partition_range_vector ranges);
     // results are returned sorted by index within the vector first, then within each vector item
-    stdx::optional<ring_position_range_and_shard_and_element> next(const schema& s);
+    std::optional<ring_position_range_and_shard_and_element> next(const schema& s);
 };
 
 dht::partition_range to_partition_range(dht::token_range);
@@ -791,7 +790,7 @@ class selective_token_range_sharder {
     bool _done = false;
     shard_id _next_shard;
     dht::token _start_token;
-    stdx::optional<range_bound<dht::token>> _start_boundary;
+    std::optional<range_bound<dht::token>> _start_boundary;
 public:
     explicit selective_token_range_sharder(dht::token_range range, shard_id shard)
             : selective_token_range_sharder(global_partitioner(), std::move(range), shard) {}
@@ -804,7 +803,7 @@ public:
             , _start_boundary(_partitioner.shard_of(_start_token) == shard ?
                 _range.start() : range_bound<dht::token>(_partitioner.token_for_next_shard(_start_token, shard))) {
     }
-    stdx::optional<dht::token_range> next();
+    std::optional<dht::token_range> next();
 };
 
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits);

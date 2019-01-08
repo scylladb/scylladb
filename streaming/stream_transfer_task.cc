@@ -166,7 +166,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
 
         auto source_op = [source, got_error_from_peer, si] () mutable -> future<> {
             return repeat([source, got_error_from_peer, si] () mutable {
-                return source().then([source, got_error_from_peer, si] (stdx::optional<std::tuple<int32_t>> status_opt) mutable {
+                return source().then([source, got_error_from_peer, si] (std::optional<std::tuple<int32_t>> status_opt) mutable {
                     if (status_opt) {
                         auto status = std::get<0>(*status_opt);
                         *got_error_from_peer = status == -1;

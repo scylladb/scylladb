@@ -294,7 +294,7 @@ schema_ptr tables() {
 schema_ptr scylla_tables() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
-        return schema_builder(NAME, SCYLLA_TABLES, stdx::make_optional(id))
+        return schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("version", uuid_type)
@@ -1660,7 +1660,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
         }
     }
 
-    return schema_mutations{std::move(m), std::move(columns_mutation), stdx::nullopt,
+    return schema_mutations{std::move(m), std::move(columns_mutation), std::nullopt,
                             std::move(indices_mutation), std::move(dropped_columns_mutation),
                             std::move(scylla_tables_mutation)};
 }
@@ -2033,7 +2033,7 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
     }
 }
 
-schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::experimental::optional<table_schema_version> version)
+schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)
 {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     query::result_set_row table_row = table_rs.row(0);
@@ -2282,7 +2282,7 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
  * View metadata serialization/deserialization.
  */
 
-view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::experimental::optional<table_schema_version> version)  {
+view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)  {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     query::result_set_row row = table_rs.row(0);
 

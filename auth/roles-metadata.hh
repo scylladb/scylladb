@@ -21,13 +21,12 @@
 
 #pragma once
 
-#include <experimental/string_view>
+#include <string_view>
 #include <functional>
 
 #include <seastar/core/future.hh>
 
 #include "seastarx.hh"
-#include "stdx.hh"
 
 namespace cql3 {
 class query_processor;
@@ -40,13 +39,13 @@ namespace meta {
 
 namespace roles_table {
 
-stdx::string_view creation_query();
+std::string_view creation_query();
 
-constexpr stdx::string_view name{"roles", 5};
+constexpr std::string_view name{"roles", 5};
 
-stdx::string_view qualified_name() noexcept;
+std::string_view qualified_name() noexcept;
 
-constexpr stdx::string_view role_col_name{"role", 4};
+constexpr std::string_view role_col_name{"role", 4};
 
 }
 

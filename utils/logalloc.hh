@@ -236,7 +236,7 @@ class region_group {
     // there are region_groups waiting on us, we broadcast these messages to the waiters and they
     // will then decide whether they can now run or if they have to wait on us again (or potentially
     // a different ancestor)
-    std::experimental::optional<shared_promise<>> _descendant_blocked_requests = {};
+    std::optional<shared_promise<>> _descendant_blocked_requests = {};
 
     condition_variable _relief;
     future<> _releaser;

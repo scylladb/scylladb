@@ -26,7 +26,7 @@
 #include <seastar/core/lowres_clock.hh>
 
 #include <chrono>
-#include <experimental/optional>
+#include <optional>
 
 // FIXME: wraps around in 2038
 class gc_clock final {
@@ -52,8 +52,8 @@ public:
     }
 };
 
-using expiry_opt = std::experimental::optional<gc_clock::time_point>;
-using ttl_opt = std::experimental::optional<gc_clock::duration>;
+using expiry_opt = std::optional<gc_clock::time_point>;
+using ttl_opt = std::optional<gc_clock::duration>;
 
 // 20 years in seconds
 static constexpr gc_clock::duration max_ttl = gc_clock::duration{20 * 365 * 24 * 60 * 60};

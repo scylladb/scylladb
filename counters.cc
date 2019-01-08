@@ -171,7 +171,7 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
  });
 }
 
-stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, atomic_cell_view b)
+std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, atomic_cell_view b)
 {
     assert(!a.is_counter_update());
     assert(!b.is_counter_update());
@@ -204,7 +204,7 @@ stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, at
         ++a_it;
     }
 
-    stdx::optional<atomic_cell> diff;
+    std::optional<atomic_cell> diff;
     if (!result.empty()) {
         diff = result.build(std::max(a.timestamp(), b.timestamp()));
     } else if (a.timestamp() > b.timestamp()) {

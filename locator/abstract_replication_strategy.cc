@@ -22,7 +22,6 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
-#include "stdx.hh"
 
 namespace locator {
 
@@ -133,11 +132,11 @@ insert_token_range_to_sorted_container_while_unwrapping(
     } else {
         ret.emplace_back(
                 dht::token_range::bound(prev_tok, false),
-                stdx::nullopt);
+                std::nullopt);
         // Insert in front to maintain sorded order
         ret.emplace(
                 ret.begin(),
-                stdx::nullopt,
+                std::nullopt,
                 dht::token_range::bound(tok, true));
     }
 }

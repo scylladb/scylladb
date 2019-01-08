@@ -111,7 +111,7 @@ static bool ranges_match(const schema& s, const dht::partition_range& original_r
     }
 
     const auto cmp = dht::ring_position_comparator(s);
-    const auto bound_eq = [&] (const stdx::optional<dht::partition_range::bound>& a, const stdx::optional<dht::partition_range::bound>& b) {
+    const auto bound_eq = [&] (const std::optional<dht::partition_range::bound>& a, const std::optional<dht::partition_range::bound>& b) {
         return bool(a) == bool(b) && (!a || a->equal(*b, cmp));
     };
 

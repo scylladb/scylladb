@@ -364,7 +364,7 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
 
 ::shared_ptr<cql_transport::messages::result_message::prepared>
 query_processor::get_stored_prepared_statement(
-        const std::experimental::string_view& query_string,
+        const std::string_view& query_string,
         const sstring& keyspace,
         bool for_thrift) {
     using namespace cql_transport::messages;
@@ -383,7 +383,7 @@ query_processor::get_stored_prepared_statement(
     }
 }
 
-static bytes md5_calculate(const std::experimental::string_view& s) {
+static bytes md5_calculate(const std::string_view& s) {
     constexpr size_t size = CryptoPP::Weak1::MD5::DIGESTSIZE;
     CryptoPP::Weak::MD5 hash;
     unsigned char digest[size];
@@ -391,18 +391,18 @@ static bytes md5_calculate(const std::experimental::string_view& s) {
     return std::move(bytes{reinterpret_cast<const int8_t*>(digest), size});
 }
 
-static sstring hash_target(const std::experimental::string_view& query_string, const sstring& keyspace) {
-    return keyspace + query_string.to_string();
+static sstring hash_target(const std::string_view& query_string, const sstring& keyspace) {
+    return keyspace + std::string(query_string);
 }
 
 prepared_cache_key_type query_processor::compute_id(
-        const std::experimental::string_view& query_string,
+        const std::string_view& query_string,
         const sstring& keyspace) {
     return prepared_cache_key_type(md5_calculate(hash_target(query_string, keyspace)));
 }
 
 prepared_cache_key_type query_processor::compute_thrift_id(
-        const std::experimental::string_view& query_string,
+        const std::string_view& query_string,
         const sstring& keyspace) {
     auto target = hash_target(query_string, keyspace);
     uint32_t h = 0;
@@ -705,7 +705,7 @@ void query_processor::migration_subscriber::on_update_view(
 }
 
 void query_processor::migration_subscriber::on_drop_keyspace(const sstring& ks_name) {
-    remove_invalid_prepared_statements(ks_name, std::experimental::nullopt);
+    remove_invalid_prepared_statements(ks_name, std::nullopt);
 }
 
 void query_processor::migration_subscriber::on_drop_column_family(const sstring& ks_name, const sstring& cf_name) {
@@ -729,7 +729,7 @@ void query_processor::migration_subscriber::on_drop_view(const sstring& ks_name,
 
 void query_processor::migration_subscriber::remove_invalid_prepared_statements(
         sstring ks_name,
-        std::experimental::optional<sstring> cf_name) {
+        std::optional<sstring> cf_name) {
     _qp->_prepared_cache.remove_if([&] (::shared_ptr<cql_statement> stmt) {
         return this->should_invalidate(ks_name, cf_name, stmt);
     });
@@ -737,7 +737,7 @@ void query_processor::migration_subscriber::remove_invalid_prepared_statements(
 
 bool query_processor::migration_subscriber::should_invalidate(
         sstring ks_name,
-        std::experimental::optional<sstring> cf_name,
+        std::optional<sstring> cf_name,
         ::shared_ptr<cql_statement> statement) {
     return statement->depends_on_keyspace(ks_name) && (!cf_name || statement->depends_on_column_family(*cf_name));
 }

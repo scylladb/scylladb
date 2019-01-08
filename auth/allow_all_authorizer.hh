@@ -23,7 +23,6 @@
 
 #include "auth/authorizer.hh"
 #include "exceptions/exceptions.hh"
-#include "stdx.hh"
 
 namespace cql3 {
 class query_processor;
@@ -58,12 +57,12 @@ public:
         return make_ready_future<permission_set>(permissions::ALL);
     }
 
-    virtual future<> grant(stdx::string_view, permission_set, const resource&) const override {
+    virtual future<> grant(std::string_view, permission_set, const resource&) const override {
         return make_exception_future<>(
                 unsupported_authorization_operation("GRANT operation is not supported by AllowAllAuthorizer"));
     }
 
-    virtual future<> revoke(stdx::string_view, permission_set, const resource&) const override {
+    virtual future<> revoke(std::string_view, permission_set, const resource&) const override {
         return make_exception_future<>(
                 unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
     }
@@ -74,7 +73,7 @@ public:
                         "LIST PERMISSIONS operation is not supported by AllowAllAuthorizer"));
     }
 
-    virtual future<> revoke_all(stdx::string_view) const override {
+    virtual future<> revoke_all(std::string_view) const override {
         return make_exception_future(
                 unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
     }

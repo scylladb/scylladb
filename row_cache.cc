@@ -30,7 +30,6 @@
 #include <chrono>
 #include <boost/version.hpp>
 #include <sys/sdt.h>
-#include "stdx.hh"
 #include "read_context.hh"
 #include "schema_upgrader.hh"
 #include "dirty_memory_manager.hh"
@@ -245,7 +244,7 @@ class partition_range_cursor final {
     row_cache::partitions_type::iterator _end;
     dht::ring_position_view _start_pos;
     dht::ring_position_view _end_pos;
-    stdx::optional<dht::decorated_key> _last;
+    std::optional<dht::decorated_key> _last;
     uint64_t _last_reclaim_count;
 private:
     void set_position(cache_entry& e) {
@@ -482,7 +481,7 @@ void row_cache::on_static_row_insert() {
 class range_populating_reader {
     row_cache& _cache;
     autoupdating_underlying_reader& _reader;
-    stdx::optional<row_cache::previous_entry_pointer> _last_key;
+    std::optional<row_cache::previous_entry_pointer> _last_key;
     read_context& _read_context;
 private:
     bool can_set_continuity() const {
@@ -527,7 +526,7 @@ public:
             {
                 if (!mfopt) {
                     this->handle_end_of_stream();
-                    return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(stdx::nullopt, stdx::nullopt);
+                    return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(std::nullopt, std::nullopt);
                 }
                 _cache.on_partition_miss();
                 const partition_start& ps = mfopt->as_partition_start();
@@ -540,7 +539,7 @@ public:
                                                                this->can_set_continuity() ? &*_last_key : nullptr);
                         _last_key = row_cache::previous_entry_pointer(key);
                         return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(
-                            e.read(_cache, _read_context, _reader.creation_phase()), stdx::nullopt);
+                            e.read(_cache, _read_context, _reader.creation_phase()), std::nullopt);
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
@@ -574,7 +573,7 @@ class scanning_and_populating_reader final : public flat_mutation_reader::impl {
     range_populating_reader _secondary_reader;
     bool _secondary_in_progress = false;
     bool _advance_primary = false;
-    stdx::optional<dht::partition_range::bound> _lower_bound;
+    std::optional<dht::partition_range::bound> _lower_bound;
     dht::partition_range _secondary_range;
     flat_mutation_reader_opt _reader;
 private:
@@ -584,7 +583,7 @@ private:
         return ce.read(_cache, *_read_context);
     }
 
-    static dht::ring_position_view as_ring_position_view(const stdx::optional<dht::partition_range::bound>& lower_bound) {
+    static dht::ring_position_view as_ring_position_view(const std::optional<dht::partition_range::bound>& lower_bound) {
         return lower_bound ? dht::ring_position_view(lower_bound->value(), dht::ring_position_view::after_key(!lower_bound->is_inclusive()))
                            : dht::ring_position_view::min();
     }
@@ -605,7 +604,7 @@ private:
 
                 if (not_moved || _primary.entry().continuous()) {
                     if (!_primary.in_range()) {
-                        return stdx::nullopt;
+                        return std::nullopt;
                     }
                     cache_entry& e = _primary.entry();
                     auto fr = read_from_entry(e);
@@ -620,17 +619,17 @@ private:
                             dht::partition_range::bound{e.key(), false});
                         _lower_bound = dht::partition_range::bound{e.key(), true};
                         _secondary_in_progress = true;
-                        return stdx::nullopt;
+                        return std::nullopt;
                     } else {
                         dht::ring_position_comparator cmp(*_read_context->schema());
-                        auto range = _pr->trim_front(stdx::optional<dht::partition_range::bound>(_lower_bound), cmp);
+                        auto range = _pr->trim_front(std::optional<dht::partition_range::bound>(_lower_bound), cmp);
                         if (!range) {
-                            return stdx::nullopt;
+                            return std::nullopt;
                         }
                         _lower_bound = dht::partition_range::bound{dht::ring_position::max()};
                         _secondary_range = std::move(*range);
                         _secondary_in_progress = true;
-                        return stdx::nullopt;
+                        return std::nullopt;
                     }
                 }
             });

@@ -331,7 +331,7 @@ std::unique_ptr<result_set> result_set_builder::build() {
         _selectors->add_input_row(_cql_serialization_format, *this);
         _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
         _selectors->reset();
-        current = std::experimental::nullopt;
+        current = std::nullopt;
     }
     if (_result_set->empty() && _selectors->is_aggregate()) {
         _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));

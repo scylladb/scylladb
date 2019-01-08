@@ -193,7 +193,7 @@ public:
     const uint64_t max_disk_size; // per-shard
 
     bool _shutdown = false;
-    std::experimental::optional<shared_promise<>> _shutdown_promise = {};
+    std::optional<shared_promise<>> _shutdown_promise = {};
 
     // Allocation must throw timed_out_error by contract.
     using timeout_exception_factory = default_timeout_exception_factory;
@@ -211,7 +211,7 @@ public:
     using request_controller_units = semaphore_units<timeout_exception_factory, db::timeout_clock>;
     request_controller_type _request_controller;
 
-    stdx::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
+    std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     std::unordered_map<sstring, descriptor> _files_to_delete;
     std::vector<file> _files_to_close;
 
@@ -1065,9 +1065,9 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
                 if (!de.type && !de.name.empty()) {
                     return engine().file_type(_dirname + "/" + de.name);
                 }
-                return make_ready_future<std::experimental::optional<directory_entry_type>>(de.type);
+                return make_ready_future<std::optional<directory_entry_type>>(de.type);
             };
-            return entry_type(de).then([this, de](std::experimental::optional<directory_entry_type> type) {
+            return entry_type(de).then([this, de](std::optional<directory_entry_type> type) {
                 if (type == directory_entry_type::regular && de.name[0] != '.' && !is_cassandra_segment(de.name)) {
                     try {
                         _result.emplace_back(de.name, _fname_prefix);
@@ -1305,9 +1305,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment(db::timeout_clock::time_point timeout) {
     // If there is no active segment, try to allocate one using new_segment(). If we time out,
     // make sure later invocations can still pick that segment up once it's ready.
-    return repeat_until_value([this, timeout] () -> future<stdx::optional<sseg_ptr>> {
+    return repeat_until_value([this, timeout] () -> future<std::optional<sseg_ptr>> {
         if (!_segments.empty() && _segments.back()->is_still_allocating()) {
-            return make_ready_future<stdx::optional<sseg_ptr>>(_segments.back());
+            return make_ready_future<std::optional<sseg_ptr>>(_segments.back());
         }
         return [this, timeout] {
             if (!_segment_allocating) {
@@ -1316,15 +1316,15 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 auto f = _segment_allocating->get_future(timeout);
                 with_gate(_gate, [this] {
                     return new_segment().discard_result().finally([this]() {
-                        _segment_allocating = stdx::nullopt;
+                        _segment_allocating = std::nullopt;
                     });
                 }).forward_to(std::move(p));
                 return f;
             } else {
                 return _segment_allocating->get_future(timeout);
             }
-        }().then([] () -> stdx::optional<sseg_ptr> {
-            return stdx::nullopt;
+        }().then([] () -> std::optional<sseg_ptr> {
+            return std::nullopt;
         });
     });
 }

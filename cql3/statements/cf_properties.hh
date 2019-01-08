@@ -80,7 +80,7 @@ public:
         return type;
     }
 
-    std::experimental::optional<bool> find_ordering_info(::shared_ptr<column_identifier> type) const {
+    std::optional<bool> find_ordering_info(::shared_ptr<column_identifier> type) const {
         for (auto& t: _defined_ordering) {
             if (*(t.first) == *type) {
                 return t.second;

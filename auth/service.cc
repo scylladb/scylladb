@@ -97,7 +97,7 @@ private:
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 };
 
-static future<> validate_role_exists(const service& ser, stdx::string_view role_name) {
+static future<> validate_role_exists(const service& ser, std::string_view role_name) {
     return ser.underlying_role_manager().exists(role_name).then([role_name](bool exists) {
         if (!exists) {
             throw nonexistant_role(role_name);
@@ -240,7 +240,7 @@ service::get_uncached_permissions(const role_or_anonymous& maybe_role, const res
         return _authorizer->authorize(maybe_role, r);
     }
 
-    const stdx::string_view role_name = *maybe_role.name;
+    const std::string_view role_name = *maybe_role.name;
 
     return has_superuser(role_name).then([this, role_name, &r](bool superuser) {
         if (superuser) {
@@ -254,7 +254,7 @@ service::get_uncached_permissions(const role_or_anonymous& maybe_role, const res
         return do_with(permission_set(), [this, role_name, &r](auto& all_perms) {
             return get_roles(role_name).then([this, &r, &all_perms](role_set all_roles) {
                 return do_with(std::move(all_roles), [this, &r, &all_perms](const auto& all_roles) {
-                    return parallel_for_each(all_roles, [this, &r, &all_perms](stdx::string_view role_name) {
+                    return parallel_for_each(all_roles, [this, &r, &all_perms](std::string_view role_name) {
                         return _authorizer->authorize(role_name, r).then([&all_perms](permission_set perms) {
                             all_perms = permission_set::from_mask(all_perms.mask() | perms.mask());
                         });
@@ -271,7 +271,7 @@ future<permission_set> service::get_permissions(const role_or_anonymous& maybe_r
     return _permissions_cache->get(maybe_role, r);
 }
 
-future<bool> service::has_superuser(stdx::string_view role_name) const {
+future<bool> service::has_superuser(std::string_view role_name) const {
     return this->get_roles(std::move(role_name)).then([this](role_set roles) {
         return do_with(std::move(roles), [this](const role_set& roles) {
             return do_with(false, roles.begin(), [this, &roles](bool& any_super, auto& iter) {
@@ -289,7 +289,7 @@ future<bool> service::has_superuser(stdx::string_view role_name) const {
     });
 }
 
-future<role_set> service::get_roles(stdx::string_view role_name) const {
+future<role_set> service::get_roles(std::string_view role_name) const {
     //
     // We may wish to cache this information in the future (as Apache Cassandra does).
     //
@@ -395,7 +395,7 @@ static void validate_authentication_options_are_supported(
 
 future<> create_role(
         const service& ser,
-        stdx::string_view name,
+        std::string_view name,
         const role_config& config,
         const authentication_options& options) {
     return ser.underlying_role_manager().create(name, config).then([&ser, name, &options] {
@@ -419,7 +419,7 @@ future<> create_role(
 
 future<> alter_role(
         const service& ser,
-        stdx::string_view name,
+        std::string_view name,
         const role_config_update& config_update,
         const authentication_options& options) {
     return ser.underlying_role_manager().alter(name, config_update).then([&ser, name, &options] {
@@ -436,7 +436,7 @@ future<> alter_role(
     });
 }
 
-future<> drop_role(const service& ser, stdx::string_view name) {
+future<> drop_role(const service& ser, std::string_view name) {
     return do_with(make_role_resource(name), [&ser, name](const resource& r) {
         auto& a = ser.underlying_authorizer();
 
@@ -452,14 +452,14 @@ future<> drop_role(const service& ser, stdx::string_view name) {
     });
 }
 
-future<bool> has_role(const service& ser, stdx::string_view grantee, stdx::string_view name) {
+future<bool> has_role(const service& ser, std::string_view grantee, std::string_view name) {
     return when_all_succeed(
             validate_role_exists(ser, name),
             ser.get_roles(grantee)).then([name](role_set all_roles) {
         return make_ready_future<bool>(all_roles.count(sstring(name)) != 0);
     });
 }
-future<bool> has_role(const service& ser, const authenticated_user& u, stdx::string_view name) {
+future<bool> has_role(const service& ser, const authenticated_user& u, std::string_view name) {
     if (is_anonymous(u)) {
         return make_ready_future<bool>(false);
     }
@@ -469,7 +469,7 @@ future<bool> has_role(const service& ser, const authenticated_user& u, stdx::str
 
 future<> grant_permissions(
         const service& ser,
-        stdx::string_view role_name,
+        std::string_view role_name,
         permission_set perms,
         const resource& r) {
     return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
@@ -477,7 +477,7 @@ future<> grant_permissions(
     });
 }
 
-future<> grant_applicable_permissions(const service& ser, stdx::string_view role_name, const resource& r) {
+future<> grant_applicable_permissions(const service& ser, std::string_view role_name, const resource& r) {
     return grant_permissions(ser, role_name, r.applicable_permissions(), r);
 }
 future<> grant_applicable_permissions(const service& ser, const authenticated_user& u, const resource& r) {
@@ -490,7 +490,7 @@ future<> grant_applicable_permissions(const service& ser, const authenticated_us
 
 future<> revoke_permissions(
         const service& ser,
-        stdx::string_view role_name,
+        std::string_view role_name,
         permission_set perms,
         const resource& r) {
     return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
@@ -501,7 +501,7 @@ future<> revoke_permissions(
 future<std::vector<permission_details>> list_filtered_permissions(
         const service& ser,
         permission_set perms,
-        std::optional<stdx::string_view> role_name,
+        std::optional<std::string_view> role_name,
         const std::optional<std::pair<resource, recursive_permissions>>& resource_filter) {
     return ser.underlying_authorizer().list_all().then([&ser, perms, role_name, &resource_filter](
             std::vector<permission_details> all_details) {

@@ -31,6 +31,8 @@
 #include <seastar/net/byteorder.hh>
 #include "bytes.hh"
 
+#include <variant>
+
 template<typename T>
 static inline T consume_be(temporary_buffer<char>& p) {
     T i = read_be<T>(p.get());
@@ -40,10 +42,10 @@ static inline T consume_be(temporary_buffer<char>& p) {
 
 namespace data_consumer {
 enum class proceed { no, yes };
-using processing_result = boost::variant<proceed, skip_bytes>;
+using processing_result = std::variant<proceed, skip_bytes>;
 
 inline bool operator==(const processing_result& result, proceed value) {
-    const proceed* p = boost::get<proceed>(&result);
+    const proceed* p = std::get_if<proceed>(&result);
     return (p != nullptr && *p == value);
 }
 
@@ -433,7 +435,7 @@ public:
             auto orig_data_size = data.size();
             _stream_position.position += data.size();
             auto result = process(data);
-            return visit(result, [this, &data, orig_data_size] (proceed value) {
+            return seastar::visit(result, [this, &data, orig_data_size] (proceed value) {
                 _remain -= orig_data_size - data.size();
                 _stream_position.position -= data.size();
                 if (value == proceed::yes) {

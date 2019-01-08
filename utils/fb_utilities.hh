@@ -41,7 +41,7 @@
 #pragma once
 
 #include <cstdint>
-#include <experimental/optional>
+#include <optional>
 #include "gms/inet_address.hh"
 
 namespace utils {
@@ -51,13 +51,13 @@ using inet_address = gms::inet_address;
 // FIXME: stub
 class fb_utilities {
 private:
-    static std::experimental::optional<inet_address>& broadcast_address() {
-        static std::experimental::optional<inet_address> _broadcast_address;
+    static std::optional<inet_address>& broadcast_address() {
+        static std::optional<inet_address> _broadcast_address;
 
         return _broadcast_address;
     }
-    static std::experimental::optional<inet_address>& broadcast_rpc_address() {
-        static std::experimental::optional<inet_address> _broadcast_rpc_address;
+    static std::optional<inet_address>& broadcast_rpc_address() {
+        static std::optional<inet_address> _broadcast_rpc_address;
 
         return _broadcast_rpc_address;
     }

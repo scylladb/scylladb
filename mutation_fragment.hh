@@ -24,11 +24,10 @@
 #include "mutation_partition.hh"
 #include "position_in_partition.hh"
 
-#include <experimental/optional>
+#include <optional>
 #include <seastar/util/gcc6-concepts.hh>
 #include <seastar/util/optimized_optional.hh>
 
-#include "stdx.hh"
 #include "seastar/core/future-util.hh"
 
 #include "db/timeout_clock.hh"
@@ -315,7 +314,7 @@ private:
         data() { }
         ~data() { }
 
-        stdx::optional<size_t> _size_in_bytes;
+        std::optional<size_t> _size_in_bytes;
         union {
             static_row _static_row;
             clustering_row _clustering_row;
@@ -411,23 +410,23 @@ public:
     bool is_end_of_partition() const { return _kind == kind::partition_end; }
 
     static_row& as_mutable_static_row() {
-        _data->_size_in_bytes = stdx::nullopt;
+        _data->_size_in_bytes = std::nullopt;
         return _data->_static_row;
     }
     clustering_row& as_mutable_clustering_row() {
-        _data->_size_in_bytes = stdx::nullopt;
+        _data->_size_in_bytes = std::nullopt;
         return _data->_clustering_row;
     }
     range_tombstone& as_mutable_range_tombstone() {
-        _data->_size_in_bytes = stdx::nullopt;
+        _data->_size_in_bytes = std::nullopt;
         return _data->_range_tombstone;
     }
     partition_start& as_mutable_partition_start() {
-        _data->_size_in_bytes = stdx::nullopt;
+        _data->_size_in_bytes = std::nullopt;
         return _data->_partition_start;
     }
     partition_end& as_mutable_end_of_partition() {
-        _data->_size_in_bytes = stdx::nullopt;
+        _data->_size_in_bytes = std::nullopt;
         return _data->_partition_end;
     }
 

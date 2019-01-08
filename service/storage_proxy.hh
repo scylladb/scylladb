@@ -91,7 +91,7 @@ class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*imp
 public:
     using clock_type = lowres_clock;
     struct config {
-        stdx::optional<std::vector<sstring>> hinted_handoff_enabled = {};
+        std::optional<std::vector<sstring>> hinted_handoff_enabled = {};
         size_t available_memory;
     };
 private:
@@ -121,12 +121,12 @@ public:
     public:
         tracing::trace_state_ptr trace_state = nullptr;
         replicas_per_token_range preferred_replicas;
-        stdx::optional<db::read_repair_decision> read_repair_decision;
+        std::optional<db::read_repair_decision> read_repair_decision;
 
         coordinator_query_options(clock_type::time_point timeout,
                 tracing::trace_state_ptr trace_state = nullptr,
                 replicas_per_token_range preferred_replicas = { },
-                stdx::optional<db::read_repair_decision> read_repair_decision = { })
+                std::optional<db::read_repair_decision> read_repair_decision = { })
             : _timeout(timeout)
             , trace_state(std::move(trace_state))
             , preferred_replicas(std::move(preferred_replicas))
@@ -164,7 +164,7 @@ private:
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
     db::hints::resource_manager _hints_resource_manager;
-    stdx::optional<db::hints::manager> _hints_manager;
+    std::optional<db::hints::manager> _hints_manager;
     db::hints::manager _hints_for_views_manager;
     stats _stats;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
@@ -192,14 +192,14 @@ private:
             coordinator_query_options optional_params);
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
-    void got_response(response_id_type id, gms::inet_address from, stdx::optional<db::view::update_backlog> backlog);
-    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, stdx::optional<db::view::update_backlog> backlog);
+    void got_response(response_id_type id, gms::inet_address from, std::optional<db::view::update_backlog> backlog);
+    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
-    response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
+    response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
     size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;
@@ -255,14 +255,14 @@ private:
     future<std::vector<unique_response_handler>> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
     template<typename Range>
     future<std::vector<unique_response_handler>> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
-    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, stdx::optional<clock_type::time_point> timeout_opt = { });
+    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, std::optional<clock_type::time_point> timeout_opt = { });
     future<> mutate_end(future<> mutate_result, utils::latency_counter, write_stats& stats, tracing::trace_state_ptr trace_state);
-    future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+    future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     bool need_throttle_writes() const;
     void unthrottle();
     void handle_read_error(std::exception_ptr eptr, bool range);
     template<typename Range>
-    future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, stdx::optional<clock_type::time_point> timeout_opt = { });
+    future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, std::optional<clock_type::time_point> timeout_opt = { });
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_nonsingular_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& pr, tracing::trace_state_ptr trace_state,
             uint64_t max_size, clock_type::time_point timeout);
@@ -285,7 +285,7 @@ private:
 
     db::view::update_backlog get_view_update_backlog() const;
 
-    void maybe_update_view_backlog_of(gms::inet_address, stdx::optional<db::view::update_backlog>);
+    void maybe_update_view_backlog_of(gms::inet_address, std::optional<db::view::update_backlog>);
 
     db::view::update_backlog get_backlog_of(gms::inet_address) const;
 public:

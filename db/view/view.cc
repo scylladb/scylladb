@@ -128,7 +128,7 @@ const column_definition* view_info::view_column(const column_definition& base_de
     return _schema.get_column_definition(base_def.name());
 }
 
-stdx::optional<column_id> view_info::base_non_pk_column_in_view_pk() const {
+std::optional<column_id> view_info::base_non_pk_column_in_view_pk() const {
     return _base_non_pk_column_in_view_pk;
 }
 
@@ -238,7 +238,7 @@ public:
         });
     }
 
-    void generate_update(const partition_key& base_key, const clustering_row& update, const stdx::optional<clustering_row>& existing, gc_clock::time_point now);
+    void generate_update(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
 private:
     mutation_partition& partition_for(partition_key&& key) {
         auto it = _updates.find(key);
@@ -552,7 +552,7 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
 void view_updates::generate_update(
         const partition_key& base_key,
         const clustering_row& update,
-        const stdx::optional<clustering_row>& existing,
+        const std::optional<clustering_row>& existing,
         gc_clock::time_point now) {
     // Note that the base PK columns in update and existing are the same, since we're intrinsically dealing
     // with the same base row. So we have to check 3 things:
@@ -635,7 +635,7 @@ public:
     future<std::vector<frozen_mutation_and_schema>> build();
 
 private:
-    void generate_update(clustering_row&& update, stdx::optional<clustering_row>&& existing);
+    void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
     future<stop_iteration> on_results();
 
     future<stop_iteration> advance_all() {
@@ -692,7 +692,7 @@ future<std::vector<frozen_mutation_and_schema>> view_update_builder::build() {
     });
 }
 
-void view_update_builder::generate_update(clustering_row&& update, stdx::optional<clustering_row>&& existing) {
+void view_update_builder::generate_update(clustering_row&& update, std::optional<clustering_row>&& existing) {
     // If we have no update at all, we shouldn't get there.
     if (update.empty()) {
         throw std::logic_error("Empty materialized view updated");
@@ -731,8 +731,8 @@ future<stop_iteration> view_update_builder::on_results() {
                 apply_tracked_tombstones(_update_tombstone_tracker, update);
                 auto tombstone = _existing_tombstone_tracker.current_tombstone();
                 auto existing = tombstone
-                              ? stdx::optional<clustering_row>(stdx::in_place, update.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row())
-                              : stdx::nullopt;
+                              ? std::optional<clustering_row>(std::in_place, update.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row())
+                              : std::nullopt;
                 generate_update(std::move(update), std::move(existing));
             }
             return advance_updates();
@@ -883,7 +883,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
 //
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
-static stdx::optional<gms::inet_address>
+static std::optional<gms::inet_address>
 get_view_natural_endpoint(const sstring& keyspace_name,
         const dht::token& base_token, const dht::token& view_token) {
     auto &db = service::get_local_storage_service().db().local();
@@ -1148,7 +1148,7 @@ void view_builder::reshard(
             return v1->id() == v2->id();
         }
     };
-    std::unordered_map<view_ptr, stdx::optional<nonwrapping_range<dht::token>>, view_ptr_hash, view_ptr_equals> my_status;
+    std::unordered_map<view_ptr, std::optional<nonwrapping_range<dht::token>>, view_ptr_hash, view_ptr_equals> my_status;
     for (auto& shard_status : view_build_status_per_shard) {
         for (auto& [view, first_token, next_token] : shard_status ) {
             // We start from an open-ended range, which we'll try to restrict.
@@ -1157,7 +1157,7 @@ void view_builder::reshard(
                     nonwrapping_range<dht::token>::make_open_ended_both_sides()).first->second;
             if (!next_token || !my_range) {
                 // A previous shard made no progress, so for this view we'll start over.
-                my_range = stdx::nullopt;
+                my_range = std::nullopt;
                 continue;
             }
             if (first_token == *next_token) {
@@ -1323,7 +1323,7 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
 static future<> flush_base(lw_shared_ptr<column_family> base, abort_source& as) {
     struct empty_state { };
     return exponential_backoff_retry::do_until_value(1s, 1min, as, [base = std::move(base)] {
-        return base->flush().then_wrapped([base] (future<> f) -> stdx::optional<empty_state> {
+        return base->flush().then_wrapped([base] (future<> f) -> std::optional<empty_state> {
             if (f.failed()) {
                 vlogger.error("Error flushing base table {}.{}: {}; retrying", base->schema()->ks_name(), base->schema()->cf_name(), f.get_exception());
                 return { };

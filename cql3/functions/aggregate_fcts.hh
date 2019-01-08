@@ -249,7 +249,7 @@ struct aggregate_type_for<timeuuid_native_type> {
 
 template <typename Type>
 class impl_max_function_for final : public aggregate_function::aggregate {
-   std::experimental::optional<typename aggregate_type_for<Type>::type> _max{};
+   std::optional<typename aggregate_type_for<Type>::type> _max{};
 public:
     virtual void reset() override {
         _max = {};
@@ -296,7 +296,7 @@ make_max_function() {
 
 template <typename Type>
 class impl_min_function_for final : public aggregate_function::aggregate {
-   std::experimental::optional<typename aggregate_type_for<Type>::type> _min{};
+   std::optional<typename aggregate_type_for<Type>::type> _min{};
 public:
     virtual void reset() override {
         _min = {};

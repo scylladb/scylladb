@@ -44,12 +44,12 @@
 #include <seastar/core/shared_ptr.hh>
 #include "column_identifier.hh"
 
-#include <experimental/optional>
+#include <optional>
 
 namespace cql3 {
 
 class ut_name final {
-    std::experimental::optional<sstring> _ks_name;
+    std::optional<sstring> _ks_name;
     ::shared_ptr<column_identifier> _ut_name;
 public:
     ut_name(shared_ptr<column_identifier> ks_name, ::shared_ptr<column_identifier> ut_name);

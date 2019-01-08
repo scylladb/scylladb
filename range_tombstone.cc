@@ -30,7 +30,7 @@ std::ostream& operator<<(std::ostream& out, const range_tombstone& rt) {
     }
 }
 
-stdx::optional<range_tombstone> range_tombstone::apply(const schema& s, range_tombstone&& src)
+std::optional<range_tombstone> range_tombstone::apply(const schema& s, range_tombstone&& src)
 {
     bound_view::compare cmp(s);
     if (tomb == src.tomb) {

@@ -21,7 +21,7 @@
 
 #include "auth/standard_role_manager.hh"
 
-#include <experimental/optional>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 
@@ -47,9 +47,9 @@ namespace meta {
 
 namespace role_members_table {
 
-constexpr stdx::string_view name{"role_members" , 12};
+constexpr std::string_view name{"role_members" , 12};
 
-static stdx::string_view qualified_name() noexcept {
+static std::string_view qualified_name() noexcept {
     static const sstring instance = AUTH_KS + "." + sstring(name);
     return instance;
 }
@@ -73,7 +73,7 @@ struct record final {
     role_set member_of;
 };
 
-static db::consistency_level consistency_for_role(stdx::string_view role_name) noexcept {
+static db::consistency_level consistency_for_role(std::string_view role_name) noexcept {
     if (role_name == meta::DEFAULT_SUPERUSER_NAME) {
         return db::consistency_level::QUORUM;
     }
@@ -81,7 +81,7 @@ static db::consistency_level consistency_for_role(stdx::string_view role_name) n
     return db::consistency_level::LOCAL_ONE;
 }
 
-static future<stdx::optional<record>> find_record(cql3::query_processor& qp, stdx::string_view role_name) {
+static future<std::optional<record>> find_record(cql3::query_processor& qp, std::string_view role_name) {
     static const sstring query = format("SELECT * FROM {} WHERE {} = ?",
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
@@ -93,12 +93,12 @@ static future<stdx::optional<record>> find_record(cql3::query_processor& qp, std
             {sstring(role_name)},
             true).then([](::shared_ptr<cql3::untyped_result_set> results) {
         if (results->empty()) {
-            return stdx::optional<record>();
+            return std::optional<record>();
         }
 
         const cql3::untyped_result_set_row& row = results->one();
 
-        return stdx::make_optional(
+        return std::make_optional(
                 record{
                         row.get_as<sstring>(sstring(meta::roles_table::role_col_name)),
                         row.get_as<bool>("is_superuser"),
@@ -109,8 +109,8 @@ static future<stdx::optional<record>> find_record(cql3::query_processor& qp, std
     });
 }
 
-static future<record> require_record(cql3::query_processor& qp, stdx::string_view role_name) {
-    return find_record(qp, role_name).then([role_name](stdx::optional<record> mr) {
+static future<record> require_record(cql3::query_processor& qp, std::string_view role_name) {
+    return find_record(qp, role_name).then([role_name](std::optional<record> mr) {
         if (!mr) {
             throw nonexistant_role(role_name);
         }
@@ -123,12 +123,12 @@ static bool has_can_login(const cql3::untyped_result_set_row& row) {
     return row.has("can_login") && !(boolean_type->deserialize(row.get_blob("can_login")).is_null());
 }
 
-stdx::string_view standard_role_manager_name() noexcept {
+std::string_view standard_role_manager_name() noexcept {
     static const sstring instance = meta::AUTH_PACKAGE_NAME + "CassandraRoleManager";
     return instance;
 }
 
-stdx::string_view standard_role_manager::qualified_java_name() const noexcept {
+std::string_view standard_role_manager::qualified_java_name() const noexcept {
     return standard_role_manager_name();
 }
 
@@ -253,7 +253,7 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
 }
 
-future<> standard_role_manager::create_or_replace(stdx::string_view role_name, const role_config& c) const {
+future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c) const {
     static const sstring query = format("INSERT INTO {} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
@@ -267,7 +267,7 @@ future<> standard_role_manager::create_or_replace(stdx::string_view role_name, c
 }
 
 future<>
-standard_role_manager::create(stdx::string_view role_name, const role_config& c) const {
+standard_role_manager::create(std::string_view role_name, const role_config& c) const {
     return this->exists(role_name).then([this, role_name, &c](bool role_exists) {
         if (role_exists) {
             throw role_already_exists(role_name);
@@ -278,7 +278,7 @@ standard_role_manager::create(stdx::string_view role_name, const role_config& c)
 }
 
 future<>
-standard_role_manager::alter(stdx::string_view role_name, const role_config_update& u) const {
+standard_role_manager::alter(std::string_view role_name, const role_config_update& u) const {
     static const auto build_column_assignments = [](const role_config_update& u) -> sstring {
         std::vector<sstring> assignments;
 
@@ -309,7 +309,7 @@ standard_role_manager::alter(stdx::string_view role_name, const role_config_upda
     });
 }
 
-future<> standard_role_manager::drop(stdx::string_view role_name) const {
+future<> standard_role_manager::drop(std::string_view role_name) const {
     return this->exists(role_name).then([this, role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(role_name);
@@ -374,8 +374,8 @@ future<> standard_role_manager::drop(stdx::string_view role_name) const {
 
 future<>
 standard_role_manager::modify_membership(
-        stdx::string_view grantee_name,
-        stdx::string_view role_name,
+        std::string_view grantee_name,
+        std::string_view role_name,
         membership_change ch) const {
 
 
@@ -419,7 +419,7 @@ standard_role_manager::modify_membership(
 }
 
 future<>
-standard_role_manager::grant(stdx::string_view grantee_name, stdx::string_view role_name) const {
+standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name) const {
     const auto check_redundant = [this, role_name, grantee_name] {
         return this->query_granted(
                 grantee_name,
@@ -450,7 +450,7 @@ standard_role_manager::grant(stdx::string_view grantee_name, stdx::string_view r
 }
 
 future<>
-standard_role_manager::revoke(stdx::string_view revokee_name, stdx::string_view role_name) const {
+standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name) const {
     return this->exists(role_name).then([this, revokee_name, role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(sstring(role_name));
@@ -472,7 +472,7 @@ standard_role_manager::revoke(stdx::string_view revokee_name, stdx::string_view 
 
 static future<> collect_roles(
         cql3::query_processor& qp,
-        stdx::string_view grantee_name,
+        std::string_view grantee_name,
         bool recurse,
         role_set& roles) {
     return require_record(qp, grantee_name).then([&qp, &roles, recurse](record r) {
@@ -490,7 +490,7 @@ static future<> collect_roles(
     });
 }
 
-future<role_set> standard_role_manager::query_granted(stdx::string_view grantee_name, recursive_role_query m) const {
+future<role_set> standard_role_manager::query_granted(std::string_view grantee_name, recursive_role_query m) const {
     const bool recurse = (m == recursive_role_query::yes);
 
     return do_with(
@@ -526,19 +526,19 @@ future<role_set> standard_role_manager::query_all() const {
     });
 }
 
-future<bool> standard_role_manager::exists(stdx::string_view role_name) const  {
-    return find_record(_qp, role_name).then([](stdx::optional<record> mr) {
+future<bool> standard_role_manager::exists(std::string_view role_name) const  {
+    return find_record(_qp, role_name).then([](std::optional<record> mr) {
         return static_cast<bool>(mr);
     });
 }
 
-future<bool> standard_role_manager::is_superuser(stdx::string_view role_name) const {
+future<bool> standard_role_manager::is_superuser(std::string_view role_name) const {
     return require_record(_qp, role_name).then([](record r) {
         return r.is_superuser;
     });
 }
 
-future<bool> standard_role_manager::can_login(stdx::string_view role_name) const {
+future<bool> standard_role_manager::can_login(std::string_view role_name) const {
     return require_record(_qp, role_name).then([](record r) {
         return r.can_login;
     });

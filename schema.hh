@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <optional>
 #include <unordered_map>
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/join.hpp>
@@ -37,7 +38,6 @@
 #include "compress.hh"
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
-#include "stdx.hh"
 
 using column_count_type = uint32_t;
 
@@ -192,7 +192,7 @@ public:
     const sstring& name() const;
     const index_metadata_kind kind() const;
     const index_options_map& options() const;
-    static sstring get_default_index_name(const sstring& cf_name, std::experimental::optional<sstring> root);
+    static sstring get_default_index_name(const sstring& cf_name, std::optional<sstring> root);
 };
 
 class column_definition final {
@@ -558,10 +558,10 @@ public:
 private:
     ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
     void rebuild();
-    schema(const raw_schema&, stdx::optional<raw_view_info>);
+    schema(const raw_schema&, std::optional<raw_view_info>);
 public:
     // deprecated, use schema_builder.
-    schema(std::experimental::optional<utils::UUID> id,
+    schema(std::optional<utils::UUID> id,
         sstring ks_name,
         sstring cf_name,
         std::vector<column> partition_key,
@@ -785,7 +785,7 @@ public:
     // Search for an index with a given name.
     bool has_index(const sstring& index_name) const;
     // Search for an existing index with same kind and options.
-    stdx::optional<index_metadata> find_index_noname(const index_metadata& target) const;
+    std::optional<index_metadata> find_index_noname(const index_metadata& target) const;
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;

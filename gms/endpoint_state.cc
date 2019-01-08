@@ -37,7 +37,7 @@
  */
 
 #include "gms/endpoint_state.hh"
-#include <experimental/optional>
+#include <optional>
 #include <ostream>
 
 namespace gms {

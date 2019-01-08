@@ -43,10 +43,10 @@ protected:
     float _tombstone_threshold = DEFAULT_TOMBSTONE_THRESHOLD;
     db_clock::duration _tombstone_compaction_interval = DEFAULT_TOMBSTONE_COMPACTION_INTERVAL();
 public:
-    static stdx::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
+    static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
         auto it = options.find(name);
         if (it == options.end()) {
-            return stdx::nullopt;
+            return std::nullopt;
         }
         return it->second;
     }

@@ -245,7 +245,7 @@ private:
     std::unique_ptr<result_set> _result_set;
     std::unique_ptr<selectors> _selectors;
 public:
-    std::experimental::optional<std::vector<bytes_opt>> current;
+    std::optional<std::vector<bytes_opt>> current;
 private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;

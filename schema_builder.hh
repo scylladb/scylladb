@@ -29,13 +29,13 @@ public:
     enum class compact_storage { no, yes };
 private:
     schema::raw_schema _raw;
-    std::experimental::optional<compact_storage> _compact_storage;
-    std::experimental::optional<table_schema_version> _version;
-    std::experimental::optional<raw_view_info> _view_info;
+    std::optional<compact_storage> _compact_storage;
+    std::optional<table_schema_version> _version;
+    std::optional<raw_view_info> _view_info;
     schema_builder(const schema::raw_schema&);
 public:
     schema_builder(const sstring& ks_name, const sstring& cf_name,
-            std::experimental::optional<utils::UUID> = { },
+            std::optional<utils::UUID> = { },
             data_type regular_column_name_type = utf8_type);
     schema_builder(const schema_ptr);
 

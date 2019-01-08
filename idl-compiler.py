@@ -289,11 +289,11 @@ def is_vector(lst):
 
 
 def is_variant(lst):
-    return get_template_name(lst) == "boost::variant"
+    return get_template_name(lst) == "boost::variant" or get_template_name(lst) == "std::variant"
 
 
 def is_optional(lst):
-    return get_template_name(lst) == "std::experimental::optional"
+    return get_template_name(lst) == "std::optional"
 
 
 created_writers = set()
@@ -766,7 +766,7 @@ def param_view_type(lst):
         return to_view(lst)
     if len(lst) == 1:
         return to_view(lst[0])
-    if lst[0] == "boost::variant":
+    if lst[0] == "boost::variant" or lst[0] == "std::variant":
         return lst[0] + join_template_view(lst[1], ["unknown_variant_type"])
     return lst[0] + join_template_view(lst[1])
 

@@ -40,7 +40,7 @@ namespace sstables {
         // Threshold size for sstable(s) to be created.
         uint64_t max_sstable_bytes;
         // Holds ownership of a weight assigned to this compaction iff it's a regular one.
-        stdx::optional<compaction_weight_registration> weight_registration;
+        std::optional<compaction_weight_registration> weight_registration;
         // Calls compaction manager's task for this compaction to release reference to exhausted sstables.
         std::function<void(const std::vector<shared_sstable>& exhausted_sstables)> release_exhausted;
 

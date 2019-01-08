@@ -94,7 +94,7 @@ public:
     virtual bytes_opt get_output(cql_serialization_format sf) override {
         auto&& value = _selected->get_output(sf);
         if (!value) {
-            return std::experimental::nullopt;
+            return std::nullopt;
         }
         auto&& buffers = _type->split(*value);
         bytes_opt ret;

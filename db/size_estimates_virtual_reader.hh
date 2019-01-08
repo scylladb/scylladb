@@ -34,7 +34,6 @@
 #include "partition_range_compat.hh"
 #include "range.hh"
 #include "service/storage_service.hh"
-#include "stdx.hh"
 #include "mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "db/timeout_clock.hh"
@@ -53,7 +52,7 @@ class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
     const dht::partition_range* _prange;
     const query::partition_slice& _slice;
     using ks_range = std::vector<sstring>;
-    stdx::optional<ks_range> _keyspaces;
+    std::optional<ks_range> _keyspaces;
     ks_range::const_iterator _current_partition;
     streamed_mutation::forwarding _fwd;
     flat_mutation_reader_opt _partition_reader;
@@ -98,7 +97,7 @@ public:
                 return stop_iteration(is_buffer_full());
             }, timeout).then([this] {
                 if (_partition_reader->is_end_of_stream() && _partition_reader->is_buffer_empty()) {
-                    _partition_reader = stdx::nullopt;
+                    _partition_reader = std::nullopt;
                 }
             });
         });
@@ -106,14 +105,14 @@ public:
     virtual void next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
-            _partition_reader = stdx::nullopt;
+            _partition_reader = std::nullopt;
         }
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         clear_buffer();
         _prange = &pr;
-        _keyspaces = stdx::nullopt;
-        _partition_reader = stdx::nullopt;
+        _keyspaces = std::nullopt;
+        _partition_reader = std::nullopt;
         _end_of_stream = false;
         return make_ready_future<>();
     }
@@ -140,7 +139,7 @@ public:
         return ss.get_local_tokens().then([&ss] (auto&& tokens) {
             auto ranges = ss.get_token_metadata().get_primary_ranges_for(std::move(tokens));
             std::vector<token_range> local_ranges;
-            auto to_bytes = [](const stdx::optional<dht::token_range::bound>& b) {
+            auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {
                 assert(b);
                 return utf8_type->decompose(dht::global_partitioner().to_sstring(b->value()));
             };
@@ -286,7 +285,7 @@ private:
      * Makes a wrapping range of ring_position from a nonwrapping range of token, used to select sstables.
      */
     static dht::partition_range as_ring_position_range(dht::token_range& r) {
-        stdx::optional<range<dht::ring_position>::bound> start_bound, end_bound;
+        std::optional<range<dht::ring_position>::bound> start_bound, end_bound;
         if (r.start()) {
             start_bound = {{ dht::ring_position(r.start()->value(), dht::ring_position::token_bound::start), r.start()->is_inclusive() }};
         }

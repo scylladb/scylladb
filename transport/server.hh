@@ -198,7 +198,7 @@ private:
         void update_client_state(processing_result& r);
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
         future<fragmented_temporary_buffer> read_and_decompress_frame(size_t length, uint8_t flags);
-        future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
+        future<std::optional<cql_binary_frame_v3>> read_frame();
         future<response_type> process_startup(uint16_t stream, request_reader in, service::client_state client_state);
         future<response_type> process_auth_response(uint16_t stream, request_reader in, service::client_state client_state);
         future<response_type> process_options(uint16_t stream, request_reader in, service::client_state client_state);

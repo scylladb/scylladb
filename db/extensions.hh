@@ -50,7 +50,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 
-#include "stdx.hh"
 #include "bytes.hh"
 
 class schema_extension;

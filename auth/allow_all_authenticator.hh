@@ -72,19 +72,19 @@ public:
         return make_ready_future<authenticated_user>(anonymous_user());
     }
 
-    virtual future<> create(stdx::string_view, const authentication_options& options) const override {
+    virtual future<> create(std::string_view, const authentication_options& options) const override {
         return make_ready_future();
     }
 
-    virtual future<> alter(stdx::string_view, const authentication_options& options) const override {
+    virtual future<> alter(std::string_view, const authentication_options& options) const override {
         return make_ready_future();
     }
 
-    virtual future<> drop(stdx::string_view) const override {
+    virtual future<> drop(std::string_view) const override {
         return make_ready_future();
     }
 
-    virtual future<custom_options> query_custom_options(stdx::string_view role_name) const override {
+    virtual future<custom_options> query_custom_options(std::string_view role_name) const override {
         return make_ready_future<custom_options>();
     }
 

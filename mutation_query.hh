@@ -121,7 +121,7 @@ class reconcilable_result_builder {
     query::result_memory_accounter _memory_accounter;
     stop_iteration _stop;
     bool _short_read_allowed;
-    stdx::optional<streamed_mutation_freezer> _mutation_consumer;
+    std::optional<streamed_mutation_freezer> _mutation_consumer;
 public:
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
                                 query::result_memory_accounter&& accounter)

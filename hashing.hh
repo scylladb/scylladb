@@ -23,7 +23,7 @@
 
 #include <chrono>
 #include <map>
-#include <experimental/optional>
+#include <optional>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
@@ -81,9 +81,9 @@ struct appending_hash<T, std::enable_if_t<std::is_enum<T>::value>> {
 };
 
 template<typename T>
-struct appending_hash<std::experimental::optional<T>>  {
+struct appending_hash<std::optional<T>>  {
     template<typename Hasher>
-    void operator()(Hasher& h, const std::experimental::optional<T>& value) const {
+    void operator()(Hasher& h, const std::optional<T>& value) const {
         if (value) {
             feed_hash(h, true);
             feed_hash(h, *value);
