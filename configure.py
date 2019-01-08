@@ -96,8 +96,8 @@ def have_pkg(package):
     return subprocess.call(['pkg-config', package]) == 0
 
 
-def pkg_config(option, package):
-    output = subprocess.check_output(['pkg-config', option, package])
+def pkg_config(package, *options):
+    output = subprocess.check_output(['pkg-config'] + list(options) + [package])
     return output.decode('utf-8').strip()
 
 
@@ -1069,8 +1069,8 @@ for mode in build_modes:
 
 seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
 
-args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
-libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config("--libs", "jsoncpp"),
+args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
+libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  maybe_static(args.staticboost, '-lboost_filesystem'), ' -lstdc++fs', ' -lcrypt', ' -lcryptopp',
                  maybe_static(args.staticboost, '-lboost_date_time'), ])
 
@@ -1083,8 +1083,8 @@ if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
 for pkg in pkgs:
-    args.user_cflags += ' ' + pkg_config('--cflags', pkg)
-    libs += ' ' + pkg_config('--libs', pkg)
+    args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
+    libs += ' ' + pkg_config(pkg, '--libs')
 user_cflags = args.user_cflags
 user_ldflags = args.user_ldflags
 if args.staticcxx:
