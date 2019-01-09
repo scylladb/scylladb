@@ -1170,7 +1170,7 @@ public:
 
     // RPC API
     // Send rows in the _working_row_buf with hash within the given sef_diff
-    future<> send_row_diff(const std::unordered_set<repair_hash>& set_diff, gms::inet_address remote_node) {
+    future<> put_row_diff(const std::unordered_set<repair_hash>& set_diff, gms::inet_address remote_node) {
         if (!set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
@@ -1191,7 +1191,7 @@ public:
     }
 
     // RPC handler
-    future<> send_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
+    future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
         return apply_rows(std::move(rows), from, update_working_row_buf::no, update_peer_row_hash_sets::no);
     }
 };
@@ -1246,7 +1246,7 @@ future<> repair_init_messaging_service_handler(distributed<db::system_distribute
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, row_diff = std::move(row_diff)] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->send_row_diff_handler(std::move(row_diff), from);
+                return rm->put_row_diff_handler(std::move(row_diff), from);
             });
         });
         ms.register_repair_row_level_start([] (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring ks_name,
@@ -1524,8 +1524,8 @@ private:
         std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes();
         parallel_for_each(boost::irange(size_t(0), _all_live_peer_nodes.size()), [&, this] (size_t idx) {
             auto set_diff = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
-            rlogger.trace("Calling master.send_row_diff to node {}, set_diff={}", _all_live_peer_nodes[idx], set_diff.size());
-            return master.send_row_diff(set_diff, _all_live_peer_nodes[idx]);
+            rlogger.trace("Calling master.put_row_diff to node {}, set_diff={}", _all_live_peer_nodes[idx], set_diff.size());
+            return master.put_row_diff(set_diff, _all_live_peer_nodes[idx]);
         }).get();
         master.stats().round_nr_slow_path++;
     }
