@@ -1124,7 +1124,7 @@ public:
 
     // RPC API
     // Return rows in the _working_row_buf with hash within the given sef_diff
-    future<> request_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx) {
+    future<> get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx) {
         if (needs_all_rows || !set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
@@ -1147,7 +1147,7 @@ public:
         return make_ready_future<>();
     }
 
-    future<> request_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx) {
+    future<> get_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx) {
         if (remote_node == _myip) {
             return make_ready_future<>();
         }
@@ -1163,7 +1163,7 @@ public:
     }
 
     // RPC handler
-    future<repair_rows_on_wire> request_row_diff_handler(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows) {
+    future<repair_rows_on_wire> get_row_diff_handler(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows) {
         std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
         return to_repair_rows_on_wire(std::move(row_diff));
     }
@@ -1237,7 +1237,7 @@ future<> repair_init_messaging_service_handler(distributed<db::system_distribute
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, set_diff = std::move(set_diff), needs_all_rows] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->request_row_diff_handler(set_diff, repair_meta::needs_all_rows_t(needs_all_rows));
+                return rm->get_row_diff_handler(set_diff, repair_meta::needs_all_rows_t(needs_all_rows));
             });
         });
         ms.register_repair_put_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
@@ -1487,7 +1487,7 @@ private:
 
             // Fast path: if local has zero row and remote has rows, request them all.
             if (master.working_row_buf_combined_hash() == repair_hash() && combined_hashes[node_idx + 1] != repair_hash()) {
-                master.request_row_diff_and_update_peer_row_hash_sets(node, node_idx).get();
+                master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx).get();
                 continue;
             }
 
@@ -1505,13 +1505,13 @@ private:
             // between repair master and repair follower 2.
             std::unordered_set<repair_hash> set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes());
             // Request missing sets from peer node
-            rlogger.debug("Calling master.request_row_diff to node {}, local={}, peer={}, set_diff={}",
+            rlogger.debug("Calling master.get_row_diff to node {}, local={}, peer={}, set_diff={}",
                     node, master.working_row_hashes().size(), master.peer_row_hash_sets(node_idx).size(), set_diff);
             // If we need to pull all rows from the peer. We can avoid
             // sending the row hashes on wire by setting needs_all_rows flag.
             auto needs_all_rows = repair_meta::needs_all_rows_t(set_diff.size() == master.peer_row_hash_sets(node_idx).size());
-            master.request_row_diff(std::move(set_diff), needs_all_rows, node, node_idx).get();
-            rlogger.debug("After request_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().size());
+            master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx).get();
+            rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().size());
         }
         return op_status::next_step;
     }
