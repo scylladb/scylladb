@@ -9,7 +9,7 @@ print_usage() {
     echo "  --reloc-pkg specify relocatable package path"
     exit 1
 }
-RELOC_PKG=$(readlink -f build/release/scylla-package.tar.gz)
+RELOC_PKG=build/release/scylla-package.tar.gz
 OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -37,6 +37,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ ! -e $RELOC_PKG ]; then
+    echo "$RELOC_PKG does not exist."
+    echo "Run ./reloc/build_reloc.sh first."
+    exit 1
+fi
+RELOC_PKG=$(readlink -f $RELOC_PKG)
 if [[ ! $OPTS =~ --reloc-pkg ]]; then
     OPTS="$OPTS --reloc-pkg $RELOC_PKG"
 fi
