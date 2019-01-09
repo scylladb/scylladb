@@ -875,7 +875,7 @@ private:
     }
 
     std::unordered_set<repair_hash>
-    request_full_row_hashes() {
+    get_full_row_hashes() {
         return working_row_hashes();
     }
 
@@ -984,9 +984,9 @@ public:
     // RPC API
     // Return the hashes of the rows in _working_row_buf
     future<std::unordered_set<repair_hash>>
-    request_full_row_hashes(gms::inet_address remote_node) {
+    get_full_row_hashes(gms::inet_address remote_node) {
         if (remote_node == _myip) {
-            return make_ready_future<std::unordered_set<repair_hash>>(request_full_row_hashes_handler());
+            return make_ready_future<std::unordered_set<repair_hash>>(get_full_row_hashes_handler());
         }
         return netw::get_local_messaging_service().send_repair_get_full_row_hashes(msg_addr(remote_node),
                 _repair_meta_id).then([this, remote_node] (std::unordered_set<repair_hash> hashes) {
@@ -1000,8 +1000,8 @@ public:
 
     // RPC handler
     std::unordered_set<repair_hash>
-    request_full_row_hashes_handler() {
-        return request_full_row_hashes();
+    get_full_row_hashes_handler() {
+        return get_full_row_hashes();
     }
 
     // RPC API
@@ -1205,7 +1205,7 @@ future<> repair_init_messaging_service_handler(distributed<db::system_distribute
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                std::unordered_set<repair_hash> hashes = rm->request_full_row_hashes_handler();
+                std::unordered_set<repair_hash> hashes = rm->get_full_row_hashes_handler();
                 _metrics.tx_hashes_nr += hashes.size();
                 return make_ready_future<std::unordered_set<repair_hash>>(std::move(hashes));
             }) ;
@@ -1439,7 +1439,7 @@ private:
             // - Move rows from `_row_buf` to `_working_row_buf`
             // But the full hashes (each and every hashes for the rows in
             // the `_working_row_buf`) are not returned until repair master
-            // explicitly requests with request_full_row_hashes() below as
+            // explicitly requests with get_full_row_hashes() below as
             // an optimization. Because if the combined_hashes from all
             // peers are identical, we think rows in the `_working_row_buff`
             // are identical, there is no need to transfer each and every
@@ -1492,8 +1492,8 @@ private:
             }
 
             // Ask the peer to send the full list hashes in the working row buf.
-            master.peer_row_hash_sets(node_idx) = master.request_full_row_hashes(node).get0();
-            rlogger.debug("Calling master.request_full_row_hashes for node {}, hash_sets={}",
+            master.peer_row_hash_sets(node_idx) = master.get_full_row_hashes(node).get0();
+            rlogger.debug("Calling master.get_full_row_hashes for node {}, hash_sets={}",
                 node, master.peer_row_hash_sets(node_idx).size());
 
             // With hashes of rows from peer node, we can figure out
