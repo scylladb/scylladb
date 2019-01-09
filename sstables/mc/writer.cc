@@ -308,9 +308,11 @@ void write_missing_columns(W& out, const indexed_columns& columns, const row& ro
 template <typename T, typename W>
 GCC6_CONCEPT(requires Writer<W>())
 void write_unsigned_delta_vint(W& out, T value, T base) {
-    using unsigned_type = std::make_unsigned_t<T>;
-    unsigned_type delta = static_cast<unsigned_type>(value) - base;
-    write_vint(out, delta);
+    // sign-extend to 64-bits
+    using signed_type = std::make_signed_t<T>;
+    int64_t delta = static_cast<signed_type>(value) - static_cast<signed_type>(base);
+    // write as unsigned 64-bit varint
+    write_vint(out, static_cast<uint64_t>(delta));
 }
 
 template <typename W>
@@ -321,13 +323,13 @@ void write_delta_timestamp(W& out, api::timestamp_type timestamp, const encoding
 
 template <typename W>
 GCC6_CONCEPT(requires Writer<W>())
-void write_delta_ttl(W& out, uint32_t ttl, const encoding_stats& enc_stats) {
+void write_delta_ttl(W& out, int32_t ttl, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, ttl, enc_stats.min_ttl);
 }
 
 template <typename W>
 GCC6_CONCEPT(requires Writer<W>())
-void write_delta_local_deletion_time(W& out, uint32_t local_deletion_time, const encoding_stats& enc_stats) {
+void write_delta_local_deletion_time(W& out, int32_t local_deletion_time, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, local_deletion_time, enc_stats.min_local_deletion_time);
 }
 
@@ -364,9 +366,10 @@ static sstring pk_type_to_string(const schema& s) {
 
 serialization_header make_serialization_header(const schema& s, const encoding_stats& enc_stats) {
     serialization_header header;
+    // mc serialization header minimum values are delta-encoded based on the default timestamp epoch times
     header.min_timestamp_base.value = static_cast<uint64_t>(enc_stats.min_timestamp) - encoding_stats::timestamp_epoch;
-    header.min_local_deletion_time_base.value = enc_stats.min_local_deletion_time - encoding_stats::deletion_time_epoch;
-    header.min_ttl_base.value = enc_stats.min_ttl - encoding_stats::ttl_epoch;
+    header.min_local_deletion_time_base.value = static_cast<uint32_t>(enc_stats.min_local_deletion_time) - encoding_stats::deletion_time_epoch;
+    header.min_ttl_base.value = static_cast<uint32_t>(enc_stats.min_ttl) - encoding_stats::ttl_epoch;
 
     header.pk_type_name = to_bytes_array_vint_size(pk_type_to_string(s));
 
@@ -616,10 +619,10 @@ private:
     void write_delta_timestamp(bytes_ostream& writer, api::timestamp_type timestamp) {
         sstables::mc::write_delta_timestamp(writer, timestamp, _enc_stats);
     }
-    void write_delta_ttl(bytes_ostream& writer, uint32_t ttl) {
+    void write_delta_ttl(bytes_ostream& writer, int32_t ttl) {
         sstables::mc::write_delta_ttl(writer, ttl, _enc_stats);
     }
-    void write_delta_local_deletion_time(bytes_ostream& writer, uint32_t ldt) {
+    void write_delta_local_deletion_time(bytes_ostream& writer, int32_t ldt) {
         sstables::mc::write_delta_local_deletion_time(writer, ldt, _enc_stats);
     }
     void write_delta_deletion_time(bytes_ostream& writer, deletion_time dt) {
@@ -628,8 +631,8 @@ private:
 
     struct row_time_properties {
         std::optional<api::timestamp_type> timestamp;
-        std::optional<uint32_t> ttl;
-        std::optional<uint32_t> local_deletion_time;
+        std::optional<int32_t> ttl;
+        std::optional<int32_t> local_deletion_time;
     };
 
     // Writes single atomic cell

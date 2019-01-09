@@ -41,12 +41,11 @@ struct encoding_stats {
     //        int DELETION_TIME_EPOCH = (int)(c.getTimeInMillis() / 1000); // local deletion times are in seconds
     // Encoding stats are used for delta-encoding, so we want some default values
     // that are just good enough so we take some recent date in the past
-    static constexpr uint32_t deletion_time_epoch = 1442880000;
+    static constexpr int32_t deletion_time_epoch = 1442880000;
     static constexpr api::timestamp_type timestamp_epoch = api::timestamp_type(deletion_time_epoch) * 1000 * 1000;
-    static constexpr uint32_t ttl_epoch = 0;
+    static constexpr int32_t ttl_epoch = 0;
 
     api::timestamp_type min_timestamp = timestamp_epoch;
-    uint32_t min_local_deletion_time = deletion_time_epoch;
-    uint32_t min_ttl = ttl_epoch;
+    int32_t min_local_deletion_time = deletion_time_epoch;
+    int32_t min_ttl = ttl_epoch;
 };
-

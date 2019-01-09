@@ -145,8 +145,8 @@ private:
     class encoding_stats_collector {
     private:
         min_max_tracker<api::timestamp_type> timestamp;
-        min_tracker<uint32_t> min_local_deletion_time;
-        min_tracker<uint32_t> min_ttl;
+        min_tracker<int32_t> min_local_deletion_time;
+        min_tracker<int32_t> min_ttl;
 
         void update_timestamp(api::timestamp_type ts) {
             if (ts != api::missing_timestamp) {

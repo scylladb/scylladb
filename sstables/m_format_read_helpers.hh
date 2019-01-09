@@ -63,7 +63,7 @@ inline api::timestamp_type parse_timestamp(const serialization_header& header,
     return static_cast<api::timestamp_type>(header.get_min_timestamp() + delta);
 }
 
-inline gc_clock::duration parse_ttl(uint32_t value) {
+inline gc_clock::duration parse_ttl(int32_t value) {
     if (value > max_ttl.count() && ! is_expired_liveness_ttl(value)) {
         throw malformed_sstable_exception(format("Too big ttl: {}", value));
     }
@@ -71,11 +71,12 @@ inline gc_clock::duration parse_ttl(uint32_t value) {
 }
 
 inline gc_clock::duration parse_ttl(const serialization_header& header,
-                                    uint32_t delta) {
-    return parse_ttl(header.get_min_ttl() + delta);
+                                    uint64_t delta) {
+    int32_t _delta = static_cast<int32_t>(delta);
+    return parse_ttl(header.get_min_ttl() + _delta);
 }
 
-inline gc_clock::time_point parse_expiry(uint32_t value) {
+inline gc_clock::time_point parse_expiry(int32_t value) {
     if (value > std::numeric_limits<gc_clock::duration::rep>::max()) {
         throw malformed_sstable_exception(format("Too big expiry: {}", value));
     }
@@ -83,8 +84,9 @@ inline gc_clock::time_point parse_expiry(uint32_t value) {
 }
 
 inline gc_clock::time_point parse_expiry(const serialization_header& header,
-                                   uint32_t delta) {
-    return parse_expiry(header.get_min_local_deletion_time() + delta);
+                                   uint64_t delta) {
+    int32_t _delta = static_cast<int32_t>(delta);
+    return parse_expiry(header.get_min_local_deletion_time() + _delta);
 }
 
 };   // namespace sstables
