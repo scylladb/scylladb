@@ -52,10 +52,10 @@ public:
     void set_timestamp(uint64_t delta) {
         _timestamp = parse_timestamp(_header, delta);
     }
-    void set_ttl(uint32_t delta) {
+    void set_ttl(uint64_t delta) {
         _ttl = parse_ttl(_header, delta);
     }
-    void set_local_deletion_time(uint32_t delta) {
+    void set_local_deletion_time(uint64_t delta) {
         _local_deletion_time = parse_expiry(_header, delta);
     }
     api::timestamp_type timestamp() const { return _timestamp; }

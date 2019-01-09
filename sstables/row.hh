@@ -981,13 +981,13 @@ private:
                 break;
             }
         case state::ROW_BODY_TIMESTAMP_TTL:
-            _liveness.set_ttl(uint32_t(_u64));
+            _liveness.set_ttl(_u64);
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_TIMESTAMP_DELTIME;
                 break;
             }
         case state::ROW_BODY_TIMESTAMP_DELTIME:
-            _liveness.set_local_deletion_time(uint32_t(_u64));
+            _liveness.set_local_deletion_time(_u64);
         case state::ROW_BODY_DELETION:
         row_body_deletion_label:
             if (!_flags.has_deletion()) {
