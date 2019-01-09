@@ -800,7 +800,7 @@ private:
     // Calculate the combined checksum of the rows
     // Calculate the total size of the rows in _row_buf
     future<get_sync_boundary_response>
-    request_sync_boundary(std::optional<repair_sync_boundary> skipped_sync_boundary) {
+    get_sync_boundary(std::optional<repair_sync_boundary> skipped_sync_boundary) {
         if (skipped_sync_boundary) {
             _current_sync_boundary = skipped_sync_boundary;
             _row_buf.clear();
@@ -822,7 +822,7 @@ private:
             if (!_row_buf.empty()) {
                 sb_max = _row_buf.back().boundary();
             }
-            rlogger.debug("request_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
+            rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
                     new_rows.size(), sb_max, row_buf_size(), row_buf_csum(), skipped_sync_boundary);
             return get_sync_boundary_response{sb_max, row_buf_csum(), row_buf_size(), new_rows_size, new_rows_nr};
         });
@@ -1108,9 +1108,9 @@ public:
     // RPC API
     // Return the largest sync point contained in the _row_buf , current _row_buf checksum, and the _row_buf size
     future<get_sync_boundary_response>
-    request_sync_boundary(gms::inet_address remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary) {
+    get_sync_boundary(gms::inet_address remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary) {
         if (remote_node == _myip) {
-            return request_sync_boundary_handler(skipped_sync_boundary);
+            return get_sync_boundary_handler(skipped_sync_boundary);
         }
         stats().rpc_call_nr++;
         return netw::get_local_messaging_service().send_repair_get_sync_boundary(msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary);
@@ -1118,8 +1118,8 @@ public:
 
     // RPC handler
     future<get_sync_boundary_response>
-    request_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
-        return request_sync_boundary(std::move(skipped_sync_boundary));
+    get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
+        return get_sync_boundary(std::move(skipped_sync_boundary));
     }
 
     // RPC API
@@ -1228,7 +1228,7 @@ future<> repair_init_messaging_service_handler(distributed<db::system_distribute
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id,
                     skipped_sync_boundary = std::move(skipped_sync_boundary)] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->request_sync_boundary_handler(std::move(skipped_sync_boundary));
+                return rm->get_sync_boundary_handler(std::move(skipped_sync_boundary));
             });
         });
         ms.register_repair_get_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
@@ -1304,9 +1304,9 @@ class row_level_repair {
     // Repair master and followers will propose a sync boundary. Each of them
     // read N bytes of rows from disk, the row with largest
     // `position_in_partition` value is the proposed sync boundary of that
-    // node. The repair master uses `request_sync_boundary` rpc call to
+    // node. The repair master uses `get_sync_boundary` rpc call to
     // get all the proposed sync boundary and stores in in
-    // `_sync_boundaries`. The `request_sync_boundary` rpc call also
+    // `_sync_boundaries`. The `get_sync_boundary` rpc call also
     // returns the combined hashes and the total size for the rows which are
     // in the `_row_buf`. `_row_buf` buffers the rows read from sstable. It
     // contains rows at most of `_max_row_buf_size` bytes.
@@ -1320,7 +1320,7 @@ class row_level_repair {
     std::optional<repair_sync_boundary> _common_sync_boundary = {};
 
     // `_skipped_sync_boundary` is used in case we find the range is synced
-    // only with the `request_sync_boundary` rpc call. We use it to make
+    // only with the `get_sync_boundary` rpc call. We use it to make
     // sure the remote peers update the `_current_sync_boundary` and
     // `_last_sync_boundary` correctly.
     std::optional<repair_sync_boundary> _skipped_sync_boundary = {};
@@ -1374,10 +1374,10 @@ private:
                 master.stats().round_nr, master.last_sync_boundary(), master.current_sync_boundary(), _skipped_sync_boundary);
         master.stats().round_nr++;
         parallel_for_each(_all_nodes, [&, this] (const gms::inet_address& node) {
-            // By calling `request_sync_boundary`, the `_last_sync_boundary`
+            // By calling `get_sync_boundary`, the `_last_sync_boundary`
             // is moved to the `_current_sync_boundary` or
             // `_skipped_sync_boundary` if it is not std::nullopt.
-            return master.request_sync_boundary(node, _skipped_sync_boundary).then([&, this] (get_sync_boundary_response res) {
+            return master.get_sync_boundary(node, _skipped_sync_boundary).then([&, this] (get_sync_boundary_response res) {
                 master.stats().row_from_disk_bytes[node] += res.new_rows_size;
                 master.stats().row_from_disk_nr[node] += res.new_rows_nr;
                 if (res.boundary && res.row_buf_size > 0) {
@@ -1389,7 +1389,7 @@ private:
                     // this node when calculating common sync boundary
                     _zero_rows = true;
                 }
-                rlogger.debug("Called master.request_sync_boundary for node {} sb={}, combined_csum={}, row_size={}, zero_rows={}, skipped_sync_boundary={}",
+                rlogger.debug("Called master.get_sync_boundary for node {} sb={}, combined_csum={}, row_size={}, zero_rows={}, skipped_sync_boundary={}",
                     node, res.boundary, res.row_buf_combined_csum, res.row_buf_size, _zero_rows, _skipped_sync_boundary);
             });
         }).get();
