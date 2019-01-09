@@ -1007,9 +1007,9 @@ public:
     // RPC API
     // Return the combined hashes of the current working row buf
     future<repair_hash>
-    request_combined_row_hash(std::optional<repair_sync_boundary> common_sync_boundary, gms::inet_address remote_node) {
+    get_combined_row_hash(std::optional<repair_sync_boundary> common_sync_boundary, gms::inet_address remote_node) {
         if (remote_node == _myip) {
-            return request_combined_row_hash_handler(common_sync_boundary);
+            return get_combined_row_hash_handler(common_sync_boundary);
         }
         return netw::get_local_messaging_service().send_repair_get_combined_row_hash(msg_addr(remote_node),
                 _repair_meta_id, common_sync_boundary).then([this] (repair_hash combined_hash) {
@@ -1022,10 +1022,10 @@ public:
 
     // RPC handler
     future<repair_hash>
-    request_combined_row_hash_handler(std::optional<repair_sync_boundary> common_sync_boundary) {
+    get_combined_row_hash_handler(std::optional<repair_sync_boundary> common_sync_boundary) {
         // We can not call this function twice. The good thing is we do not use
         // retransmission at messaging_service level, so no message will be retransmited.
-        rlogger.trace("Calling request_combined_row_hash_handler");
+        rlogger.trace("Calling get_combined_row_hash_handler");
         return request_row_hashes(common_sync_boundary);
     }
 
@@ -1218,7 +1218,7 @@ future<> repair_init_messaging_service_handler(distributed<db::system_distribute
                     common_sync_boundary = std::move(common_sync_boundary)] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
                 _metrics.tx_hashes_nr++;
-                return rm->request_combined_row_hash_handler(std::move(common_sync_boundary));
+                return rm->get_combined_row_hash_handler(std::move(common_sync_boundary));
             });
         });
         ms.register_repair_get_sync_boundary([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
@@ -1426,7 +1426,7 @@ private:
         // `combined_hashes` contains the combined hashes for the
         // `_working_row_buf`. Like `_row_buf`, `_working_row_buf` contains
         // rows which are within the (_last_sync_boundary, _current_sync_boundary]
-        // By calling `request_combined_row_hash(_common_sync_boundary)`,
+        // By calling `get_combined_row_hash(_common_sync_boundary)`,
         // all the nodes move the `_current_sync_boundary` to `_common_sync_boundary`,
         // Rows within the (_last_sync_boundary, _current_sync_boundary] are
         // moved from the `_row_buf` to `_working_row_buf`.
@@ -1444,8 +1444,8 @@ private:
             // peers are identical, we think rows in the `_working_row_buff`
             // are identical, there is no need to transfer each and every
             // row hashes to the repair master.
-            return master.request_combined_row_hash(_common_sync_boundary, _all_nodes[idx]).then([&, this, idx] (repair_hash h) {
-                rlogger.debug("Calling master.request_combined_row_hash for node {}, got hash={}", _all_nodes[idx], h);
+            return master.get_combined_row_hash(_common_sync_boundary, _all_nodes[idx]).then([&, this, idx] (repair_hash h) {
+                rlogger.debug("Calling master.get_combined_row_hash for node {}, got hash={}", _all_nodes[idx], h);
                 combined_hashes[idx]= std::move(h);
             });
         }).get();
