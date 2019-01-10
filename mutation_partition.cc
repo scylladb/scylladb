@@ -1000,7 +1000,7 @@ int compare_row_marker_for_merge(const row_marker& left, const row_marker& right
             return left.expiry() < right.expiry() ? -1 : 1;
         }
     } else {
-        // Both are deleted
+        // Both are either deleted or missing
         if (left.deletion_time() != right.deletion_time()) {
             // Origin compares big-endian serialized deletion time. That's because it
             // delegates to AbstractCell.reconcile() which compares values after

@@ -374,9 +374,10 @@ int compare_row_marker_for_merge(const row_marker& left, const row_marker& right
 class row_marker {
     static constexpr gc_clock::duration no_ttl { 0 };
     static constexpr gc_clock::duration dead { -1 };
+    static constexpr gc_clock::time_point no_expiry { gc_clock::duration(0) };
     api::timestamp_type _timestamp = api::missing_timestamp;
     gc_clock::duration _ttl = no_ttl;
-    gc_clock::time_point _expiry;
+    gc_clock::time_point _expiry = no_expiry;
 public:
     row_marker() = default;
     explicit row_marker(api::timestamp_type created_at) : _timestamp(created_at) { }
@@ -420,7 +421,9 @@ public:
     gc_clock::time_point expiry() const {
         return _expiry;
     }
-    // Can be called only when is_dead().
+    // Should be called when is_dead() or is_expiring().
+    // Safe to be called when is_missing().
+    // When is_expiring(), returns the the deletion time of the marker when it finally expires.
     gc_clock::time_point deletion_time() const {
         return _ttl == dead ? _expiry : _expiry - _ttl;
     }
