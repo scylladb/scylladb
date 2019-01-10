@@ -430,6 +430,10 @@ private:
     std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_need_rewrite;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
+    // This semaphore ensures that an operation like snapshot won't have its selected
+    // sstables deleted by compaction in parallel, a race condition which could
+    // easily result in failure.
+    seastar::semaphore _sstable_deletion_sem = {1};
     // There are situations in which we need to stop writing sstables. Flushers will take
     // the read lock, and the ones that wish to stop that process will take the write lock.
     rwlock _sstables_lock;
