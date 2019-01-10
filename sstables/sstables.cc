@@ -1849,7 +1849,7 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
 // map each metadata type to its correspondent position in the file.
 void seal_statistics(sstable_version_types v, statistics& s, metadata_collector& collector,
         const sstring partitioner, double bloom_filter_fp_chance, schema_ptr schema,
-        const dht::decorated_key& first_key, const dht::decorated_key& last_key, encoding_stats enc_stats) {
+        const dht::decorated_key& first_key, const dht::decorated_key& last_key, const encoding_stats& enc_stats) {
     validation_metadata validation;
     compaction_metadata compaction;
     stats_metadata stats;

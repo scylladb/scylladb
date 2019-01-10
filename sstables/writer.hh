@@ -604,7 +604,7 @@ void seal_summary(summary& s,
 
 void seal_statistics(sstable_version_types, statistics&, metadata_collector&,
     const sstring partitioner, double bloom_filter_fp_chance, schema_ptr,
-    const dht::decorated_key& first_key, const dht::decorated_key& last_key, encoding_stats enc_stats = {});
+    const dht::decorated_key& first_key, const dht::decorated_key& last_key, const encoding_stats& enc_stats = {});
 
 void write(sstable_version_types, file_writer&, const utils::estimated_histogram&);
 void write(sstable_version_types, file_writer&, const utils::streaming_histogram&);
