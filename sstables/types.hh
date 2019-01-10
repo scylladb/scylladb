@@ -371,8 +371,8 @@ using bytes_array_vint_size = disk_string_vint_size;
 
 struct serialization_header : public metadata_base<serialization_header> {
     vint<uint64_t> min_timestamp_base;
-    vint<uint32_t> min_local_deletion_time_base;
-    vint<uint32_t> min_ttl_base;
+    vint<uint64_t> min_local_deletion_time_base;
+    vint<uint64_t> min_ttl_base;
     bytes_array_vint_size pk_type_name;
     disk_array_vint_size<bytes_array_vint_size> clustering_key_types_names;
     struct column_desc {
