@@ -1368,6 +1368,7 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
 
     // This is done in the background, so we can consider this compaction completed.
     seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
+       return with_semaphore(_sstable_deletion_sem, 1, [this, sstables_to_remove = std::move(sstables_to_remove)] {
         return sstables::delete_atomically(sstables_to_remove, *get_large_partition_handler()).then_wrapped([this, sstables_to_remove] (future<> f) {
             std::exception_ptr eptr;
             try {
@@ -1391,6 +1392,7 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
                 return make_exception_future<>(eptr);
             }
             return make_ready_future<>();
+         });
         }).then([this] {
             // refresh underlying data source in row cache to prevent it from holding reference
             // to sstables files which were previously deleted.
@@ -4093,6 +4095,7 @@ seal_snapshot(sstring jsondir) {
 
 future<> table::snapshot(sstring name) {
     return flush().then([this, name = std::move(name)]() {
+       return with_semaphore(_sstable_deletion_sem, 1, [this, name = std::move(name)]() {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
         return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
@@ -4152,6 +4155,7 @@ future<> table::snapshot(sstring name) {
                 });
             });
         });
+       });
     });
 }
 
