@@ -1307,7 +1307,7 @@ private:
             }
         case state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME:
             _left_range_tombstone.deletion_time = parse_expiry(_header, _u64);
-            if (!is_boundary(_range_tombstone_kind)) {
+            if (!is_boundary_between_adjacent_intervals(_range_tombstone_kind)) {
                 if (!is_bound_kind(_range_tombstone_kind)) {
                     throw sstables::malformed_sstable_exception(
                         format("Corrupted range tombstone: invalid boundary type {}", _range_tombstone_kind));
