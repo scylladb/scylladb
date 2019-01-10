@@ -1235,8 +1235,7 @@ future<file> sstable::open_file(component_type type, open_flags flags, file_open
         return new_sstable_component_file(_read_error_handler, type, flags, opts);
     }
     return new_sstable_component_file_non_checked(type, flags, opts).then([this, type, flags](file f) {
-        return do_with(std::move(f), [this, type, flags](file& f) {
-            auto ext_range = get_config().extensions().sstable_file_io_extensions();
+        return do_with(std::move(f), get_config().extensions().sstable_file_io_extensions(), [this, type, flags](file& f, std::vector<sstables::file_io_extension*>& ext_range) {
             return do_for_each(ext_range.begin(), ext_range.end(), [this, &f, type, flags](auto& ext) {
                 // note: we're potentially wrapping more than once. extension mechanism
                 // is responsible for order being sane.
