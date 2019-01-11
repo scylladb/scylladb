@@ -1456,7 +1456,7 @@ const sstables::sstable_set& table::get_sstable_set() const {
     return *_sstables;
 }
 
-lw_shared_ptr<sstable_list> table::get_sstables() const {
+lw_shared_ptr<const sstable_list> table::get_sstables() const {
     return _sstables->all();
 }
 
@@ -1482,7 +1482,7 @@ std::vector<sstables::shared_sstable> table::sstables_need_rewrite() const {
 // As long as we haven't deleted them, compaction needs to ensure it doesn't
 // garbage-collect a tombstone that covers data in an sstable that may not be
 // successfully deleted.
-lw_shared_ptr<sstable_list> table::get_sstables_including_compacted_undeleted() const {
+lw_shared_ptr<const sstable_list> table::get_sstables_including_compacted_undeleted() const {
     if (_sstables_compacted_but_not_deleted.empty()) {
         return get_sstables();
     }
