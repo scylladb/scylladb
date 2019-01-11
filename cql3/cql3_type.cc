@@ -31,9 +31,6 @@
 namespace cql3 {
 
 sstring cql3_type::to_string() const {
-    if (_type->is_tuple()) {
-        return "frozen<" + _name + ">";
-    }
     return _name;
 }
 
