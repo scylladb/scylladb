@@ -62,7 +62,6 @@ namespace cql3 {
 
 class cql3_type;
 class column_specification;
-shared_ptr<cql3_type> make_cql3_tuple_type(shared_ptr<const tuple_type_impl> t);
 
 }
 

@@ -3470,7 +3470,11 @@ tuple_type_impl::hash(bytes_view v) const {
 
 shared_ptr<cql3::cql3_type>
 tuple_type_impl::as_cql3_type() const {
-    return cql3::make_cql3_tuple_type(static_pointer_cast<const tuple_type_impl>(shared_from_this()));
+    auto name = format("tuple<{}>",
+                       ::join(", ",
+                            all_types()
+                            | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));
+    return make_shared<cql3::cql3_type>(std::move(name), shared_from_this(), false);
 }
 
 sstring
