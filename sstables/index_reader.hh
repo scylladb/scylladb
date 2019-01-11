@@ -186,21 +186,21 @@ public:
             }
         state_CONSUME_ENTRY:
         case state::CONSUME_ENTRY: {
-            auto _promoted_index_size = _promoted_index_end - current_pos();
+            auto promoted_index_size = _promoted_index_end - current_pos();
             if (_deletion_time) {
                 _num_pi_blocks = get_uint32();
             }
             auto data_size = data.size();
             std::optional<input_stream<char>> promoted_index_stream;
-            if ((_trust_pi == trust_promoted_index::yes) && (_promoted_index_size > 0)) {
-                if (_promoted_index_size <= data_size) {
+            if ((_trust_pi == trust_promoted_index::yes) && (promoted_index_size > 0)) {
+                if (promoted_index_size <= data_size) {
                     auto buf = data.share();
-                    buf.trim(_promoted_index_size);
+                    buf.trim(promoted_index_size);
                     promoted_index_stream = make_buffer_input_stream(std::move(buf));
                 } else {
                     promoted_index_stream = make_prepended_input_stream(
                             std::move(data),
-                            make_file_input_stream(_index_file, this->position(), _promoted_index_size - data_size, _options).detach());
+                            make_file_input_stream(_index_file, this->position(), promoted_index_size - data_size, _options).detach());
                 }
             } else {
                 _num_pi_blocks = 0;
@@ -209,22 +209,22 @@ public:
             if (promoted_index_stream) {
                 if (is_mc_format()) {
                     index = std::make_unique<promoted_index>(_s, *_deletion_time, std::move(*promoted_index_stream),
-                                  _promoted_index_size,
+                                  promoted_index_size,
                                   _num_pi_blocks, *_ck_values_fixed_lengths);
                 } else {
                      index = std::make_unique<promoted_index>(_s, *_deletion_time, std::move(*promoted_index_stream),
-                                   _promoted_index_size, _num_pi_blocks);
+                                   promoted_index_size, _num_pi_blocks);
                 }
             }
             _consumer.consume_entry(index_entry{std::move(_key), _position, std::move(index)}, _entry_offset);
             _deletion_time = std::nullopt;
             _num_pi_blocks = 0;
             _state = state::START;
-            if (_promoted_index_size <= data_size) {
-                data.trim_front(_promoted_index_size);
+            if (promoted_index_size <= data_size) {
+                data.trim_front(promoted_index_size);
             } else {
                 data.trim(0);
-                return skip_bytes{_promoted_index_size - data_size};
+                return skip_bytes{promoted_index_size - data_size};
             }
         }
             break;
