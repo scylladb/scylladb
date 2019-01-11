@@ -3480,6 +3480,11 @@ tuple_type_impl::as_cql3_type() const {
 
 sstring
 tuple_type_impl::make_name(const std::vector<data_type>& types) {
+    // To keep format compatibility with Origin we never wrap
+    // tuple name into
+    // "org.apache.cassandra.db.marshal.FrozenType(...)".
+    // Even when the tuple is frozen.
+    // For more details see #4087
     return format("org.apache.cassandra.db.marshal.TupleType({})", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
 }
 
