@@ -1685,7 +1685,7 @@ private:
 public:
     using native_type = std::vector<data_value>;
     user_type_impl(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types)
-            : tuple_type_impl(make_name(keyspace, name, field_names, field_types), field_types)
+            : tuple_type_impl(make_name(keyspace, name, field_names, field_types, false /* frozen */), field_types)
             , _keyspace(keyspace)
             , _name(name)
             , _field_names(field_names) {
@@ -1708,7 +1708,11 @@ public:
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 private:
-    static sstring make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types);
+    static sstring make_name(sstring keyspace,
+                             bytes name,
+                             std::vector<bytes> field_names,
+                             std::vector<data_type> field_types,
+                             bool is_multi_cell);
 };
 
 data_value make_user_value(data_type tuple_type, user_type_impl::native_type value);
