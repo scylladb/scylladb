@@ -352,20 +352,13 @@ static bytes_array_vint_size to_bytes_array_vint_size(const sstring& s) {
     return result;
 }
 
-sstring type_name_with_udt_frozen(data_type type) {
-    if (type->is_user_type()) {
-        return "org.apache.cassandra.db.marshal.FrozenType(" + type->name() + ")";
-    }
-    return type->name();
-}
-
 static sstring pk_type_to_string(const schema& s) {
     if (s.partition_key_size() == 1) {
-        return type_name_with_udt_frozen(s.partition_key_columns().begin()->type);
+        return s.partition_key_columns().begin()->type->name();
     } else {
         sstring type_params = ::join(",", s.partition_key_columns()
                                           | boost::adaptors::transformed(std::mem_fn(&column_definition::type))
-                                          | boost::adaptors::transformed(type_name_with_udt_frozen));
+                                          | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)));
         return "org.apache.cassandra.db.marshal.CompositeType(" + type_params + ")";
     }
 }
@@ -381,7 +374,7 @@ serialization_header make_serialization_header(const schema& s, const encoding_s
 
     header.clustering_key_types_names.elements.reserve(s.clustering_key_size());
     for (const auto& ck_column : s.clustering_key_columns()) {
-        auto ck_type_name = to_bytes_array_vint_size(type_name_with_udt_frozen(ck_column.type));
+        auto ck_type_name = to_bytes_array_vint_size(ck_column.type->name());
         header.clustering_key_types_names.elements.push_back(std::move(ck_type_name));
     }
 
@@ -389,7 +382,7 @@ serialization_header make_serialization_header(const schema& s, const encoding_s
     for (const auto& static_column : s.static_columns()) {
         serialization_header::column_desc cd;
         cd.name = to_bytes_array_vint_size(static_column.name());
-        cd.type_name = to_bytes_array_vint_size(type_name_with_udt_frozen(static_column.type));
+        cd.type_name = to_bytes_array_vint_size(static_column.type->name());
         header.static_columns.elements.push_back(std::move(cd));
     }
 
@@ -397,7 +390,7 @@ serialization_header make_serialization_header(const schema& s, const encoding_s
     for (const auto& regular_column : s.regular_columns()) {
         serialization_header::column_desc cd;
         cd.name = to_bytes_array_vint_size(regular_column.name());
-        cd.type_name = to_bytes_array_vint_size(type_name_with_udt_frozen(regular_column.type));
+        cd.type_name = to_bytes_array_vint_size(regular_column.type->name());
         header.regular_columns.elements.push_back(std::move(cd));
     }
 

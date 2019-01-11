@@ -3853,39 +3853,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     validate_stats_metadata(s, written_sst, table_name);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_serialization_header_with_user_defined_types) {
-    // CREATE TYPE ut (my_int int, my_boolean boolean, my_text text);
-    auto ut = user_type_impl::get_instance("sst3", to_bytes("ut"),
-            {to_bytes("my_int"), to_bytes("my_boolean"), to_bytes("my_text")},
-            {int32_type, boolean_type, utf8_type});
-
-    sstring table_name = "user_defined_type_table";
-    // CREATE TABLE user_defined_type_table (pk1 frozen<ut>, pk2 frozen<ut>, ck1 frozen<ut>, ck2 frozen<ut>, rc frozen <ut>, PRIMARY KEY ((pk1, pk2), ck1 ck2));
-    schema_builder builder("sst3", table_name);
-    builder.with_column("pk1", ut, column_kind::partition_key);
-    builder.with_column("pk2", ut, column_kind::partition_key);
-    builder.with_column("ck1", ut, column_kind::clustering_key);
-    builder.with_column("ck2", ut, column_kind::clustering_key);
-    builder.with_column("st", ut, column_kind::static_column);
-    builder.with_column("rc", ut);
-    schema_ptr s = builder.build();
-    sstring expected_ut_name = "org.apache.cassandra.db.marshal.FrozenType(" + ut->name() + ")";
-    auto header = mc::make_serialization_header(*s, encoding_stats{});
-    auto pk_type = to_sstring_view(header.pk_type_name.value);
-    BOOST_REQUIRE(pk_type == "org.apache.cassandra.db.marshal.CompositeType(" + expected_ut_name + "," + expected_ut_name + ")");
-    BOOST_REQUIRE(header.clustering_key_types_names.elements.size() == 2);
-    for (auto& ck : header.clustering_key_types_names.elements) {
-        auto ck_type = to_sstring_view(ck.value);
-        BOOST_REQUIRE(ck_type == expected_ut_name);
-    }
-    BOOST_REQUIRE(header.static_columns.elements.size() == 1);
-    auto st_type = to_sstring_view(header.static_columns.elements[0].type_name.value);
-    BOOST_REQUIRE(st_type == expected_ut_name);
-    BOOST_REQUIRE(header.regular_columns.elements.size() == 1);
-    auto rc_type = to_sstring_view(header.regular_columns.elements[0].type_name.value);
-    BOOST_REQUIRE(rc_type == expected_ut_name);
-}
-
 SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     auto abj = defer([] { await_background_jobs().get(); });
     // CREATE TYPE ut (my_int int, my_boolean boolean, my_text text);
