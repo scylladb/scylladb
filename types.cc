@@ -3470,7 +3470,8 @@ tuple_type_impl::hash(bytes_view v) const {
 
 shared_ptr<cql3::cql3_type>
 tuple_type_impl::as_cql3_type() const {
-    auto name = format("frozen<tuple<{}>>",
+    auto tuple_name = is_multi_cell() ? "tuple<{}>" : "frozen<tuple<{}>>";
+    auto name = format(std::move(tuple_name),
                        ::join(", ",
                             all_types()
                             | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));
