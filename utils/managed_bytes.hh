@@ -203,7 +203,11 @@ public:
 
     managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
         if (!external()) {
+            // Workaround for https://github.com/scylladb/scylla/issues/4086
+            #pragma GCC diagnostic push
+            #pragma GCC diagnostic ignored "-Warray-bounds"
             std::copy(v.begin(), v.end(), _u.small.data);
+            #pragma GCC diagnostic pop
             return;
         }
         auto p = v.data();
