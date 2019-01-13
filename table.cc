@@ -2288,7 +2288,7 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
     cfg.monitor = &monitor;
     cfg.large_partition_handler = lp_handler;
     return sst->write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(),
-        mt.schema(), cfg, mt.get_stats(), pc);
+        mt.schema(), cfg, mt.get_encoding_stats(), pc);
 }
 
 future<>

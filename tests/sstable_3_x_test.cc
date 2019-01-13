@@ -3072,7 +3072,7 @@ static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_share
     cfg.large_partition_handler = &nop_lp_handler;
     sst->write_components(make_combined_reader(s,
         mt1->make_flat_reader(s),
-        mt2->make_flat_reader(s)), 1, s, cfg, mt1->get_stats()).get();
+        mt2->make_flat_reader(s)), 1, s, cfg, mt1->get_encoding_stats()).get();
     return tmp;
 }
 
