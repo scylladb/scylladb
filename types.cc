@@ -3470,11 +3470,21 @@ tuple_type_impl::hash(bytes_view v) const {
 
 shared_ptr<cql3::cql3_type>
 tuple_type_impl::as_cql3_type() const {
-    return cql3::make_cql3_tuple_type(static_pointer_cast<const tuple_type_impl>(shared_from_this()));
+    auto tuple_name = is_multi_cell() ? "tuple<{}>" : "frozen<tuple<{}>>";
+    auto name = format(std::move(tuple_name),
+                       ::join(", ",
+                            all_types()
+                            | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));
+    return make_shared<cql3::cql3_type>(std::move(name), shared_from_this(), false);
 }
 
 sstring
 tuple_type_impl::make_name(const std::vector<data_type>& types) {
+    // To keep format compatibility with Origin we never wrap
+    // tuple name into
+    // "org.apache.cassandra.db.marshal.FrozenType(...)".
+    // Even when the tuple is frozen.
+    // For more details see #4087
     return format("org.apache.cassandra.db.marshal.TupleType({})", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
 }
 
@@ -3520,12 +3530,20 @@ user_type_impl::get_name_as_string() const {
 
 shared_ptr<cql3::cql3_type>
 user_type_impl::as_cql3_type() const {
-    return make_shared<cql3::cql3_type>(get_name_as_string(), shared_from_this(), false);
+    auto name = is_multi_cell() ? get_name_as_string() : "frozen<" + get_name_as_string() + ">";
+    return make_shared<cql3::cql3_type>(std::move(name), shared_from_this(), false);
 }
 
 sstring
-user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
+user_type_impl::make_name(sstring keyspace,
+                          bytes name,
+                          std::vector<bytes> field_names,
+                          std::vector<data_type> field_types,
+                          bool is_multi_cell) {
     std::ostringstream os;
+    if (!is_multi_cell) {
+        os << "org.apache.cassandra.db.marshal.FrozenType(";
+    }
     os << "org.apache.cassandra.db.marshal.UserType(" << keyspace << "," << to_hex(name);
     for (size_t i = 0; i < field_names.size(); ++i) {
         os << ",";
@@ -3533,6 +3551,9 @@ user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field
         os << field_types[i]->name(); // FIXME: ignore frozen<>
     }
     os << ")";
+    if (!is_multi_cell) {
+        os << ")";
+    }
     return os.str();
 }
 

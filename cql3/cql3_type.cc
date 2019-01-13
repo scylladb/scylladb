@@ -31,12 +31,6 @@
 namespace cql3 {
 
 sstring cql3_type::to_string() const {
-    if (_type->is_user_type()) {
-        return "frozen<" + util::maybe_quote(_name) + ">";
-    }
-    if (_type->is_tuple()) {
-        return "frozen<" + _name + ">";
-    }
     return _name;
 }
 
@@ -256,7 +250,7 @@ public:
             }
             ts.push_back(t->prepare_internal(keyspace, user_types)->get_type());
         }
-        return make_cql3_tuple_type(tuple_type_impl::get_instance(std::move(ts)));
+        return tuple_type_impl::get_instance(std::move(ts))->as_cql3_type();
     }
 
     bool references_user_type(const sstring& name) const override {
@@ -378,16 +372,6 @@ cql3_type::values() {
     };
     return v;
 }
-
-shared_ptr<cql3_type>
-make_cql3_tuple_type(tuple_type t) {
-    auto name = format("tuple<{}>",
-                       ::join(", ",
-                            t->all_types()
-                            | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));
-    return ::make_shared<cql3_type>(std::move(name), std::move(t), false);
-}
-
 
 std::ostream&
 operator<<(std::ostream& os, const cql3_type::raw& r) {
