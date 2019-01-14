@@ -1058,14 +1058,20 @@ if status:
     print('Failed to generate {}\n'.format(pc))
     sys.exit(1)
 
+def query_seastar_flags(seastar_pc_file, link_static_cxx=False):
+    pc_file = os.path.join('seastar', seastar_pc_file)
+    cflags = pkg_config(pc_file, '--cflags', '--static')
+    libs = pkg_config(pc_file, '--libs', '--static')
+
+    if link_static_cxx:
+        libs = libs.replace('-lstdc++ ', '')
+
+    return cflags, libs
+
 for mode in build_modes:
-    cfg = dict([line.strip().split(': ', 1)
-                for line in open('seastar/' + pc[mode])
-                if ': ' in line])
-    if args.staticcxx:
-        cfg['Libs'] = cfg['Libs'].replace('-lstdc++ ', '')
-    modes[mode]['seastar_cflags'] = cfg['Cflags']
-    modes[mode]['seastar_libs'] = cfg['Libs']
+    seastar_cflags, seastar_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
+    modes[mode]['seastar_cflags'] = seastar_cflags
+    modes[mode]['seastar_libs'] = seastar_libs
 
 seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
 
