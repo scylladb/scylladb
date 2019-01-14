@@ -1066,6 +1066,13 @@ def query_seastar_flags(seastar_pc_file, link_static_cxx=False):
     if link_static_cxx:
         libs = libs.replace('-lstdc++ ', '')
 
+    # Amend the incorrect flags in the pkg-config file to point to the
+    # right place. This is a temporary hack until we switch to the new
+    # pkg-config specification.
+    cflags = (cflags
+        .replace('-I. ', '')
+        .replace('-Iinclude ', '-I' + os.path.join('seastar', 'include') + ' '))
+
     return cflags, libs
 
 for mode in build_modes:
@@ -1158,7 +1165,7 @@ with open(buildfile, 'w') as f:
     for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = {opt} -DXXH_PRIVATE_API -I. -I $builddir/{mode}/gen -I seastar/include -I seastar/include -I seastar/build/{mode}/gen/include
+            cxxflags_{mode} = {opt} -DXXH_PRIVATE_API -I. -I $builddir/{mode}/gen
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
               description = CXX $out
@@ -1236,15 +1243,12 @@ with open(buildfile, 'w') as f:
                     # So we strip the tests by default; The user can very
                     # quickly re-link the test unstripped by adding a "_g"
                     # to the test name, e.g., "ninja build/release/testname_g"
-                    f.write('build $builddir/{}/{}: {}.{} {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs),
-                                                                          'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}: {}.{} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs)))
                     f.write('   libs = {}\n'.format(local_libs))
-                    f.write('build $builddir/{}/{}_g: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
-                                                                              'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}_g: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
                     f.write('   libs = {}\n'.format(local_libs))
                 else:
-                    f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
-                                                                            'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
                     if has_thrift:
                         f.write('   libs =  {} {} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system')))
             for src in srcs:
