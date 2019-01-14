@@ -56,6 +56,7 @@
 #include "random-utils.hh"
 #include "simple_schema.hh"
 #include "types/map.hh"
+#include "types/list.hh"
 
 using namespace std::chrono_literals;
 

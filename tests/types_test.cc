@@ -32,6 +32,7 @@
 #include "cql3/cql3_type.hh"
 #include "utils/big_decimal.hh"
 #include "types/map.hh"
+#include "types/list.hh"
 
 using namespace std::literals::chrono_literals;
 

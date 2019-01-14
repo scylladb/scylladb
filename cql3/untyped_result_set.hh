@@ -44,6 +44,7 @@
 #include "bytes.hh"
 #include "types.hh"
 #include "types/map.hh"
+#include "types/list.hh"
 #include "transport/messages/result_message_base.hh"
 
 #pragma once

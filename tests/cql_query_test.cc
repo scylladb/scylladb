@@ -39,6 +39,7 @@
 #include "utils/big_decimal.hh"
 #include "types/user.hh"
 #include "types/map.hh"
+#include "types/list.hh"
 
 using namespace std::literals::chrono_literals;
 

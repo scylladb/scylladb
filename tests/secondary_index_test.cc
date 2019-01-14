@@ -25,6 +25,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/pager/paging_state.hh"
 #include "types/map.hh"
+#include "types/list.hh"
 
 
 SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {

@@ -26,6 +26,7 @@
 #include "constants.hh"
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/range/adaptor/reversed.hpp>
+#include "types/list.hh"
 
 namespace cql3 {
 
