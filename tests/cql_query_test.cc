@@ -40,6 +40,7 @@
 #include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
+#include "types/set.hh"
 
 using namespace std::literals::chrono_literals;
 

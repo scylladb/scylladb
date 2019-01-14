@@ -57,6 +57,7 @@
 #include "types/tuple.hh"
 #include "types/map.hh"
 #include "types/list.hh"
+#include "types/set.hh"
 
 template<typename T>
 sstring time_point_to_string(const T& tp)

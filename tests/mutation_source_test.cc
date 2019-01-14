@@ -37,6 +37,7 @@
 #include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
+#include "types/set.hh"
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {

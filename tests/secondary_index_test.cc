@@ -26,6 +26,7 @@
 #include "service/pager/paging_state.hh"
 #include "types/map.hh"
 #include "types/list.hh"
+#include "types/set.hh"
 
 
 SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {

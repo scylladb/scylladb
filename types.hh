@@ -1048,47 +1048,8 @@ using concrete_collection_type = concrete_type<NativeType, collection_type_impl>
 class map_type_impl;
 using map_type = shared_ptr<const map_type_impl>;
 
-class set_type_impl final : public concrete_collection_type<std::vector<data_value>> {
-    using set_type = shared_ptr<const set_type_impl>;
-    using intern = type_interning_helper<set_type_impl, data_type, bool>;
-    data_type _elements;
-    bool _is_multi_cell;
-protected:
-    virtual sstring cql3_type_name() const override;
-public:
-    static set_type get_instance(data_type elements, bool is_multi_cell);
-    set_type_impl(data_type elements, bool is_multi_cell);
-    data_type get_elements_type() const { return _elements; }
-    virtual data_type name_comparator() const override { return _elements; }
-    virtual data_type value_comparator() const override;
-    virtual bool is_multi_cell() const override { return _is_multi_cell; }
-    virtual data_type freeze() const override;
-    virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const override;
-    virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
-    virtual bool less(bytes_view o1, bytes_view o2) const override;
-    virtual bool is_byte_order_comparable() const override { return _elements->is_byte_order_comparable(); }
-    virtual void serialize(const void* value, bytes::iterator& out) const override;
-    virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
-    virtual size_t serialized_size(const void* value) const override;
-    virtual data_value deserialize(bytes_view v) const override;
-    virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
-    virtual sstring to_string(const bytes& b) const override;
-    virtual sstring to_json_string(const bytes& b) const override;
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
-    virtual size_t hash(bytes_view v) const override;
-    virtual bytes from_string(sstring_view text) const override;
-    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
-    virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
-    bytes serialize_partially_deserialized_form(
-            const std::vector<bytes_view>& v, cql_serialization_format sf) const;
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
-    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
-    virtual bool references_duration() const override;
-};
-
+class set_type_impl;
 using set_type = shared_ptr<const set_type_impl>;
-
-data_value make_set_value(data_type tuple_type, set_type_impl::native_type value);
 
 class list_type_impl;
 using list_type = shared_ptr<const list_type_impl>;
@@ -1483,11 +1444,6 @@ template <typename NativeType>
 data_value::data_value(std::optional<NativeType> v)
         : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<NativeType>())) {
 }
-
-template <typename NativeType>
-data_value::data_value(const std::unordered_set<NativeType>& v)
-    : data_value(new set_type_impl::native_type(v.begin(), v.end()), set_type_impl::get_instance(data_type_for<NativeType>(), true))
-{}
 
 template<>
 struct appending_hash<data_type> {

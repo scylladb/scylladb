@@ -34,6 +34,7 @@
 #include "cql3/constants.hh"
 #include "types/map.hh"
 #include "types/list.hh"
+#include "types/set.hh"
 
 namespace cql3 {
 namespace restrictions {

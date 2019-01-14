@@ -47,6 +47,7 @@
 #include "column_identifier.hh"
 #include "to_string.hh"
 #include <unordered_set>
+#include "types/set.hh"
 
 namespace cql3 {
 

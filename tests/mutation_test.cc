@@ -57,6 +57,7 @@
 #include "simple_schema.hh"
 #include "types/map.hh"
 #include "types/list.hh"
+#include "types/set.hh"
 
 using namespace std::chrono_literals;
 
