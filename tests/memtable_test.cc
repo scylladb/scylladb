@@ -25,6 +25,7 @@
 #include "database.hh"
 #include "utils/UUID_gen.hh"
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "schema_builder.hh"
 
 #include <seastar/core/thread.hh>
@@ -33,6 +34,8 @@
 #include "mutation_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "flat_mutation_reader.hh"
+#include "data_model.hh"
+#include "random-utils.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -559,4 +562,64 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
+    auto random_int32_value = [] {
+        return int32_type->decompose(tests::random::get_int<int32_t>());
+    };
+
+    auto now = gc_clock::now();
+
+    auto td = tests::data_model::table_description({ { "pk", int32_type } }, { { "ck", utf8_type } });
+
+    auto td1 = td;
+    td1.add_static_column("s1", int32_type);
+    td1.add_regular_column("v1", int32_type);
+    td1.add_regular_column("v2", int32_type);
+    auto built_schema = td1.build();
+    auto s = built_schema.schema;
+
+    auto md1 = tests::data_model::mutation_description({ to_bytes("pk1") });
+    md1.add_clustered_row_marker({ to_bytes("ck1") });
+    md1.add_clustered_cell({ to_bytes("ck1") }, "v1", random_int32_value());
+    auto m1 = md1.build(s);
+
+    auto md2 = tests::data_model::mutation_description({ to_bytes("pk2") });
+    auto md2_ttl = gc_clock::duration(std::chrono::seconds(1));
+    md2.add_clustered_row_marker({ to_bytes("ck1") }, -10);
+    md2.add_clustered_cell({ to_bytes("ck1") }, "v1", random_int32_value());
+    md2.add_clustered_expiring_cell({ to_bytes("ck2") }, "v2", random_int32_value(), md2_ttl, now + md2_ttl);
+    auto m2 = md2.build(s);
+
+    auto md3 = tests::data_model::mutation_description({ to_bytes("pk3") });
+    auto md3_ttl = gc_clock::duration(std::chrono::seconds(2));
+    auto md3_expiry_point = now - std::chrono::hours(8);
+    md3.add_static_expiring_cell("s1", random_int32_value(), md3_ttl, md3_expiry_point);
+    auto m3 = md3.build(s);
+
+    auto mt = make_lw_shared<memtable>(s);
+
+    auto stats = mt->get_encoding_stats();
+    BOOST_CHECK(stats.min_local_deletion_time == gc_clock::time_point::max());
+    BOOST_CHECK_EQUAL(stats.min_timestamp, api::max_timestamp);
+    BOOST_CHECK(stats.min_ttl == gc_clock::duration::max());
+
+    mt->apply(m1);
+    stats = mt->get_encoding_stats();
+    BOOST_CHECK(stats.min_local_deletion_time == gc_clock::time_point::max());
+    BOOST_CHECK_EQUAL(stats.min_timestamp, tests::data_model::data_timestamp);
+    BOOST_CHECK(stats.min_ttl == gc_clock::duration::max());
+
+    mt->apply(m2);
+    stats = mt->get_encoding_stats();
+    BOOST_CHECK(stats.min_local_deletion_time == now + md2_ttl);
+    BOOST_CHECK_EQUAL(stats.min_timestamp, -10);
+    BOOST_CHECK(stats.min_ttl == md2_ttl);
+
+    mt->apply(m3);
+    stats = mt->get_encoding_stats();
+    BOOST_CHECK(stats.min_local_deletion_time == md3_expiry_point);
+    BOOST_CHECK_EQUAL(stats.min_timestamp, -10);
+    BOOST_CHECK(stats.min_ttl == md2_ttl);
 }
