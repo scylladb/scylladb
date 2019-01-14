@@ -46,6 +46,8 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/count.hpp>
 
+#include "types/user.hh"
+
 namespace cql3 {
 
 shared_ptr<column_specification> user_types::field_spec_of(shared_ptr<column_specification> column, size_t field) {

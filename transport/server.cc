@@ -57,6 +57,8 @@
 #include "response.hh"
 #include "request.hh"
 
+#include "types/user.hh"
+
 namespace cql_transport {
 
 static logging::logger clogger("cql_server");

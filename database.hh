@@ -47,6 +47,7 @@
 #include <optional>
 #include <string.h>
 #include "types.hh"
+#include "types/user.hh"
 #include "compound.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>

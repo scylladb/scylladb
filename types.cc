@@ -53,6 +53,8 @@
 #include "mutation_partition.hh"
 #include "json.hh"
 
+#include "types/user.hh"
+
 template<typename T>
 sstring time_point_to_string(const T& tp)
 {

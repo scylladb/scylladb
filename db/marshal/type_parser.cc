@@ -46,6 +46,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "types/user.hh"
+
 namespace db {
 
 namespace marshal {
