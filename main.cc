@@ -679,7 +679,7 @@ int main(int ac, char** av) {
                 for (auto& x : db.get_column_families()) {
                     table& t = *(x.second);
                     for (sstables::shared_sstable sst : *t.get_sstables()) {
-                        if (sst->is_staging()) {
+                        if (sst->requires_view_building()) {
                             view_update_from_staging_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());
                         }
                     }

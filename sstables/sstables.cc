@@ -2523,7 +2523,7 @@ std::vector<sstring> sstable::component_filenames() const {
     return res;
 }
 
-bool sstable::is_staging() const {
+bool sstable::requires_view_building() const {
     return boost::algorithm::ends_with(_dir, "staging");
 }
 

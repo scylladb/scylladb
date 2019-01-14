@@ -394,7 +394,7 @@ public:
         return temp_sst_dir(_dir, _generation);
     }
 
-    bool is_staging() const;
+    bool requires_view_building() const;
 
     metadata_collector& get_metadata_collector() {
         return _collector;

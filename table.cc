@@ -666,7 +666,7 @@ void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsi
     new_sstables->insert(sstable);
     _sstables = std::move(new_sstables);
     update_stats_for_new_sstable(sstable->bytes_on_disk(), shards_for_the_sstable);
-    if (sstable->is_staging()) {
+    if (sstable->requires_view_building()) {
         _sstables_staging.emplace(sstable->generation(), sstable);
     } else {
         _compaction_strategy.get_backlog_tracker().add_sstable(sstable);
