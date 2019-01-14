@@ -37,6 +37,7 @@
 #include <seastar/core/sleep.hh>
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
+#include "types/user.hh"
 
 using namespace std::literals::chrono_literals;
 

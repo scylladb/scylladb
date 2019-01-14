@@ -24,6 +24,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "database.hh"
+#include "types/user.hh"
 #include "db/view/node_view_update_backlog.hh"
 #include "db/view/view_builder.hh"
 
