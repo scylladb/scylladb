@@ -1065,13 +1065,14 @@ future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> shard_reader::recreat
 
         // The original range contained a single partition and we've read it
         // all. We'd have to create a reader with an empty range that would
-        // immediately be at EOS. This is not possible so just don't recreate
-        // the reader.
+        // immediately be at EOS. This is not possible so just create an empty
+        // reader instead.
         // This should be extremely rare (who'd create a multishard reader to
         // read a single partition) but still, let's make sure we handle it
         // correctly.
         if (_pr->is_singular() && !partition_range_is_inclusive) {
-            return make_ready_future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>();
+            return make_ready_future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>(
+                    make_foreign(std::make_unique<flat_mutation_reader>(make_empty_flat_reader(_schema))));
         }
 
         _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());
