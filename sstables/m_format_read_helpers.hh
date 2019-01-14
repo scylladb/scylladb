@@ -63,7 +63,7 @@ inline api::timestamp_type parse_timestamp(const serialization_header& header,
     return static_cast<api::timestamp_type>(header.get_min_timestamp() + delta);
 }
 
-inline gc_clock::duration parse_ttl(int32_t value) {
+inline gc_clock::duration parse_ttl(int64_t value) {
     if (!is_expired_liveness_ttl(value)) {
         if (value < 0) {
             throw malformed_sstable_exception(format("Negative ttl: {}", value));
@@ -80,11 +80,11 @@ inline gc_clock::duration parse_ttl(const serialization_header& header,
     // sign-extend min_ttl back to 64 bits and
     // add the delta using unsigned arithmetic
     // to prevent signed integer overflow
-    uint64_t min_ttl = static_cast<uint64_t>(static_cast<int64_t>(header.get_min_ttl()));
-    return parse_ttl(static_cast<int32_t>(min_ttl + delta));
+    uint64_t min_ttl = static_cast<uint64_t>(header.get_min_ttl());
+    return parse_ttl(static_cast<int64_t>(min_ttl + delta));
 }
 
-inline gc_clock::time_point parse_expiry(int32_t value) {
+inline gc_clock::time_point parse_expiry(int64_t value) {
     if (value > std::numeric_limits<gc_clock::duration::rep>::max()) {
         throw malformed_sstable_exception(format("Too big expiry: {}", value));
     }
@@ -96,8 +96,8 @@ inline gc_clock::time_point parse_expiry(const serialization_header& header,
     // sign-extend min_local_deletion_time back to 64 bits and
     // add the delta using unsigned arithmetic
     // to prevent signed integer overflow
-    uint64_t min_local_deletion_time = static_cast<uint64_t>(static_cast<int64_t>(header.get_min_local_deletion_time()));
-    return parse_expiry(static_cast<int32_t>(min_local_deletion_time + delta));
+    uint64_t min_local_deletion_time = static_cast<uint64_t>(header.get_min_local_deletion_time());
+    return parse_expiry(static_cast<int64_t>(min_local_deletion_time + delta));
 }
 
 };   // namespace sstables

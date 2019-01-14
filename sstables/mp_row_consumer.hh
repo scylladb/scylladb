@@ -477,7 +477,7 @@ public:
     //requires requires(CreateCell create_cell, column col) {
     //    { create_cell(col) } -> void;
     //}
-    proceed do_consume_cell(bytes_view col_name, int64_t timestamp, int32_t ttl, int32_t expiration, CreateCell&& create_cell) {
+    proceed do_consume_cell(bytes_view col_name, int64_t timestamp, int64_t ttl, int64_t expiration, CreateCell&& create_cell) {
         struct column col(*_schema, col_name, timestamp);
 
         auto ret = flush_if_needed(col.is_static, col.clustering);
@@ -511,7 +511,7 @@ public:
         });
     }
 
-    virtual proceed consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
+    virtual proceed consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int64_t ttl, int64_t expiration) override {
         return do_consume_cell(col_name, timestamp, ttl, expiration, [&] (auto&& col) {
             bool is_multi_cell = col.collection_extra_data.size();
             if (is_multi_cell != col.cdef->is_multi_cell()) {

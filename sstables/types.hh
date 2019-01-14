@@ -416,12 +416,12 @@ struct serialization_header : public metadata_base<serialization_header> {
         return static_cast<api::timestamp_type>(min_timestamp_base.value + encoding_stats::timestamp_epoch);
     }
 
-    int32_t get_min_ttl() const {
-        return static_cast<int32_t>(min_ttl_base.value + encoding_stats::ttl_epoch);
+    int64_t get_min_ttl() const {
+        return static_cast<int64_t>(min_ttl_base.value + encoding_stats::ttl_epoch);
     }
 
-    int32_t get_min_local_deletion_time() const {
-        return static_cast<int32_t>(min_local_deletion_time_base.value + encoding_stats::deletion_time_epoch);
+    int64_t get_min_local_deletion_time() const {
+        return static_cast<int64_t>(min_local_deletion_time_base.value + encoding_stats::deletion_time_epoch);
     }
 };
 
@@ -564,9 +564,9 @@ struct hash<sstables::metadata_type> : enum_hash<sstables::metadata_type> {};
 namespace sstables {
 
 // Special value to represent expired (i.e., 'dead') liveness info
-constexpr static int32_t expired_liveness_ttl = std::numeric_limits<int32_t>::max();
+constexpr static int64_t expired_liveness_ttl = std::numeric_limits<int32_t>::max();
 
-inline bool is_expired_liveness_ttl(int32_t ttl) {
+inline bool is_expired_liveness_ttl(int64_t ttl) {
     return ttl == expired_liveness_ttl;
 }
 
@@ -575,19 +575,19 @@ inline bool is_expired_liveness_ttl(gc_clock::duration ttl) {
 }
 
 // Corresponding to Cassandra's NO_DELETION_TIME
-constexpr static int32_t no_deletion_time = std::numeric_limits<int32_t>::max();
+constexpr static int64_t no_deletion_time = std::numeric_limits<int32_t>::max();
 
 // Corresponding to Cassandra's MAX_DELETION_TIME
-constexpr static int32_t max_deletion_time = std::numeric_limits<int32_t>::max() - 1;
+constexpr static int64_t max_deletion_time = std::numeric_limits<int32_t>::max() - 1;
 
 inline int32_t adjusted_local_deletion_time(gc_clock::time_point local_deletion_time, bool& capped) {
     int64_t ldt = local_deletion_time.time_since_epoch().count();
     if (ldt <= max_deletion_time) {
         capped = false;
-        return ldt;
+        return static_cast<int32_t>(ldt);
     }
     capped = true;
-    return max_deletion_time;
+    return static_cast<int32_t>(max_deletion_time);
 }
 
 struct statistics {

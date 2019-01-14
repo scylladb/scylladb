@@ -99,7 +99,7 @@ public:
     // expire. Typical cells, not set to expire, will get expiration = 0.
     virtual proceed consume_cell(bytes_view col_name, bytes_view value,
             int64_t timestamp,
-            int32_t ttl, int32_t expiration) = 0;
+            int64_t ttl, int64_t expiration) = 0;
 
     // Consume one counter cell. Column name and value are serialized, and need
     // to be deserialized according to the schema.

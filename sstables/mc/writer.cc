@@ -333,8 +333,8 @@ void write_delta_ttl(W& out, gc_clock::duration ttl, const encoding_stats& enc_s
 
 template <typename W>
 GCC6_CONCEPT(requires Writer<W>())
-void write_delta_local_deletion_time(W& out, int32_t local_deletion_time, const encoding_stats& enc_stats) {
-    write_unsigned_delta_vint(out, local_deletion_time, enc_stats.min_local_deletion_time.time_since_epoch().count());
+void write_delta_local_deletion_time(W& out, int64_t local_deletion_time, const encoding_stats& enc_stats) {
+    write_unsigned_delta_vint(out, local_deletion_time, static_cast<int64_t>(enc_stats.min_local_deletion_time.time_since_epoch().count()));
 }
 
 template <typename W>
