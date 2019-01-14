@@ -47,6 +47,7 @@
 
 #include "cql3/operation_impl.hh"
 #include "json.hh"
+#include "types/map.hh"
 
 namespace cql3 {
 

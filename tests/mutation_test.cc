@@ -55,6 +55,7 @@
 #include "service/storage_proxy.hh"
 #include "random-utils.hh"
 #include "simple_schema.hh"
+#include "types/map.hh"
 
 using namespace std::chrono_literals;
 

@@ -38,6 +38,7 @@
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
 #include "types/user.hh"
+#include "types/map.hh"
 
 using namespace std::literals::chrono_literals;
 

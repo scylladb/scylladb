@@ -47,6 +47,7 @@
 #include <string>
 
 #include "types/user.hh"
+#include "types/map.hh"
 
 namespace db {
 

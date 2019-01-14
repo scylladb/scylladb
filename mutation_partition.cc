@@ -38,6 +38,7 @@
 #include "view_info.hh"
 #include "mutation_cleaner.hh"
 #include <seastar/core/execution_stage.hh>
+#include "types/map.hh"
 
 template<bool reversed>
 struct reversal_traits;

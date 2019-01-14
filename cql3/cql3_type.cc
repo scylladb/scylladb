@@ -28,6 +28,7 @@
 #include "ut_name.hh"
 #include "database.hh"
 #include "user_types_metadata.hh"
+#include "types/map.hh"
 
 namespace cql3 {
 

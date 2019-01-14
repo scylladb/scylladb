@@ -35,6 +35,7 @@
 #include "make_random_string.hh"
 #include <boost/algorithm/string/join.hpp>
 #include "types/user.hh"
+#include "types/map.hh"
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {

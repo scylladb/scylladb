@@ -31,6 +31,7 @@
 #include "db/marshal/type_parser.hh"
 #include "cql3/cql3_type.hh"
 #include "utils/big_decimal.hh"
+#include "types/map.hh"
 
 using namespace std::literals::chrono_literals;
 
