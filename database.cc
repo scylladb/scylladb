@@ -359,6 +359,16 @@ database::setup_metrics() {
                        sm::description("Holds the number of currently queued read operations."),
                        {user_label_instance}),
 
+        sm::make_gauge("paused_reads", _read_concurrency_sem.get_inactive_read_stats().population,
+                       sm::description("The number of currently active reads that are temporarily paused."),
+                       {user_label_instance}),
+
+        sm::make_derive("paused_reads_permit_based_evictions", _read_concurrency_sem.get_inactive_read_stats().permit_based_evictions,
+                       sm::description("The number of paused reads evicted to free up permits."
+                                       " Permits are required for new reads to start, and the database will evict paused reads (if any)"
+                                       " to be able to admit new ones, if there is a shortage of permits."),
+                       {user_label_instance}),
+
         sm::make_gauge("active_reads", [this] { return max_count_streaming_concurrent_reads - _streaming_concurrency_sem.available_resources().count; },
                        sm::description("Holds the number of currently active read operations issued on behalf of streaming "),
                        {streaming_label_instance}),
@@ -374,6 +384,16 @@ database::setup_metrics() {
                        sm::description("Holds the number of currently queued read operations on behalf of streaming."),
                        {streaming_label_instance}),
 
+        sm::make_gauge("paused_reads", _streaming_concurrency_sem.get_inactive_read_stats().population,
+                       sm::description("The number of currently ongoing streaming reads that are temporarily paused."),
+                       {streaming_label_instance}),
+
+        sm::make_derive("paused_reads_permit_based_evictions", _streaming_concurrency_sem.get_inactive_read_stats().permit_based_evictions,
+                       sm::description("The number of inactive streaming reads evicted to free up permits"
+                                       " Permits are required for new reads to start, and the database will evict paused reads (if any)"
+                                       " to be able to admit new ones, if there is a shortage of permits."),
+                       {streaming_label_instance}),
+
         sm::make_gauge("active_reads", [this] { return max_count_system_concurrent_reads - _system_read_concurrency_sem.available_resources().count; },
                        sm::description("Holds the number of currently active read operations from \"system\" keyspace tables. "),
                        {system_label_instance}),
@@ -386,6 +406,16 @@ database::setup_metrics() {
 
         sm::make_gauge("queued_reads", [this] { return _system_read_concurrency_sem.waiters(); },
                        sm::description("Holds the number of currently queued read operations from \"system\" keyspace tables."),
+                       {system_label_instance}),
+
+        sm::make_gauge("paused_reads", _system_read_concurrency_sem.get_inactive_read_stats().population,
+                       sm::description("The number of currently ongoing system reads that are temporarily paused."),
+                       {system_label_instance}),
+
+        sm::make_derive("paused_reads_permit_based_evictions", _system_read_concurrency_sem.get_inactive_read_stats().permit_based_evictions,
+                       sm::description("The number of paused system reads evicted to free up permits"
+                                       " Permits are required for new reads to start, and the database will evict inactive reads (if any)"
+                                       " to be able to admit new ones, if there is a shortage of permits."),
                        {system_label_instance}),
 
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },

@@ -134,6 +134,13 @@ public:
         }
     };
 
+    struct inactive_read_stats {
+        // The number of inactive reads evicted to free up permits.
+        uint64_t permit_based_evictions = 0;
+        // The number of inactive reads currently registered.
+        uint64_t population = 0;
+    };
+
 private:
     struct entry {
         promise<lw_shared_ptr<reader_permit>> pr;
@@ -155,6 +162,7 @@ private:
     std::function<std::exception_ptr()> _make_queue_overloaded_exception;
     uint64_t _next_id = 1;
     std::map<uint64_t, std::unique_ptr<inactive_read>> _inactive_reads;
+    inactive_read_stats _inactive_read_stats;
 
 private:
     static std::exception_ptr default_make_queue_overloaded_exception() {
@@ -228,12 +236,12 @@ public:
     /// (if there was no reader to evict).
     bool try_evict_one_inactive_read();
 
-    size_t inactive_reads() const {
-        return _inactive_reads.size();
-    }
-
     void clear_inactive_reads() {
         _inactive_reads.clear();
+    }
+
+    const inactive_read_stats& get_inactive_read_stats() const {
+        return _inactive_read_stats;
     }
 
     future<lw_shared_ptr<reader_permit>> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
