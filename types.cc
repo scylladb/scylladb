@@ -54,6 +54,7 @@
 #include "json.hh"
 
 #include "types/user.hh"
+#include "types/tuple.hh"
 
 template<typename T>
 sstring time_point_to_string(const T& tp)

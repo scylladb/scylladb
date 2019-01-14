@@ -41,6 +41,7 @@
 
 #include "term.hh"
 #include "abstract_marker.hh"
+#include "types/tuple.hh"
 
 namespace cql3 {
 

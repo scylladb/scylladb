@@ -43,6 +43,7 @@
 #include "maps.hh"
 #include "sets.hh"
 #include "lists.hh"
+#include "types/tuple.hh"
 
 namespace cql3 {
 
