@@ -24,6 +24,7 @@
 #include "schema.hh"
 #include "flat_mutation_reader.hh"
 #include "dht/i_partitioner.hh"
+#include "utils/phased_barrier.hh"
 
 // Helper to use multishard_writer to distribute mutation_fragments from the
 // producer to the correct shard and consume with the consumer.
@@ -31,5 +32,5 @@
 future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
     dht::i_partitioner& partitioner,
     flat_mutation_reader producer,
-    std::function<future<> (flat_mutation_reader)> consumer);
-
+    std::function<future<> (flat_mutation_reader)> consumer,
+    utils::phased_barrier::operation&& op = {});

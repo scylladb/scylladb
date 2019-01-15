@@ -996,7 +996,7 @@ table::start() {
 future<>
 table::stop() {
     return _async_gate.close().then([this] {
-        return when_all(await_pending_writes(), await_pending_reads()).discard_result().finally([this] {
+        return when_all(await_pending_writes(), await_pending_reads(), await_pending_streams()).discard_result().finally([this] {
             return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
                 return _compaction_manager.remove(this).then([this] {
                     // Nest, instead of using when_all, so we don't lose any exceptions.

@@ -164,8 +164,9 @@ void stream_session::init_messaging_service_handler() {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
-        return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(), [from, estimated_partitions, plan_id, schema_id, cf_id, source, reason] () mutable {
-                return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, cf_id, source, reason] (schema_ptr s) mutable {
+        table& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
+        return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(), [from, estimated_partitions, plan_id, schema_id, &cf, source, reason] () mutable {
+                return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
                     auto sink = ms().make_sink_for_stream_mutation_fragments(source);
                     auto get_next_mutation_fragment = [source, plan_id, from, s] () mutable {
                         return source().then([plan_id, from, s] (std::optional<std::tuple<frozen_mutation_fragment>> fmf_opt) mutable {
@@ -182,9 +183,7 @@ void stream_session::init_messaging_service_handler() {
                     };
                     distribute_reader_and_consume_on_shards(s, dht::global_partitioner(),
                         make_generating_reader(s, std::move(get_next_mutation_fragment)),
-                        [cf_id, plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
-                            auto& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
-
+                        [&cf, plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
                             return db::view::check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
                                 sstables::shared_sstable sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
                                 schema_ptr s = reader.schema();
@@ -202,7 +201,8 @@ void stream_session::init_messaging_service_handler() {
                                     return _view_update_generator->local().register_staging_sstable(sst, std::move(cf));
                                 });
                             });
-                        }
+                        },
+                        cf.stream_in_progress()
                     ).then_wrapped([s, plan_id, from, sink, estimated_partitions] (future<uint64_t> f) mutable {
                         int32_t status = 0;
                         uint64_t received_partitions = 0;
