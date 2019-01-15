@@ -26,8 +26,8 @@
 #include <vector>
 
 #include "types.hh"
+#include "types/collection.hh"
 
-class collection_type_impl;
 class user_type_impl;
 class cql_serialization_format;
 

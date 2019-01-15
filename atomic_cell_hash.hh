@@ -24,6 +24,7 @@
 // Not part of atomic_cell.hh to avoid cyclic dependency between types.hh and atomic_cell.hh
 
 #include "types.hh"
+#include "types/collection.hh"
 #include "atomic_cell.hh"
 #include "atomic_cell_or_collection.hh"
 #include "hashing.hh"
