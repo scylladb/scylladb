@@ -1150,7 +1150,7 @@ void writer::write_static_row(const row& static_row) {
     uint64_t current_pos = _data_writer->offset();
     // Static row flag is stored in extended flags so extension_flag is always set for static rows
     row_flags flags = row_flags::extension_flag;
-    if (static_row.size() == _schema.static_columns_count()) {
+    if (static_row.size() == _static_columns.size()) {
         flags |= row_flags::has_all_columns;
     }
     bool has_complex_deletion = row_has_complex_deletion(_schema, static_row, column_kind::static_column);
@@ -1197,7 +1197,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
         ext_flags = row_extended_flags::has_shadowable_deletion_scylla;
     }
 
-    if (clustered_row.cells().size() == _schema.regular_columns_count()) {
+    if (clustered_row.cells().size() == _regular_columns.size()) {
         flags |= row_flags::has_all_columns;
     }
     bool has_complex_deletion = row_has_complex_deletion(_schema, clustered_row.cells(), column_kind::regular_column);
