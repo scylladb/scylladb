@@ -37,7 +37,7 @@
 #include "db/system_distributed_keyspace.hh"
 
 namespace db::view {
-class view_update_from_staging_generator;
+class view_update_generator;
 }
 
 SEASTAR_TEST_CASE(test_boot_shutdown){
@@ -45,7 +45,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         distributed<database> db;
         sharded<auth::service> auth_service;
         sharded<db::system_distributed_keyspace> sys_dist_ks;
-        sharded<db::view::view_update_from_staging_generator> view_update_generator;
+        sharded<db::view::view_update_generator> view_update_generator;
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
         sharded<gms::feature_service> feature_service;
         feature_service.start().get();

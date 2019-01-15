@@ -61,7 +61,7 @@
 
 namespace db::view {
 
-class view_update_from_staging_generator;
+class view_update_generator;
 
 }
 
@@ -145,14 +145,14 @@ private:
     static void init_messaging_service_handler();
     static distributed<database>* _db;
     static distributed<db::system_distributed_keyspace>* _sys_dist_ks;
-    static distributed<db::view::view_update_from_staging_generator>* _view_update_generator;
+    static distributed<db::view::view_update_generator>* _view_update_generator;
 public:
     static netw::messaging_service& ms() {
         return netw::get_local_messaging_service();
     }
     static database& get_local_db() { return _db->local(); }
     static distributed<database>& get_db() { return *_db; };
-    static future<> init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_from_staging_generator>& view_update_generator);
+    static future<> init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator);
 public:
     /**
      * Streaming endpoint.

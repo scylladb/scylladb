@@ -19,11 +19,11 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "view_update_from_staging_generator.hh"
+#include "view_update_generator.hh"
 
 namespace db::view {
 
-future<> view_update_from_staging_generator::start() {
+future<> view_update_generator::start() {
     _started = seastar::async([this]() mutable {
         while (!_as.abort_requested()) {
             if (_sstables_with_tables.empty()) {
@@ -46,7 +46,7 @@ future<> view_update_from_staging_generator::start() {
     return make_ready_future<>();
 }
 
-future<> view_update_from_staging_generator::stop() {
+future<> view_update_generator::stop() {
     _as.request_abort();
     _pending_sstables.signal();
     return std::move(_started).then([this] {
@@ -54,11 +54,11 @@ future<> view_update_from_staging_generator::stop() {
     });
 }
 
-bool view_update_from_staging_generator::should_throttle() const {
+bool view_update_generator::should_throttle() const {
     return !_started.available();
 }
 
-future<> view_update_from_staging_generator::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<table> table) {
+future<> view_update_generator::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<table> table) {
     if (_as.abort_requested()) {
         return make_ready_future<>();
     }

@@ -130,7 +130,7 @@ int get_generation_number() {
 }
 
 storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_from_staging_generator>& view_update_generator, gms::feature_service& feature_service)
+        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service)
         : _feature_service(feature_service)
         , _db(db)
         , _auth_service(auth_service)
@@ -3289,7 +3289,7 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
 }
 
 future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_from_staging_generator>& view_update_generator, sharded<gms::feature_service>& feature_service) {
+        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service) {
     return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service));
 }
 

@@ -33,7 +33,6 @@
 #include "service/storage_service.hh"
 #include "service/priority_manager.hh"
 #include "db/view/view_update_checks.hh"
-#include "db/view/view_update_from_staging_generator.hh"
 #include "database.hh"
 #include <seastar/util/bool_class.hh>
 #include <list>
@@ -42,6 +41,7 @@
 #include <random>
 #include <optional>
 #include <boost/range/adaptors.hpp>
+#include "../db/view/view_update_generator.hh"
 
 extern logging::logger rlogger;
 
@@ -53,7 +53,7 @@ struct shard_config {
 };
 
 distributed<db::system_distributed_keyspace>* _sys_dist_ks;
-distributed<db::view::view_update_from_staging_generator>* _view_update_generator;
+distributed<db::view::view_update_generator>* _view_update_generator;
 
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
@@ -1147,7 +1147,7 @@ public:
     }
 };
 
-future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_from_staging_generator>& view_update_generator) {
+future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
     return netw::get_messaging_service().invoke_on_all([] (auto& ms) {

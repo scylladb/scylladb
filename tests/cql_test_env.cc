@@ -98,7 +98,7 @@ private:
     ::shared_ptr<distributed<database>> _db;
     ::shared_ptr<sharded<auth::service>> _auth_service;
     ::shared_ptr<sharded<db::view::view_builder>> _view_builder;
-    ::shared_ptr<sharded<db::view::view_update_from_staging_generator>> _view_update_generator;
+    ::shared_ptr<sharded<db::view::view_update_generator>> _view_update_generator;
     lw_shared_ptr<tmpdir> _data_dir;
 private:
     struct core_local_state {
@@ -128,7 +128,7 @@ public:
             ::shared_ptr<distributed<database>> db,
             ::shared_ptr<sharded<auth::service>> auth_service,
             ::shared_ptr<sharded<db::view::view_builder>> view_builder,
-            ::shared_ptr<sharded<db::view::view_update_from_staging_generator>> view_update_generator)
+            ::shared_ptr<sharded<db::view::view_update_generator>> view_update_generator)
             : _feature_service(std::move(_feature_service))
             , _db(db)
             , _auth_service(std::move(auth_service))
@@ -279,7 +279,7 @@ public:
         return _view_builder->local();
     }
 
-    virtual db::view::view_update_from_staging_generator& local_view_update_generator() override {
+    virtual db::view::view_update_generator& local_view_update_generator() override {
         return _view_update_generator->local();
     }
 
@@ -356,7 +356,7 @@ public:
             distributed<service::migration_manager>& mm = service::get_migration_manager();
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
 
-            auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_from_staging_generator>>();
+            auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_generator>>();
 
             auto& ss = service::get_storage_service();
             ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service)).get();
@@ -405,7 +405,7 @@ public:
             auto stop_bm = defer([&bm] { bm.stop().get(); });
 
             view_update_generator->start(std::ref(*db), std::ref(proxy));
-            view_update_generator->invoke_on_all(&db::view::view_update_from_staging_generator::start);
+            view_update_generator->invoke_on_all(&db::view::view_update_generator::start);
             auto stop_view_update_generator = defer([view_update_generator] {
                 view_update_generator->stop().get();
             });
@@ -496,7 +496,7 @@ class storage_service_for_tests::impl {
     distributed<database> _db;
     sharded<auth::service> _auth_service;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
-    sharded<db::view::view_update_from_staging_generator> _view_update_generator;
+    sharded<db::view::view_update_generator> _view_update_generator;
 public:
     impl() {
         auto thread = seastar::thread_impl::get();

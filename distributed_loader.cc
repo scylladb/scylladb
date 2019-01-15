@@ -33,10 +33,10 @@
 #include "service/priority_manager.hh"
 #include "auth/common.hh"
 #include "tracing/trace_keyspace_helper.hh"
-#include "db/view/view_update_from_staging_generator.hh"
 #include "db/view/view_update_checks.hh"
 #include <unordered_map>
 #include <boost/range/adaptor/map.hpp>
+#include "db/view/view_update_generator.hh"
 
 extern logging::logger dblog;
 
@@ -429,7 +429,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
     });
 }
 
-future<> distributed_loader::load_new_sstables(distributed<database>& db, distributed<db::view::view_update_from_staging_generator>& view_update_generator,
+future<> distributed_loader::load_new_sstables(distributed<database>& db, distributed<db::view::view_update_generator>& view_update_generator,
         sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables) {
     return parallel_for_each(new_tables, [&db] (auto comps) {
         auto cf_sstable_open = [comps] (column_family& cf, sstables::foreign_sstable_open_info info) {

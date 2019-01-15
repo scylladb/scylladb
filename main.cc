@@ -62,10 +62,11 @@
 #include <seastar/net/dns.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/util/log-cli.hh>
+
+#include "db/view/view_update_generator.hh"
 #include "service/cache_hitrate_calculator.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
-#include <db/view/view_update_from_staging_generator.hh>
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
 
@@ -518,9 +519,9 @@ int main(int ac, char** av) {
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
-            static sharded<db::view::view_update_from_staging_generator> view_update_from_staging_generator;
+            static sharded<db::view::view_update_generator> view_update_generator;
             supervisor::notify("initializing storage service");
-            init_storage_service(db, auth_service, sys_dist_ks, view_update_from_staging_generator, feature_service);
+            init_storage_service(db, auth_service, sys_dist_ks, view_update_generator, feature_service);
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
@@ -673,14 +674,14 @@ int main(int ac, char** av) {
             supervisor::notify("loading sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
-            view_update_from_staging_generator.start(std::ref(db), std::ref(proxy)).get();
+            view_update_generator.start(std::ref(db), std::ref(proxy)).get();
             supervisor::notify("discovering staging sstables");
             db.invoke_on_all([] (database& db) {
                 for (auto& x : db.get_column_families()) {
                     table& t = *(x.second);
                     for (sstables::shared_sstable sst : *t.get_sstables()) {
                         if (sst->requires_view_building()) {
-                            view_update_from_staging_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());
+                            view_update_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());
                         }
                     }
                 }
@@ -746,7 +747,7 @@ int main(int ac, char** av) {
             }).get();
 
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_from_staging_generator).get();
+            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator).get();
             api::set_server_stream_manager(ctx).get();
 
             supervisor::notify("starting hinted handoff manager");
@@ -770,7 +771,7 @@ int main(int ac, char** av) {
                     });
                 });
             }).get();
-            repair_init_messaging_service_handler(sys_dist_ks, view_update_from_staging_generator).get();
+            repair_init_messaging_service_handler(sys_dist_ks, view_update_generator).get();
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
@@ -812,7 +813,7 @@ int main(int ac, char** av) {
 
             if (cfg->view_building()) {
                 supervisor::notify("Launching generate_mv_updates for non system tables");
-                view_update_from_staging_generator.invoke_on_all(&db::view::view_update_from_staging_generator::start).get();
+                view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
             }
 
             static sharded<db::view::view_builder> view_builder;
@@ -854,7 +855,7 @@ int main(int ac, char** av) {
             });
 
             engine().at_exit([] {
-                return view_update_from_staging_generator.stop();
+                return view_update_generator.stop();
             });
 
             engine().at_exit([] {
