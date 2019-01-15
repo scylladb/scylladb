@@ -170,7 +170,7 @@ database::database(const db::config& cfg, database_config dbcfg)
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
 
-    dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
+    dblog.debug("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
 }
 
 const db::extensions& database::extensions() const {
