@@ -397,7 +397,7 @@ mutation_source make_sstable_mutation_source(schema_ptr s, sstring dir, std::vec
         mt->apply(m);
     }
 
-    sst->write_components(mt->make_flat_reader(s), mutations.size(), s, cfg).get();
+    sst->write_components(mt->make_flat_reader(s), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
 
     return as_mutation_source(sst);
@@ -1446,7 +1446,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                 created_with_base_schema = sstables::make_sstable(base, dir->path, gen, version, sstables::sstable::format_types::big);
                 sstable_writer_config cfg;
                 cfg.large_data_handler = &nop_lp_handler;
-                created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, cfg).get();
+                created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, cfg, mt->get_encoding_stats()).get();
                 created_with_base_schema->load().get();
 
                 created_with_changed_schema = sstables::make_sstable(changed, dir->path, gen, version, sstables::sstable::format_types::big);
