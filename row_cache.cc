@@ -1010,7 +1010,9 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             _tracker.on_partition_merge();
             return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.memtable_cleaner(),
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
-        } else if (cache_i->continuous() || is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
+        } else if (cache_i->continuous()
+                   || with_allocator(standard_allocator(), [&] { return is_present(mem_e.key()); })
+                      == partition_presence_checker_result::definitely_doesnt_exist) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
             cache_entry* entry = current_allocator().construct<cache_entry>(cache_entry::evictable_tag(),
                 _schema, dht::decorated_key(mem_e.key()),

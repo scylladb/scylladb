@@ -688,6 +688,46 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
     });
 }
 
+SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+
+        memtable_snapshot_source underlying(gen.schema());
+
+        // Create a snapshot source whose presence checker allocates and stores a managed object.
+        // The presence checker may assume that it runs and is destroyed in the context
+        // of the standard allocator. If that isn't the case, there will be alloc-dealloc mismatch.
+        auto src = snapshot_source([&] {
+            auto ms = underlying();
+            return mutation_source([ms = std::move(ms)] (schema_ptr s,
+                const dht::partition_range& pr,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr tr,
+                streamed_mutation::forwarding fwd,
+                mutation_reader::forwarding mr_fwd,
+                reader_resource_tracker rrt) mutable {
+                return ms.make_reader(s, pr, slice, pc, std::move(tr), fwd, mr_fwd, std::move(rrt));
+            }, [] {
+                return [saved = managed_bytes()] (const dht::decorated_key& key) mutable {
+                    // size large enough to defeat the small blob optimization
+                    saved = managed_bytes(managed_bytes::initialized_later(), 1024);
+                    return partition_presence_checker_result::maybe_exists;
+                };
+            });
+        });
+
+        row_cache cache(gen.schema(), std::move(src), tracker);
+
+        auto m1 = make_fully_continuous(gen());
+
+        auto mt = make_lw_shared<memtable>(gen.schema());
+        mt->apply(m1);
+        cache.update([&] { underlying.apply(m1); }, *mt).get();
+    });
+}
+
 SEASTAR_TEST_CASE(test_random_partition_population) {
     return seastar::async([] {
         cache_tracker tracker;
