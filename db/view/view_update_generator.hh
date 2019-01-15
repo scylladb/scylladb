@@ -31,7 +31,7 @@
 
 namespace db::view {
 
-class view_update_from_staging_generator {
+class view_update_generator {
     static constexpr size_t registration_queue_size = 5;
     database& _db;
     service::storage_proxy& _proxy;
@@ -46,11 +46,13 @@ class view_update_from_staging_generator {
     };
     std::deque<sstable_with_table> _sstables_with_tables;
 public:
-    view_update_from_staging_generator(database& db, service::storage_proxy& proxy) : _db(db), _proxy(proxy) { }
+    view_update_generator(database& db, service::storage_proxy& proxy) : _db(db), _proxy(proxy) { }
 
     future<> start();
     future<> stop();
     future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<table> table);
+private:
+    bool should_throttle() const;
 };
 
 }

@@ -130,7 +130,7 @@ int get_generation_number() {
 }
 
 storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        gms::feature_service& feature_service)
+        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service)
         : _feature_service(feature_service)
         , _db(db)
         , _auth_service(auth_service)
@@ -152,7 +152,8 @@ storage_service::storage_service(distributed<database>& db, sharded<auth::servic
         , _row_level_repair_feature(_feature_service, ROW_LEVEL_REPAIR)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
-        , _sys_dist_ks(sys_dist_ks) {
+        , _sys_dist_ks(sys_dist_ks)
+        , _view_update_generator(view_update_generator) {
     register_metrics();
     sstable_read_error.connect([this] { isolate_on_error(); });
     sstable_write_error.connect([this] { isolate_on_error(); });
@@ -2908,7 +2909,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
-        auto f = distributed_loader::flush_upload_dir(_db, ks_name, cf_name);
+        auto f = distributed_loader::flush_upload_dir(_db, _sys_dist_ks, ks_name, cf_name);
         return f.then([new_tables = std::move(new_tables), ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables_from_upload) mutable {
             if (new_tables.empty() && new_tables_from_upload.empty()) {
                 slogger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
@@ -2918,7 +2919,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
-        return distributed_loader::load_new_sstables(_db, ks_name, cf_name, std::move(new_tables)).then([ks_name, cf_name] {
+        return distributed_loader::load_new_sstables(_db, _view_update_generator, ks_name, cf_name, std::move(new_tables)).then([ks_name, cf_name] {
             slogger.info("Done loading new SSTables for {}.{} for all shards", ks_name, cf_name);
         });
     }).finally([this] {
@@ -3288,8 +3289,8 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
 }
 
 future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<gms::feature_service>& feature_service) {
-    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(feature_service));
+        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service) {
+    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service));
 }
 
 future<> deinit_storage_service() {

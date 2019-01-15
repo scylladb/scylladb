@@ -36,11 +36,16 @@
 #include "database.hh"
 #include "db/system_distributed_keyspace.hh"
 
+namespace db::view {
+class view_update_generator;
+}
+
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
         distributed<database> db;
         sharded<auth::service> auth_service;
         sharded<db::system_distributed_keyspace> sys_dist_ks;
+        sharded<db::view::view_update_generator> view_update_generator;
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
         sharded<gms::feature_service> feature_service;
         feature_service.start().get();
@@ -52,7 +57,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false /* don't bind */).get();
         auto stop_messaging_service = defer([&] { netw::get_messaging_service().stop().get(); });
 
-        service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(feature_service)).get();
+        service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service)).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
         db.start().get();
