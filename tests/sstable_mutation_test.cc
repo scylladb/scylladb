@@ -1549,3 +1549,36 @@ SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
     // which is 0.
     BOOST_CHECK(stats.min_ttl == gc_clock::duration(0));
 }
+
+SEASTAR_THREAD_TEST_CASE(test_merging_encoding_stats) {
+    auto ecc = encoding_stats_collector{};
+    auto ec1 = encoding_stats{};
+
+    ecc.update(ec1);
+    auto ec = ecc.get();
+    BOOST_CHECK_EQUAL(ec.min_timestamp, ec1.min_timestamp);
+    BOOST_CHECK(ec.min_local_deletion_time == ec1.min_local_deletion_time);
+    BOOST_CHECK(ec.min_ttl == ec1.min_ttl);
+
+    ec1.min_timestamp = -10;
+    ec1.min_local_deletion_time = gc_clock::now();
+    ec1.min_ttl = gc_clock::duration(std::chrono::hours(1));
+
+    ecc = encoding_stats_collector{};
+    ecc.update(ec1);
+    ec = ecc.get();
+    BOOST_CHECK_EQUAL(ec.min_timestamp, ec1.min_timestamp);
+    BOOST_CHECK(ec.min_local_deletion_time == ec1.min_local_deletion_time);
+    BOOST_CHECK(ec.min_ttl == ec1.min_ttl);
+
+    auto ec2 = encoding_stats{};
+    ec2.min_timestamp = -20;
+    ec2.min_local_deletion_time = ec1.min_local_deletion_time - std::chrono::seconds(1);
+    ec2.min_ttl = gc_clock::duration(std::chrono::hours(2));
+    ecc.update(ec2);
+
+    ec = ecc.get();
+    BOOST_CHECK_EQUAL(ec.min_timestamp, -20);
+    BOOST_CHECK(ec.min_local_deletion_time == ec2.min_local_deletion_time);
+    BOOST_CHECK(ec.min_ttl == ec1.min_ttl);
+}
