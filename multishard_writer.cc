@@ -219,8 +219,9 @@ future<uint64_t> multishard_writer::operator()() {
 future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
     dht::i_partitioner& partitioner,
     flat_mutation_reader producer,
-    std::function<future<> (flat_mutation_reader)> consumer) {
-    return do_with(multishard_writer(std::move(s), partitioner, std::move(producer), std::move(consumer)), [] (multishard_writer& writer) {
+    std::function<future<> (flat_mutation_reader)> consumer,
+    utils::phased_barrier::operation&& op) {
+    return do_with(multishard_writer(std::move(s), partitioner, std::move(producer), std::move(consumer)), std::move(op), [] (multishard_writer& writer, utils::phased_barrier::operation&) {
         return writer();
     });
 }
