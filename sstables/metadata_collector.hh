@@ -99,8 +99,26 @@ struct column_stats {
     void update_local_deletion_time(int32_t value) {
         local_deletion_time_tracker.update(value);
     }
+    void update_local_deletion_time_and_tombstone_histogram(int32_t value) {
+        local_deletion_time_tracker.update(value);
+        tombstone_histogram.update(value);
+    }
     void update_ttl(int32_t value) {
         ttl_tracker.update(value);
+    }
+    void update(const deletion_time& dt) {
+        assert(!dt.live());
+        update_timestamp(dt.marked_for_delete_at);
+        update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
+    }
+    void do_update(const tombstone& t) {
+        update_timestamp(t.timestamp);
+        update_local_deletion_time_and_tombstone_histogram(t.deletion_time.time_since_epoch().count());
+    }
+    void update(const tombstone& t) {
+        if (t) {
+            do_update(t);
+        }
     }
 };
 

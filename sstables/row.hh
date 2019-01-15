@@ -432,39 +432,10 @@ private:
                 break;
             }
         case state::CELL_VALUE_BYTES:
-            if (read_bytes(data, _u32, _val) == read_status::ready) {
-                // If the whole string is in our buffer, great, we don't
-                // need to copy, and can skip the CELL_VALUE_BYTES_2 state.
-                //
-                // finally pass it to the consumer:
-                row_consumer::proceed ret;
-                if (_deleted) {
-                    if (_val.size() != 4) {
-                        throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
-                    }
-                    deletion_time del;
-                    del.local_deletion_time = consume_be<uint32_t>(_val);
-                    del.marked_for_delete_at = _u64;
-                    ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
-                } else if (_counter) {
-                    ret = _consumer.consume_counter_cell(to_bytes_view(_key),
-                            to_bytes_view(_val), _u64);
-                } else {
-                    ret = _consumer.consume_cell(to_bytes_view(_key),
-                            to_bytes_view(_val), _u64, _ttl, _expiration);
-                }
-                // after calling the consume function, we can release the
-                // buffers we held for it.
-                _key.release();
-                _val.release();
-                _state = state::ATOM_START;
-                if (ret == row_consumer::proceed::no) {
-                    return row_consumer::proceed::no;
-                }
-            } else {
+            if (read_bytes(data, _u32, _val) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES_2;
+                break;
             }
-            break;
         case state::CELL_VALUE_BYTES_2:
         {
             row_consumer::proceed ret;

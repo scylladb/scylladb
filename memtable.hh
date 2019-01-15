@@ -36,6 +36,7 @@
 #include "partition_version.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_cleaner.hh"
+#include "sstables/types.hh"
 
 class frozen_mutation;
 
@@ -156,9 +157,9 @@ private:
 
     public:
         encoding_stats_collector()
-            : timestamp(encoding_stats::timestamp_epoch, 0)
-            , min_local_deletion_time(encoding_stats::deletion_time_epoch)
-            , min_ttl(encoding_stats::ttl_epoch)
+            : timestamp(api::max_timestamp, 0)
+            , min_local_deletion_time(std::numeric_limits<int32_t>::max())
+            , min_ttl(std::numeric_limits<int32_t>::max())
         {}
 
         void update(atomic_cell_view cell) {
@@ -187,6 +188,11 @@ private:
                     auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
                   item.as_collection_mutation().data.with_linearized([&] (bytes_view bv) {
                     auto mview = ctype->deserialize_mutation_form(bv);
+                    // Note: when some of the collection cells are dead and some are live
+                    // we need to encode a "live" deletion_time for the living ones.
+                    // It is not strictly required to update encoding_stats for the latter case
+                    // since { <int64_t>.min(), <int32_t>.max() } will not affect the encoding_stats
+                    // minimum values.  (See #4035)
                     update(mview.tomb);
                     for (auto& entry : mview.cells) {
                         update(entry.second);
@@ -204,6 +210,7 @@ private:
             update_timestamp(marker.timestamp());
             if (!marker.is_missing()) {
                 if (!marker.is_live()) {
+                    min_ttl.update(sstables::expired_liveness_ttl);
                     min_local_deletion_time.update(marker.deletion_time().time_since_epoch().count());
                 } else if (marker.is_expiring()) {
                     min_ttl.update(marker.ttl().count());
