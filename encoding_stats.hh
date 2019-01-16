@@ -22,6 +22,7 @@
 #pragma once
 
 #include "timestamp.hh"
+#include "utils/extremum_tracking.hh"
 
 // Stores statistics on all the updates done to a memtable
 // The collected statistics are used for flushing memtable to the disk
@@ -48,4 +49,34 @@ struct encoding_stats {
     api::timestamp_type min_timestamp = timestamp_epoch;
     int32_t min_local_deletion_time = deletion_time_epoch;
     int32_t min_ttl = ttl_epoch;
+};
+
+class encoding_stats_collector {
+private:
+    min_tracker<api::timestamp_type> min_timestamp;
+    min_tracker<int32_t> min_local_deletion_time;
+    min_tracker<int32_t> min_ttl;
+
+public:
+    encoding_stats_collector()
+        : min_timestamp(api::max_timestamp)
+        , min_local_deletion_time(std::numeric_limits<int32_t>::max())
+        , min_ttl(std::numeric_limits<int32_t>::max())
+    {}
+
+    void update_timestamp(api::timestamp_type ts) {
+        min_timestamp.update(ts);
+    }
+
+    void update_local_deletion_time(int32_t local_deletion_time) {
+        min_local_deletion_time.update(local_deletion_time);
+    }
+
+    void update_ttl(int32_t ttl) {
+        min_ttl.update(ttl);
+    }
+
+    encoding_stats get() const {
+        return { min_timestamp.get(), min_local_deletion_time.get(), min_ttl.get() };
+    }
 };
