@@ -646,10 +646,12 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
             { int32_type->decompose(4), boolean_type->decompose(false)}
         });
 
-        auto extract_paging_state = [] (::shared_ptr<cql_transport::messages::result_message> res) {
+        auto extract_paging_state = [] (::shared_ptr<cql_transport::messages::result_message> res) -> ::shared_ptr<service::pager::paging_state> {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
             auto paging_state = rows->rs().get_metadata().paging_state();
-            assert(paging_state);
+            if (!paging_state) {
+                return nullptr;
+            }
             return ::make_shared<service::pager::paging_state>(*paging_state);
         };
 
