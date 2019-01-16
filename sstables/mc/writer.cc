@@ -637,6 +637,25 @@ private:
         }
     }
 
+    deletion_time to_deletion_time(tombstone t) {
+        deletion_time dt;
+        if (t) {
+            bool capped;
+            int32_t ldt = adjusted_local_deletion_time(t.deletion_time, capped);
+            if (capped) {
+                slogger.warn("Capping tombstone local_deletion_time {} to max {}", t.deletion_time.time_since_epoch().count(), ldt);
+                _sst.get_stats().on_capped_tombstone_deletion_time();
+            }
+            dt.local_deletion_time = ldt;
+            dt.marked_for_delete_at = t.timestamp;
+        } else {
+            // Default values for live, non-deleted rows.
+            dt.local_deletion_time = no_deletion_time;
+            dt.marked_for_delete_at = api::missing_timestamp;
+        }
+        return dt;
+    }
+
     struct row_time_properties {
         std::optional<api::timestamp_type> timestamp;
         std::optional<gc_clock::duration> ttl;
@@ -747,23 +766,6 @@ void writer::maybe_set_pi_first_clustering(const writer::clustering_info& info) 
         _pi_write_m.block_start_offset = pos;
         _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
     }
-}
-
-static deletion_time to_deletion_time(tombstone t) {
-    deletion_time dt;
-    if (t) {
-        int32_t ldt = adjusted_local_deletion_time(t.deletion_time);
-        if (ldt != t.deletion_time.time_since_epoch().count()) {
-            slogger.warn("Capping tombstone local_deletion_time {} to max {}", t.deletion_time.time_since_epoch().count(), ldt);
-        }
-        dt.local_deletion_time = ldt;
-        dt.marked_for_delete_at = t.timestamp;
-    } else {
-        // Default values for live, non-deleted rows.
-        dt.local_deletion_time = no_deletion_time;
-        dt.marked_for_delete_at = api::missing_timestamp;
-    }
-    return dt;
 }
 
 void writer::add_pi_block() {

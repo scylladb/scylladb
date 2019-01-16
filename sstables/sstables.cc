@@ -3176,6 +3176,8 @@ future<> init_metrics() {
 
         sm::make_counter("capped_local_deletion_time", [] { return sstables_stats::get_shard_stats().capped_local_deletion_time; },
             sm::description("Was local deletion time capped at maximum allowed value in Statistics")),
+        sm::make_counter("capped_tombstone_deletion_time", [] { return sstables_stats::get_shard_stats().capped_tombstone_deletion_time; },
+            sm::description("Was partition tombstone deletion time capped at maximum allowed value")),
     });
   });
 }

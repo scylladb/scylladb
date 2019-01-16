@@ -39,6 +39,7 @@ class sstables_stats {
         uint64_t partition_seeks = 0;
         uint64_t row_reads = 0;
         uint64_t capped_local_deletion_time = 0;
+        uint64_t capped_tombstone_deletion_time = 0;
     } _shard_stats;
 
     stats& _stats = _shard_stats;
@@ -102,6 +103,10 @@ public:
 
     inline void on_capped_local_deletion_time() {
         ++_stats.capped_local_deletion_time;
+    }
+
+    inline void on_capped_tombstone_deletion_time() {
+        ++_stats.capped_tombstone_deletion_time;
     }
 };
 
