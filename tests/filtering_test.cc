@@ -694,6 +694,26 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         assert_that(msg).is_rows().with_rows_ignore_order({
             { int32_type->decompose(4), boolean_type->decompose(false)}
         });
+
+        // Assert that with LIMIT 3 and paging 1 we will not extract more than 3 values (issue #4100)
+        rows_fetched = 0;
+        uint32_t remaining = 1;
+        while (remaining > 0) {
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 3 ALLOW FILTERING;", std::move(qo)).get0();
+            rows_fetched += count_rows_fetched(msg);
+            paging_state = extract_paging_state(msg);
+            if (!paging_state) {
+                remaining = 0;
+            } else if (remaining > 0) {
+                remaining = paging_state->get_remaining();
+            }
+        }
+        BOOST_REQUIRE_EQUAL(rows_fetched, 1U);
+        assert_that(msg).is_rows().with_rows_ignore_order({
+            { int32_type->decompose(4), boolean_type->decompose(false)}
+        });
     });
 }
 
