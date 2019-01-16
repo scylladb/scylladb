@@ -35,6 +35,7 @@
 #include "db/view/view_update_checks.hh"
 #include "database.hh"
 #include <seastar/util/bool_class.hh>
+#include <seastar/core/metrics_registration.hh>
 #include <list>
 #include <vector>
 #include <algorithm>
@@ -54,6 +55,41 @@ struct shard_config {
 
 distributed<db::system_distributed_keyspace>* _sys_dist_ks;
 distributed<db::view::view_update_generator>* _view_update_generator;
+
+struct row_level_repair_metrics {
+    seastar::metrics::metric_groups _metrics;
+    uint64_t tx_row_nr{0};
+    uint64_t rx_row_nr{0};
+    uint64_t tx_row_bytes{0};
+    uint64_t rx_row_bytes{0};
+    uint64_t row_from_disk_nr{0};
+    uint64_t row_from_disk_bytes{0};
+    uint64_t tx_hashes_nr{0};
+    uint64_t rx_hashes_nr{0};
+    row_level_repair_metrics() {
+        namespace sm = seastar::metrics;
+        _metrics.add_group("repair", {
+            sm::make_derive("tx_row_nr", tx_row_nr,
+                            sm::description("Total number of rows sent on this shard.")),
+            sm::make_derive("rx_row_nr", rx_row_nr,
+                            sm::description("Total number of rows received on this shard.")),
+            sm::make_derive("tx_row_bytes", tx_row_bytes,
+                            sm::description("Total bytes of rows sent on this shard.")),
+            sm::make_derive("rx_row_bytes", rx_row_bytes,
+                            sm::description("Total bytes of rows received on this shard.")),
+            sm::make_derive("tx_hashes_nr", tx_hashes_nr,
+                            sm::description("Total number of row hashes sent on this shard.")),
+            sm::make_derive("rx_hashes_nr", rx_hashes_nr,
+                            sm::description("Total number of row hashes received on this shard.")),
+            sm::make_derive("row_from_disk_nr", row_from_disk_nr,
+                            sm::description("Total number of rows read from disk on this shard.")),
+            sm::make_derive("row_from_disk_bytes", row_from_disk_bytes,
+                            sm::description("Total bytes of rows read from disk on this shard.")),
+        });
+    }
+};
+
+static thread_local row_level_repair_metrics _metrics;
 
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
@@ -732,6 +768,8 @@ private:
         auto hash = do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
         repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash);
         rlogger.trace("Reading: r.boundary={}, r.hash={}", r.boundary(), r.hash());
+        _metrics.row_from_disk_nr++;
+        _metrics.row_from_disk_bytes += r.size();
         cur_size += r.size();
         cur_rows.push_back(std::move(r));
         return stop_iteration::no;
@@ -863,9 +901,12 @@ private:
         }
         return to_repair_rows_list(rows).then([this, from, node_idx, update_buf, update_hash_set] (std::list<repair_row> row_diff) {
             return do_with(std::move(row_diff), [this, from, node_idx, update_buf, update_hash_set] (std::list<repair_row>& row_diff) {
-                stats().rx_row_bytes += get_repair_rows_size(row_diff);
+                auto sz = get_repair_rows_size(row_diff);
+                stats().rx_row_bytes += sz;
                 stats().rx_row_nr += row_diff.size();
                 stats().rx_row_nr_peer[from] += row_diff.size();
+                _metrics.rx_row_nr += row_diff.size();
+                _metrics.rx_row_bytes += sz;
                 if (update_buf) {
                     std::list<repair_row> tmp;
                     tmp.swap(_working_row_buf);
@@ -896,6 +937,8 @@ private:
     }
 
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
+        _metrics.tx_row_nr += row_list.size();
+        _metrics.tx_row_bytes += get_repair_rows_size(row_list);
         return do_with(repair_rows_on_wire(), std::move(row_list), [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list) {
             return do_for_each(row_list, [this, &rows] (repair_row& r) {
                 auto pk = r.get_dk_with_hash()->dk.key();
@@ -946,6 +989,7 @@ public:
         return netw::get_local_messaging_service().send_repair_get_full_row_hashes(msg_addr(remote_node),
                 _repair_meta_id).then([this, remote_node] (std::unordered_set<repair_hash> hashes) {
             rlogger.debug("Got full hashes from peer={}, nr_hashes={}", remote_node, hashes.size());
+            _metrics.rx_hashes_nr += hashes.size();
             stats().rx_hashes_nr += hashes.size();
             stats().rpc_call_nr++;
             return hashes;
@@ -969,6 +1013,7 @@ public:
                 _repair_meta_id, common_sync_boundary).then([this] (repair_hash combined_hash) {
             stats().rpc_call_nr++;
             stats().rx_hashes_nr++;
+            _metrics.rx_hashes_nr++;
             return combined_hash;
         });
     }
@@ -1086,6 +1131,7 @@ public:
                 set_diff.clear();
             } else {
                 stats().tx_hashes_nr += set_diff.size();
+                _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
             return netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
@@ -1158,6 +1204,7 @@ future<> repair_init_messaging_service_handler(distributed<db::system_distribute
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
                 std::unordered_set<repair_hash> hashes = rm->request_full_row_hashes_handler();
+                _metrics.tx_hashes_nr += hashes.size();
                 return make_ready_future<std::unordered_set<repair_hash>>(std::move(hashes));
             }) ;
         });
@@ -1168,6 +1215,7 @@ future<> repair_init_messaging_service_handler(distributed<db::system_distribute
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id,
                     common_sync_boundary = std::move(common_sync_boundary)] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+                _metrics.tx_hashes_nr++;
                 return rm->request_combined_row_hash_handler(std::move(common_sync_boundary));
             });
         });
