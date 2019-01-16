@@ -346,7 +346,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                                                          const query::result_row_view& row) const {
     static logging::logger rlogger("restrictions_filter");
 
-    if (_current_partition_key_does_not_match || _current_static_row_does_not_match) {
+    if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0) {
         return false;
     }
 
@@ -434,9 +434,11 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
                                                          const std::vector<bytes>& clustering_key,
                                                          const query::result_row_view& static_row,
                                                          const query::result_row_view& row) const {
-    bool accepted = do_filter(selection, partition_key, clustering_key, static_row, row);
+    const bool accepted = do_filter(selection, partition_key, clustering_key, static_row, row);
     if (!accepted) {
         ++_rows_dropped;
+    } else if (_remaining > 0) {
+        --_remaining;
     }
     return accepted;
 }
