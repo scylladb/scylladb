@@ -64,7 +64,12 @@ future<> view_update_generator::register_staging_sstable(sstables::shared_sstabl
     }
     _sstables_with_tables.emplace_back(std::move(sst), std::move(table));
     _pending_sstables.signal();
-    return should_throttle() ? _registration_sem.wait(1) : make_ready_future<>();
+    if (should_throttle()) {
+        return _registration_sem.wait(1);
+    } else {
+        _registration_sem.consume(1);
+        return make_ready_future<>();
+    }
 }
 
 }
