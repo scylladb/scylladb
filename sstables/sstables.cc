@@ -2194,6 +2194,13 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
 
+void sstable::update_stats_on_end_of_stream()
+{
+    if (_c_stats.capped_local_deletion_time) {
+        _stats.on_capped_local_deletion_time();
+    }
+}
+
 class sstable_writer_k_l : public sstable_writer::writer_impl {
     bool _backup;
     bool _leave_unsealed;
@@ -2357,6 +2364,7 @@ stop_iteration sstable_writer::consume_end_of_partition() {
 }
 
 void sstable_writer::consume_end_of_stream() {
+    _impl->_sst.update_stats_on_end_of_stream();
     return _impl->consume_end_of_stream();
 }
 
@@ -3165,6 +3173,9 @@ future<> init_metrics() {
             sm::description("Number of partitions seeked")),
         sm::make_derive("row_reads", [] { return sstables_stats::get_shard_stats().row_reads; },
             sm::description("Number of rows read")),
+
+        sm::make_counter("capped_local_deletion_time", [] { return sstables_stats::get_shard_stats().capped_local_deletion_time; },
+            sm::description("Was local deletion time capped at maximum allowed value in Statistics")),
     });
   });
 }

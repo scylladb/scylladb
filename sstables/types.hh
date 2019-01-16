@@ -580,9 +580,14 @@ constexpr static int32_t no_deletion_time = std::numeric_limits<int32_t>::max();
 // Corresponding to Cassandra's MAX_DELETION_TIME
 constexpr static int32_t max_deletion_time = std::numeric_limits<int32_t>::max() - 1;
 
-inline int32_t adjusted_local_deletion_time(gc_clock::time_point local_deletion_time) {
+inline int32_t adjusted_local_deletion_time(gc_clock::time_point local_deletion_time, bool& capped) {
     int64_t ldt = local_deletion_time.time_since_epoch().count();
-    return static_cast<int32_t>(std::min(ldt, static_cast<int64_t>(max_deletion_time)));
+    if (ldt <= max_deletion_time) {
+        capped = false;
+        return ldt;
+    }
+    capped = true;
+    return max_deletion_time;
 }
 
 struct statistics {

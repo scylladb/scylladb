@@ -74,6 +74,7 @@ struct column_stats {
     utils::streaming_histogram tombstone_histogram;
 
     bool has_legacy_counter_shards;
+    bool capped_local_deletion_time = false;
 
     column_stats() :
         cells_count(0),
@@ -101,14 +102,20 @@ struct column_stats {
         local_deletion_time_tracker.update(value);
     }
     void update_local_deletion_time(gc_clock::time_point value) {
-        update_local_deletion_time(adjusted_local_deletion_time(value));
+        bool capped;
+        int32_t ldt = adjusted_local_deletion_time(value, capped);
+        update_local_deletion_time(ldt);
+        capped_local_deletion_time |= capped;
     }
     void update_local_deletion_time_and_tombstone_histogram(int32_t value) {
         local_deletion_time_tracker.update(value);
         tombstone_histogram.update(value);
     }
     void update_local_deletion_time_and_tombstone_histogram(gc_clock::time_point value) {
-        update_local_deletion_time_and_tombstone_histogram(adjusted_local_deletion_time(value));
+        bool capped;
+        int32_t ldt = adjusted_local_deletion_time(value, capped);
+        update_local_deletion_time_and_tombstone_histogram(ldt);
+        capped_local_deletion_time |= capped;
     }
     void update_ttl(int32_t value) {
         ttl_tracker.update(value);
