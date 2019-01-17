@@ -1239,12 +1239,12 @@ void set_cell_or_clustered(mutation& m, const exploded_clustering_prefix & ckey,
     m.set_cell(ckey, std::forward<Args>(args)...);
 }
 
-template<typename Func, typename Map>
+template<typename Map>
 static atomic_cell_or_collection
 make_map_mutation(const Map& map,
                   const column_definition& column,
                   api::timestamp_type timestamp,
-                  Func&& f)
+                  noncopyable_function<map_type_impl::native_type::value_type (const typename Map::value_type&)> f)
 {
     auto column_type = static_pointer_cast<const map_type_impl>(column.type);
     auto ktyp = column_type->get_keys_type();
@@ -1263,7 +1263,7 @@ make_map_mutation(const Map& map,
     } else {
         map_type_impl::native_type tmp;
         tmp.reserve(map.size());
-        std::transform(map.begin(), map.end(), std::inserter(tmp, tmp.end()), f);
+        std::transform(map.begin(), map.end(), std::inserter(tmp, tmp.end()), std::move(f));
         return atomic_cell::make_live(*column.type, timestamp, column_type->decompose(make_map_value(column_type, std::move(tmp))));
     }
 }
