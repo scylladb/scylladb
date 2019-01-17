@@ -533,20 +533,16 @@ future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db
 }
 
 // Not performance critical. Currently used for testing only.
-template <typename Func>
 future<bool>
-table::for_all_partitions(schema_ptr s, Func&& func) const {
-    static_assert(std::is_same<bool, std::result_of_t<Func(const dht::decorated_key&, const mutation_partition&)>>::value,
-                  "bad Func signature");
-
+table::for_all_partitions_slow(schema_ptr s, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
     struct iteration_state {
         flat_mutation_reader reader;
-        Func func;
+        std::function<bool (const dht::decorated_key&, const mutation_partition&)> func;
         bool ok = true;
         bool empty = false;
     public:
         bool done() const { return !ok || empty; }
-        iteration_state(schema_ptr s, const column_family& cf, Func&& func)
+        iteration_state(schema_ptr s, const column_family& cf, std::function<bool (const dht::decorated_key&, const mutation_partition&)>&& func)
             : reader(cf.make_reader(std::move(s)))
             , func(std::move(func))
         { }
@@ -565,11 +561,6 @@ table::for_all_partitions(schema_ptr s, Func&& func) const {
             return is.ok;
         });
     });
-}
-
-future<bool>
-table::for_all_partitions_slow(schema_ptr s, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
-    return for_all_partitions(std::move(s), std::move(func));
 }
 
 static bool belongs_to_current_shard(const std::vector<shard_id>& shards) {
