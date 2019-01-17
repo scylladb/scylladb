@@ -65,8 +65,7 @@ static void create_user_if_not_exists(cql_test_env& env, std::string_view user_n
 
 // Invoke `f` as though the user indicated with `user_name` had logged in. The current logged in user is restored after
 // `f` is invoked.
-template <typename Function>
-static void with_user(cql_test_env& env, std::string_view user_name, Function&& f) {
+static void with_user(cql_test_env& env, std::string_view user_name, noncopyable_function<void ()> f) {
     auto& cs = env.local_client_state();
     auto old_user = cs.user();
 
@@ -82,12 +81,11 @@ static void with_user(cql_test_env& env, std::string_view user_name, Function&& 
 
 // Ensure that invoking the CQL query as a specific user throws `exceptions::unauthorized_exception`, but that, after
 // invoking `resolve` as a superuser, the same CQL query does not throw.
-template <class Function>
 void verify_unauthorized_then_ok(
         cql_test_env& env,
         std::string_view user_name,
         std::string_view cql_query,
-        Function&& resolve) {
+        noncopyable_function<void ()> resolve) {
     const auto cql_query_string = sstring(cql_query);
 
     with_user(env, user_name, [&env, &cql_query_string] {
