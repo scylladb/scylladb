@@ -269,9 +269,10 @@ public:
         mutable bool _current_partition_key_does_not_match = false;
         mutable bool _current_static_row_does_not_match = false;
         mutable uint32_t _rows_dropped = 0;
+        mutable uint32_t _remaining = 0;
     public:
         restrictions_filter() = default;
-        explicit restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions, const query_options& options) : _restrictions(restrictions), _options(options) {}
+        explicit restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions, const query_options& options, uint32_t remaining) : _restrictions(restrictions), _options(options), _remaining(remaining) {}
         bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view& row) const;
         void reset() {
             _current_partition_key_does_not_match = false;
