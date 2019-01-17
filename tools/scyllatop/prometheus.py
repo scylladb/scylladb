@@ -1,4 +1,4 @@
-import urllib2
+import urllib.request, urllib.error, urllib.parse
 import re
 
 
@@ -12,7 +12,7 @@ class Prometheus(object):
         self._host = host
 
     def read_metrics(self):
-        return urllib2.urlopen(self._host).readlines()
+        return urllib.request.urlopen(self._host).read().decode('utf-8').splitlines()
 
     def get_metrics(self):
         return self.read_metrics()

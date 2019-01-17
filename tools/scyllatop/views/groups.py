@@ -1,5 +1,5 @@
 import re
-import mergeable
+from . import mergeable
 
 
 class Group(object):
@@ -48,4 +48,4 @@ class Groups(object):
             self._groups[label].add(metric)
 
     def all(self):
-        return sorted(self._groups.values(), key=lambda group: group.label)
+        return sorted(list(self._groups.values()), key=lambda group: group.label)

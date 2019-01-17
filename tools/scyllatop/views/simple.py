@@ -1,6 +1,6 @@
-import base
-import helpers
-import table
+from . import base
+from . import helpers
+from . import table
 
 
 class Simple(base.Base):

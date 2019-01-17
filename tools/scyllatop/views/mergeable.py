@@ -4,12 +4,12 @@ class Mergeable(dict):
         dict.__init__(self)
 
     def add(self, dictionary):
-        for key, value in dictionary.iteritems():
+        for key, value in dictionary.items():
             self.setdefault(key, [])
             self[key].append(value)
 
     def merged(self):
         result = {}
-        for key, values in self.iteritems():
+        for key, values in self.items():
             result[key] = self._mergeMethod(values)
         return result

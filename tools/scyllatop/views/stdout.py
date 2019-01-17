@@ -1,5 +1,5 @@
-import base
-import helpers
+from . import base
+from . import helpers
 import sys
 
 

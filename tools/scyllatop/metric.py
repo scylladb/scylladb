@@ -36,7 +36,7 @@ class Metric(object):
             logging.debug('update {}: {}'.format(self.symbol, line.strip()))
 
     def markAbsent(self):
-        for key in self._status.keys():
+        for key in list(self._status.keys()):
             self._status[key] = 'not available'
 
     @classmethod

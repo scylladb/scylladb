@@ -1,7 +1,7 @@
-import groups
-import table
-import base
-import helpers
+from . import groups
+from . import table
+from . import base
+from . import helpers
 
 
 class Aggregate(base.Base):
@@ -37,7 +37,7 @@ class Aggregate(base.Base):
 
     def _valid(self, values):
         floats = [self._float(value) for value in values]
-        valid = filter(lambda x: x is not None, floats)
+        valid = [x for x in floats if x is not None]
         return valid
 
     def _float(self, value):
