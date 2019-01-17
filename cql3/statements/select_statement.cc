@@ -329,16 +329,15 @@ select_statement::do_execute(service::storage_proxy& proxy,
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         options.get_cql_serialization_format()),
-                [this, p, page_size, now, timeout_duration, restrictions_need_filtering, limit](auto& builder) {
+                [this, p, page_size, now, timeout_duration, restrictions_need_filtering](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
                             [p, &builder, page_size, now, timeout_duration] {
                                 auto timeout = db::timeout_clock::now() + timeout_duration;
                                 return p->fetch_page(builder, page_size, now, timeout);
                             }
-                    ).then([this, &builder, restrictions_need_filtering, limit] {
+                    ).then([this, &builder, restrictions_need_filtering] {
                                 auto rs = builder.build();
                                 if (restrictions_need_filtering) {
-                                    rs->trim(limit);
                                     _stats.filtered_rows_matched_total += rs->size();
                                 }
                                 update_stats_rows_read(rs->size());
@@ -374,14 +373,13 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     return p->fetch_page(page_size, now, timeout).then(
-            [this, p, &options, limit, now, restrictions_need_filtering](std::unique_ptr<cql3::result_set> rs) {
+            [this, p, &options, now, restrictions_need_filtering](std::unique_ptr<cql3::result_set> rs) {
 
                 if (!p->is_exhausted()) {
                     rs->get_metadata().set_paging_state(p->state());
                 }
 
                 if (restrictions_need_filtering) {
-                    rs->trim(limit);
                     _stats.filtered_rows_matched_total += rs->size();
                 }
                 update_stats_rows_read(rs->size());
@@ -647,7 +645,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         _stats.filtered_rows_read_total += *results->row_count();
         query::result_view::consume(*results, cmd->slice,
                 cql3::selection::result_set_builder::visitor(builder, *_schema,
-                        *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options)));
+                        *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->row_limit)));
     } else {
         query::result_view::consume(*results, cmd->slice,
                 cql3::selection::result_set_builder::visitor(builder, *_schema,
@@ -660,8 +658,6 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         if (_is_reversed) {
             rs->reverse();
         }
-        rs->trim(cmd->row_limit);
-    } else if (restrictions_need_filtering) {
         rs->trim(cmd->row_limit);
     }
     update_stats_rows_read(rs->size());
@@ -785,7 +781,6 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
     auto paging_state_copy = ::make_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
     paging_state_copy->set_partition_key(std::move(index_pk));
     paging_state_copy->set_clustering_key(std::move(index_ck));
-    paging_state_copy->set_remaining(query::max_rows);
     return std::move(paging_state_copy);
 }
 
