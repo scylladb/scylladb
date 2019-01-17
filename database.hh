@@ -900,6 +900,10 @@ public:
         return *_config.read_concurrency_semaphore;
     }
 
+    reader_concurrency_semaphore& streaming_read_concurrency_semaphore() {
+        return *_config.streaming_read_concurrency_semaphore;
+    }
+
 private:
     future<row_locker::lock_holder> do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source) const;
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
@@ -1441,15 +1445,6 @@ public:
     std::unordered_set<sstring> get_initial_tokens();
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
-    reader_concurrency_semaphore& user_read_concurrency_sem() {
-        return _read_concurrency_sem;
-    }
-    reader_concurrency_semaphore& streaming_read_concurrency_sem() {
-        return _streaming_concurrency_sem;
-    }
-    reader_concurrency_semaphore& system_keyspace_read_concurrency_sem() {
-        return _system_read_concurrency_sem;
-    }
     semaphore& sstable_load_concurrency_sem() {
         return _sstable_load_concurrency_sem;
     }

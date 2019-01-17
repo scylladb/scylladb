@@ -1790,6 +1790,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             std::unique_ptr<const dht::partition_range> range;
             foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
             std::optional<reader_concurrency_semaphore::inactive_read_handle> pause_handle_opt;
+            reader_concurrency_semaphore* semaphore;
         };
         distributed<database>& _db;
         std::vector<reader_context> _contexts;
@@ -1808,12 +1809,14 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             return _db.invoke_on(shard, [gs = global_schema_ptr(std::move(schema)), range = _contexts[shard].range.get(), fwd_mr] (database& db) {
                 auto schema = gs.get();
                 auto& cf = db.find_column_family(schema);
-                return make_ready_future<foreign_unique_ptr<utils::phased_barrier::operation>, foreign_unique_ptr<flat_mutation_reader>>(
+                return make_ready_future<foreign_unique_ptr<utils::phased_barrier::operation>, foreign_unique_ptr<flat_mutation_reader>, reader_concurrency_semaphore*>(
                         make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress())),
-                        make_foreign(std::make_unique<flat_mutation_reader>(cf.make_streaming_reader(std::move(schema), *range, fwd_mr))));
+                        make_foreign(std::make_unique<flat_mutation_reader>(cf.make_streaming_reader(std::move(schema), *range, fwd_mr))),
+                        &cf.streaming_read_concurrency_semaphore());
             }).then([this, zis = shared_from_this(), shard] (foreign_unique_ptr<utils::phased_barrier::operation> read_operation,
-                    foreign_unique_ptr<flat_mutation_reader> reader) {
+                    foreign_unique_ptr<flat_mutation_reader> reader, reader_concurrency_semaphore* semaphore) {
                 _contexts[shard].read_operation = std::move(read_operation);
+                _contexts[shard].semaphore = semaphore;
                 return std::move(reader);
             });
         }
@@ -1826,15 +1829,15 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
         }
         virtual future<> pause(foreign_unique_ptr<flat_mutation_reader> reader) override {
             const auto shard = reader.get_owner_shard();
-            return _db.invoke_on(shard, [reader = std::move(reader)] (database& db) mutable {
-                return db.streaming_read_concurrency_sem().register_inactive_read(std::make_unique<inactive_read>(std::move(reader)));
+            return _db.invoke_on(shard, [sem = _contexts[shard].semaphore, reader = std::move(reader)] (database& db) mutable {
+                return sem->register_inactive_read(std::make_unique<inactive_read>(std::move(reader)));
             }).then([this, zis = shared_from_this(), shard] (reader_concurrency_semaphore::inactive_read_handle handle) {
                 _contexts[shard].pause_handle_opt = handle;
             });
         }
         virtual future<foreign_unique_ptr<flat_mutation_reader>> try_resume(shard_id shard) override {
-            return _db.invoke_on(shard, [handle = *_contexts[shard].pause_handle_opt] (database& db) mutable {
-                if (auto ir_ptr = db.streaming_read_concurrency_sem().unregister_inactive_read(handle)) {
+            return _db.invoke_on(shard, [sem = _contexts[shard].semaphore, handle = *_contexts[shard].pause_handle_opt] (database& db) mutable {
+                if (auto ir_ptr = sem->unregister_inactive_read(handle)) {
                     return std::move(static_cast<inactive_read&>(*ir_ptr).reader);
                 }
                 return foreign_unique_ptr<flat_mutation_reader>{};

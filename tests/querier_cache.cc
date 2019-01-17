@@ -672,7 +672,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 nullptr,
                 db::no_timeout).get();
 
-        auto& semaphore = db.user_read_concurrency_sem();
+        auto& semaphore = cf.read_concurrency_semaphore();
 
         BOOST_CHECK_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 0);
 
