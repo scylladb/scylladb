@@ -31,9 +31,7 @@
 #include "schema_builder.hh"
 #include "memtable.hh"
 #include "row_cache.hh"
-#include "sstables/sstables.hh"
 #include "tmpdir.hh"
-#include "sstable_test.hh"
 #include "repair/repair.hh"
 
 #include "tests/test_services.hh"
