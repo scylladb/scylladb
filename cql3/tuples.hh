@@ -42,7 +42,8 @@
 #include "term.hh"
 #include "abstract_marker.hh"
 #include "types/tuple.hh"
-#include "types/list.hh"
+
+class list_type_impl;
 
 namespace cql3 {
 
@@ -51,13 +52,7 @@ namespace cql3 {
  */
 class tuples {
 public:
-    static shared_ptr<column_specification> component_spec_of(shared_ptr<column_specification> column, size_t component) {
-        return ::make_shared<column_specification>(
-                column->ks_name,
-                column->cf_name,
-                ::make_shared<column_identifier>(format("{}[{:d}]", column->name, component), true),
-                static_pointer_cast<const tuple_type_impl>(column->type)->type(component));
-    }
+    static shared_ptr<column_specification> component_spec_of(shared_ptr<column_specification> column, size_t component);
 
     /**
      * A raw, literal tuple.  When prepared, this will become a Tuples.Value or Tuples.DelayedValue, depending
@@ -69,48 +64,9 @@ public:
         literal(std::vector<shared_ptr<raw>> elements)
                 : _elements(std::move(elements)) {
         }
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
-            validate_assignable_to(db, keyspace, receiver);
-            std::vector<shared_ptr<term>> values;
-            bool all_terminal = true;
-            for (size_t i = 0; i < _elements.size(); ++i) {
-                auto&& value = _elements[i]->prepare(db, keyspace, component_spec_of(receiver, i));
-                if (dynamic_pointer_cast<non_terminal>(value)) {
-                    all_terminal = false;
-                }
-                values.push_back(std::move(value));
-            }
-            delayed_value value(static_pointer_cast<const tuple_type_impl>(receiver->type), values);
-            if (all_terminal) {
-                return value.bind(query_options::DEFAULT);
-            } else {
-                return make_shared(std::move(value));
-            }
-        }
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override;
 
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
-            if (_elements.size() != receivers.size()) {
-                throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), _elements.size(), *this));
-            }
-
-            std::vector<shared_ptr<term>> values;
-            std::vector<data_type> types;
-            bool all_terminal = true;
-            for (size_t i = 0; i < _elements.size(); ++i) {
-                auto&& t = _elements[i]->prepare(db, keyspace, receivers[i]);
-                if (dynamic_pointer_cast<non_terminal>(t)) {
-                    all_terminal = false;
-                }
-                values.push_back(t);
-                types.push_back(receivers[i]->type);
-            }
-            delayed_value value(tuple_type_impl::get_instance(std::move(types)), std::move(values));
-            if (all_terminal) {
-                return value.bind(query_options::DEFAULT);
-            } else {
-                return make_shared(std::move(value));
-            }
-        }
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override;
 
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
@@ -255,33 +211,7 @@ public:
             }
         }
 
-        static in_value from_serialized(const fragmented_temporary_buffer::view& value_view, list_type type, const query_options& options) {
-            try {
-                // Collections have this small hack that validate cannot be called on a serialized object,
-                // but the deserialization does the validation (so we're fine).
-              return with_linearized(value_view, [&] (bytes_view value) {
-                auto l = value_cast<list_type_impl::native_type>(type->deserialize(value, options.get_cql_serialization_format()));
-                auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type->get_elements_type());
-                assert(ttype);
-
-                std::vector<std::vector<bytes_opt>> elements;
-                elements.reserve(l.size());
-                for (auto&& element : l) {
-                    auto tuple_buff = ttype->decompose(element);
-                    auto tuple = ttype->split(tuple_buff);
-                    std::vector<bytes_opt> elems;
-                    elems.reserve(tuple.size());
-                    for (auto&& e : tuple) {
-                        elems.emplace_back(to_bytes_opt(e));
-                    }
-                    elements.emplace_back(std::move(elems));
-                }
-                return in_value(elements);
-              });
-            } catch (marshal_exception& e) {
-                throw exceptions::invalid_request_exception(e.what());
-            }
-        }
+        static in_value from_serialized(const fragmented_temporary_buffer::view& value_view, list_type type, const query_options& options);
 
         virtual cql3::raw_value get(const query_options& options) override {
             throw exceptions::unsupported_operation_exception();
@@ -364,28 +294,7 @@ public:
             return abstract_marker::raw::to_string();
         }
     private:
-        static ::shared_ptr<column_specification> make_in_receiver(const std::vector<shared_ptr<column_specification>>& receivers) {
-            std::vector<data_type> types;
-            types.reserve(receivers.size());
-            sstring in_name = "in(";
-            for (auto&& receiver : receivers) {
-                in_name += receiver->name->text();
-                if (receiver != receivers.back()) {
-                    in_name += ",";
-                }
-
-                if (receiver->type->is_collection() && receiver->type->is_multi_cell()) {
-                    throw exceptions::invalid_request_exception("Non-frozen collection columns do not support IN relations");
-                }
-
-                types.emplace_back(receiver->type);
-            }
-            in_name += ")";
-
-            auto identifier = make_shared<column_identifier>(in_name, true);
-            auto type = tuple_type_impl::get_instance(types);
-            return make_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
-        }
+        static ::shared_ptr<column_specification> make_in_receiver(const std::vector<shared_ptr<column_specification>>& receivers);
     };
 
     /**
@@ -415,23 +324,9 @@ public:
      */
     class in_marker : public abstract_marker {
     public:
-        in_marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
-            : abstract_marker(bind_index, std::move(receiver))
-        {
-            assert(dynamic_pointer_cast<const list_type_impl>(_receiver->type));
-        }
+        in_marker(int32_t bind_index, ::shared_ptr<column_specification> receiver);
 
-        virtual shared_ptr<terminal> bind(const query_options& options) override {
-            const auto& value = options.get_value_at(_bind_index);
-            if (value.is_null()) {
-                return nullptr;
-            } else if (value.is_unset_value()) {
-                throw exceptions::invalid_request_exception(format("Invalid unset value for tuple {}", _receiver->name->text()));
-            } else {
-                auto as_list_type = static_pointer_cast<const list_type_impl>(_receiver->type);
-                return make_shared(in_value::from_serialized(*value, as_list_type, options));
-            }
-        }
+        virtual shared_ptr<terminal> bind(const query_options& options) override;
     };
 
     template <typename T>

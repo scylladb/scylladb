@@ -30,6 +30,7 @@
 #include "user_types_metadata.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+#include "types/list.hh"
 
 namespace cql3 {
 
