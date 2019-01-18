@@ -22,9 +22,10 @@
 #pragma once
 
 #include <seastar/core/sleep.hh>
+#include <seastar/util/noncopyable_function.hh>
 
-template<typename EventuallySucceedingFunction>
-void eventually(EventuallySucceedingFunction&& f, size_t max_attempts = 12) {
+inline
+void eventually(noncopyable_function<void ()> f, size_t max_attempts = 12) {
     size_t attempts = 0;
     while (true) {
         try {
@@ -40,8 +41,8 @@ void eventually(EventuallySucceedingFunction&& f, size_t max_attempts = 12) {
     }
 }
 
-template<typename EventuallySucceedingFunction>
-bool eventually_true(EventuallySucceedingFunction&& f) {
+inline
+bool eventually_true(noncopyable_function<bool ()> f) {
     const unsigned max_attempts = 10;
     unsigned attempts = 0;
     while (true) {

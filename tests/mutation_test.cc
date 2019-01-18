@@ -90,9 +90,8 @@ static mutation_partition get_partition(memtable& mt, const partition_key& key) 
     return std::move(mo->partition());
 }
 
-template <typename Func>
 future<>
-with_column_family(schema_ptr s, column_family::config cfg, Func func) {
+with_column_family(schema_ptr s, column_family::config cfg, noncopyable_function<future<> (column_family&)> func) {
     auto tracker = make_lw_shared<cache_tracker>();
     auto dir = make_lw_shared<tmpdir>();
     cfg.datadir = { dir->path };

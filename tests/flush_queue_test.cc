@@ -133,20 +133,23 @@ SEASTAR_TEST_CASE(test_queue_ordering_multi_ops) {
     });
 }
 
-template<typename Func, typename Post, typename Then>
-static future<> test_propagation(bool propagate, Func&& func, Post&& post, Then&& thn, bool want_except_in_run, bool want_except_in_wait) {
+static future<> test_propagation(bool propagate,
+        noncopyable_function<future<> ()> func,
+        noncopyable_function<future<> ()> post,
+        noncopyable_function<void ()> thn,
+        bool want_except_in_run, bool want_except_in_wait) {
     auto queue = ::make_shared<utils::flush_queue<int>>(propagate);
     auto sem = ::make_shared<semaphore>(0);
     auto xr = ::make_shared<bool>(false);
     auto xw = ::make_shared<bool>(false);
 
-    auto f1 = queue->run_with_ordered_post_op(0, [sem, func = std::forward<Func>(func)]() mutable {
-        return sem->wait().then(std::forward<Func>(func));
-    }, std::forward<Post>(post)).handle_exception([xr](auto p) {
+    auto f1 = queue->run_with_ordered_post_op(0, [sem, func = std::move(func)]() mutable {
+        return sem->wait().then(std::move(func));
+    }, std::move(post)).handle_exception([xr](auto p) {
         *xr = true;
     }).discard_result();
 
-    auto f2 = queue->wait_for_pending(0).then(std::forward<Then>(thn)).handle_exception([xw](auto p) {
+    auto f2 = queue->wait_for_pending(0).then(std::move(thn)).handle_exception([xw](auto p) {
         *xw = true;
     }).discard_result();
 
@@ -163,7 +166,7 @@ static future<> test_propagation(bool propagate, Func&& func, Post&& post, Then&
 SEASTAR_TEST_CASE(test_propagate_exception_in_op) {
     return test_propagation(true, // propagate exception to waiter
                     [] { return make_exception_future(std::runtime_error("hej")); }, // ex in op
-                    [] { BOOST_FAIL("should not reach (1)"); }, // should not reach post
+                    [] { BOOST_FAIL("should not reach (1)"); return make_ready_future(); }, // should not reach post
                     [] { BOOST_FAIL("should not reach (2)"); }, // should not reach waiter "then"
                     true,
                     true
@@ -172,7 +175,7 @@ SEASTAR_TEST_CASE(test_propagate_exception_in_op) {
 
 SEASTAR_TEST_CASE(test_propagate_exception_in_post) {
     return test_propagation(true, // propagate exception to waiter
-                    [] {}, // ok func
+                    [] { return make_ready_future(); }, // ok func
                     [] { return make_exception_future(std::runtime_error("hej")); }, // ex in post
                     [] { BOOST_FAIL("should not reach"); }, // should not reach waiter "then"
                     true,
@@ -183,7 +186,7 @@ SEASTAR_TEST_CASE(test_propagate_exception_in_post) {
 SEASTAR_TEST_CASE(test_no_propagate_exception_in_op) {
     return test_propagation(false, // do not propagate exception to waiter
                     [] { return make_exception_future(std::runtime_error("hej")); }, // ex in op
-                    [] { BOOST_FAIL("should not reach"); }, // should not reach post
+                    [] { BOOST_FAIL("should not reach"); return make_ready_future(); }, // should not reach post
                     [] {}, // should reach waiter "then"
                     true,
                     false
@@ -192,7 +195,7 @@ SEASTAR_TEST_CASE(test_no_propagate_exception_in_op) {
 
 SEASTAR_TEST_CASE(test_no_propagate_exception_in_post) {
     return test_propagation(false, // do not propagate exception to waiter
-                    [] {}, // ok func
+                    [] { return make_ready_future(); }, // ok func
                     [] { return make_exception_future(std::runtime_error("hej")); }, // ex in post
                     [] {}, // should reach waiter "then"
                     true,
