@@ -2605,7 +2605,11 @@ bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb,
     can_gc_fn& can_gc, gc_clock::time_point gc_before)
 {
     bool any_live = false;
-    tomb.apply(base_tomb.regular());
+    auto t = tomb;
+    if (tomb <= base_tomb.regular() || (tomb.deletion_time < gc_before && can_gc(tomb))) {
+        tomb = tombstone();
+    }
+    t.apply(base_tomb.regular());
     std::vector<std::pair<bytes, atomic_cell>> survivors;
     for (auto&& name_and_cell : cells) {
         atomic_cell& cell = name_and_cell.second;
@@ -2613,7 +2617,7 @@ bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb,
             return cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
         };
 
-        if (cell.is_covered_by(tomb, false)) {
+        if (cell.is_covered_by(t, false)) {
             continue;
         }
         if (cell.has_expired(query_time)) {
@@ -2631,9 +2635,6 @@ bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb,
         }
     }
     cells = std::move(survivors);
-    if (tomb.deletion_time < gc_before && can_gc(tomb)) {
-        tomb = tombstone();
-    }
     return any_live;
 }
 
