@@ -29,6 +29,7 @@
 #include "cql3/constants.hh"
 #include "database.hh"
 #include "types/map.hh"
+#include "types/set.hh"
 #include "types/list.hh"
 
 namespace cql3 {

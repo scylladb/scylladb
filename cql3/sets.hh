@@ -47,7 +47,6 @@
 #include "column_identifier.hh"
 #include "to_string.hh"
 #include <unordered_set>
-#include "types/set.hh"
 
 namespace cql3 {
 
@@ -101,10 +100,7 @@ public:
 
     class marker : public abstract_marker {
     public:
-        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
-                : abstract_marker{bind_index, std::move(receiver)} {
-            assert(dynamic_cast<const set_type_impl*>(_receiver->type.get()));
-        }
+        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver);
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;
     };
 
