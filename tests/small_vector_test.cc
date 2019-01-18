@@ -127,6 +127,14 @@ void test_random_walk(std::function<T()> make_element) {
         // Assigning to a container with other elements
         copy_assign(a2, actual);
         move_assign(a2, actual);
+
+        // Assigning to a container with pre-existing elements, forcing slow
+        // path
+        auto a3 = utils::small_vector<T, 8>();
+        for (auto j = 0; j <= i / 2; j++) {
+            a3.emplace_back();
+        }
+        copy_assign(a1, a3);
     }
 
     auto another_actual = utils::small_vector<T, 8>(expected.begin(), expected.end());

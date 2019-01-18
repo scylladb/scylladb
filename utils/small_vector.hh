@@ -108,7 +108,7 @@ private:
             throw;
         }
         std::destroy(begin(), end());
-        if (!uses_internal_storage(), false) {
+        if (!uses_internal_storage()) {
             std::free(_begin);
         }
         _begin = ptr;
