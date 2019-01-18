@@ -2383,6 +2383,20 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
     return sstable_writer(*this, s, estimated_partitions, cfg, enc_stats, pc, shard);
 }
 
+// Encoding stats for compaction are based on the sstable's stats metadata
+// since, in contract to the mc-format encoding_stats that are evaluated
+// before the sstable data is written, the stats metadata is updated during
+// writing so it provides actual minimum values of the written timestamps.
+encoding_stats sstable::get_encoding_stats_for_compaction() const {
+    encoding_stats enc_stats;
+
+    enc_stats.min_timestamp = _c_stats.timestamp_tracker.min();
+    enc_stats.min_local_deletion_time = _c_stats.local_deletion_time_tracker.min();
+    enc_stats.min_ttl = _c_stats.ttl_tracker.min();
+
+    return enc_stats;
+}
+
 future<> sstable::write_components(
         flat_mutation_reader mr,
         uint64_t estimated_partitions,
