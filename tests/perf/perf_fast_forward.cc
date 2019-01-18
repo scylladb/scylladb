@@ -360,8 +360,8 @@ public:
         _test_count.clear();
         _root = Json::Value{Json::objectValue};
         _tg_properties = Json::Value{Json::objectValue};
-        _current_dir = output_dir + "/" + name + "/";
-        fs::create_directory(_current_dir);
+        _current_dir = output_dir + "/" + name + "/" + ds.name() + "/";
+        fs::create_directories(_current_dir);
         _tg_properties["name"] = name;
         _tg_properties["message"] = message;
         _tg_properties["dataset"] = ds.name();
@@ -374,7 +374,7 @@ public:
     }
 
     void write_dataset_population(const dataset& ds) override {
-        write_common_test_group(format("population-{}", ds.name()), ds.description(), ds);
+        write_common_test_group("population", ds.description(), ds);
     }
 
     void write_test_names(const output_items& param_names, const output_items& stats_names) override {
