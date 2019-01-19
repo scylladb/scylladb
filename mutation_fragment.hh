@@ -620,7 +620,13 @@ public:
     void apply(const range_tombstone_list& list) {
         _list.apply(_schema, list);
     }
+    // Apply those range tombstones from the list, that overlap with the
+    // range.
     void apply(const range_tombstone_list&, const query::clustering_range&);
+    // Apply those range tombstones from the list, that overlap with the
+    // range *and* have a start position that is strictly greater than
+    // the position.
+    void apply(const range_tombstone_list&, const query::clustering_range&, position_in_partition_view);
     void reset();
     bool empty() const;
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
