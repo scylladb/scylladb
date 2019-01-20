@@ -309,9 +309,11 @@ void write_missing_columns(W& out, const indexed_columns& columns, const row& ro
 template <typename T, typename W>
 GCC6_CONCEPT(requires Writer<W>())
 void write_unsigned_delta_vint(W& out, T value, T base) {
+    using unsigned_type = std::make_unsigned_t<T>;
+    unsigned_type unsigned_delta = static_cast<unsigned_type>(value) - static_cast<unsigned_type>(base);
     // sign-extend to 64-bits
     using signed_type = std::make_signed_t<T>;
-    int64_t delta = static_cast<signed_type>(value) - static_cast<signed_type>(base);
+    int64_t delta = static_cast<int64_t>(static_cast<signed_type>(unsigned_delta));
     // write as unsigned 64-bit varint
     write_vint(out, static_cast<uint64_t>(delta));
 }
@@ -381,9 +383,11 @@ sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_st
     sstable_schema sst_sch;
     serialization_header& header = sst_sch.header;
     // mc serialization header minimum values are delta-encoded based on the default timestamp epoch times
-    header.min_timestamp_base.value = static_cast<uint64_t>(enc_stats.min_timestamp - encoding_stats::timestamp_epoch);
-    header.min_local_deletion_time_base.value = static_cast<uint64_t>(enc_stats.min_local_deletion_time - encoding_stats::deletion_time_epoch);
-    header.min_ttl_base.value = static_cast<uint64_t>(enc_stats.min_ttl - encoding_stats::ttl_epoch);
+    // Note: We rely on implicit conversion to uint64_t when subtracting the signed epoch values below
+    // for preventing signed integer overflow.
+    header.min_timestamp_base.value = static_cast<uint64_t>(enc_stats.min_timestamp) - encoding_stats::timestamp_epoch;
+    header.min_local_deletion_time_base.value = static_cast<uint64_t>(enc_stats.min_local_deletion_time) - encoding_stats::deletion_time_epoch;
+    header.min_ttl_base.value = static_cast<uint64_t>(enc_stats.min_ttl) - encoding_stats::ttl_epoch;
 
     header.pk_type_name = to_bytes_array_vint_size(pk_type_to_string(s));
 

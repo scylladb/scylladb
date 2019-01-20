@@ -72,8 +72,11 @@ inline gc_clock::duration parse_ttl(int32_t value) {
 
 inline gc_clock::duration parse_ttl(const serialization_header& header,
                                     uint64_t delta) {
-    int32_t _delta = static_cast<int32_t>(delta);
-    return parse_ttl(header.get_min_ttl() + _delta);
+    // sign-extend min_ttl back to 64 bits and
+    // add the delta using unsigned arithmetic
+    // to prevent signed integer overflow
+    uint64_t min_ttl = static_cast<uint64_t>(static_cast<int64_t>(header.get_min_ttl()));
+    return parse_ttl(static_cast<int32_t>(min_ttl + delta));
 }
 
 inline gc_clock::time_point parse_expiry(int32_t value) {
@@ -85,8 +88,11 @@ inline gc_clock::time_point parse_expiry(int32_t value) {
 
 inline gc_clock::time_point parse_expiry(const serialization_header& header,
                                    uint64_t delta) {
-    int32_t _delta = static_cast<int32_t>(delta);
-    return parse_expiry(header.get_min_local_deletion_time() + _delta);
+    // sign-extend min_local_deletion_time back to 64 bits and
+    // add the delta using unsigned arithmetic
+    // to prevent signed integer overflow
+    uint64_t min_local_deletion_time = static_cast<uint64_t>(static_cast<int64_t>(header.get_min_local_deletion_time()));
+    return parse_expiry(static_cast<int32_t>(min_local_deletion_time + delta));
 }
 
 };   // namespace sstables

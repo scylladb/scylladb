@@ -410,16 +410,17 @@ struct serialization_header : public metadata_base<serialization_header> {
     }
 
     // mc serialization header minimum values are delta-encoded based on the default timestamp epoch times
+    // Note: following conversions rely on min_*_base.value being unsigned to prevent signed integer overflow
     api::timestamp_type get_min_timestamp() const {
         return static_cast<api::timestamp_type>(min_timestamp_base.value + encoding_stats::timestamp_epoch);
     }
 
     int32_t get_min_ttl() const {
-        return static_cast<int32_t>(min_ttl_base.value) + encoding_stats::ttl_epoch;
+        return static_cast<int32_t>(min_ttl_base.value + encoding_stats::ttl_epoch);
     }
 
     int32_t get_min_local_deletion_time() const {
-        return static_cast<int32_t>(min_local_deletion_time_base.value) + encoding_stats::deletion_time_epoch;
+        return static_cast<int32_t>(min_local_deletion_time_base.value + encoding_stats::deletion_time_epoch);
     }
 };
 
