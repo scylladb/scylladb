@@ -950,6 +950,11 @@ private:
     // filter manifest.json files out
     static bool manifest_json_filter(const fs::path&, const directory_entry& entry);
 
+    // Iterate over all partitions.  Protocol is the same as std::all_of(),
+    // so that iteration can be stopped by returning false.
+    // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
+    template <typename Func>
+    future<bool> for_all_partitions(schema_ptr, Func&& func) const;
     void check_valid_rp(const db::replay_position&) const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),

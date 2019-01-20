@@ -47,11 +47,12 @@
 
 using namespace db;
 
-static future<> cl_test(commitlog::config cfg, noncopyable_function<future<> (commitlog& log)> f) {
+template<typename Func>
+static future<> cl_test(commitlog::config cfg, Func && f) {
     tmpdir tmp;
     cfg.commit_log_location = tmp.path;
-    return commitlog::create_commitlog(cfg).then([f = std::move(f)](commitlog log) mutable {
-        return do_with(std::move(log), [f = std::move(f)](commitlog& log) {
+    return commitlog::create_commitlog(cfg).then([f = std::forward<Func>(f)](commitlog log) mutable {
+        return do_with(std::move(log), [f = std::forward<Func>(f)](commitlog& log) {
             return futurize_apply(f, log).finally([&log] {
                 return log.shutdown().then([&log] {
                     return log.clear();

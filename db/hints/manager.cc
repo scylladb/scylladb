@@ -791,8 +791,9 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
 }
 
-static future<> scan_for_hints_dirs(const sstring& hints_directory, std::function<future<> (stdx::filesystem::path dir, directory_entry de, unsigned shard_id)> f) {
-    return lister::scan_dir(hints_directory, { directory_entry_type::directory }, [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
+template<typename Func>
+static future<> scan_for_hints_dirs(const sstring& hints_directory, Func&& f) {
+    return lister::scan_dir(hints_directory, { directory_entry_type::directory }, [f = std::forward<Func>(f)] (fs::path dir, directory_entry de) {
         try {
             return f(std::move(dir), std::move(de), std::stoi(de.name.c_str()));
         } catch (std::invalid_argument& ex) {

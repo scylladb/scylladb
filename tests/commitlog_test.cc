@@ -35,7 +35,6 @@
 #include <seastar/core/scollectd_api.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/reactor.hh>
-#include <seastar/util/noncopyable_function.hh>
 #include "utils/UUID_gen.hh"
 #include "tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
@@ -45,11 +44,12 @@
 
 using namespace db;
 
-static future<> cl_test(commitlog::config cfg, noncopyable_function<future<> (commitlog&)> f) {
+template<typename Func>
+static future<> cl_test(commitlog::config cfg, Func && f) {
     tmpdir tmp;
     cfg.commit_log_location = tmp.path;
-    return commitlog::create_commitlog(cfg).then([f = std::move(f)](commitlog log) mutable {
-        return do_with(std::move(log), [f = std::move(f)](commitlog& log) {
+    return commitlog::create_commitlog(cfg).then([f = std::forward<Func>(f)](commitlog log) mutable {
+        return do_with(std::move(log), [f = std::forward<Func>(f)](commitlog& log) {
             return futurize_apply(f, log).finally([&log] {
                 return log.shutdown().then([&log] {
                     return log.clear();
@@ -60,10 +60,11 @@ static future<> cl_test(commitlog::config cfg, noncopyable_function<future<> (co
     });
 }
 
-static future<> cl_test(noncopyable_function<future<> (commitlog&)> f) {
+template<typename Func>
+static future<> cl_test(Func && f) {
     commitlog::config cfg;
     cfg.metrics_category_name = "commitlog";
-    return cl_test(cfg, std::move(f));
+    return cl_test(cfg, std::forward<Func>(f));
 }
 
 #if 0
@@ -510,7 +511,6 @@ SEASTAR_TEST_CASE(test_commitlog_counters) {
     BOOST_CHECK_EQUAL(count_cl_counters(), 0);
     return cl_test([count_cl_counters](commitlog& log) {
         BOOST_CHECK_GT(count_cl_counters(), 0);
-        return make_ready_future<>();
     }).finally([count_cl_counters] {
         BOOST_CHECK_EQUAL(count_cl_counters(), 0);
     });

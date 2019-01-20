@@ -39,7 +39,8 @@ class fragment_scatterer {
     std::vector<mutation>& _mutations;
     size_t _next = 0;
 private:
-    void for_each_target(noncopyable_function<void (mutation&)> func) {
+    template<typename Func>
+    void for_each_target(Func&& func) {
         // round-robin
         func(_mutations[_next % _mutations.size()]);
         ++_next;
