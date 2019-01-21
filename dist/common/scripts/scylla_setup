@@ -343,7 +343,7 @@ if __name__ == '__main__':
         run_setup_script('NIC queue', '/usr/lib/scylla/scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
     if interactive:
-        io_setup = interactive_ask_service('Do you want iotune to study your disks IO profile and adapt Scylla to it?', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', 'yes')
+        io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', 'yes')
     if io_setup:
         run_setup_script('IO configuration', '/usr/lib/scylla/scylla_io_setup')
 
