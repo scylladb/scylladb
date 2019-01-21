@@ -465,13 +465,9 @@ const utils::UUID& database::get_version() const {
     return _version;
 }
 
-template <typename Func>
 static future<>
-do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, Func&& func) {
+do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
     using namespace db::schema_tables;
-    static_assert(std::is_same<future<>, std::result_of_t<Func(schema_result_value_type&)>>::value,
-                  "bad Func signature");
-
 
     auto cf_name = make_lw_shared<sstring>(_cf_name);
     return db::system_keyspace::query(proxy, db::schema_tables::NAME, *cf_name).then([] (auto rs) {
@@ -481,14 +477,14 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
             names.emplace(keyspace_name);
         }
         return std::move(names);
-    }).then([&proxy, cf_name, func = std::forward<Func>(func)] (std::set<sstring>&& names) mutable {
-        return parallel_for_each(names.begin(), names.end(), [&proxy, cf_name, func = std::forward<Func>(func)] (sstring name) mutable {
+    }).then([&proxy, cf_name, func = std::move(func)] (std::set<sstring>&& names) mutable {
+        return parallel_for_each(names.begin(), names.end(), [&proxy, cf_name, func = std::move(func)] (sstring name) mutable {
             if (is_system_keyspace(name)) {
                 return make_ready_future<>();
             }
 
             return read_schema_partition_for_keyspace(proxy, *cf_name, name).then([func, cf_name] (auto&& v) mutable {
-                return do_with(std::move(v), [func = std::forward<Func>(func), cf_name] (auto& v) {
+                return do_with(std::move(v), [func = std::move(func), cf_name] (auto& v) {
                     return func(v).then_wrapped([cf_name, &v] (future<> f) {
                         try {
                             f.get();

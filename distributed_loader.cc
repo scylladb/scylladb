@@ -107,10 +107,14 @@ static future<bool> worth_resharding(distributed<database>& db, global_column_fa
     return db.map_reduce0(has_shared_sstables, bool(false), std::logical_or<bool>());
 }
 
+static future<std::vector<sstables::shared_sstable>>
+load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, schema_ptr s, sstring dir,
+        noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred);
+
 // make a set of sstables available at another shard.
-template <typename Func>
-static future<> forward_sstables_to(shard_id shard, sstring directory, std::vector<sstables::shared_sstable> sstables, global_column_family_ptr cf, Func&& func) {
-    return seastar::async([sstables = std::move(sstables), directory, shard, cf, func] () mutable {
+static future<> forward_sstables_to(shard_id shard, sstring directory, std::vector<sstables::shared_sstable> sstables, global_column_family_ptr cf,
+        std::function<future<> (std::vector<sstables::shared_sstable>)> func) {
+    return seastar::async([sstables = std::move(sstables), directory, shard, cf, func = std::move(func)] () mutable {
         auto infos = boost::copy_range<std::vector<sstables::foreign_sstable_open_info>>(sstables
             | boost::adaptors::transformed([] (auto&& sst) { return sst->get_open_info().get0(); }));
 
@@ -124,11 +128,11 @@ static future<> forward_sstables_to(shard_id shard, sstring directory, std::vect
     });
 }
 
-template <typename Pred>
 static future<std::vector<sstables::shared_sstable>>
-load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, schema_ptr s, sstring dir, Pred&& pred) {
-    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), s, dir, pred] (auto& ssts) mutable {
-        return parallel_for_each(std::move(ssts_info), [&ssts, s, dir, pred] (auto& info) mutable {
+load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, schema_ptr s, sstring dir,
+        noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred) {
+    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), s, dir, pred = std::move(pred)] (auto& ssts) mutable {
+        return parallel_for_each(std::move(ssts_info), [&ssts, s, dir, pred = std::move(pred)] (auto& info) mutable {
             if (!pred(info)) {
                 return make_ready_future<>();
             }
@@ -294,8 +298,8 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
 }
 
 // invokes each descriptor at its target shard, which involves forwarding sstables too.
-template <typename Func>
-static future<> invoke_all_resharding_jobs(global_column_family_ptr cf, sstring directory, std::vector<sstables::resharding_descriptor> jobs, Func&& func) {
+static future<> invoke_all_resharding_jobs(global_column_family_ptr cf, sstring directory, std::vector<sstables::resharding_descriptor> jobs,
+        std::function<future<> (std::vector<sstables::shared_sstable>, uint32_t level, uint64_t max_sstable_bytes)> func) {
     return parallel_for_each(std::move(jobs), [cf, func, &directory] (sstables::resharding_descriptor& job) mutable {
         return forward_sstables_to(job.reshard_at, directory, std::move(job.sstables), cf,
                 [cf, func, level = job.level, max_sstable_bytes = job.max_sstable_bytes] (auto sstables) {
@@ -407,8 +411,9 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                                     cf->remove_ancestors_needed_rewrite(ancestors);
                                 });
                             } else {
-                                return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf, ancestors = std::move(ancestors)] (auto sstables) {
+                                return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf, ancestors = std::move(ancestors)] (std::vector<sstables::shared_sstable> sstables) {
                                     cf->replace_ancestors_needed_rewrite(std::move(ancestors), std::move(sstables));
+                                    return make_ready_future<>();
                                 });
                             }
                         }).then([&cf, sstables] {
