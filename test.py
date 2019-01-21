@@ -110,6 +110,7 @@ boost_tests = [
     'querier_cache',
     'limiting_data_source_test',
     'sstable_test',
+    'sstable_datafile_test',
     'broken_sstable_test',
     'sstable_3_x_test',
     'meta_test',
@@ -208,6 +209,7 @@ if __name__ == "__main__":
 
     custom_seastar_args = {
         "sstable_test": ['-c1'],
+        'sstable_datafile_test': ['-c1'],
         "sstable_3_x_test": ['-c1'],
         "mutation_reader_test": ['-c{}'.format(min(os.cpu_count(), 3)), '-m2G'],
     }
