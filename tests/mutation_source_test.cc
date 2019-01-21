@@ -304,11 +304,6 @@ static void test_slicing_and_fast_forwarding(populate_fn populate) {
                         .build();
 
                     test_common(slice);
-
-                    BOOST_TEST_MESSAGE("Test monotonic positions");
-                    auto mr = ms.make_reader(s.schema(), query::full_partition_range, slice,
-                                                default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
-                    assert_that(std::move(mr)).has_monotonic_positions();
                 }
             }
         }

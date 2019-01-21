@@ -268,14 +268,6 @@ void range_tombstone_stream::apply(const range_tombstone_list& list, const query
         _list.apply(_schema, rt);
     }
 }
-void range_tombstone_stream::apply(const range_tombstone_list& list, const query::clustering_range& range, position_in_partition_view last_pos) {
-    auto tri_cmp = position_in_partition::tri_compare(_schema);
-    for (const range_tombstone& rt : list.slice(_schema, range)) {
-        if (tri_cmp(rt.position(), last_pos) > 0) {
-            _list.apply(_schema, rt);
-        }
-    }
-}
 
 void range_tombstone_stream::reset() {
     _list.clear();
