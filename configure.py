@@ -1161,11 +1161,11 @@ with open(buildfile, 'w') as f:
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx  $cxxflags_{mode} {sanitize_libs} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode} {seastar_libs}
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
-              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode} {seastar_libs}
               description = LINK (stripped) $out
               pool = link_pool
             rule ar.{mode}
