@@ -182,6 +182,10 @@ future<> service::start() {
 }
 
 future<> service::stop() {
+    // Only one of the shards has the listener registered, but let's try to
+    // unregister on each one just to make sure.
+    _migration_manager.unregister_listener(_migration_listener.get());
+
     return _permissions_cache->stop().then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop());
     });
