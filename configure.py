@@ -432,8 +432,6 @@ arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_i
                         help='enable allocation failure injection')
 arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', default=None,
                         help='path to antlr3 executable')
-arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default=None,
-                        help='path to ragel executable')
 args = arg_parser.parse_args()
 
 defines = []
@@ -1080,8 +1078,6 @@ for mode in build_modes:
     modes[mode]['seastar_cflags'] = seastar_cflags
     modes[mode]['seastar_libs'] = seastar_libs
 
-seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
-
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  maybe_static(args.staticboost, '-lboost_filesystem'), ' -lstdc++fs', ' -lcrypt', ' -lcryptopp',
@@ -1120,11 +1116,6 @@ if args.antlr3_exec:
 else:
     antlr3_exec = "antlr3"
 
-if args.ragel_exec:
-    ragel_exec = args.ragel_exec
-else:
-    ragel_exec = "ragel"
-
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
@@ -1137,9 +1128,6 @@ with open(buildfile, 'w') as f:
             depth = {link_pool_depth}
         pool seastar_pool
             depth = 1
-        rule ragel
-            command = {ragel_exec} -G2 -o $out $in
-            description = RAGEL $out
         rule gen
             command = echo -e $text > $out
             description = GEN $out
@@ -1205,7 +1193,6 @@ with open(buildfile, 'w') as f:
             )
         )
         compiles = {}
-        ragels = {}
         swaggers = {}
         serializers = {}
         thrifts = set()
@@ -1255,9 +1242,6 @@ with open(buildfile, 'w') as f:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     compiles[obj] = src
-                elif src.endswith('.rl'):
-                    hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
-                    ragels[hh] = src
                 elif src.endswith('.idl.hh'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.idl.hh', '.dist.hh')
                     serializers[hh] = src
@@ -1285,21 +1269,16 @@ with open(buildfile, 'w') as f:
 
         for obj in compiles:
             src = compiles[obj]
-            gen_headers = list(ragels.keys())
-            gen_headers += ['seastar/build/{}/gen/include/seastar/http/request_parser.hh'.format(mode)]
-            gen_headers += ['seastar/build/{}/gen/include/seastar/http/response_parser.hh'.format(mode)]
+            gen_headers = []
             for th in thrifts:
                 gen_headers += th.headers('$builddir/{}/gen'.format(mode))
             for g in antlr3_grammars:
                 gen_headers += g.headers('$builddir/{}/gen'.format(mode))
             gen_headers += list(swaggers.keys())
             gen_headers += list(serializers.keys())
-            f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
+            f.write('build {}: cxx.{} {} | {} || {}\n'.format(obj, mode, src, 'seastar/build/{}/libseastar.a'.format(mode), ' '.join(gen_headers)))
             if src in extra_cxxflags:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[src], **modeval))
-        for hh in ragels:
-            src = ragels[hh]
-            f.write('build {}: ragel {}\n'.format(hh, src))
         for hh in swaggers:
             src = swaggers[hh]
             f.write('build {}: swagger {} | seastar/scripts/seastar-json2code.py\n'.format(hh, src))
@@ -1322,11 +1301,11 @@ with open(buildfile, 'w') as f:
                 if cc.endswith('Parser.cpp') and has_sanitize_address_use_after_scope:
                     # Parsers end up using huge amounts of stack space and overflowing their stack
                     f.write('  obj_cxxflags = -fno-sanitize-address-use-after-scope\n')
-        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune seastar/build/{mode}/gen/include/seastar/http/request_parser.hh seastar/build/{mode}/gen/include/seastar/http/response_parser.hh: ninja {seastar_deps}\n'
+        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune: ninja | always\n'
                 .format(**locals()))
         f.write('  pool = seastar_pool\n')
         f.write('  subdir = seastar\n')
-        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune build/{mode}/gen/include/seastar/http/request_parser.hh build/{mode}/gen/include/seastar/http/response_parser.hh\n'.format(**locals()))
+        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune\n'.format(**locals()))
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
             ''').format(**locals()))
@@ -1336,7 +1315,6 @@ with open(buildfile, 'w') as f:
         f.write('    command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc}\n'.format(**locals()))
         f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
 
-    f.write('build {}: phony\n'.format(seastar_deps))
     f.write(textwrap.dedent('''\
         rule configure
           command = {python} configure.py $configure_args
