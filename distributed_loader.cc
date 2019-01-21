@@ -195,68 +195,56 @@ static future<std::vector<sstables::shared_sstable>> get_all_shared_sstables(dis
 // Return a vector containing descriptor of sstables to be loaded.
 future<std::vector<sstables::entry_descriptor>>
 distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, sstring ks_name, sstring cf_name) {
-    struct work {
+    return seastar::async([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] {
         std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
         std::vector<sstables::entry_descriptor> flushed;
-    };
 
-    return do_with(work(), [&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] (work& work) {
         auto& cf = db.local().find_column_family(ks_name, cf_name);
-
-        return lister::scan_dir(fs::path(cf._config.datadir) / "upload", { directory_entry_type::regular },
-                [&work] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir(fs::path(cf._config.datadir) / "upload", { directory_entry_type::regular },
+                [&descriptors] (fs::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
             if (comps.component != component_type::TOC) {
                 return make_ready_future<>();
             }
-            work.descriptors.emplace(comps.generation, std::move(comps));
+            descriptors.emplace(comps.generation, std::move(comps));
             return make_ready_future<>();
-        }, &column_family::manifest_json_filter).then([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name), &work] {
-            work.flushed.reserve(work.descriptors.size());
+        }, &column_family::manifest_json_filter).get();
 
-            return do_for_each(work.descriptors, [&db, &sys_dist_ks, ks_name, cf_name, &work] (auto& pair) {
-                return db.invoke_on(column_family::calculate_shard_from_sstable_generation(pair.first),
-                        [&sys_dist_ks, ks_name, cf_name, &work, comps = pair.second] (database& db) {
+        flushed.reserve(descriptors.size());
+        for (auto& [generation, comps] : descriptors) {
+            auto descriptors = db.invoke_on(column_family::calculate_shard_from_sstable_generation(generation), [&sys_dist_ks, ks_name, cf_name, comps] (database& db) {
+                return seastar::async([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name), comps = std::move(comps)] () mutable {
                     auto& cf = db.find_column_family(ks_name, cf_name);
-
                     auto sst = sstables::make_sstable(cf.schema(), cf._config.datadir + "/upload", comps.generation,
                         comps.version, comps.format, gc_clock::now(),
                         [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
                     auto gen = cf.calculate_generation_for_new_table();
 
-                    // Read toc content as it will be needed for moving and deleting a sstable.
-                    return sst->read_toc().then([sst, s = cf.schema()] {
-                        if (s->is_counter() && !sst->has_scylla_component()) {
-                            return make_exception_future<>(std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead."));
-                        }
-                        if (s->is_view()) {
-                            return make_exception_future<>(std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead."));
-                        }
-                        return sst->mutate_sstable_level(0);
-                    }).then([&sys_dist_ks, &cf, sst, gen, comps, &work] {
-                        // If view updates need to be generated, leave them in upload/ directory,
-                        // so they will be treated as staging sstables.
-                        return db::view::check_needs_view_update_path(sys_dist_ks.local(), cf, streaming::stream_reason::repair).then([&cf, gen, sst, comps = comps, &work] (bool use_view_update_path) {
-                            if (use_view_update_path) {
-                                return make_ready_future<sstables::entry_descriptor>(std::move(comps));
-                            }
-                            return sst->create_links(cf._config.datadir, gen).then([sst] {
-                                return sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir());
-                            }).then([sst, &cf, gen, comps = comps, &work] () mutable {
-                                comps.generation = gen;
-                                comps.sstdir = cf._config.datadir;
-                                return make_ready_future<sstables::entry_descriptor>(std::move(comps));
-                            });
-                        });
-                    });
-                }).then([&work] (sstables::entry_descriptor comps) mutable {
-                    work.flushed.push_back(std::move(comps));
-                    return make_ready_future<>();
+                    sst->read_toc().get();
+                    schema_ptr s = cf.schema();
+                    if (s->is_counter() && !sst->has_scylla_component()) {
+                        throw std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead.");
+                    }
+                    if (s->is_view()) {
+                        throw std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead.");
+                    }
+                    sst->mutate_sstable_level(0).get();
+                    // If view updates need to be generated, leave them in upload/ directory, so they will be treated as staging sstables.
+                    const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), cf, streaming::stream_reason::repair).get0();
+                    if (use_view_update_path) {
+                        return std::move(comps);
+                    }
+                    sst->create_links(cf._config.datadir, gen).get();
+                    sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir()).get();
+                    comps.generation = gen;
+                    comps.sstdir = cf._config.datadir;
+                    return std::move(comps);
                 });
-            });
-        }).then([&work] {
-            return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(work.flushed));
-        });
+            }).get0();
+
+            flushed.push_back(std::move(descriptors));
+        }
+        return std::vector<sstables::entry_descriptor>(std::move(flushed));
     });
 }
 
