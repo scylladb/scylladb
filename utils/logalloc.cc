@@ -1924,7 +1924,7 @@ size_t tracker::impl::reclaim(size_t memory_to_release) {
         auto segments_to_release = align_up(std::min(max_bytes, memory_to_release), segment::size) >> segment::size_shift;
         auto nr_released = shard_segment_pool.reclaim_segments(segments_to_release);
         mem_released = nr_released * segment::size;
-        if (mem_released > memory_to_release) {
+        if (mem_released >= memory_to_release) {
             return memory_to_release;
         }
     }
