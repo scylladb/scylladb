@@ -30,21 +30,16 @@
 
 namespace sstables {
 
-class liveness_info {
-    api::timestamp_type _timestamp;
-    gc_clock::duration _ttl;
-    gc_clock::time_point _local_deletion_time;
+struct liveness_info {
+    api::timestamp_type _timestamp = api::missing_timestamp;
+    gc_clock::duration _ttl = gc_clock::duration::zero();
+    gc_clock::time_point _local_deletion_time = gc_clock::time_point::max();
     bool is_set() const {
         return _timestamp != api::missing_timestamp
                || _ttl != gc_clock::duration::zero()
                || _local_deletion_time != gc_clock::time_point::max();
     }
 public:
-    void reset() {
-        _timestamp = api::missing_timestamp;
-        _ttl = gc_clock::duration::zero();
-        _local_deletion_time = gc_clock::time_point::max();
-    }
     void set_timestamp(api::timestamp_type timestamp) {
         _timestamp = timestamp;
     }

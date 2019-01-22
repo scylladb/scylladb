@@ -797,7 +797,7 @@ private:
         }
         case state::FLAGS:
         flags_label:
-            _liveness.reset();
+            _liveness = {};
             _row_tombstone = {};
             _row_shadowable_tombstone = {};
             if (read_8(data) != read_status::ready) {
