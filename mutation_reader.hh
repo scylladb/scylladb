@@ -404,12 +404,20 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
 class reader_lifecycle_policy {
 public:
     struct paused_or_stopped_reader {
-        // Null when the reader is paused.
-        foreign_ptr<std::unique_ptr<flat_mutation_reader>> remote_reader;
+        using paused_reader = foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>>;
+        using stopped_reader = foreign_ptr<std::unique_ptr<flat_mutation_reader>>;
+
+        std::variant<paused_reader, stopped_reader> remote_reader;
         circular_buffer<mutation_fragment> unconsumed_fragments;
         // Only set for paused readers.
         bool has_pending_next_partition;
     };
+
+protected:
+    // Helpers for implementations, who might wish to provide the semaphore in
+    // other ways than through the official `semaphore()` override.
+    static reader_concurrency_semaphore::inactive_read_handle pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader);
+    static flat_mutation_reader_opt try_resume(reader_concurrency_semaphore& sem, reader_concurrency_semaphore::inactive_read_handle irh);
 
 public:
     /// Create an appropriate reader on the specified shard.
@@ -443,19 +451,37 @@ public:
     /// This method will be called from a destructor so it cannot throw.
     virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader) noexcept = 0;
 
+    /// Get the relevant semaphore for this read.
+    ///
+    /// The semaphore is used to register paused readers with as inactive
+    /// readers. The semaphore then can evict these readers when resources are
+    /// in-demand.
+    /// The multishard reader will pause and resume readers via the `pause()`
+    /// and `try_resume()` helper methods. Clients can resume any paused readers
+    /// after the multishard reader is destroyed via the same helper methods.
+    ///
+    /// This method will be called on the shard where the relevant reader lives.
+    virtual reader_concurrency_semaphore& semaphore() = 0;
+
     /// Pause the reader.
     ///
     /// The purpose of pausing a reader is making it evictable while it is
     /// otherwise inactive. This allows freeing up resources that are in-demand
     /// by evicting these paused readers. Most notably, this allows freeing up
     /// reader permits when the node is overloaded with reads.
-    virtual future<> pause(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) = 0;
+    /// This is just a helper method, it uses the semaphore returned by
+    /// `semaphore()` for the actual pausing.
+    /// \see semaphore()
+    reader_concurrency_semaphore::inactive_read_handle pause(flat_mutation_reader reader);
 
     /// Try to resume the reader.
     ///
-    /// The pointer returned will be null when resuming fails. This can happen
-    /// if the reader was evicted while paused.
-    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume(shard_id shard) = 0;
+    /// The optional returned will be disengaged when resuming fails. This can
+    /// happen if the reader was evicted while paused.
+    /// This is just a helper method, it uses the semaphore returned by
+    /// `semaphore()` for the actual pausing.
+    /// \see semaphore()
+    flat_mutation_reader_opt try_resume(reader_concurrency_semaphore::inactive_read_handle irh);
 };
 
 /// Make a multishard_combining_reader.

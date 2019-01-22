@@ -895,6 +895,7 @@ private:
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
     foreign_ptr<std::unique_ptr<flat_mutation_reader>> _reader;
+    foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> _irh;
     bool _pending_next_partition = false;
     bool _stopped = false;
     bool _drop_partition_start = false;
@@ -917,6 +918,8 @@ private:
     future<> resume();
     future<> do_fill_buffer(db::timeout_clock::time_point timeout);
     void process_remote_buffer(const circular_buffer<mutation_fragment>& buffer, bool end_of_stream);
+    future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume();
+    future<> do_pause();
 
 public:
     shard_reader(
@@ -987,7 +990,11 @@ void shard_reader::stop() noexcept {
     }();
 
     _lifecycle_policy->destroy_reader(_shard, f.then([this] {
-        return reader_lifecycle_policy::paused_or_stopped_reader{std::move(_reader), detach_buffer(), _pending_next_partition};
+        if (_reader) {
+            return reader_lifecycle_policy::paused_or_stopped_reader{std::move(_reader), detach_buffer(), _pending_next_partition};
+        } else {
+            return reader_lifecycle_policy::paused_or_stopped_reader{std::move(_irh), detach_buffer(), _pending_next_partition};
+        }
     }).finally([zis = shared_from_this()] {}));
 }
 
@@ -1094,7 +1101,7 @@ future<> shard_reader::resume() {
         if (_stopped) {
             return make_ready_future<>();
         }
-        return _lifecycle_policy->try_resume(_shard).then([this] (foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) mutable {
+        return try_resume().then([this] (foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) mutable {
             if (reader) {
                 _reader = std::move(reader);
                 return make_ready_future<>();
@@ -1155,6 +1162,24 @@ void shard_reader::process_remote_buffer(const circular_buffer<mutation_fragment
     if (!_stopped) {
         update_last_position();
     }
+}
+
+future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> shard_reader::try_resume() {
+    return smp::submit_to(_shard, [this, irh = std::exchange(_irh, {})] () mutable {
+        if (auto reader_opt = _lifecycle_policy->try_resume(std::move(*irh))) {
+            return make_foreign(std::make_unique<flat_mutation_reader>(std::move(*reader_opt)));
+        } else {
+            return foreign_ptr<std::unique_ptr<flat_mutation_reader>>{};
+        }
+    });
+}
+
+future<> shard_reader::do_pause() {
+    return smp::submit_to(_shard, [this, reader = std::exchange(_reader, {})] () mutable {
+        return make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(_lifecycle_policy->pause(std::move(*reader))));
+    }).then([this] (foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> irh) {
+        _irh = std::move(irh);
+    });
 }
 
 future<> shard_reader::fill_buffer(db::timeout_clock::time_point timeout) {
@@ -1258,7 +1283,7 @@ void shard_reader::pause() {
             return make_ready_future<>();
         }
 
-        return _lifecycle_policy->pause(std::move(_reader));
+        return do_pause();
     }).finally([zis = shared_from_this()] {});
 }
 
@@ -1453,6 +1478,49 @@ future<> multishard_combining_reader::fast_forward_to(const dht::partition_range
 
 future<> multishard_combining_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
     return make_exception_future<>(std::bad_function_call());
+}
+
+namespace {
+
+class inactive_shard_read : public reader_concurrency_semaphore::inactive_read {
+    flat_mutation_reader_opt _reader;
+public:
+    inactive_shard_read(flat_mutation_reader reader)
+        : _reader(std::move(reader)) {
+    }
+    flat_mutation_reader reader() && {
+        return std::move(*_reader);
+    }
+    virtual void evict() override {
+        _reader = {};
+    }
+};
+
+}
+
+reader_concurrency_semaphore::inactive_read_handle
+reader_lifecycle_policy::pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader) {
+    return sem.register_inactive_read(std::make_unique<inactive_shard_read>(std::move(reader)));
+}
+
+flat_mutation_reader_opt
+reader_lifecycle_policy::try_resume(reader_concurrency_semaphore& sem, reader_concurrency_semaphore::inactive_read_handle irh) {
+    auto ir_ptr = sem.unregister_inactive_read(std::move(irh));
+    if (!ir_ptr) {
+        return {};
+    }
+    auto& ir = static_cast<inactive_shard_read&>(*ir_ptr);
+    return std::move(ir).reader();
+}
+
+reader_concurrency_semaphore::inactive_read_handle
+reader_lifecycle_policy::pause(flat_mutation_reader reader) {
+    return pause(semaphore(), std::move(reader));
+}
+
+flat_mutation_reader_opt
+reader_lifecycle_policy::try_resume(reader_concurrency_semaphore::inactive_read_handle irh) {
+    return try_resume(semaphore(), std::move(irh));
 }
 
 flat_mutation_reader make_multishard_combining_reader(

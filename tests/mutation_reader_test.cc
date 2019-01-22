@@ -1523,8 +1523,6 @@ public:
     enum class operation {
         none,
         create,
-        pause,
-        try_resume,
     };
 
     using delay_function = std::function<future<>()>;
@@ -1548,8 +1546,8 @@ private:
         const query::partition_slice slice;
     };
     struct reader_context {
+        foreign_ptr<std::unique_ptr<reader_concurrency_semaphore>> semaphore;
         std::unique_ptr<reader_params> params;
-        foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader;
         operation operation_in_progress = operation::none;
     };
 
@@ -1565,10 +1563,6 @@ private:
                 return "none";
             case operation::create:
                 return "create";
-            case operation::pause:
-                return "pause";
-            case operation::try_resume:
-                return "try_resume";
         }
         return "unknown";
     }
@@ -1606,32 +1600,27 @@ public:
     virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader) noexcept override {
         reader.then([shard, this] (paused_or_stopped_reader&& reader) {
             return smp::submit_to(shard, [reader = std::move(reader.remote_reader), ctx = std::move(_contexts[shard])] () mutable {
-                reader.release();
+                if (auto* maybe_paused_reader = std::get_if<paused_or_stopped_reader::paused_reader>(&reader)) {
+                    ctx.semaphore->unregister_inactive_read(std::move(**maybe_paused_reader));
+                } else {
+                    std::get<paused_or_stopped_reader::stopped_reader>(reader).release();
+                }
             });
         }).finally([zis = shared_from_this()] {});
     }
-    virtual future<> pause(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) override {
-        const auto shard = reader.get_owner_shard();
-
-        set_current_operation(shard, operation::pause);
-
-        return _delay().then([this, shard, reader = std::move(reader)] () mutable {
-            _contexts[shard].reader = std::move(reader);
-        }).finally([this, zis = shared_from_this(), shard] {
-            _contexts[shard].operation_in_progress = operation::none;
-        });
-    }
-    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume(shard_id shard) override {
-        set_current_operation(shard, operation::try_resume);
-
-        return _delay().then([this, shard] {
+    virtual reader_concurrency_semaphore& semaphore() override {
+        const auto shard = engine().cpu_id();
+        if (!_contexts[shard].semaphore) {
             if (_evict_paused_readers) {
-                _contexts[shard].reader.reset();
+                _contexts[shard].semaphore = make_foreign(std::make_unique<reader_concurrency_semaphore>(0, std::numeric_limits<ssize_t>::max()));
+                 // Add a waiter, so that all registered inactive reads are
+                 // immediately evicted.
+                _contexts[shard].semaphore->wait_admission(1);
+            } else {
+                _contexts[shard].semaphore = make_foreign(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}));
             }
-            return std::move(_contexts[shard].reader);
-        }).finally([this, zis = shared_from_this(), shard] {
-            _contexts[shard].operation_in_progress = operation::none;
-        });
+        }
+        return *_contexts[shard].semaphore;
     }
 };
 
