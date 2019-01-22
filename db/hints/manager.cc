@@ -703,7 +703,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
 bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fname) {
     timespec last_mod = get_last_file_modification(fname).get0();
     gc_clock::duration secs_since_file_mod = std::chrono::seconds(last_mod.tv_sec);
-    lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>();
+    lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
     try {
         auto s = commitlog::read_log_file(fname, manager::FILENAME_PREFIX, service::get_local_streaming_read_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (fragmented_temporary_buffer buf, db::replay_position rp) mutable {
@@ -760,6 +760,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
 
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
+    _last_schema_ver_to_column_mapping.clear();
     manager_logger.trace("send_one_file(): segment {} was sent in full and deleted", fname);
     return true;
 }
