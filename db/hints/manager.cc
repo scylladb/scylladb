@@ -80,6 +80,9 @@ void manager::register_metrics(const sstring& group_name) {
 
         sm::make_derive("sent", _stats.sent,
                         sm::description("Number of sent hints.")),
+
+        sm::make_derive("discarded", _stats.discarded,
+                        sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
     });
 }
 
@@ -680,10 +683,13 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
             } catch (no_such_column_family& e) {
                 manager_logger.debug("send_hints(): no_such_column_family: {}", e.what());
+                ++this->shard_stats().discarded;
             } catch (no_such_keyspace& e) {
                 manager_logger.debug("send_hints(): no_such_keyspace: {}", e.what());
+                ++this->shard_stats().discarded;
             } catch (no_column_mapping& e) {
-                manager_logger.debug("send_hints(): {}: {}", fname, e.what());
+                manager_logger.debug("send_hints(): {} at {}: {}", fname, rp, e.what());
+                ++this->shard_stats().discarded;
             }
             return make_ready_future<>();
         }).finally([units = std::move(units), ctx_ptr] {});

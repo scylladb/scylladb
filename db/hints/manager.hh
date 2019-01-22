@@ -60,6 +60,7 @@ private:
         uint64_t errors = 0;
         uint64_t dropped = 0;
         uint64_t sent = 0;
+        uint64_t discarded = 0;
     };
 
     // map: shard -> segments
