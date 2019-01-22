@@ -129,10 +129,15 @@ statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_t
     return do_merge_to(std::move(schema), std::move(restriction));
 }
 
-template<typename T>
-::shared_ptr<primary_key_restrictions<T>> statement_restrictions::get_initial_key_restrictions(bool allow_filtering) {
-    static thread_local ::shared_ptr<primary_key_restrictions<T>> initial_kr_true = ::make_shared<initial_key_restrictions<T>>(true);
-    static thread_local ::shared_ptr<primary_key_restrictions<T>> initial_kr_false = ::make_shared<initial_key_restrictions<T>>(false);
+::shared_ptr<partition_key_restrictions> statement_restrictions::get_initial_partition_key_restrictions(bool allow_filtering) {
+    static thread_local ::shared_ptr<partition_key_restrictions> initial_kr_true = ::make_shared<initial_key_restrictions<partition_key>>(true);
+    static thread_local ::shared_ptr<partition_key_restrictions> initial_kr_false = ::make_shared<initial_key_restrictions<partition_key>>(false);
+    return allow_filtering ? initial_kr_true : initial_kr_false;
+}
+
+::shared_ptr<clustering_key_restrictions> statement_restrictions::get_initial_clustering_key_restrictions(bool allow_filtering) {
+    static thread_local ::shared_ptr<clustering_key_restrictions> initial_kr_true = ::make_shared<initial_key_restrictions<clustering_key>>(true);
+    static thread_local ::shared_ptr<clustering_key_restrictions> initial_kr_false = ::make_shared<initial_key_restrictions<clustering_key>>(false);
     return allow_filtering ? initial_kr_true : initial_kr_false;
 }
 
@@ -152,8 +157,8 @@ statement_restrictions::get_partition_key_unrestricted_components() const {
 
 statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_filtering)
     : _schema(schema)
-    , _partition_key_restrictions(get_initial_key_restrictions<partition_key>(allow_filtering))
-    , _clustering_columns_restrictions(get_initial_key_restrictions<clustering_key_prefix>(allow_filtering))
+    , _partition_key_restrictions(get_initial_partition_key_restrictions(allow_filtering))
+    , _clustering_columns_restrictions(get_initial_clustering_key_restrictions(allow_filtering))
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
 { }
 #if 0
