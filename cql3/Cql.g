@@ -43,12 +43,14 @@ options {
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
+#include "cql3/statements/create_function_statement.hh"
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_index_statement.hh"
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/drop_view_statement.hh"
+#include "cql3/statements/drop_function_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
@@ -243,10 +245,14 @@ struct uninitialized {
         return res;
     }
 
-    bool convert_boolean_literal(std::string_view s) {
-        std::string lower_s(s.size(), '\0');
+    sstring to_lower(std::string_view s) {
+        sstring lower_s(s.size(), '\0');
         std::transform(s.cbegin(), s.cend(), lower_s.begin(), &::tolower);
-        return lower_s == "true";
+        return lower_s;
+    }
+
+    bool convert_boolean_literal(std::string_view s) {
+        return to_lower(s) == "true";
     }
 
     void add_raw_update(std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>& operations,
@@ -348,9 +354,9 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st25=createTypeStatement         { $stmt = st25; }
     | st26=alterTypeStatement          { $stmt = st26; }
     | st27=dropTypeStatement           { $stmt = st27; }
-#if 0
     | st28=createFunctionStatement     { $stmt = st28; }
     | st29=dropFunctionStatement       { $stmt = st29; }
+#if 0
     | st30=createAggregateStatement    { $stmt = st30; }
     | st31=dropAggregateStatement      { $stmt = st31; }
 #endif
@@ -686,54 +692,54 @@ dropAggregateStatement returns [DropAggregateStatement expr]
       )?
       { $expr = new DropAggregateStatement(fn, argsTypes, argsPresent, ifExists); }
     ;
+#endif
 
-createFunctionStatement returns [CreateFunctionStatement expr]
+createFunctionStatement returns [shared_ptr<cql3::statements::create_function_statement> expr]
     @init {
-        boolean orReplace = false;
-        boolean ifNotExists = false;
+        bool or_replace = false;
+        bool if_not_exists = false;
 
-        List<ColumnIdentifier> argsNames = new ArrayList<>();
-        List<CQL3Type.Raw> argsTypes = new ArrayList<>();
-        boolean calledOnNullInput = false;
+        std::vector<shared_ptr<cql3::column_identifier>> arg_names;
+        std::vector<shared_ptr<cql3_type::raw>> arg_types;
+        bool called_on_null_input = false;
     }
-    : K_CREATE (K_OR K_REPLACE { orReplace = true; })?
+    : K_CREATE (K_OR K_REPLACE { or_replace = true; })?
       K_FUNCTION
-      (K_IF K_NOT K_EXISTS { ifNotExists = true; })?
+      (K_IF K_NOT K_EXISTS { if_not_exists = true; })?
       fn=functionName
       '('
         (
-          k=ident v=comparatorType { argsNames.add(k); argsTypes.add(v); }
-          ( ',' k=ident v=comparatorType { argsNames.add(k); argsTypes.add(v); } )*
+          k=ident v=comparatorType { arg_names.push_back(k); arg_types.push_back(v); }
+          ( ',' k=ident v=comparatorType { arg_names.push_back(k); arg_types.push_back(v); } )*
         )?
       ')'
-      ( (K_RETURNS K_NULL) | (K_CALLED { calledOnNullInput=true; })) K_ON K_NULL K_INPUT
+      ( (K_RETURNS K_NULL) | (K_CALLED { called_on_null_input = true; })) K_ON K_NULL K_INPUT
       K_RETURNS rt = comparatorType
       K_LANGUAGE language = IDENT
       K_AS body = STRING_LITERAL
-      { $expr = new CreateFunctionStatement(fn, $language.text.toLowerCase(), $body.text, argsNames, argsTypes, rt, calledOnNullInput, orReplace, ifNotExists); }
+      { $expr = ::make_shared<cql3::statements::create_function_statement>(std::move(fn), to_lower($language.text), $body.text, std::move(arg_names), std::move(arg_types), std::move(rt), called_on_null_input, or_replace, if_not_exists); }
     ;
 
-dropFunctionStatement returns [DropFunctionStatement expr]
+dropFunctionStatement returns [shared_ptr<cql3::statements::drop_function_statement> expr]
     @init {
-        boolean ifExists = false;
-        List<CQL3Type.Raw> argsTypes = new ArrayList<>();
-        boolean argsPresent = false;
+        bool if_exists = false;
+        std::vector<shared_ptr<cql3_type::raw>> arg_types;
+        bool args_present = false;
     }
     : K_DROP K_FUNCTION
-      (K_IF K_EXISTS { ifExists = true; } )?
+      (K_IF K_EXISTS { if_exists = true; } )?
       fn=functionName
       (
         '('
           (
-            v=comparatorType { argsTypes.add(v); }
-            ( ',' v=comparatorType { argsTypes.add(v); } )*
+            v=comparatorType { arg_types.push_back(v); }
+            ( ',' v=comparatorType { arg_types.push_back(v); } )*
           )?
         ')'
-        { argsPresent = true; }
+        { args_present = true; }
       )?
-      { $expr = new DropFunctionStatement(fn, argsTypes, argsPresent, ifExists); }
+      { $expr = ::make_shared<cql3::statements::drop_function_statement>(std::move(fn), std::move(arg_types), args_present, if_exists); }
     ;
-#endif
 
 /**
  * CREATE KEYSPACE [IF NOT EXISTS] <KEYSPACE> WITH attr1 = value1 AND attr2 = value2;
