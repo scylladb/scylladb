@@ -159,10 +159,11 @@ if __name__ == '__main__':
                         help='skip cpu scaling setup')
     parser.add_argument('--no-fstrim-setup', action='store_true', default=False,
                         help='skip fstrim setup')
-    args = parser.parse_args()
-
     if len(sys.argv) == 1:
         interactive = True
+        group.required = False # interactive mode: no option is required.
+
+    args = parser.parse_args()
 
     if not interactive:
         if not args.no_sysconfig_setup or (is_ec2() and not args.no_ec2_check):
