@@ -63,27 +63,16 @@ namespace restrictions {
  * implementations of methods).
  */
 
-template<typename ValueType>
-struct range_type_for;
-
-template<>
-struct range_type_for<partition_key> : public std::remove_reference<dht::partition_range> {};
-template<>
-struct range_type_for<clustering_key_prefix> : public std::remove_reference<query::clustering_range> {};
-
-template<typename ValueType>
-class primary_key_restrictions: public abstract_restriction,
-        public restrictions,
-        public enable_shared_from_this<primary_key_restrictions<ValueType>> {
+class partition_key_restrictions: public abstract_restriction, public restrictions, public enable_shared_from_this<partition_key_restrictions> {
 public:
-    typedef typename range_type_for<ValueType>::type bounds_range_type;
+    using bounds_range_type = dht::partition_range;
 
-    virtual ::shared_ptr<primary_key_restrictions<ValueType>> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
+    virtual ::shared_ptr<partition_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
         merge_with(restriction);
         return this->shared_from_this();
     }
 
-    virtual std::vector<ValueType> values_as_keys(const query_options& options) const = 0;
+    virtual std::vector<partition_key> values_as_keys(const query_options& options) const = 0;
     virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const = 0;
 
     using restrictions::uses_function;
@@ -97,9 +86,63 @@ public:
         return uint32_t(get_column_defs().size());
     }
 
-    bool has_unrestricted_components(const schema& schema) const;
+    bool has_unrestricted_components(const schema& schema) const {
+        return size() < schema.partition_key_size();
+    }
 
-    virtual bool needs_filtering(const schema& schema) const;
+    virtual bool needs_filtering(const schema& schema) const {
+        return !empty() && !is_on_token() && (has_unrestricted_components(schema) || is_contains() || is_slice());
+    }
+
+    // NOTICE(sarna): This function is useless for partition key restrictions,
+    // but it should remain here until single_column_primary_key_restrictions class is detemplatized.
+    virtual unsigned int num_prefix_columns_that_need_not_be_filtered() const {
+        return 0;
+    }
+
+    virtual bool is_all_eq() const {
+        return false;
+    }
+
+    virtual size_t prefix_size() const {
+        return 0;
+    }
+
+    size_t prefix_size(const schema_ptr schema) const {
+        return 0;
+    }
+};
+
+class clustering_key_restrictions : public abstract_restriction, public restrictions, public enable_shared_from_this<clustering_key_restrictions> {
+public:
+    using bounds_range_type = query::clustering_range;
+
+    virtual ::shared_ptr<clustering_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
+        merge_with(restriction);
+        return this->shared_from_this();
+    }
+
+    virtual std::vector<clustering_key> values_as_keys(const query_options& options) const = 0;
+    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const = 0;
+
+    using restrictions::uses_function;
+    using restrictions::has_supporting_index;
+    using restrictions::values;
+
+    bool empty() const override {
+        return get_column_defs().empty();
+    }
+    uint32_t size() const override {
+        return uint32_t(get_column_defs().size());
+    }
+
+    bool has_unrestricted_components(const schema& schema) const {
+        return size() < schema.clustering_key_size();
+    }
+
+    virtual bool needs_filtering(const schema& schema) const {
+        return false;
+    }
 
     // How long a prefix of the restrictions could have resulted in
     // need_filtering() == false. These restrictions do not need to be
@@ -114,54 +157,33 @@ public:
     virtual bool is_all_eq() const {
         return false;
     }
+
     virtual size_t prefix_size() const {
         return 0;
     }
 
     size_t prefix_size(const schema_ptr schema) const {
-        return 0;
-    }
-
-};
-
-template<>
-inline bool primary_key_restrictions<partition_key>::has_unrestricted_components(const schema& schema) const {
-    return size() < schema.partition_key_size();
-}
-
-template<>
-inline bool primary_key_restrictions<clustering_key>::has_unrestricted_components(const schema& schema) const {
-    return size() < schema.clustering_key_size();
-}
-
-template<>
-inline bool primary_key_restrictions<partition_key>::needs_filtering(const schema& schema) const  {
-    return !empty() && !is_on_token() && (has_unrestricted_components(schema) || is_contains() || is_slice());
-}
-
-template<>
-inline bool primary_key_restrictions<clustering_key>::needs_filtering(const schema& schema) const  {
-    // Currently only overloaded single_column_primary_key_restrictions will require ALLOW FILTERING
-    return false;
-}
-
-template<>
-inline size_t primary_key_restrictions<clustering_key>::prefix_size(const schema_ptr schema) const {
-    size_t count = 0;
-    if (schema->clustering_key_columns().empty()) {
-        return count;
-    }
-    auto column_defs = get_column_defs();
-    column_id expected_column_id = schema->clustering_key_columns().begin()->id;
-    for (auto&& cdef : column_defs) {
-        if (schema->position(*cdef) != expected_column_id) {
+        size_t count = 0;
+        if (schema->clustering_key_columns().empty()) {
             return count;
         }
-        expected_column_id++;
-        count++;
+        auto column_defs = get_column_defs();
+        column_id expected_column_id = schema->clustering_key_columns().begin()->id;
+        for (auto&& cdef : column_defs) {
+            if (schema->position(*cdef) != expected_column_id) {
+                return count;
+            }
+            expected_column_id++;
+            count++;
+        }
+        return count;
     }
-    return count;
-}
+};
+
+// FIXME(sarna): transitive hack only, do not judge. Should be dropped after all primary_key_restrictions<T> uses are removed from code.
+template<typename ValueType>
+using primary_key_restrictions = std::conditional_t<std::is_same_v<ValueType, partition_key>, partition_key_restrictions, clustering_key_restrictions>;
+
 
 }
 }
