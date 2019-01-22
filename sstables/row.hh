@@ -99,7 +99,7 @@ public:
     // expire. Typical cells, not set to expire, will get expiration = 0.
     virtual proceed consume_cell(bytes_view col_name, bytes_view value,
             int64_t timestamp,
-            int32_t ttl, int32_t expiration) = 0;
+            int64_t ttl, int64_t expiration) = 0;
 
     // Consume one counter cell. Column name and value are serialized, and need
     // to be deserialized according to the schema.
@@ -797,7 +797,7 @@ private:
         }
         case state::FLAGS:
         flags_label:
-            _liveness.reset();
+            _liveness = {};
             _row_tombstone = {};
             _row_shadowable_tombstone = {};
             if (read_8(data) != read_status::ready) {
@@ -942,7 +942,7 @@ private:
             }
           }
         case state::ROW_BODY_TIMESTAMP:
-            _liveness.set_timestamp(_u64);
+            _liveness.set_timestamp(parse_timestamp(_header, _u64));
             if (!_flags.has_ttl()) {
                 _state = state::ROW_BODY_DELETION;
                 goto row_body_deletion_label;
@@ -952,13 +952,13 @@ private:
                 break;
             }
         case state::ROW_BODY_TIMESTAMP_TTL:
-            _liveness.set_ttl(_u64);
+            _liveness.set_ttl(parse_ttl(_header, _u64));
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_TIMESTAMP_DELTIME;
                 break;
             }
         case state::ROW_BODY_TIMESTAMP_DELTIME:
-            _liveness.set_local_deletion_time(_u64);
+            _liveness.set_local_deletion_time(parse_expiry(_header, _u64));
         case state::ROW_BODY_DELETION:
         row_body_deletion_label:
             if (!_flags.has_deletion()) {
@@ -1333,7 +1333,6 @@ public:
         , _header(sst->get_serialization_header())
         , _column_translation(sst->get_column_translation(s, _header))
         , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
-        , _liveness(_header)
     {
         setup_columns(_regular_row, _column_translation.regular_columns());
         setup_columns(_static_row, _column_translation.static_columns());

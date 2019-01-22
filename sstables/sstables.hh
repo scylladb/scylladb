@@ -788,6 +788,8 @@ public:
         return _stats;
     }
 
+    void update_stats_on_end_of_stream();
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.

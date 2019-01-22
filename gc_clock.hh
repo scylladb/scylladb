@@ -28,11 +28,10 @@
 #include <chrono>
 #include <optional>
 
-// FIXME: wraps around in 2038
 class gc_clock final {
 public:
     using base = seastar::lowres_system_clock;
-    using rep = int32_t;
+    using rep = int64_t;
     using period = std::ratio<1, 1>; // seconds
     using duration = std::chrono::duration<rep, period>;
     using time_point = std::chrono::time_point<gc_clock, duration>;
@@ -49,6 +48,19 @@ public:
 
     static time_point now() {
         return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch())) + get_clocks_offset();
+    }
+
+    static int32_t as_int32(duration d) {
+        auto count = d.count();
+        int32_t count_32 = static_cast<int32_t>(count);
+        if (count_32 != count) {
+            throw std::runtime_error("Duration too big");
+        }
+        return count_32;
+    }
+
+    static int32_t as_int32(time_point tp) {
+        return as_int32(tp.time_since_epoch());
     }
 };
 

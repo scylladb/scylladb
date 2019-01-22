@@ -328,7 +328,7 @@ public:
     }
 
     virtual proceed consume_cell(bytes_view col_name, bytes_view value,
-            int64_t timestamp, int32_t ttl, int32_t expiration) override {
+            int64_t timestamp, int64_t ttl, int64_t expiration) override {
         BOOST_REQUIRE(ttl == 0);
         BOOST_REQUIRE(expiration == 0);
         switch (count_cell) {
@@ -444,7 +444,7 @@ public:
         return proceed::yes;
     }
     virtual proceed consume_cell(bytes_view col_name, bytes_view value,
-            int64_t timestamp, int32_t ttl, int32_t expiration) override {
+            int64_t timestamp, int64_t ttl, int64_t expiration) override {
         count_cell++;
         return proceed::yes;
     }
@@ -596,7 +596,7 @@ public:
     }
 
     virtual proceed consume_cell(bytes_view col_name, bytes_view value,
-            int64_t timestamp, int32_t ttl, int32_t expiration) override {
+            int64_t timestamp, int64_t ttl, int64_t expiration) override {
         switch (count_cell) {
         case 0:
             // The silly "cql row marker" cell

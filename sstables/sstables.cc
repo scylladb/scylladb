@@ -1539,7 +1539,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         get_stats().on_cell_tombstone_write();
         column_mask mask = column_mask::deletion;
         uint32_t deletion_time_size = sizeof(uint32_t);
-        uint32_t deletion_time = cell.deletion_time().time_since_epoch().count();
+        uint32_t deletion_time = gc_clock::as_int32(cell.deletion_time());
 
         _c_stats.update_local_deletion_time_and_tombstone_histogram(deletion_time);
 
@@ -1566,8 +1566,8 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         // expiring cell
 
         column_mask mask = column_mask::expiration;
-        uint32_t ttl = cell.ttl().count();
-        uint32_t expiration = cell.expiry().time_since_epoch().count();
+        uint32_t ttl = gc_clock::as_int32(cell.ttl());
+        uint32_t expiration = gc_clock::as_int32(cell.expiry());
         disk_data_value_view<uint32_t> cell_value { cell.value() };
 
         // tombstone histogram is updated with expiration time because if ttl is longer
@@ -1602,15 +1602,15 @@ void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, con
     if (marker.is_dead(_now)) {
         column_mask mask = column_mask::deletion;
         uint32_t deletion_time_size = sizeof(uint32_t);
-        uint32_t deletion_time = marker.deletion_time().time_since_epoch().count();
+        uint32_t deletion_time = gc_clock::as_int32(marker.deletion_time());
 
         _c_stats.update_local_deletion_time_and_tombstone_histogram(deletion_time);
 
         write(_version, out, mask, timestamp, deletion_time_size, deletion_time);
     } else if (marker.is_expiring()) {
         column_mask mask = column_mask::expiration;
-        uint32_t ttl = marker.ttl().count();
-        uint32_t expiration = marker.expiry().time_since_epoch().count();
+        uint32_t ttl = gc_clock::as_int32(marker.ttl());
+        uint32_t expiration = gc_clock::as_int32(marker.expiry());
 
         _c_stats.update_local_deletion_time_and_tombstone_histogram(expiration);
 
@@ -1623,7 +1623,7 @@ void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, con
 
 void sstable::write_deletion_time(file_writer& out, const tombstone t) {
     uint64_t timestamp = t.timestamp;
-    uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
+    uint32_t deletion_time = gc_clock::as_int32(t.deletion_time);
 
     update_cell_stats(_c_stats, timestamp);
     _c_stats.update_local_deletion_time_and_tombstone_histogram(deletion_time);
@@ -2194,6 +2194,13 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
 
+void sstable::update_stats_on_end_of_stream()
+{
+    if (_c_stats.capped_local_deletion_time) {
+        _stats.on_capped_local_deletion_time();
+    }
+}
+
 class sstable_writer_k_l : public sstable_writer::writer_impl {
     bool _backup;
     bool _leave_unsealed;
@@ -2357,6 +2364,7 @@ stop_iteration sstable_writer::consume_end_of_partition() {
 }
 
 void sstable_writer::consume_end_of_stream() {
+    _impl->_sst.update_stats_on_end_of_stream();
     return _impl->consume_end_of_stream();
 }
 
@@ -2391,8 +2399,8 @@ encoding_stats sstable::get_encoding_stats_for_compaction() const {
     encoding_stats enc_stats;
 
     enc_stats.min_timestamp = _c_stats.timestamp_tracker.min();
-    enc_stats.min_local_deletion_time = _c_stats.local_deletion_time_tracker.min();
-    enc_stats.min_ttl = _c_stats.ttl_tracker.min();
+    enc_stats.min_local_deletion_time = gc_clock::time_point(gc_clock::duration(_c_stats.local_deletion_time_tracker.min()));
+    enc_stats.min_ttl = gc_clock::duration(_c_stats.ttl_tracker.min());
 
     return enc_stats;
 }
@@ -3165,6 +3173,11 @@ future<> init_metrics() {
             sm::description("Number of partitions seeked")),
         sm::make_derive("row_reads", [] { return sstables_stats::get_shard_stats().row_reads; },
             sm::description("Number of rows read")),
+
+        sm::make_counter("capped_local_deletion_time", [] { return sstables_stats::get_shard_stats().capped_local_deletion_time; },
+            sm::description("Was local deletion time capped at maximum allowed value in Statistics")),
+        sm::make_counter("capped_tombstone_deletion_time", [] { return sstables_stats::get_shard_stats().capped_tombstone_deletion_time; },
+            sm::description("Was partition tombstone deletion time capped at maximum allowed value")),
     });
   });
 }

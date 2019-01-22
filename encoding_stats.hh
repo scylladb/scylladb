@@ -47,32 +47,32 @@ struct encoding_stats {
     static constexpr int32_t ttl_epoch = 0;
 
     api::timestamp_type min_timestamp = timestamp_epoch;
-    int32_t min_local_deletion_time = deletion_time_epoch;
-    int32_t min_ttl = ttl_epoch;
+    gc_clock::time_point min_local_deletion_time = gc_clock::time_point(gc_clock::duration(deletion_time_epoch));
+    gc_clock::duration min_ttl = gc_clock::duration(ttl_epoch);
 };
 
 class encoding_stats_collector {
 private:
     min_tracker<api::timestamp_type> min_timestamp;
-    min_tracker<int32_t> min_local_deletion_time;
-    min_tracker<int32_t> min_ttl;
+    min_tracker<gc_clock::time_point> min_local_deletion_time;
+    min_tracker<gc_clock::duration> min_ttl;
 
 public:
     encoding_stats_collector()
         : min_timestamp(api::max_timestamp)
-        , min_local_deletion_time(std::numeric_limits<int32_t>::max())
-        , min_ttl(std::numeric_limits<int32_t>::max())
+        , min_local_deletion_time(gc_clock::time_point::max())
+        , min_ttl(gc_clock::duration::max())
     {}
 
     void update_timestamp(api::timestamp_type ts) {
         min_timestamp.update(ts);
     }
 
-    void update_local_deletion_time(int32_t local_deletion_time) {
+    void update_local_deletion_time(gc_clock::time_point local_deletion_time) {
         min_local_deletion_time.update(local_deletion_time);
     }
 
-    void update_ttl(int32_t ttl) {
+    void update_ttl(gc_clock::duration ttl) {
         min_ttl.update(ttl);
     }
 

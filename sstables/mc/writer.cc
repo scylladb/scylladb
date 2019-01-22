@@ -34,6 +34,8 @@
 #include <boost/iterator/iterator_facade.hpp>
 #include <boost/container/static_vector.hpp>
 
+logging::logger slogger("mc_writer");
+
 namespace sstables {
 namespace mc {
 
@@ -325,21 +327,20 @@ void write_delta_timestamp(W& out, api::timestamp_type timestamp, const encoding
 
 template <typename W>
 GCC6_CONCEPT(requires Writer<W>())
-void write_delta_ttl(W& out, int32_t ttl, const encoding_stats& enc_stats) {
-    write_unsigned_delta_vint(out, ttl, enc_stats.min_ttl);
+void write_delta_ttl(W& out, gc_clock::duration ttl, const encoding_stats& enc_stats) {
+    write_unsigned_delta_vint(out, ttl.count(), enc_stats.min_ttl.count());
 }
 
 template <typename W>
 GCC6_CONCEPT(requires Writer<W>())
-void write_delta_local_deletion_time(W& out, int32_t local_deletion_time, const encoding_stats& enc_stats) {
-    write_unsigned_delta_vint(out, local_deletion_time, enc_stats.min_local_deletion_time);
+void write_delta_local_deletion_time(W& out, int64_t local_deletion_time, const encoding_stats& enc_stats) {
+    write_unsigned_delta_vint(out, local_deletion_time, enc_stats.min_local_deletion_time.time_since_epoch().count());
 }
 
 template <typename W>
 GCC6_CONCEPT(requires Writer<W>())
-void write_delta_deletion_time(W& out, deletion_time dt, const encoding_stats& enc_stats) {
-    write_delta_timestamp(out, dt.marked_for_delete_at, enc_stats);
-    write_delta_local_deletion_time(out, dt.local_deletion_time, enc_stats);
+void write_delta_local_deletion_time(W& out, gc_clock::time_point ldt, const encoding_stats& enc_stats) {
+    write_unsigned_delta_vint(out, ldt.time_since_epoch().count(), enc_stats.min_local_deletion_time.time_since_epoch().count());
 }
 
 static bytes_array_vint_size to_bytes_array_vint_size(bytes b) {
@@ -371,8 +372,8 @@ serialization_header make_serialization_header(const schema& s, const encoding_s
     // Note: We rely on implicit conversion to uint64_t when subtracting the signed epoch values below
     // for preventing signed integer overflow.
     header.min_timestamp_base.value = static_cast<uint64_t>(enc_stats.min_timestamp) - encoding_stats::timestamp_epoch;
-    header.min_local_deletion_time_base.value = static_cast<uint64_t>(enc_stats.min_local_deletion_time) - encoding_stats::deletion_time_epoch;
-    header.min_ttl_base.value = static_cast<uint64_t>(enc_stats.min_ttl) - encoding_stats::ttl_epoch;
+    header.min_local_deletion_time_base.value = static_cast<uint64_t>(enc_stats.min_local_deletion_time.time_since_epoch().count()) - encoding_stats::deletion_time_epoch;
+    header.min_ttl_base.value = static_cast<uint64_t>(enc_stats.min_ttl.count()) - encoding_stats::ttl_epoch;
 
     header.pk_type_name = to_bytes_array_vint_size(pk_type_to_string(s));
 
@@ -617,20 +618,48 @@ private:
     void write_delta_timestamp(bytes_ostream& writer, api::timestamp_type timestamp) {
         sstables::mc::write_delta_timestamp(writer, timestamp, _enc_stats);
     }
-    void write_delta_ttl(bytes_ostream& writer, int32_t ttl) {
+    void write_delta_ttl(bytes_ostream& writer, gc_clock::duration ttl) {
         sstables::mc::write_delta_ttl(writer, ttl, _enc_stats);
     }
-    void write_delta_local_deletion_time(bytes_ostream& writer, int32_t ldt) {
+    void write_delta_local_deletion_time(bytes_ostream& writer, gc_clock::time_point ldt) {
         sstables::mc::write_delta_local_deletion_time(writer, ldt, _enc_stats);
     }
-    void write_delta_deletion_time(bytes_ostream& writer, deletion_time dt) {
-        sstables::mc::write_delta_deletion_time(writer, dt, _enc_stats);
+    void do_write_delta_deletion_time(bytes_ostream& writer, const tombstone& t) {
+        sstables::mc::write_delta_timestamp(writer, t.timestamp, _enc_stats);
+        sstables::mc::write_delta_local_deletion_time(writer, t.deletion_time, _enc_stats);
+    }
+    void write_delta_deletion_time(bytes_ostream& writer, const tombstone& t) {
+        if (t) {
+            do_write_delta_deletion_time(writer, t);
+        } else {
+            sstables::mc::write_delta_timestamp(writer, api::missing_timestamp, _enc_stats);
+            sstables::mc::write_delta_local_deletion_time(writer, no_deletion_time, _enc_stats);
+        }
+    }
+
+    deletion_time to_deletion_time(tombstone t) {
+        deletion_time dt;
+        if (t) {
+            bool capped;
+            int32_t ldt = adjusted_local_deletion_time(t.deletion_time, capped);
+            if (capped) {
+                slogger.warn("Capping tombstone local_deletion_time {} to max {}", t.deletion_time.time_since_epoch().count(), ldt);
+                _sst.get_stats().on_capped_tombstone_deletion_time();
+            }
+            dt.local_deletion_time = ldt;
+            dt.marked_for_delete_at = t.timestamp;
+        } else {
+            // Default values for live, non-deleted rows.
+            dt.local_deletion_time = no_deletion_time;
+            dt.marked_for_delete_at = api::missing_timestamp;
+        }
+        return dt;
     }
 
     struct row_time_properties {
         std::optional<api::timestamp_type> timestamp;
-        std::optional<int32_t> ttl;
-        std::optional<int32_t> local_deletion_time;
+        std::optional<gc_clock::duration> ttl;
+        std::optional<gc_clock::time_point> local_deletion_time;
     };
 
     // Writes single atomic cell
@@ -737,19 +766,6 @@ void writer::maybe_set_pi_first_clustering(const writer::clustering_info& info) 
         _pi_write_m.block_start_offset = pos;
         _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
     }
-}
-
-static deletion_time to_deletion_time(tombstone t) {
-    deletion_time dt;
-    if (t) {
-        dt.local_deletion_time = t.deletion_time.time_since_epoch().count();
-        dt.marked_for_delete_at = t.timestamp;
-    } else {
-        // Default values for live, non-deleted rows.
-        dt.local_deletion_time = std::numeric_limits<int32_t>::max();
-        dt.marked_for_delete_at = std::numeric_limits<int64_t>::min();
-    }
-    return dt;
 }
 
 void writer::add_pi_block() {
@@ -925,8 +941,8 @@ void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const colu
     bool is_row_expiring = properties.ttl.has_value();
     bool is_cell_expiring = cell.is_live_and_has_ttl();
     bool use_row_ttl = is_row_expiring && is_cell_expiring &&
-                       properties.ttl == cell.ttl().count() &&
-                       properties.local_deletion_time == cell.deletion_time().time_since_epoch().count();
+                       properties.ttl == cell.ttl() &&
+                       properties.local_deletion_time == cell.deletion_time();
 
     cell_flags flags = cell_flags::none;
     if (!has_value) {
@@ -951,10 +967,10 @@ void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const colu
 
     if (!use_row_ttl) {
         if (is_deleted) {
-            write_delta_local_deletion_time(writer, cell.deletion_time().time_since_epoch().count());
+            write_delta_local_deletion_time(writer, cell.deletion_time());
         } else if (is_cell_expiring) {
-            write_delta_local_deletion_time(writer, cell.expiry().time_since_epoch().count());
-            write_delta_ttl(writer, cell.ttl().count());
+            write_delta_local_deletion_time(writer, cell.expiry());
+            write_delta_ttl(writer, cell.ttl());
         }
     }
 
@@ -979,20 +995,17 @@ void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const colu
     // Collect cell statistics
     _c_stats.update_timestamp(cell.timestamp());
     if (is_deleted) {
-        auto ldt = cell.deletion_time().time_since_epoch().count();
-        _c_stats.update_local_deletion_time_and_tombstone_histogram(ldt);
+        _c_stats.update_local_deletion_time_and_tombstone_histogram(cell.deletion_time());
         _sst.get_stats().on_cell_tombstone_write();
         return;
     }
 
     if (is_cell_expiring) {
-        auto expiration = cell.expiry().time_since_epoch().count();
-        auto ttl = cell.ttl().count();
-        _c_stats.update_ttl(ttl);
+        _c_stats.update_ttl(cell.ttl());
         // tombstone histogram is updated with expiration time because if ttl is longer
         // than gc_grace_seconds for all data, sstable will be considered fully expired
         // when actually nothing is expired.
-        _c_stats.update_local_deletion_time_and_tombstone_histogram(expiration);
+        _c_stats.update_local_deletion_time_and_tombstone_histogram(cell.expiry());
     } else { // regular live cell
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     }
@@ -1008,16 +1021,16 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
     _c_stats.update_timestamp(timestamp);
     write_delta_timestamp(writer, timestamp);
 
-    auto write_expiring_liveness_info = [this, &writer] (uint32_t ttl, uint64_t ldt) {
+    auto write_expiring_liveness_info = [this, &writer] (gc_clock::duration ttl, gc_clock::time_point ldt) {
         _c_stats.update_ttl(ttl);
         _c_stats.update_local_deletion_time_and_tombstone_histogram(ldt);
         write_delta_ttl(writer, ttl);
         write_delta_local_deletion_time(writer, ldt);
     };
     if (!marker.is_live()) {
-        write_expiring_liveness_info(expired_liveness_ttl, marker.deletion_time().time_since_epoch().count());
+        write_expiring_liveness_info(gc_clock::duration(expired_liveness_ttl), marker.deletion_time());
     } else if (marker.is_expiring()) {
-        write_expiring_liveness_info(marker.ttl().count(), marker.expiry().time_since_epoch().count());
+        write_expiring_liveness_info(marker.ttl(), marker.expiry());
     } else {
         _c_stats.update_ttl(0);
         _c_stats.update_local_deletion_time(std::numeric_limits<int32_t>::max());
@@ -1030,8 +1043,7 @@ void writer::write_collection(bytes_ostream& writer, const column_definition& cd
     collection.data.with_linearized([&] (bytes_view collection_bv) {
         auto mview = ctype.deserialize_mutation_form(collection_bv);
         if (has_complex_deletion) {
-            auto dt = to_deletion_time(mview.tomb);
-            write_delta_deletion_time(writer, dt);
+            write_delta_deletion_time(writer, mview.tomb);
             _c_stats.update(mview.tomb);
         }
 
@@ -1074,9 +1086,8 @@ void writer::write_cells(bytes_ostream& writer, column_kind kind, const row& row
 void writer::write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion) {
     write_liveness_info(writer, row.marker());
     auto write_tombstone_and_update_stats = [this, &writer] (const tombstone& t) {
-        auto dt = to_deletion_time(t);
         _c_stats.do_update(t);
-        write_delta_deletion_time(writer, dt);
+        do_write_delta_deletion_time(writer, t);
     };
     if (row.tomb().regular()) {
         write_tombstone_and_update_stats(row.tomb().regular());
@@ -1088,8 +1099,8 @@ void writer::write_row_body(bytes_ostream& writer, const clustering_row& row, bo
     if (!row.marker().is_missing()) {
         properties.timestamp = row.marker().timestamp();
         if (row.marker().is_expiring()) {
-            properties.ttl = row.marker().ttl().count();
-            properties.local_deletion_time = row.marker().deletion_time().time_since_epoch().count();
+            properties.ttl = row.marker().ttl();
+            properties.local_deletion_time = row.marker().deletion_time();
         }
     }
 
@@ -1262,12 +1273,10 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write(sstable_version_types::mc, *_data_writer, row_flags::is_marker);
     write_clustering_prefix(*_data_writer, marker.kind, _schema, marker.clustering);
     auto write_marker_body = [this, &marker] (bytes_ostream& writer) {
-        auto dt = to_deletion_time(marker.tomb);
-        write_delta_deletion_time(writer, dt);
+        write_delta_deletion_time(writer, marker.tomb);
         _c_stats.update(marker.tomb);
         if (marker.boundary_tomb) {
-            auto dt_boundary = to_deletion_time(*marker.boundary_tomb);
-            write_delta_deletion_time(writer, dt_boundary);
+            do_write_delta_deletion_time(writer, *marker.boundary_tomb);
             _c_stats.do_update(*marker.boundary_tomb);
         }
     };
