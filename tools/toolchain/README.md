@@ -28,7 +28,7 @@ set environment variables:
 
 Run the command
 
-    docker build -f tools/toolchain/Dockerfile .
+    docker build --no-cache -f tools/toolchain/Dockerfile .
 
 and use the resulting image.
 
