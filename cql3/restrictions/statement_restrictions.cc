@@ -466,7 +466,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
         return {query::clustering_range::make_open_ended_both_sides()};
     }
     if (_clustering_columns_restrictions->needs_filtering(*_schema)) {
-        if (auto single_ck_restrictions = dynamic_pointer_cast<single_column_primary_key_restrictions<clustering_key>>(_clustering_columns_restrictions)) {
+        if (auto single_ck_restrictions = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions)) {
             return single_ck_restrictions->get_longest_prefix_restrictions()->bounds_ranges(options);
         }
         return {query::clustering_range::make_open_ended_both_sides()};
@@ -512,7 +512,7 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
 
 const single_column_restrictions::restrictions_map& statement_restrictions::get_single_column_partition_key_restrictions() const {
     static single_column_restrictions::restrictions_map empty;
-    auto single_restrictions = dynamic_pointer_cast<single_column_primary_key_restrictions<partition_key>>(_partition_key_restrictions);
+    auto single_restrictions = dynamic_pointer_cast<single_column_partition_key_restrictions>(_partition_key_restrictions);
     if (!single_restrictions) {
         if (dynamic_pointer_cast<initial_key_restrictions<partition_key>>(_partition_key_restrictions)) {
             return empty;
@@ -527,7 +527,7 @@ const single_column_restrictions::restrictions_map& statement_restrictions::get_
  */
 const single_column_restrictions::restrictions_map& statement_restrictions::get_single_column_clustering_key_restrictions() const {
     static single_column_restrictions::restrictions_map empty;
-    auto single_restrictions = dynamic_pointer_cast<single_column_primary_key_restrictions<clustering_key>>(_clustering_columns_restrictions);
+    auto single_restrictions = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions);
     if (!single_restrictions) {
         if (dynamic_pointer_cast<initial_key_restrictions<clustering_key>>(_clustering_columns_restrictions)) {
             return empty;

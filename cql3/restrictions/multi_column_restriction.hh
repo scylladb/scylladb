@@ -674,7 +674,7 @@ private:
         std::size_t num_of_restrictions = bound_values.size() - first_neq_component;
         ret.reserve(num_of_restrictions);
         for (std::size_t i = 0;i < num_of_restrictions ; i++) {
-            ret.emplace_back(::make_shared<cql3::restrictions::single_column_primary_key_restrictions<clustering_key>>(_schema, false));
+            ret.emplace_back(::make_shared<cql3::restrictions::single_column_clustering_key_restrictions>(_schema, false));
             std::size_t neq_component_idx = first_neq_component + i;
             for (std::size_t j = 0;j < neq_component_idx; j++) {
                 ret[i]->merge_with(make_single_column_restriction(std::nullopt, false, j, bound_values[j]));

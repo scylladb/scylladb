@@ -895,10 +895,10 @@ read_posting_list(service::storage_proxy& proxy,
     partition_slice_builder partition_slice_builder{*view_schema};
 
     if (!base_restrictions->has_partition_key_unrestricted_components()) {
-        auto single_pk_restrictions = dynamic_pointer_cast<restrictions::single_column_primary_key_restrictions<partition_key>>(base_restrictions->get_partition_key_restrictions());
+        auto single_pk_restrictions = dynamic_pointer_cast<restrictions::single_column_partition_key_restrictions>(base_restrictions->get_partition_key_restrictions());
         // Only EQ restrictions on base partition key can be used in an index view query
         if (single_pk_restrictions && single_pk_restrictions->is_all_eq()) {
-            auto clustering_restrictions = ::make_shared<restrictions::single_column_primary_key_restrictions<clustering_key_prefix>>(view_schema, *single_pk_restrictions);
+            auto clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(view_schema, *single_pk_restrictions);
             // Computed token column needs to be added to index view restrictions
             const column_definition& token_cdef = *view_schema->clustering_key_columns().begin();
             auto base_pk = partition_key::from_optional_exploded(*base_schema, base_restrictions->get_partition_key_restrictions()->values(options));
@@ -907,10 +907,10 @@ read_posting_list(service::storage_proxy& proxy,
             clustering_restrictions->merge_with(token_restriction);
 
             if (base_restrictions->get_clustering_columns_restrictions()->prefix_size() > 0) {
-                auto single_ck_restrictions = dynamic_pointer_cast<restrictions::single_column_primary_key_restrictions<clustering_key>>(base_restrictions->get_clustering_columns_restrictions());
+                auto single_ck_restrictions = dynamic_pointer_cast<restrictions::single_column_clustering_key_restrictions>(base_restrictions->get_clustering_columns_restrictions());
                 if (single_ck_restrictions) {
                     auto prefix_restrictions = single_ck_restrictions->get_longest_prefix_restrictions();
-                    auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_primary_key_restrictions<clustering_key_prefix>>(view_schema, *prefix_restrictions);
+                    auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_clustering_key_restrictions>(view_schema, *prefix_restrictions);
                     for (auto restriction_it : clustering_restrictions_from_base->restrictions()) {
                         clustering_restrictions->merge_with(restriction_it.second);
                     }
