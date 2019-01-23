@@ -66,18 +66,18 @@ private:
     template<typename>
     class initial_key_restrictions;
 
-    template<typename T>
-    static ::shared_ptr<primary_key_restrictions<T>> get_initial_key_restrictions(bool allow_filtering);
+    static ::shared_ptr<partition_key_restrictions> get_initial_partition_key_restrictions(bool allow_filtering);
+    static ::shared_ptr<clustering_key_restrictions> get_initial_clustering_key_restrictions(bool allow_filtering);
 
     /**
      * Restrictions on partitioning columns
      */
-    ::shared_ptr<primary_key_restrictions<partition_key>> _partition_key_restrictions;
+    ::shared_ptr<partition_key_restrictions> _partition_key_restrictions;
 
     /**
      * Restrictions on clustering columns
      */
-    ::shared_ptr<primary_key_restrictions<clustering_key_prefix>> _clustering_columns_restrictions;
+    ::shared_ptr<clustering_key_restrictions> _clustering_columns_restrictions;
 
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
@@ -155,11 +155,11 @@ public:
         return _uses_secondary_indexing;
     }
 
-    ::shared_ptr<primary_key_restrictions<partition_key>> get_partition_key_restrictions() const {
+    ::shared_ptr<partition_key_restrictions> get_partition_key_restrictions() const {
         return _partition_key_restrictions;
     }
 
-    ::shared_ptr<primary_key_restrictions<clustering_key_prefix>> get_clustering_columns_restrictions() const {
+    ::shared_ptr<clustering_key_restrictions> get_clustering_columns_restrictions() const {
         return _clustering_columns_restrictions;
     }
 

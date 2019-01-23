@@ -55,7 +55,7 @@ namespace restrictions {
 /**
  * <code>Restriction</code> using the token function.
  */
-class token_restriction: public primary_key_restrictions<partition_key> {
+class token_restriction: public partition_key_restrictions {
 private:
     /**
      * The definition of the columns to which apply the token restriction.
