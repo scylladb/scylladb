@@ -420,14 +420,13 @@ protected:
     static flat_mutation_reader_opt try_resume(reader_concurrency_semaphore& sem, reader_concurrency_semaphore::inactive_read_handle irh);
 
 public:
-    /// Create an appropriate reader on the specified shard.
+    /// Create an appropriate reader on the shard it is called on.
     ///
     /// Will be called when the multishard reader visits a shard for the
     /// first time. This method should also enter gates, take locks or
     /// whatever is appropriate to make sure resources it is using on the
     /// remote shard stay alive, during the lifetime of the created reader.
-    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> create_reader(
-            shard_id shard,
+    virtual flat_mutation_reader create_reader(
             schema_ptr schema,
             const dht::partition_range& range,
             const query::partition_slice& slice,

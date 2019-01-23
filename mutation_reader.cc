@@ -27,6 +27,7 @@
 #include "mutation_reader.hh"
 #include <seastar/core/future-util.hh>
 #include "flat_mutation_reader.hh"
+#include "schema_registry.hh"
 
 
 static constexpr size_t merger_small_vector_size = 4;
@@ -920,6 +921,7 @@ private:
     void process_remote_buffer(const circular_buffer<mutation_fragment>& buffer, bool end_of_stream);
     future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume();
     future<> do_pause();
+    future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> do_create_reader(const dht::partition_range& pr, const query::partition_slice& ps);
 
 public:
     shard_reader(
@@ -1086,14 +1088,7 @@ future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> shard_reader::recreat
         range = &*_range_override;
     }
 
-    return _lifecycle_policy->create_reader(
-            _shard,
-            _schema,
-            *range,
-            *slice,
-            _pc,
-            _trace_state,
-            _fwd_mr);
+    return do_create_reader(*range, *slice);
 }
 
 future<> shard_reader::resume() {
@@ -1182,6 +1177,12 @@ future<> shard_reader::do_pause() {
     });
 }
 
+future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> shard_reader::do_create_reader(const dht::partition_range& pr, const query::partition_slice& ps) {
+    return smp::submit_to(_shard, [this, &pr, &ps, schema = global_schema_ptr(_schema)] {
+        return make_foreign(std::make_unique<flat_mutation_reader>(_lifecycle_policy->create_reader(schema, pr, ps, _pc, _trace_state, _fwd_mr)));
+    });
+}
+
 future<> shard_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     if (_read_ahead) {
         return *std::exchange(_read_ahead, std::nullopt);
@@ -1245,8 +1246,7 @@ future<> shard_reader::create_reader() {
     if (_read_ahead) {
         return *std::exchange(_read_ahead, std::nullopt);
     }
-    return _lifecycle_policy->create_reader(_shard, _schema, *_pr, _ps, _pc, _trace_state, _fwd_mr).then(
-            [this, zis = shared_from_this()] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
+    return do_create_reader(*_pr, _ps).then([this, zis = shared_from_this()] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
         _reader = std::move(r);
     });
 }

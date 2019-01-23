@@ -78,12 +78,6 @@ class read_context : public reader_lifecycle_policy {
         }
     };
 
-    struct bundled_remote_reader {
-        foreign_unique_ptr<reader_params> params;
-        foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
-        foreign_unique_ptr<flat_mutation_reader> reader;
-        reader_concurrency_semaphore* semaphore;
-    };
     struct paused_reader {
         foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
         bool has_pending_next_partition;
@@ -122,10 +116,10 @@ class read_context : public reader_lifecycle_policy {
     //  successful_lookup         |
     //     |         |            |
     //     |         |            |
-    //     |         |    (4)     |
+    //     |         |    (3)     |
     //     |         +---------> used
     // (2) |                      |
-    //     |                  (5) |
+    //     |                  (4) |
     //     |                      |
     //     |                 dismantling
     //     |                      |
@@ -137,9 +131,8 @@ class read_context : public reader_lifecycle_policy {
     //
     //  1) lookup_readers()
     //  2) save_readers()
-    //  3) do_make_remote_reader()
-    //  4) make_remote_reader()
-    //  5) dismantle_reader()
+    //  3) make_remote_reader()
+    //  4) dismantle_reader()
     using reader_state = std::variant<
         inexistent_state,
         successful_lookup_state,
@@ -218,17 +211,7 @@ class read_context : public reader_lifecycle_policy {
 
     static std::string_view reader_state_to_string(const reader_state& rs);
 
-    static future<bundled_remote_reader> do_make_remote_reader(
-            distributed<database>& db,
-            shard_id shard,
-            schema_ptr schema,
-            const dht::partition_range& pr,
-            const query::partition_slice& ps,
-            const io_priority_class& pc,
-            tracing::trace_state_ptr trace_state);
-
-    future<foreign_unique_ptr<flat_mutation_reader>> make_remote_reader(
-            shard_id shard,
+    flat_mutation_reader make_remote_reader(
             schema_ptr schema,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
@@ -261,15 +244,14 @@ public:
     read_context& operator=(read_context&&) = delete;
     read_context& operator=(const read_context&) = delete;
 
-    virtual future<foreign_unique_ptr<flat_mutation_reader>> create_reader(
-            shard_id shard,
+    virtual flat_mutation_reader create_reader(
             schema_ptr schema,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override {
-        return make_remote_reader(shard, std::move(schema), pr, ps, pc, std::move(trace_state), fwd_mr);
+        return make_remote_reader(std::move(schema), pr, ps, pc, std::move(trace_state), fwd_mr);
     }
 
     virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader_fut) noexcept override {
@@ -306,40 +288,14 @@ std::string_view read_context::reader_state_to_string(const std::variant<
     return reader_state_names.at(rs.index());
 }
 
-future<read_context::bundled_remote_reader> read_context::do_make_remote_reader(
-        distributed<database>& db,
-        shard_id shard,
+flat_mutation_reader read_context::make_remote_reader(
         schema_ptr schema,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class&,
-        tracing::trace_state_ptr trace_state) {
-    return db.invoke_on(shard, [gs = global_schema_ptr(schema), &pr, &ps, gts = tracing::global_trace_state_ptr(std::move(trace_state))] (
-                database& db) {
-        auto s = gs.get();
-        auto& table = db.find_column_family(s);
-        //TODO need a way to transport io_priority_calls across shards
-        auto& pc = service::get_local_sstable_query_read_priority();
-        auto params = reader_params(pr, ps);
-        auto read_operation = table.read_in_progress();
-        auto reader = table.as_mutation_source().make_reader(std::move(s), *params.range, *params.slice, pc, gts.get());
-
-        return make_ready_future<bundled_remote_reader>(bundled_remote_reader{
-                make_foreign(std::make_unique<reader_params>(std::move(params))),
-                make_foreign(std::make_unique<utils::phased_barrier::operation>(std::move(read_operation))),
-                make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader))),
-                &table.read_concurrency_semaphore()});
-    });
-}
-
-future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reader(
-        shard_id shard,
-        schema_ptr schema,
-        const dht::partition_range& pr,
-        const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding) {
+    const auto shard = engine().cpu_id();
     auto& rs = _readers[shard];
 
     if (!std::holds_alternative<used_state>(rs) && !std::holds_alternative<successful_lookup_state>(rs) && !std::holds_alternative<inexistent_state>(rs)) {
@@ -354,15 +310,20 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
     if (auto current_state = std::get_if<successful_lookup_state>(&rs)) {
         auto reader = std::move(current_state->reader);
         rs = used_state{std::move(current_state->params), std::move(current_state->read_operation)};
-        return make_ready_future<foreign_unique_ptr<flat_mutation_reader>>(std::move(reader));
+        return std::move(*reader);
     }
 
-    return do_make_remote_reader(_db, shard, std::move(schema), pr, ps, pc, std::move(trace_state)).then(
-            [this, &rs, shard] (bundled_remote_reader&& bundled_reader) mutable {
-        _semaphores[shard] = bundled_reader.semaphore;
-        rs = used_state{std::move(bundled_reader.params), std::move(bundled_reader.read_operation)};
-        return make_ready_future<foreign_unique_ptr<flat_mutation_reader>>(std::move(bundled_reader.reader));
-    });
+    auto& table = _db.local().find_column_family(schema);
+    //TODO need a way to transport io_priority_calls across shards
+    auto& pc = service::get_local_sstable_query_read_priority();
+    auto params = make_foreign(std::make_unique<reader_params>(pr, ps));
+    auto read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(table.read_in_progress()));
+    auto reader = table.as_mutation_source().make_reader(std::move(schema), *params->range, *params->slice, pc, std::move(trace_state));
+
+    _semaphores[shard] = &table.read_concurrency_semaphore();
+    rs = used_state{std::move(params), std::move(read_operation)};
+
+    return reader;
 }
 
 void read_context::dismantle_reader(shard_id shard, future<paused_or_stopped_reader>&& reader_fut) {
