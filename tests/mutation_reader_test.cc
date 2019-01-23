@@ -1558,14 +1558,10 @@ public:
         return _factory_function(std::move(schema), _contexts[shard].params->range, _contexts[shard].params->slice, pc,
                 std::move(trace_state), fwd_mr);
     }
-    virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader) noexcept override {
-        reader.then([shard, this] (paused_or_stopped_reader&& reader) {
-            return smp::submit_to(shard, [reader = std::move(reader.remote_reader), ctx = std::move(_contexts[shard])] () mutable {
-                if (auto* maybe_paused_reader = std::get_if<paused_or_stopped_reader::paused_reader>(&reader)) {
-                    ctx.semaphore->unregister_inactive_read(std::move(**maybe_paused_reader));
-                } else {
-                    std::get<paused_or_stopped_reader::stopped_reader>(reader).release();
-                }
+    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
+        reader.then([shard, this] (stopped_reader&& reader) {
+            return smp::submit_to(shard, [handle = std::move(reader.handle), ctx = std::move(_contexts[shard])] () mutable {
+                ctx.semaphore->unregister_inactive_read(std::move(*handle));
             });
         }).finally([zis = shared_from_this()] {});
     }
@@ -1766,7 +1762,7 @@ public:
     }
 
     virtual future<> fill_buffer(db::timeout_clock::time_point) override {
-        if (is_end_of_stream()) {
+        if (is_end_of_stream() || !is_buffer_empty()) {
             return make_ready_future<>();
         }
 

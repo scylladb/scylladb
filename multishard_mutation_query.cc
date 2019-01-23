@@ -96,7 +96,7 @@ class read_context : public reader_lifecycle_policy {
     struct dismantling_state {
         foreign_unique_ptr<reader_params> params;
         foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
-        std::variant<foreign_unique_ptr<flat_mutation_reader>, paused_reader> reader;
+        paused_reader reader;
         circular_buffer<mutation_fragment> buffer;
     };
     struct ready_to_save_state {
@@ -219,7 +219,7 @@ class read_context : public reader_lifecycle_policy {
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr);
 
-    void dismantle_reader(shard_id shard, future<paused_or_stopped_reader>&& reader_fut);
+    void dismantle_reader(shard_id shard, future<stopped_reader>&& reader_fut);
 
     dismantle_buffer_stats dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
@@ -254,7 +254,7 @@ public:
         return make_remote_reader(std::move(schema), pr, ps, pc, std::move(trace_state), fwd_mr);
     }
 
-    virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader_fut) noexcept override {
+    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
         dismantle_reader(shard, std::move(reader_fut));
     }
 
@@ -326,9 +326,9 @@ flat_mutation_reader read_context::make_remote_reader(
     return reader;
 }
 
-void read_context::dismantle_reader(shard_id shard, future<paused_or_stopped_reader>&& reader_fut) {
+void read_context::dismantle_reader(shard_id shard, future<stopped_reader>&& reader_fut) {
     with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
-        return reader_fut.then_wrapped([this, shard] (future<paused_or_stopped_reader>&& reader_fut) {
+        return reader_fut.then_wrapped([this, shard] (future<stopped_reader>&& reader_fut) {
             auto& rs = _readers[shard];
 
             if (reader_fut.failed()) {
@@ -342,16 +342,8 @@ void read_context::dismantle_reader(shard_id shard, future<paused_or_stopped_rea
             if (auto* maybe_used_state = std::get_if<used_state>(&rs)) {
                 auto read_operation = std::move(maybe_used_state->read_operation);
                 auto params = std::move(maybe_used_state->params);
-                if (auto maybe_paused_reader = std::get_if<paused_or_stopped_reader::paused_reader>(&reader.remote_reader)) {
-                    rs = dismantling_state{std::move(params), std::move(read_operation),
-                        paused_reader{std::move(*maybe_paused_reader), reader.has_pending_next_partition}, std::move(reader.unconsumed_fragments)};
-                } else {
-                    rs = dismantling_state{
-                            std::move(params),
-                            std::move(read_operation),
-                            std::get<paused_or_stopped_reader::stopped_reader>(std::move(reader.remote_reader)),
-                            std::move(reader.unconsumed_fragments)};
-                }
+                rs = dismantling_state{std::move(params), std::move(read_operation),
+                    paused_reader{std::move(reader.handle), reader.has_pending_next_partition}, std::move(reader.unconsumed_fragments)};
             } else {
                 mmq_log.warn(
                         "Unexpected request to dismantle reader in state `{}` for shard {}."
@@ -370,16 +362,12 @@ future<> read_context::stop() {
     gate_fut.then([this] {
         for (shard_id shard = 0; shard != smp::count; ++shard) {
             if (auto* maybe_dismantling_state = std::get_if<dismantling_state>(&_readers[shard])) {
-                _db.invoke_on(shard, [schema = global_schema_ptr(_schema), reader = std::move(maybe_dismantling_state->reader),
+                _db.invoke_on(shard, [schema = global_schema_ptr(_schema), handle = std::move(maybe_dismantling_state->reader.handle),
                         params = std::move(maybe_dismantling_state->params),
                         read_operation = std::move(maybe_dismantling_state->read_operation)] (database& db) mutable {
-                    if (auto* maybe_stopped_reader = std::get_if<foreign_unique_ptr<flat_mutation_reader>>(&reader)) {
-                        maybe_stopped_reader->release();
-                    } else {
-                        // We cannot use semaphore() here, as this can be already destroyed.
-                        auto& table = db.find_column_family(schema);
-                        table.read_concurrency_semaphore().unregister_inactive_read(std::move(*std::get<paused_reader>(reader).handle));
-                    }
+                    // We cannot use semaphore() here, as this can be already destroyed.
+                    auto& table = db.find_column_family(schema);
+                    table.read_concurrency_semaphore().unregister_inactive_read(std::move(*handle));
                     params.release();
                     read_operation.release();
                 });

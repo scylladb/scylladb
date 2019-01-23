@@ -887,6 +887,51 @@ class shard_reader : public enable_lw_shared_from_this<shard_reader>, public fla
         }
     };
 
+    // Encapsulates all data and logic that is local to the remote shard the
+    // reader lives on.
+    class remote_reader {
+        schema_ptr _schema;
+        reader_lifecycle_policy& _lifecycle_policy;
+        const dht::partition_range* _pr;
+        const query::partition_slice& _ps;
+        const io_priority_class& _pc;
+        tracing::global_trace_state_ptr _trace_state;
+        const mutation_reader::forwarding _fwd_mr;
+        reader_concurrency_semaphore::inactive_read_handle _irh;
+        bool _reader_created = false;
+        bool _drop_partition_start = false;
+        bool _drop_static_row = false;
+
+        std::optional<dht::decorated_key> _last_pkey;
+        std::optional<position_in_partition> _last_position_in_partition;
+        // These are used when the reader has to be recreated (after having been
+        // evicted while paused) and the range and/or slice it is recreated with
+        // differs from the original ones.
+        std::optional<dht::partition_range> _range_override;
+        std::optional<query::partition_slice> _slice_override;
+
+    private:
+        void update_last_position(const circular_buffer<mutation_fragment>& buffer);
+        void adjust_partition_slice();
+        flat_mutation_reader recreate_reader();
+        flat_mutation_reader resume_or_create_reader();
+
+    public:
+        remote_reader(
+                schema_ptr schema,
+                reader_lifecycle_policy& lifecycle_policy,
+                const dht::partition_range& pr,
+                const query::partition_slice& ps,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                mutation_reader::forwarding fwd_mr);
+        future<fill_buffer_result> fill_buffer(const dht::partition_range& pr, bool pending_next_partition, db::timeout_clock::time_point timeout);
+        future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout);
+        reader_concurrency_semaphore::inactive_read_handle inactive_read_handle() && {
+            return std::move(_irh);
+        }
+    };
+
 private:
     shared_ptr<reader_lifecycle_policy> _lifecycle_policy;
     const unsigned _shard;
@@ -895,33 +940,13 @@ private:
     const io_priority_class& _pc;
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
-    foreign_ptr<std::unique_ptr<flat_mutation_reader>> _reader;
-    foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> _irh;
     bool _pending_next_partition = false;
     bool _stopped = false;
-    bool _drop_partition_start = false;
-    bool _drop_static_row = false;
     std::optional<future<>> _read_ahead;
-    std::optional<future<>> _pause;
-
-    std::optional<dht::decorated_key> _last_pkey;
-    std::optional<position_in_partition> _last_position_in_partition;
-    // These are used when the reader has to be recreated (after having been
-    // evicted while paused) and the range and/or slice it is recreated with
-    // differs from the original ones.
-    std::optional<dht::partition_range> _range_override;
-    std::optional<query::partition_slice> _slice_override;
+    foreign_ptr<std::unique_ptr<remote_reader>> _reader;
 
 private:
-    void update_last_position();
-    void adjust_partition_slice();
-    future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> recreate_reader();
-    future<> resume();
     future<> do_fill_buffer(db::timeout_clock::time_point timeout);
-    void process_remote_buffer(const circular_buffer<mutation_fragment>& buffer, bool end_of_stream);
-    future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume();
-    future<> do_pause();
-    future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> do_create_reader(const dht::partition_range& pr, const query::partition_slice& ps);
 
 public:
     shard_reader(
@@ -958,10 +983,6 @@ public:
     virtual void next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override;
-    future<> create_reader();
-    explicit operator bool() const {
-        return bool(_reader);
-    }
     bool done() const {
         return _reader && is_buffer_empty() && is_end_of_stream();
     }
@@ -969,7 +990,6 @@ public:
     bool is_read_ahead_in_progress() const {
         return _read_ahead.has_value();
     }
-    void pause();
 };
 
 void shard_reader::stop() noexcept {
@@ -981,45 +1001,37 @@ void shard_reader::stop() noexcept {
 
     _stopped = true;
 
-    auto f = [this] {
-        if (_read_ahead) {
-            return std::move(*_read_ahead);
-        } else if (_pause) {
-            return std::move(*_pause);
-        } else {
-            return make_ready_future<>();
-        }
-    }();
+    auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
 
     _lifecycle_policy->destroy_reader(_shard, f.then([this] {
-        if (_reader) {
-            return reader_lifecycle_policy::paused_or_stopped_reader{std::move(_reader), detach_buffer(), _pending_next_partition};
-        } else {
-            return reader_lifecycle_policy::paused_or_stopped_reader{std::move(_irh), detach_buffer(), _pending_next_partition};
-        }
+        return smp::submit_to(_shard, [this] {
+            return make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(*_reader).inactive_read_handle()));
+        }).then([this] (foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> irh) {
+            return reader_lifecycle_policy::stopped_reader{std::move(irh), detach_buffer(), _pending_next_partition};
+        });
     }).finally([zis = shared_from_this()] {}));
 }
 
-void shard_reader::update_last_position() {
-    if (is_buffer_empty()) {
+void shard_reader::remote_reader::update_last_position(const circular_buffer<mutation_fragment>& buffer) {
+    if (buffer.empty()) {
         return;
     }
 
-    auto rbegin = std::reverse_iterator(buffer().end());
-    auto rend = std::reverse_iterator(buffer().begin());
+    auto rbegin = std::reverse_iterator(buffer.end());
+    auto rend = std::reverse_iterator(buffer.begin());
     if (auto pk_it = std::find_if(rbegin, rend, std::mem_fn(&mutation_fragment::is_partition_start)); pk_it != rend) {
         _last_pkey = pk_it->as_partition_start().key();
     }
 
-    _last_position_in_partition.emplace(buffer().back().position());
+    _last_position_in_partition.emplace(buffer.back().position());
 }
 
-void shard_reader::adjust_partition_slice() {
+void shard_reader::remote_reader::adjust_partition_slice() {
     if (!_slice_override) {
         _slice_override = _ps;
     }
 
-    _slice_override->clear_range(*_schema, _last_pkey->key());
+    //_slice_override->clear_range(*_schema, _last_pkey->key());
     auto& last_ckey = _last_position_in_partition->key();
 
     auto cmp = bound_view::compare(*_schema);
@@ -1044,7 +1056,7 @@ void shard_reader::adjust_partition_slice() {
     _slice_override->set_range(*_schema, _last_pkey->key(), std::move(ranges));
 }
 
-future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> shard_reader::recreate_reader() {
+flat_mutation_reader shard_reader::remote_reader::recreate_reader() {
     const dht::partition_range* range = _pr;
     const query::partition_slice* slice = &_ps;
 
@@ -1080,106 +1092,148 @@ future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> shard_reader::recreat
         // read a single partition) but still, let's make sure we handle it
         // correctly.
         if (_pr->is_singular() && !partition_range_is_inclusive) {
-            return make_ready_future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>(
-                    make_foreign(std::make_unique<flat_mutation_reader>(make_empty_flat_reader(_schema))));
+            return make_empty_flat_reader(_schema);
         }
 
         _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());
         range = &*_range_override;
     }
 
-    return do_create_reader(*range, *slice);
+    return _lifecycle_policy.create_reader(
+            _schema,
+            *range,
+            *slice,
+            _pc,
+            _trace_state,
+            _fwd_mr);
 }
 
-future<> shard_reader::resume() {
-    return std::exchange(_pause, std::nullopt)->then([this] {
-        if (_stopped) {
-            return make_ready_future<>();
-        }
-        return try_resume().then([this] (foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) mutable {
-            if (reader) {
-                _reader = std::move(reader);
-                return make_ready_future<>();
-            } else if (_stopped) {
-                return make_ready_future<>();
-            } else {
-                return recreate_reader().then([this] (foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) {
-                    _reader = std::move(reader);
-                });
-            }
-        });
-    }).finally([zis = shared_from_this()] {});
+flat_mutation_reader shard_reader::remote_reader::resume_or_create_reader() {
+    if (!_reader_created) {
+        auto reader = _lifecycle_policy.create_reader(_schema, *_pr, _ps, _pc, _trace_state, _fwd_mr);
+        _reader_created = true;
+        return reader;
+    }
+    if (auto reader_opt = _lifecycle_policy.try_resume(std::move(_irh))) {
+        return std::move(*reader_opt);
+    }
+    return recreate_reader();
 }
+
+shard_reader::remote_reader::remote_reader(
+        schema_ptr schema,
+        reader_lifecycle_policy& lifecycle_policy,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr)
+    : _schema(std::move(schema))
+    , _lifecycle_policy(lifecycle_policy)
+    , _pr(&pr)
+    , _ps(ps)
+    , _pc(pc)
+    , _trace_state(std::move(trace_state))
+    , _fwd_mr(fwd_mr) {
+}
+
+future<shard_reader::fill_buffer_result> shard_reader::remote_reader::fill_buffer(const dht::partition_range& pr, bool pending_next_partition,
+        db::timeout_clock::time_point timeout) {
+    // We could have missed a `fast_forward_to()` if the reader wasn't created yet.
+    _pr = &pr;
+    if (pending_next_partition) {
+        _last_position_in_partition = position_in_partition(position_in_partition::end_of_partition_tag_t{});
+    }
+    return do_with(resume_or_create_reader(), [this, pending_next_partition, timeout] (flat_mutation_reader& reader) {
+        if (pending_next_partition) {
+            reader.next_partition();
+        }
+        auto f = make_ready_future<>();
+        if (_drop_partition_start || _drop_static_row) {
+            f = repeat([this, &reader, timeout] {
+                return reader.fill_buffer(timeout).then([this, &reader] {
+                    const auto eos = reader.is_end_of_stream();
+
+                    if (reader.is_buffer_empty()) {
+                        return stop_iteration(eos);
+                    }
+                    if (_drop_partition_start) {
+                        _drop_partition_start = false;
+                        if (reader.peek_buffer().is_partition_start()) {
+                            reader.pop_mutation_fragment();
+                        }
+                    }
+
+                    if (reader.is_buffer_empty()) {
+                        return stop_iteration(eos);
+                    }
+                    if (_drop_static_row) {
+                        _drop_static_row = false;
+                        if (reader.peek_buffer().is_static_row()) {
+                            reader.pop_mutation_fragment();
+                        }
+                    }
+
+                    return stop_iteration(reader.is_buffer_full() || eos);
+                });
+            });
+        } else {
+            f = reader.fill_buffer(timeout);
+        }
+
+        return f.then([this, &reader] {
+            auto buffer = reader.detach_buffer();
+            const auto eos = reader.is_end_of_stream();
+            update_last_position(buffer);
+            _irh = _lifecycle_policy.pause(std::move(reader));
+            return fill_buffer_result(std::move(buffer), eos);
+        });
+    });
+}
+
+future<> shard_reader::remote_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+    _pr = &pr;
+    _last_pkey.reset();
+    _last_position_in_partition.reset();
+
+    if (!_reader_created || !_irh) {
+        return make_ready_future<>();
+    }
+    if (auto reader_opt = _lifecycle_policy.try_resume(std::move(_irh))) {
+        auto f = reader_opt->fast_forward_to(pr, timeout);
+        return f.then([this, reader = std::move(*reader_opt)] () mutable {
+            _irh = _lifecycle_policy.pause(std::move(reader));
+        });
+    }
+    return make_ready_future<>();
+}
+
 
 future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
-    return smp::submit_to(_shard, [reader = _reader.get(), pending_next_partition = std::exchange(_pending_next_partition, false), timeout] {
-        if (pending_next_partition) {
-            reader->next_partition();
-        }
-        return reader->fill_buffer(timeout).then([reader] {
-            return fill_buffer_result(reader->detach_buffer(), reader->is_end_of_stream());
+    auto fill_buf_fut = make_ready_future<fill_buffer_result>();
+    const auto pending_next_partition = std::exchange(_pending_next_partition, false);
+    if (!_reader) {
+        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), pending_next_partition, timeout] {
+            auto rreader = make_foreign(std::make_unique<remote_reader>(gs.get(), *_lifecycle_policy, *_pr, _ps, _pc, _trace_state, _fwd_mr));
+            auto f = rreader->fill_buffer(*_pr, pending_next_partition, timeout);
+            return f.then([rreader = std::move(rreader)] (fill_buffer_result res) mutable {
+                return make_ready_future<foreign_ptr<std::unique_ptr<remote_reader>>, fill_buffer_result>(std::move(rreader), std::move(res));
+            });
+        }).then([this, timeout] (foreign_ptr<std::unique_ptr<remote_reader>> reader, fill_buffer_result res) {
+            _reader = std::move(reader);
+            return std::move(res);
         });
-    }).then([this, zis = shared_from_this()] (fill_buffer_result res) {
-        process_remote_buffer(*res.buffer, res.end_of_stream);
-    });
-}
-
-void shard_reader::process_remote_buffer(const circular_buffer<mutation_fragment>& buffer, bool end_of_stream) {
-    _end_of_stream = end_of_stream;
-
-    if (buffer.empty()) {
-        return;
+    } else {
+        fill_buf_fut = smp::submit_to(_shard, [this, pending_next_partition, timeout] () mutable {
+            return _reader->fill_buffer(*_pr, pending_next_partition, timeout);
+        });
     }
 
-    auto it = buffer.begin();
-
-    if (_drop_partition_start) {
-        _drop_partition_start = false;
-        if (it->is_partition_start()) {
-            ++it;
+    return fill_buf_fut.then([this, zis = shared_from_this()] (fill_buffer_result res) mutable {
+        _end_of_stream = res.end_of_stream;
+        for (const auto& mf : *res.buffer) {
+            push_mutation_fragment(mutation_fragment(*_schema, mf));
         }
-    }
-
-    if (it == buffer.end()) {
-        return;
-    }
-    if (_drop_static_row) {
-        _drop_static_row = false;
-        if (it->is_static_row()) {
-            ++it;
-        }
-    }
-
-    for (; it != buffer.end(); ++it) {
-        push_mutation_fragment(mutation_fragment(*_schema, *it));
-    }
-
-    if (!_stopped) {
-        update_last_position();
-    }
-}
-
-future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> shard_reader::try_resume() {
-    return smp::submit_to(_shard, [this, irh = std::exchange(_irh, {})] () mutable {
-        if (auto reader_opt = _lifecycle_policy->try_resume(std::move(*irh))) {
-            return make_foreign(std::make_unique<flat_mutation_reader>(std::move(*reader_opt)));
-        } else {
-            return foreign_ptr<std::unique_ptr<flat_mutation_reader>>{};
-        }
-    });
-}
-
-future<> shard_reader::do_pause() {
-    return smp::submit_to(_shard, [this, reader = std::exchange(_reader, {})] () mutable {
-        return make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(_lifecycle_policy->pause(std::move(*reader))));
-    }).then([this] (foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> irh) {
-        _irh = std::move(irh);
-    });
-}
-
-future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> shard_reader::do_create_reader(const dht::partition_range& pr, const query::partition_slice& ps) {
-    return smp::submit_to(_shard, [this, &pr, &ps, schema = global_schema_ptr(_schema)] {
-        return make_foreign(std::make_unique<flat_mutation_reader>(_lifecycle_policy->create_reader(schema, pr, ps, _pc, _trace_state, _fwd_mr)));
     });
 }
 
@@ -1190,16 +1244,13 @@ future<> shard_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     if (!is_buffer_empty()) {
         return make_ready_future<>();
     }
-    if (_pause) {
-        return resume().then([this, timeout] {
-            return fill_buffer(timeout);
-        });
-    }
     return do_fill_buffer(timeout);
 }
 
 void shard_reader::next_partition() {
-    _last_position_in_partition = position_in_partition(position_in_partition::end_of_partition_tag_t{});
+    if (!_reader) {
+        return;
+    }
     clear_buffer_to_next_partition();
     _pending_next_partition = is_buffer_empty();
 }
@@ -1207,48 +1258,25 @@ void shard_reader::next_partition() {
 future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
     _pr = &pr;
 
-    if (_reader) {
-        _end_of_stream = false;
-        clear_buffer();
-
-        _last_pkey.reset();
-        _last_position_in_partition.reset();
-
-        auto do_fast_forward = [this, &pr, timeout] {
-            return smp::submit_to(_shard, [reader = _reader.get(), pr, timeout] {
-                return reader->fast_forward_to(pr, timeout);
-            });
-        };
-
-        if (_pause) {
-            return resume().then(std::move(do_fast_forward));
-        }
-
-        if (_read_ahead) {
-            return std::exchange(_read_ahead, std::nullopt)->then(std::move(do_fast_forward));
-        }
-
-        return do_fast_forward();
+    if (!_reader) {
+        // No need to fast-forward uncreated readers, they will be passed the new
+        // range when created.
+        return make_ready_future<>();
     }
-    // No need to fast-forward uncreated readers, they will be passed the new
-    // range when created.
-    return make_ready_future<>();
+
+    _end_of_stream = false;
+    clear_buffer();
+
+    auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
+    return f.then([this, &pr, timeout] {
+        return smp::submit_to(_shard, [this, &pr, timeout] {
+            return _reader->fast_forward_to(pr, timeout);
+        });
+    });
 }
 
 future<> shard_reader::fast_forward_to(position_range, db::timeout_clock::time_point timeout) {
     return make_exception_future<>(std::bad_function_call());
-}
-
-future<> shard_reader::create_reader() {
-    if (_reader) {
-        return make_ready_future<>();
-    }
-    if (_read_ahead) {
-        return *std::exchange(_read_ahead, std::nullopt);
-    }
-    return do_create_reader(*_pr, _ps).then([this, zis = shared_from_this()] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
-        _reader = std::move(r);
-    });
 }
 
 void shard_reader::read_ahead(db::timeout_clock::time_point timeout) {
@@ -1256,35 +1284,7 @@ void shard_reader::read_ahead(db::timeout_clock::time_point timeout) {
         return;
     }
 
-    auto f = _reader
-        ? (_pause ? resume() : make_ready_future<>())
-        : create_reader();
-
-    _read_ahead.emplace(f.then([this, timeout, zis = shared_from_this()] () mutable {
-        if (_stopped) {
-            return make_ready_future<>();
-        }
-        return do_fill_buffer(timeout).then([this, zis = std::move(zis)] {
-            // Read ahead is still in the background, so pause the reader.
-            if (!_stopped && _read_ahead) {
-                pause();
-            }
-        });
-    }));
-}
-
-void shard_reader::pause() {
-    if (_pause) {
-        return;
-    }
-    auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
-    _pause = f.then([this] () {
-        if (_stopped) {
-            return make_ready_future<>();
-        }
-
-        return do_pause();
-    }).finally([zis = shared_from_this()] {});
+    _read_ahead.emplace(do_fill_buffer(timeout));
 }
 
 } // anonymous namespace
@@ -1389,7 +1389,6 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
         } else {
             maybe_move_to_next_shard();
         }
-        reader.pause();
         return make_ready_future<>();
     } else if (reader.is_read_ahead_in_progress()) {
         return reader.fill_buffer(timeout);
@@ -1441,9 +1440,6 @@ future<> multishard_combining_reader::fill_buffer(db::timeout_clock::time_point 
     _crossed_shards = false;
     return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this, timeout] {
         auto& reader = *_shard_readers[_current_shard];
-        if (!reader) {
-            return reader.create_reader();
-        }
 
         if (reader.is_buffer_empty()) {
             return handle_empty_reader_buffer(timeout);
@@ -1451,7 +1447,6 @@ future<> multishard_combining_reader::fill_buffer(db::timeout_clock::time_point 
 
         while (!reader.is_buffer_empty() && !is_buffer_full()) {
             if (const auto& mf = reader.peek_buffer(); mf.is_partition_start() && maybe_move_to_next_shard(&mf.as_partition_start().key().token())) {
-                reader.pause();
                 return make_ready_future<>();
             }
             push_mutation_fragment(reader.pop_mutation_fragment());

@@ -403,13 +403,9 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
 /// multishard reader itself.
 class reader_lifecycle_policy {
 public:
-    struct paused_or_stopped_reader {
-        using paused_reader = foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>>;
-        using stopped_reader = foreign_ptr<std::unique_ptr<flat_mutation_reader>>;
-
-        std::variant<paused_reader, stopped_reader> remote_reader;
+    struct stopped_reader {
+        foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> handle;
         circular_buffer<mutation_fragment> unconsumed_fragments;
-        // Only set for paused readers.
         bool has_pending_next_partition;
     };
 
@@ -423,8 +419,9 @@ public:
     /// Create an appropriate reader on the shard it is called on.
     ///
     /// Will be called when the multishard reader visits a shard for the
-    /// first time. This method should also enter gates, take locks or
-    /// whatever is appropriate to make sure resources it is using on the
+    /// first time or when a reader has to be recreated after having been
+    /// evicted (while paused). This method should also enter gates, take locks
+    /// or whatever is appropriate to make sure resources it is using on the
     /// remote shard stay alive, during the lifetime of the created reader.
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
@@ -448,7 +445,7 @@ public:
     /// all the readers being cleaned up is up to the implementation.
     ///
     /// This method will be called from a destructor so it cannot throw.
-    virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader) noexcept = 0;
+    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
 
     /// Get the relevant semaphore for this read.
     ///
