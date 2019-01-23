@@ -21,8 +21,6 @@
 
 #include "sstable_utils.hh"
 
-#include <tests/test-utils.hh>
-
 #include "database.hh"
 #include "memtable-sstable.hh"
 #include "dht/i_partitioner.hh"

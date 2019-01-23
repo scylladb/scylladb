@@ -96,8 +96,8 @@ def have_pkg(package):
     return subprocess.call(['pkg-config', package]) == 0
 
 
-def pkg_config(option, package):
-    output = subprocess.check_output(['pkg-config', option, package])
+def pkg_config(package, *options):
+    output = subprocess.check_output(['pkg-config'] + list(options) + [package])
     return output.decode('utf-8').strip()
 
 
@@ -284,6 +284,7 @@ scylla_tests = [
     'tests/test-serialization',
     'tests/broken_sstable_test',
     'tests/sstable_test',
+    'tests/sstable_datafile_test',
     'tests/sstable_3_x_test',
     'tests/sstable_mutation_test',
     'tests/sstable_resharding_test',
@@ -432,8 +433,6 @@ arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_i
                         help='enable allocation failure injection')
 arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', default=None,
                         help='path to antlr3 executable')
-arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default=None,
-                        help='path to ragel executable')
 args = arg_parser.parse_args()
 
 defines = []
@@ -859,7 +858,8 @@ perf_tests_seastar_deps = [
 for t in perf_tests:
     deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
 
-deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc', 'tests/sstable_utils.cc', 'tests/normalizing_reader.cc']
+deps['tests/sstable_test'] += ['tests/sstable_utils.cc', 'tests/normalizing_reader.cc']
+deps['tests/sstable_datafile_test'] += ['tests/sstable_utils.cc', 'tests/normalizing_reader.cc']
 deps['tests/mutation_reader_test'] += ['tests/sstable_utils.cc']
 
 deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc', 'utils/managed_bytes.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
@@ -1058,19 +1058,30 @@ if status:
     print('Failed to generate {}\n'.format(pc))
     sys.exit(1)
 
+def query_seastar_flags(seastar_pc_file, link_static_cxx=False):
+    pc_file = os.path.join('seastar', seastar_pc_file)
+    cflags = pkg_config(pc_file, '--cflags', '--static')
+    libs = pkg_config(pc_file, '--libs', '--static')
+
+    if link_static_cxx:
+        libs = libs.replace('-lstdc++ ', '')
+
+    # Amend the incorrect flags in the pkg-config file to point to the
+    # right place. This is a temporary hack until we switch to the new
+    # pkg-config specification.
+    cflags = (cflags
+        .replace('-I. ', '')
+        .replace('-Iinclude ', '-I' + os.path.join('seastar', 'include') + ' '))
+
+    return cflags, libs
+
 for mode in build_modes:
-    cfg = dict([line.strip().split(': ', 1)
-                for line in open('seastar/' + pc[mode])
-                if ': ' in line])
-    if args.staticcxx:
-        cfg['Libs'] = cfg['Libs'].replace('-lstdc++ ', '')
-    modes[mode]['seastar_cflags'] = cfg['Cflags']
-    modes[mode]['seastar_libs'] = cfg['Libs']
+    seastar_cflags, seastar_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
+    modes[mode]['seastar_cflags'] = seastar_cflags
+    modes[mode]['seastar_libs'] = seastar_libs
 
-seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
-
-args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
-libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config("--libs", "jsoncpp"),
+args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
+libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  maybe_static(args.staticboost, '-lboost_filesystem'), ' -lstdc++fs', ' -lcrypt', ' -lcryptopp',
                  maybe_static(args.staticboost, '-lboost_date_time'), ])
 
@@ -1083,8 +1094,8 @@ if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
 for pkg in pkgs:
-    args.user_cflags += ' ' + pkg_config('--cflags', pkg)
-    libs += ' ' + pkg_config('--libs', pkg)
+    args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
+    libs += ' ' + pkg_config(pkg, '--libs')
 user_cflags = args.user_cflags
 user_ldflags = args.user_ldflags
 if args.staticcxx:
@@ -1107,11 +1118,6 @@ if args.antlr3_exec:
 else:
     antlr3_exec = "antlr3"
 
-if args.ragel_exec:
-    ragel_exec = args.ragel_exec
-else:
-    ragel_exec = "ragel"
-
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
@@ -1124,9 +1130,6 @@ with open(buildfile, 'w') as f:
             depth = {link_pool_depth}
         pool seastar_pool
             depth = 1
-        rule ragel
-            command = {ragel_exec} -G2 -o $out $in
-            description = RAGEL $out
         rule gen
             command = echo -e $text > $out
             description = GEN $out
@@ -1152,17 +1155,17 @@ with open(buildfile, 'w') as f:
     for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = {opt} -DXXH_PRIVATE_API -I. -I $builddir/{mode}/gen -I seastar/include -I seastar/include -I seastar/build/{mode}/gen/include
+            cxxflags_{mode} = {opt} -DXXH_PRIVATE_API -I. -I $builddir/{mode}/gen
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx  $cxxflags_{mode} {sanitize_libs} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode} {seastar_libs}
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
-              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode} {seastar_libs}
               description = LINK (stripped) $out
               pool = link_pool
             rule ar.{mode}
@@ -1192,7 +1195,6 @@ with open(buildfile, 'w') as f:
             )
         )
         compiles = {}
-        ragels = {}
         swaggers = {}
         serializers = {}
         thrifts = set()
@@ -1230,24 +1232,18 @@ with open(buildfile, 'w') as f:
                     # So we strip the tests by default; The user can very
                     # quickly re-link the test unstripped by adding a "_g"
                     # to the test name, e.g., "ninja build/release/testname_g"
-                    f.write('build $builddir/{}/{}: {}.{} {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs),
-                                                                          'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}: {}.{} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs)))
                     f.write('   libs = {}\n'.format(local_libs))
-                    f.write('build $builddir/{}/{}_g: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
-                                                                              'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}_g: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
                     f.write('   libs = {}\n'.format(local_libs))
                 else:
-                    f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
-                                                                            'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
                     if has_thrift:
                         f.write('   libs =  {} {} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system')))
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     compiles[obj] = src
-                elif src.endswith('.rl'):
-                    hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
-                    ragels[hh] = src
                 elif src.endswith('.idl.hh'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.idl.hh', '.dist.hh')
                     serializers[hh] = src
@@ -1275,21 +1271,16 @@ with open(buildfile, 'w') as f:
 
         for obj in compiles:
             src = compiles[obj]
-            gen_headers = list(ragels.keys())
-            gen_headers += ['seastar/build/{}/gen/include/seastar/http/request_parser.hh'.format(mode)]
-            gen_headers += ['seastar/build/{}/gen/include/seastar/http/response_parser.hh'.format(mode)]
+            gen_headers = []
             for th in thrifts:
                 gen_headers += th.headers('$builddir/{}/gen'.format(mode))
             for g in antlr3_grammars:
                 gen_headers += g.headers('$builddir/{}/gen'.format(mode))
             gen_headers += list(swaggers.keys())
             gen_headers += list(serializers.keys())
-            f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
+            f.write('build {}: cxx.{} {} | {} || {}\n'.format(obj, mode, src, 'seastar/build/{}/libseastar.a'.format(mode), ' '.join(gen_headers)))
             if src in extra_cxxflags:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[src], **modeval))
-        for hh in ragels:
-            src = ragels[hh]
-            f.write('build {}: ragel {}\n'.format(hh, src))
         for hh in swaggers:
             src = swaggers[hh]
             f.write('build {}: swagger {} | seastar/scripts/seastar-json2code.py\n'.format(hh, src))
@@ -1312,11 +1303,11 @@ with open(buildfile, 'w') as f:
                 if cc.endswith('Parser.cpp') and has_sanitize_address_use_after_scope:
                     # Parsers end up using huge amounts of stack space and overflowing their stack
                     f.write('  obj_cxxflags = -fno-sanitize-address-use-after-scope\n')
-        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune seastar/build/{mode}/gen/include/seastar/http/request_parser.hh seastar/build/{mode}/gen/include/seastar/http/response_parser.hh: ninja {seastar_deps}\n'
+        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune: ninja | always\n'
                 .format(**locals()))
         f.write('  pool = seastar_pool\n')
         f.write('  subdir = seastar\n')
-        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune build/{mode}/gen/include/seastar/http/request_parser.hh build/{mode}/gen/include/seastar/http/response_parser.hh\n'.format(**locals()))
+        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune\n'.format(**locals()))
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
             ''').format(**locals()))
@@ -1326,7 +1317,6 @@ with open(buildfile, 'w') as f:
         f.write('    command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc}\n'.format(**locals()))
         f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
 
-    f.write('build {}: phony\n'.format(seastar_deps))
     f.write(textwrap.dedent('''\
         rule configure
           command = {python} configure.py $configure_args
