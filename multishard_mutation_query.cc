@@ -78,11 +78,6 @@ class read_context : public reader_lifecycle_policy {
         }
     };
 
-    struct paused_reader {
-        foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
-        bool has_pending_next_partition;
-    };
-
     using inexistent_state = std::monostate;
     struct successful_lookup_state {
         foreign_unique_ptr<reader_params> params;
@@ -96,7 +91,8 @@ class read_context : public reader_lifecycle_policy {
     struct saving_state {
         foreign_unique_ptr<reader_params> params;
         foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
-        paused_reader reader;
+        foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
+        bool has_pending_next_partition;
         circular_buffer<mutation_fragment> buffer;
     };
 
@@ -317,7 +313,7 @@ void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_
                 auto read_operation = std::move(maybe_used_state->read_operation);
                 auto params = std::move(maybe_used_state->params);
                 rs = saving_state{std::move(params), std::move(read_operation),
-                    paused_reader{std::move(reader.handle), reader.has_pending_next_partition}, std::move(reader.unconsumed_fragments)};
+                    std::move(reader.handle), reader.has_pending_next_partition, std::move(reader.unconsumed_fragments)};
             } else {
                 mmq_log.warn(
                         "Unexpected request to dismantle reader in state `{}` for shard {}."
@@ -336,7 +332,7 @@ future<> read_context::stop() {
     gate_fut.then([this] {
         for (shard_id shard = 0; shard != smp::count; ++shard) {
             if (auto* maybe_saving_state = std::get_if<saving_state>(&_readers[shard])) {
-                _db.invoke_on(shard, [schema = global_schema_ptr(_schema), reader = std::move(maybe_saving_state->reader),
+                _db.invoke_on(shard, [schema = global_schema_ptr(_schema), handle = std::move(maybe_saving_state->handle),
                         params = std::move(maybe_saving_state->params),
                         read_operation = std::move(maybe_saving_state->read_operation)] (database& db) mutable {
                     // We cannot use semaphore() here, as this can be already destroyed.
@@ -442,7 +438,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
 
 future<> read_context::save_reader(saving_state& current_state, const dht::decorated_key& last_pkey,
         const std::optional<clustering_key_prefix>& last_ckey) {
-    const auto shard = current_state.reader.handle.get_owner_shard();
+    const auto shard = current_state.handle.get_owner_shard();
 
     return _db.invoke_on(shard, [this, shard, query_uuid = _cmd.query_uuid, query_ranges = _ranges, &current_state,
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
@@ -450,13 +446,13 @@ future<> read_context::save_reader(saving_state& current_state, const dht::decor
             auto params = current_state.params.release();
             auto read_operation = current_state.read_operation.release();
 
-            flat_mutation_reader_opt reader = try_resume(std::move(*current_state.reader.handle));
+            flat_mutation_reader_opt reader = try_resume(std::move(*current_state.handle));
 
             if (!reader) {
                 return;
             }
 
-            if (current_state.reader.has_pending_next_partition) {
+            if (current_state.has_pending_next_partition) {
                 reader->next_partition();
             }
 
@@ -557,7 +553,7 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
                 if (auto* maybe_successful_lookup_state = std::get_if<successful_lookup_state>(&rs)) {
                     auto& current_state = *maybe_successful_lookup_state;
                     rs = saving_state{std::move(current_state.params), std::move(current_state.read_operation),
-                            paused_reader{std::move(current_state.handle), false}, circular_buffer<mutation_fragment>{}};
+                            std::move(current_state.handle), false, circular_buffer<mutation_fragment>{}};
                     return save_reader(std::get<saving_state>(rs), last_pkey, last_ckey);
                 }
 
