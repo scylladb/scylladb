@@ -382,9 +382,9 @@ public:
         return dir + "/" + sst_dir_basename(gen);
     }
 
-    static bool is_temp_dir(const sstring& dirpath)
+    static bool is_temp_dir(const fs::path& dirpath)
     {
-        return fs::canonical(fs::path(dirpath)).extension().string() == "sstable";
+        return dirpath.extension().string() == ".sstable";
     }
 
     const sstring& get_dir() const {

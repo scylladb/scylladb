@@ -540,8 +540,8 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
             // so that the supplied callback will not block scan_dir() from
             // reading the next entry in the directory.
             if (de.type && *de.type == directory_entry_type::directory) {
-                if (engine().cpu_id() == 0 && sstables::sstable::is_temp_dir(de.name)) {
-                    fs::path dirpath = sstdir / de.name;
+                fs::path dirpath = sstdir / de.name;
+                if (engine().cpu_id() == 0 && sstables::sstable::is_temp_dir(dirpath)) {
                     dblog.info("Found temporary sstable directory: {}, removing", dirpath);
                     futures.push_back(lister::rmdir(dirpath));
                 }
