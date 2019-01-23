@@ -98,6 +98,9 @@ if [ ! -f /usr/bin/pystache ]; then
         sudo apt-get install -y python-pystache
     fi
 fi
+if [ ! -f /usr/bin/file ]; then
+    pkg_install file
+fi
 if is_debian_variant && [ ! -f /usr/share/doc/python-pkg-resources/copyright ]; then
     sudo apt-get install -y python-pkg-resources
 fi
