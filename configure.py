@@ -1314,7 +1314,7 @@ with open(buildfile, 'w') as f:
         f.write('build build/{mode}/scylla-package.tar.gz: package build/{mode}/scylla build/{mode}/iotune build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE | always\n'.format(**locals()))
         f.write('    mode = {mode}\n'.format(**locals()))
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
-        f.write('    command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc}\n'.format(**locals()))
+        f.write('    command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../build/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
         f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
 
     f.write(textwrap.dedent('''\
