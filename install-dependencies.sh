@@ -47,6 +47,17 @@ fedora_packages=(
     ant-junit
     maven
     pystache
+    patchelf
+    python3
+    python3-PyYAML
+    python3-pyudev
+    python3-setuptools
+    python3-urwid
+    python3-pyparsing
+    python3-requests
+    python3-pyudev
+    python3-setuptools
+    dnf-utils
 )
 
 centos_packages=(
