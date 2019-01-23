@@ -59,6 +59,7 @@ private:
         uint64_t errors = 0;
         uint64_t dropped = 0;
         uint64_t sent = 0;
+        uint64_t discarded = 0;
     };
 
     // map: shard -> segments
@@ -102,7 +103,10 @@ public:
                 send_state::restart_segment>>;
 
             struct send_one_file_ctx {
-                std::unordered_map<table_schema_version, column_mapping> schema_ver_to_column_mapping;
+                send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
+                    : schema_ver_to_column_mapping(last_schema_ver_to_column_mapping)
+                {}
+                std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
                 seastar::gate file_send_gate;
                 std::unordered_set<db::replay_position> rps_set; // number of elements in this set is never going to be greater than the maximum send queue length
                 send_state_set state;
@@ -111,6 +115,7 @@ public:
         private:
             std::list<sstring> _segments_to_replay;
             replay_position _last_not_complete_rp;
+            std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
             state_set _state;
             future<> _stopped;
             clock::time_point _next_flush_tp;
