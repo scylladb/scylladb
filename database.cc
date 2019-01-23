@@ -162,6 +162,7 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _enable_incremental_backups(cfg.incremental_backups())
     , _querier_cache(_read_concurrency_sem, dbcfg.available_memory * 0.04)
     , _large_partition_handler(std::make_unique<db::cql_table_large_partition_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024))
+    , _nop_large_partition_handler(std::make_unique<db::nop_large_partition_handler>())
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>(*this))
 {
@@ -817,7 +818,14 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
     cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
-    cfg.large_partition_handler = db.get_large_partition_handler();
+
+    // avoid self-reporting
+    if (s.ks_name() == "system" && s.cf_name() == db::system_keyspace::LARGE_PARTITIONS) {
+        cfg.large_partition_handler = db.get_nop_large_partition_handler();
+    } else {
+        cfg.large_partition_handler = db.get_large_partition_handler();
+    }
+
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();

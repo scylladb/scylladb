@@ -55,10 +55,6 @@ logging::logger cql_table_large_partition_handler::large_partition_logger("large
 future<> cql_table_large_partition_handler::update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& key, uint64_t partition_size) const {
     static const sstring req = format("INSERT INTO system.{} (keyspace_name, table_name, sstable_name, partition_size, partition_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?) USING TTL 2592000",
             db::system_keyspace::LARGE_PARTITIONS);
-    // avoid self-reporting
-    if (s.ks_name() == "system" && s.cf_name() == db::system_keyspace::LARGE_PARTITIONS) {
-        return make_ready_future<>();
-    }
     auto ks_name = s.ks_name();
     auto cf_name = s.cf_name();
     std::ostringstream oss;

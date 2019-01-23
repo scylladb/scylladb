@@ -1272,6 +1272,7 @@ private:
     query::querier_cache _querier_cache;
 
     std::unique_ptr<db::large_partition_handler> _large_partition_handler;
+    std::unique_ptr<db::large_partition_handler> _nop_large_partition_handler;
 
     query::result_memory_limiter _result_memory_limiter;
 
@@ -1421,6 +1422,10 @@ public:
 
     db::large_partition_handler* get_large_partition_handler() const {
         return _large_partition_handler.get();
+    }
+
+    db::large_partition_handler* get_nop_large_partition_handler() const {
+        return _nop_large_partition_handler.get();
     }
 
     future<> flush_all_memtables();
