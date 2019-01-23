@@ -64,37 +64,6 @@ using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 ///    knows to do nothing when the query is not stateful and just short
 ///    circuit.
 class read_context : public reader_lifecycle_policy {
-    struct reader_params {
-        std::unique_ptr<const dht::partition_range> range;
-        std::unique_ptr<const query::partition_slice> slice;
-
-        reader_params(dht::partition_range range, query::partition_slice slice)
-            : range(std::make_unique<const dht::partition_range>(std::move(range)))
-            , slice(std::make_unique<const query::partition_slice>(std::move(slice))) {
-        }
-        reader_params(std::unique_ptr<const dht::partition_range> range, std::unique_ptr<const query::partition_slice> slice)
-            : range(std::move(range))
-            , slice(std::move(slice)) {
-        }
-    };
-
-    using inexistent_state = std::monostate;
-    struct successful_lookup_state {
-        foreign_unique_ptr<reader_params> params;
-        foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
-        foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
-    };
-    struct used_state {
-        foreign_unique_ptr<reader_params> params;
-        foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
-    };
-    struct saving_state {
-        foreign_unique_ptr<reader_params> params;
-        foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
-        foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
-        bool has_pending_next_partition;
-        circular_buffer<mutation_fragment> buffer;
-    };
 
     //              ( )    (O)
     //               |      ^
@@ -119,11 +88,46 @@ class read_context : public reader_lifecycle_policy {
     //  2) save_readers()
     //  3) create_reader()
     //  4) destroy_reader()
-    using reader_state = std::variant<
-        inexistent_state,
-        successful_lookup_state,
-        used_state,
-        saving_state>;
+    enum class reader_state {
+        inexistent,
+        successful_lookup,
+        used,
+        saving,
+    };
+
+    struct reader_meta {
+        struct remote_parts {
+            reader_concurrency_semaphore& semaphore;
+            std::unique_ptr<const dht::partition_range> range;
+            std::unique_ptr<const query::partition_slice> slice;
+            utils::phased_barrier::operation read_operation;
+
+            remote_parts(
+                    reader_concurrency_semaphore& semaphore,
+                    std::unique_ptr<const dht::partition_range> range = nullptr,
+                    std::unique_ptr<const query::partition_slice> slice = nullptr,
+                    utils::phased_barrier::operation read_operation = {})
+                : semaphore(semaphore)
+                , range(std::move(range))
+                , slice(std::move(slice))
+                , read_operation(std::move(read_operation)) {
+            }
+        };
+
+        reader_state state = reader_state::inexistent;
+        foreign_unique_ptr<remote_parts> rparts;
+        foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
+        bool has_pending_next_partition = false;
+        circular_buffer<mutation_fragment> buffer;
+
+        reader_meta() = default;
+        // Remote constructor.
+        reader_meta(reader_state s, remote_parts rp, reader_concurrency_semaphore::inactive_read_handle h = {})
+            : state(s)
+            , rparts(make_foreign(std::make_unique<remote_parts>(std::move(rp))))
+            , handle(make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(h)))) {
+        }
+    };
 
     struct dismantle_buffer_stats {
         size_t partitions = 0;
@@ -189,17 +193,15 @@ class read_context : public reader_lifecycle_policy {
     tracing::trace_state_ptr _trace_state;
 
     // One for each shard. Index is shard id.
-    std::vector<reader_state> _readers;
-    std::vector<reader_concurrency_semaphore*> _semaphores;
+    std::vector<reader_meta> _readers;
 
     gate _dismantling_gate;
 
-    static std::string_view reader_state_to_string(const reader_state& rs);
+    static std::string_view reader_state_to_string(reader_state rs);
 
     dismantle_buffer_stats dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
-    future<> save_reader(saving_state& current_state, const dht::decorated_key& last_pkey,
-            const std::optional<clustering_key_prefix>& last_ckey);
+    future<> save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey);
 
 public:
     read_context(distributed<database>& db, schema_ptr s, const query::read_command& cmd, const dht::partition_range_vector& ranges,
@@ -210,7 +212,6 @@ public:
             , _ranges(ranges)
             , _trace_state(std::move(trace_state)) {
         _readers.resize(smp::count);
-        _semaphores.resize(smp::count);
     }
 
     read_context(read_context&&) = delete;
@@ -230,7 +231,7 @@ public:
     virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
-        return *_semaphores[engine().cpu_id()];
+        return _readers[engine().cpu_id()].rparts->semaphore;
     }
 
     future<> lookup_readers();
@@ -241,20 +242,20 @@ public:
     future<> stop();
 };
 
-// Deliberatly not using the `reader_state` alias here, so that we can enlist
-// the help of the compiler to keep this up-to-date.
-std::string_view read_context::reader_state_to_string(const std::variant<
-        inexistent_state,
-        successful_lookup_state,
-        used_state,
-        saving_state>& rs) {
-    static const std::array<const char*, 7> reader_state_names{
-        "inexistent",
-        "successful_lookup",
-        "used",
-        "saving",
-    };
-    return reader_state_names.at(rs.index());
+std::string_view read_context::reader_state_to_string(reader_state rs) {
+    switch (rs) {
+        case reader_state::inexistent:
+            return "inexistent";
+        case reader_state::successful_lookup:
+            return "successful_lookup";
+        case reader_state::used:
+            return "used";
+        case reader_state::saving:
+            return "saving";
+    }
+    // If we got here, we are logging an error anyway, so the above layers
+    // (should) have detected the invalid state.
+    return "invalid";
 }
 
 flat_mutation_reader read_context::create_reader(
@@ -265,60 +266,63 @@ flat_mutation_reader read_context::create_reader(
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding) {
     const auto shard = engine().cpu_id();
-    auto& rs = _readers[shard];
+    auto& rm = _readers[shard];
 
-    if (!std::holds_alternative<used_state>(rs) && !std::holds_alternative<successful_lookup_state>(rs) && !std::holds_alternative<inexistent_state>(rs)) {
+    if (rm.state != reader_state::used && rm.state != reader_state::successful_lookup && rm.state != reader_state::inexistent) {
         auto msg = format("Unexpected request to create reader for shard {}."
                 " The reader is expected to be in either `used`, `successful_lookup` or `inexistent` state,"
-                " but is in `{}` state instead.", shard, reader_state_to_string(rs));
+                " but is in `{}` state instead.", shard, reader_state_to_string(rm.state));
         mmq_log.warn(msg.c_str());
         throw std::logic_error(msg.c_str());
     }
 
     // The reader is either in inexistent or successful lookup state.
-    if (auto current_state = std::get_if<successful_lookup_state>(&rs)) {
-        if (auto reader_opt = try_resume(std::move(*current_state->handle))) {
-            rs = used_state{std::move(current_state->params), std::move(current_state->read_operation)};
+    if (rm.state == reader_state::successful_lookup) {
+        if (auto reader_opt = try_resume(std::move(*rm.handle))) {
+            rm.state = reader_state::used;
             return std::move(*reader_opt);
         }
     }
 
     auto& table = _db.local().find_column_family(schema);
+
+    if (!rm.rparts) {
+        rm.rparts = make_foreign(std::make_unique<reader_meta::remote_parts>(table.read_concurrency_semaphore()));
+    }
+
     //TODO need a way to transport io_priority_calls across shards
     auto& pc = service::get_local_sstable_query_read_priority();
-    auto params = make_foreign(std::make_unique<reader_params>(pr, ps));
-    auto read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(table.read_in_progress()));
-    auto reader = table.as_mutation_source().make_reader(std::move(schema), *params->range, *params->slice, pc, std::move(trace_state));
+    rm.rparts->range = std::make_unique<const dht::partition_range>(pr);
+    rm.rparts->slice = std::make_unique<const query::partition_slice>(ps);
+    rm.rparts->read_operation = table.read_in_progress();
+    rm.state = reader_state::used;
 
-    _semaphores[shard] = &table.read_concurrency_semaphore();
-    rs = used_state{std::move(params), std::move(read_operation)};
-
-    return reader;
+    return table.as_mutation_source().make_reader(std::move(schema), *rm.rparts->range, *rm.rparts->slice, pc, std::move(trace_state));
 }
 
 void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
     with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
         return reader_fut.then_wrapped([this, shard] (future<stopped_reader>&& reader_fut) {
-            auto& rs = _readers[shard];
+            auto& rm = _readers[shard];
 
             if (reader_fut.failed()) {
                 mmq_log.debug("Failed to stop reader on shard {}: {}", shard, reader_fut.get_exception());
                 ++_db.local().get_stats().multishard_query_failed_reader_stops;
-                rs = inexistent_state{};
+                rm.state = reader_state::inexistent;
                 return;
             }
 
             auto reader = reader_fut.get0();
-            if (auto* maybe_used_state = std::get_if<used_state>(&rs)) {
-                auto read_operation = std::move(maybe_used_state->read_operation);
-                auto params = std::move(maybe_used_state->params);
-                rs = saving_state{std::move(params), std::move(read_operation),
-                    std::move(reader.handle), reader.has_pending_next_partition, std::move(reader.unconsumed_fragments)};
+            if (rm.state == reader_state::used) {
+                rm.state = reader_state::saving;
+                rm.handle = std::move(reader.handle);
+                rm.has_pending_next_partition = reader.has_pending_next_partition;
+                rm.buffer = std::move(reader.unconsumed_fragments);
             } else {
                 mmq_log.warn(
                         "Unexpected request to dismantle reader in state `{}` for shard {}."
                         " Reader was not created nor is in the process of being created.",
-                        reader_state_to_string(rs),
+                        reader_state_to_string(rm.state),
                         shard);
             }
         });
@@ -331,15 +335,11 @@ future<> read_context::stop() {
     auto gate_fut = _dismantling_gate.is_closed() ? make_ready_future<>() : _dismantling_gate.close();
     gate_fut.then([this] {
         for (shard_id shard = 0; shard != smp::count; ++shard) {
-            if (auto* maybe_saving_state = std::get_if<saving_state>(&_readers[shard])) {
-                _db.invoke_on(shard, [schema = global_schema_ptr(_schema), handle = std::move(maybe_saving_state->handle),
-                        params = std::move(maybe_saving_state->params),
-                        read_operation = std::move(maybe_saving_state->read_operation)] (database& db) mutable {
+            if (_readers[shard].state == reader_state::saving) {
+                _db.invoke_on(shard, [schema = global_schema_ptr(_schema), rm = std::move(_readers[shard])] (database& db) mutable {
                     // We cannot use semaphore() here, as this can be already destroyed.
                     auto& table = db.find_column_family(schema);
-                    table.read_concurrency_semaphore().unregister_inactive_read(std::move(*handle));
-                    params.release();
-                    read_operation.release();
+                    table.read_concurrency_semaphore().unregister_inactive_read(std::move(*rm.handle));
                 });
             }
         }
@@ -361,12 +361,11 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
     for (;rit != rend; ++rit) {
         if (rit->is_partition_start()) {
             const auto shard = partitioner.shard_of(rit->as_partition_start().key().token());
-            auto maybe_saving_state = std::get_if<saving_state>(&_readers[shard]);
 
             // It is possible that the reader this partition originates from
             // does not exist anymore. Either because we failed stopping it or
             // because it was evicted.
-            if (!maybe_saving_state) {
+            if (_readers[shard].state != reader_state::saving) {
                 for (auto& smf : tmp_buffer) {
                     stats.add_discarded(*_schema, smf);
                 }
@@ -375,7 +374,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
                 continue;
             }
 
-            auto& shard_buffer = maybe_saving_state->buffer;
+            auto& shard_buffer = _readers[shard].buffer;
             for (auto& smf : tmp_buffer) {
                 stats.add(*_schema, smf);
                 shard_buffer.emplace_front(std::move(smf));
@@ -389,7 +388,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
     }
 
     const auto shard = partitioner.shard_of(pkey.token());
-    auto& shard_buffer = std::get<saving_state>(_readers[shard]).buffer;
+    auto& shard_buffer = _readers[shard].buffer;
     for (auto& smf : tmp_buffer) {
         stats.add(*_schema, smf);
         shard_buffer.emplace_front(std::move(smf));
@@ -402,12 +401,11 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
     auto stats = dismantle_buffer_stats();
     auto& partitioner = dht::global_partitioner();
     const auto shard = partitioner.shard_of(compaction_state.partition_start.key().token());
-    auto maybe_saving_state = std::get_if<saving_state>(&_readers[shard]);
 
     // It is possible that the reader this partition originates from does not
     // exist anymore. Either because we failed stopping it or because it was
     // evicted.
-    if (!maybe_saving_state) {
+    if (_readers[shard].state != reader_state::saving) {
         for (auto& rt : compaction_state.range_tombstones) {
             stats.add_discarded(*_schema, rt);
         }
@@ -418,7 +416,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
         return stats;
     }
 
-    auto& shard_buffer = maybe_saving_state->buffer;
+    auto& shard_buffer = _readers[shard].buffer;
 
     for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
         stats.add(*_schema, rt);
@@ -436,27 +434,21 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
     return stats;
 }
 
-future<> read_context::save_reader(saving_state& current_state, const dht::decorated_key& last_pkey,
-        const std::optional<clustering_key_prefix>& last_ckey) {
-    const auto shard = current_state.handle.get_owner_shard();
-
-    return _db.invoke_on(shard, [this, shard, query_uuid = _cmd.query_uuid, query_ranges = _ranges, &current_state,
+future<> read_context::save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey) {
+    return _db.invoke_on(shard, [this, shard, query_uuid = _cmd.query_uuid, query_ranges = _ranges, rm = std::exchange(_readers[shard], {}),
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
-            auto params = current_state.params.release();
-            auto read_operation = current_state.read_operation.release();
-
-            flat_mutation_reader_opt reader = try_resume(std::move(*current_state.handle));
+            flat_mutation_reader_opt reader = try_resume(rm.rparts->semaphore, std::move(*rm.handle));
 
             if (!reader) {
                 return;
             }
 
-            if (current_state.has_pending_next_partition) {
+            if (rm.has_pending_next_partition) {
                 reader->next_partition();
             }
 
-            auto& buffer = current_state.buffer;
+            auto& buffer = rm.buffer;
             const auto fragments = buffer.size();
             const auto size_before = reader->buffer_size();
 
@@ -472,8 +464,8 @@ future<> read_context::save_reader(saving_state& current_state, const dht::decor
 
             auto querier = query::shard_mutation_querier(
                     std::move(query_ranges),
-                    std::move(params->range),
-                    std::move(params->slice),
+                    std::move(rm.rparts->range),
+                    std::move(rm.rparts->slice),
                     std::move(*reader),
                     last_pkey,
                     last_ckey);
@@ -504,29 +496,25 @@ future<> read_context::lookup_readers() {
     }
 
     return parallel_for_each(boost::irange(0u, smp::count), [this] (shard_id shard) {
-        return _db.invoke_on(shard,
-                [shard, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema), gts = tracing::global_trace_state_ptr(_trace_state)] (
-                        database& db) mutable -> future<reader_state, reader_concurrency_semaphore*> {
+        return _db.invoke_on(shard, [shard, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
+                gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
             auto schema = gs.get();
             auto querier_opt = db.get_querier_cache().lookup_shard_mutation_querier(cmd->query_uuid, *schema, *ranges, cmd->slice, gts.get());
             auto& table = db.find_column_family(schema);
+            auto& semaphore = table.read_concurrency_semaphore();
+
             if (!querier_opt) {
-                return make_ready_future<reader_state, reader_concurrency_semaphore*>(inexistent_state{}, &table.read_concurrency_semaphore());
+                return reader_meta(reader_state::inexistent, reader_meta::remote_parts(semaphore));
             }
 
             auto& q = *querier_opt;
-            auto params = make_foreign(std::make_unique<reader_params>(std::move(q).reader_range(), std::move(q).reader_slice()));
-            auto read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(table.read_in_progress()));
-            auto* semaphore = &table.read_concurrency_semaphore();
-            auto handle = pause(*semaphore, std::move(q).reader());
-            auto handle_ptr = make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(handle)));
-
-            return make_ready_future<reader_state, reader_concurrency_semaphore*>(
-                    successful_lookup_state{std::move(params), std::move(read_operation), std::move(handle_ptr)},
-                    semaphore);
-        }).then([this, shard] (reader_state&& state, reader_concurrency_semaphore* sem) {
-            _readers[shard] = std::move(state);
-            _semaphores[shard] = sem;
+            auto handle = pause(semaphore, std::move(q).reader());
+            return reader_meta(
+                    reader_state::successful_lookup,
+                    reader_meta::remote_parts(semaphore, std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress()),
+                    std::move(handle));
+        }).then([this, shard] (reader_meta rm) {
+            _readers[shard] = std::move(rm);
         });
     });
 }
@@ -549,16 +537,10 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
 
         return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
                 const std::optional<clustering_key_prefix>& last_ckey) {
-            return parallel_for_each(_readers, [this, &last_pkey, &last_ckey] (reader_state& rs) {
-                if (auto* maybe_successful_lookup_state = std::get_if<successful_lookup_state>(&rs)) {
-                    auto& current_state = *maybe_successful_lookup_state;
-                    rs = saving_state{std::move(current_state.params), std::move(current_state.read_operation),
-                            std::move(current_state.handle), false, circular_buffer<mutation_fragment>{}};
-                    return save_reader(std::get<saving_state>(rs), last_pkey, last_ckey);
-                }
-
-                if (auto* maybe_saving_state = std::get_if<saving_state>(&rs)) {
-                    return save_reader(*maybe_saving_state, last_pkey, last_ckey);
+            return parallel_for_each(boost::irange(0u, smp::count), [this, &last_pkey, &last_ckey] (shard_id shard) {
+                auto& rm = _readers[shard];
+                if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
+                    return save_reader(shard, last_pkey, last_ckey);
                 }
 
                 return make_ready_future<>();
