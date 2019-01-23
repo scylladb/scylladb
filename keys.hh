@@ -172,6 +172,16 @@ protected:
         return TopLevel::get_compound_type(s);
     }
 public:
+    struct with_schema_wrapper {
+        with_schema_wrapper(const schema& s, const TopLevel& key) : s(s), key(key) {}
+        const schema& s;
+        const TopLevel& key;
+    };
+
+    with_schema_wrapper with_schema(const schema& s) const {
+        return with_schema_wrapper(s, *static_cast<const TopLevel*>(this));
+    }
+
     static TopLevel make_empty() {
         return from_exploded(std::vector<bytes>());
     }
@@ -650,12 +660,6 @@ class partition_key : public compound_wrapper<partition_key, partition_key_view>
         : compound_wrapper<partition_key, partition_key_view>(std::move(b))
     { }
 public:
-    struct with_schema_wrapper {
-        with_schema_wrapper(const schema& s, const partition_key& pkey) : s(s), pkey(pkey) {}
-        const schema& s;
-        const partition_key& pkey;
-    };
-public:
     using c_type = compound_type<allow_prefixes::no>;
 
     template<typename RangeOfSerializedComponents>
@@ -717,13 +721,10 @@ public:
         return s.partition_key_type()->validate(representation());
     }
 
-    with_schema_wrapper with_schema(const schema& s) const {
-        return with_schema_wrapper(s, *this);
-    }
-
     friend std::ostream& operator<<(std::ostream& out, const partition_key& pk);
-    friend std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wrapper& pk);
 };
+
+std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wrapper& pk);
 
 class exploded_clustering_prefix {
     std::vector<bytes> _v;
@@ -823,6 +824,8 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp);
 };
+
+std::ostream& operator<<(std::ostream& out, const clustering_key_prefix::with_schema_wrapper& pk);
 
 template<>
 struct appending_hash<partition_key_view> {
