@@ -80,6 +80,9 @@ void manager::register_metrics(const sstring& group_name) {
 
         sm::make_derive("sent", _stats.sent,
                         sm::description("Number of sent hints.")),
+
+        sm::make_derive("discarded", _stats.discarded,
+                        sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
     });
 }
 
@@ -680,10 +683,13 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
             } catch (no_such_column_family& e) {
                 manager_logger.debug("send_hints(): no_such_column_family: {}", e.what());
+                ++this->shard_stats().discarded;
             } catch (no_such_keyspace& e) {
                 manager_logger.debug("send_hints(): no_such_keyspace: {}", e.what());
+                ++this->shard_stats().discarded;
             } catch (no_column_mapping& e) {
-                manager_logger.debug("send_hints(): {}: {}", fname, e.what());
+                manager_logger.debug("send_hints(): {} at {}: {}", fname, rp, e.what());
+                ++this->shard_stats().discarded;
             }
             return make_ready_future<>();
         }).finally([units = std::move(units), ctx_ptr] {});
@@ -697,7 +703,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
 bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fname) {
     timespec last_mod = get_last_file_modification(fname).get0();
     gc_clock::duration secs_since_file_mod = std::chrono::seconds(last_mod.tv_sec);
-    lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>();
+    lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
     try {
         auto s = commitlog::read_log_file(fname, manager::FILENAME_PREFIX, service::get_local_streaming_read_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (fragmented_temporary_buffer buf, db::replay_position rp) mutable {
@@ -754,6 +760,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
 
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
+    _last_schema_ver_to_column_mapping.clear();
     manager_logger.trace("send_one_file(): segment {} was sent in full and deleted", fname);
     return true;
 }
