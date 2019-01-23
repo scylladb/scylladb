@@ -118,7 +118,8 @@ ln -sf /opt/scylladb/bin/iotune "$rprefix/bin/iotune"
 install -m755 dist/common/bin/scyllatop -Dt "$rprefix/bin"
 install -m644 dist/common/scripts/scylla_blocktune.py -Dt "$rprefix"/lib/scylla/
 install -m755 dist/common/scripts/scylla-blocktune -Dt "$rprefix"/lib/scylla/
-install -m755 scylla-housekeeping -Dt "$rprefix"/lib/scylla/
+install -m755 dist/common/scripts/scylla-housekeeping -Dt "$rprefix"/lib/scylla/
+
 if $housekeeping; then
     install -m644 conf/housekeeping.cfg -Dt "$retc"/scylla.d
 fi
@@ -141,7 +142,6 @@ cp -r swagger-ui/dist "$rprefix"/lib/scylla/swagger-ui
 install -d -m755 -d "$rprefix"/lib/scylla/api
 cp -r api/api-doc "$rprefix"/lib/scylla/api
 cp -r tools/scyllatop "$rprefix"/lib/scylla/scyllatop
-cp -r scylla-housekeeping "$rprefix"/lib/scylla/scylla-housekeeping
 install -d "$rprefix"/sbin
 cp -P dist/common/sbin/* "$rprefix"/sbin
 install -m755 scylla-gdb.py -Dt "$rprefix"/lib/scylla/
