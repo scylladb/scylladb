@@ -100,6 +100,17 @@ public:
     bool has_unrestricted_components(const schema& schema) const;
 
     virtual bool needs_filtering(const schema& schema) const;
+
+    // How long a prefix of the restrictions could have resulted in
+    // need_filtering() == false. These restrictions do not need to be
+    // applied during filtering.
+    // For example, if we have the filter "c1 < 3 and c2 > 3", c1 does
+    // not need filtering (just a read stopping at c1=3) but c2 does,
+    // so num_prefix_columns_that_need_not_be_filtered() will be 1.
+    virtual unsigned int num_prefix_columns_that_need_not_be_filtered() const {
+        return 0;
+    }
+
     virtual bool is_all_eq() const {
         return false;
     }

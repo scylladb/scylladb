@@ -407,6 +407,7 @@ public:
     }
 
     virtual bool needs_filtering(const schema& schema) const override;
+    virtual unsigned int num_prefix_columns_that_need_not_be_filtered() const override;
 };
 
 template<>
@@ -486,6 +487,39 @@ inline bool single_column_primary_key_restrictions<clustering_key>::needs_filter
     }
     return false;
 }
+
+// How many of the restrictions (in column order) do not need filtering
+// because they are implemented as a slice (potentially, a contiguous disk
+// read). For example, if we have the filter "c1 < 3 and c2 > 3", c1 does not
+// need filtering but c2 does so num_prefix_columns_that_need_not_be_filtered
+// will be 1.
+// The implementation of num_prefix_columns_that_need_not_be_filtered() is
+// closely tied to that of needs_filtering() above - basically, if only the
+// first num_prefix_columns_that_need_not_be_filtered() restrictions existed,
+// then needs_filtering() would have returned false.
+template<>
+inline unsigned single_column_primary_key_restrictions<clustering_key>::num_prefix_columns_that_need_not_be_filtered() const {
+    column_id position = 0;
+    unsigned int count = 0;
+    for (const auto& restriction : _restrictions->restrictions() | boost::adaptors::map_values) {
+        if (restriction->is_contains() || position != restriction->get_column_def().id) {
+            return count;
+        }
+        if (!restriction->is_slice()) {
+            position = restriction->get_column_def().id + 1;
+        }
+        count++;
+    }
+    return count;
+}
+
+template<>
+inline unsigned single_column_primary_key_restrictions<partition_key>::num_prefix_columns_that_need_not_be_filtered() const {
+    // skip_filtering() is currently called only for clustering key
+    // restrictions, so it doesn't matter what we return here.
+    return 0;
+}
+
 
 }
 }

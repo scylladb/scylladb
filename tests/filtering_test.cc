@@ -259,6 +259,60 @@ SEASTAR_TEST_CASE(test_allow_filtering_clustering_column) {
     });
 }
 
+SEASTAR_TEST_CASE(test_allow_filtering_two_clustering_columns) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (p int, c1 int, c2 int, data int, PRIMARY KEY (p, c1, c2))").get();
+
+        e.execute_cql("INSERT INTO t (p, c1, c2, data) VALUES (1, 2, 3, 1)").get();
+        e.execute_cql("INSERT INTO t (p, c1, c2, data) VALUES (1, 3, 4, 2)").get();
+        e.execute_cql("INSERT INTO t (p, c1, c2, data) VALUES (1, 2, 5, 3)").get();
+        e.execute_cql("INSERT INTO t (p, c1, c2, data) VALUES (2, 3, 4, 4)").get();
+
+        auto res = e.execute_cql("SELECT * FROM t WHERE p = 1 and c1 < 3 and c2 > 3 ALLOW FILTERING").get0();
+        assert_that(res).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(5),
+                int32_type->decompose(3)
+            }
+        });
+        // In issue #4121, we noticed that although with "SELECT *" filtering
+        // was correct, when we select only a column *not* involved in the
+        // filtering, one of the constraints was ignored.
+        res = e.execute_cql("SELECT data FROM t WHERE p = 1 and c1 < 3 and c2 > 3 ALLOW FILTERING").get0();
+        assert_that(res).is_rows().with_rows({
+            {
+                int32_type->decompose(3),
+                // Because of issue #4126 our test code also sees as part of
+                // the results additional columns which were requested just
+                // for filtering, in this case c2 (=5) was necessary for the
+                // filtering but c1 was not. These columns may change in the
+                // future.
+                int32_type->decompose(5)
+            }
+        });
+        // Similar to the above test for issue #4121, but with more clustering
+        // key components, two of them form a slice, two more need filtering.
+        e.execute_cql("CREATE TABLE t2 (p int, c1 int, c2 int, c3 int, c4 int, data int, PRIMARY KEY (p, c1, c2, c3, c4))").get();
+        e.execute_cql("INSERT INTO t2 (p, c1, c2, c3, c4, data) VALUES (1, 1, 2, 3, 3, 1)").get();
+        e.execute_cql("INSERT INTO t2 (p, c1, c2, c3, c4, data) VALUES (1, 1, 2, 5, 8, 2)").get();
+        e.execute_cql("INSERT INTO t2 (p, c1, c2, c3, c4, data) VALUES (1, 1, 2, 5, 4, 3)").get();
+        e.execute_cql("INSERT INTO t2 (p, c1, c2, c3, c4, data) VALUES (1, 1, 4, 3, 4, 4)").get();
+        e.execute_cql("INSERT INTO t2 (p, c1, c2, c3, c4, data) VALUES (1, 2, 4, 4, 2, 5)").get();
+        res = e.execute_cql("SELECT data FROM t2 WHERE p = 1 and c1 = 1 and c2 < 3 and c3 > 4 and c4 < 7 ALLOW FILTERING").get0();
+        assert_that(res).is_rows().with_rows({
+            {
+                int32_type->decompose(3),
+                // Again, the following appear here just because of issue #4126
+                int32_type->decompose(5),
+                int32_type->decompose(4)
+            }
+        });
+    });
+}
+
+
 SEASTAR_TEST_CASE(test_allow_filtering_static_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int, b int, c int, s int static, PRIMARY KEY(a, b));").get();

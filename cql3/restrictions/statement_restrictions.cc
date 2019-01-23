@@ -366,10 +366,10 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
             }
         }
         if (_clustering_columns_restrictions->needs_filtering(*_schema)) {
-            column_id first_non_prefix_id = _schema->clustering_key_columns().begin()->id +
-                    _clustering_columns_restrictions->prefix_size(_schema);
+            column_id first_filtering_id = _schema->clustering_key_columns().begin()->id +
+                    _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : _clustering_columns_restrictions->get_column_defs()) {
-                if ((cdef->id >= first_non_prefix_id) && (!column_uses_indexing(cdef))) {
+                if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 }
             }
