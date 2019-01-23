@@ -131,8 +131,8 @@ class read_context : public reader_lifecycle_policy {
     //
     //  1) lookup_readers()
     //  2) save_readers()
-    //  3) make_remote_reader()
-    //  4) dismantle_reader()
+    //  3) create_reader()
+    //  4) destroy_reader()
     using reader_state = std::variant<
         inexistent_state,
         successful_lookup_state,
@@ -211,16 +211,6 @@ class read_context : public reader_lifecycle_policy {
 
     static std::string_view reader_state_to_string(const reader_state& rs);
 
-    flat_mutation_reader make_remote_reader(
-            schema_ptr schema,
-            const dht::partition_range& pr,
-            const query::partition_slice& ps,
-            const io_priority_class& pc,
-            tracing::trace_state_ptr trace_state,
-            mutation_reader::forwarding fwd_mr);
-
-    void dismantle_reader(shard_id shard, future<stopped_reader>&& reader_fut);
-
     dismantle_buffer_stats dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
     future<> save_reader(ready_to_save_state& current_state, const dht::decorated_key& last_pkey,
@@ -250,13 +240,9 @@ public:
             const query::partition_slice& ps,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
-            mutation_reader::forwarding fwd_mr) override {
-        return make_remote_reader(std::move(schema), pr, ps, pc, std::move(trace_state), fwd_mr);
-    }
+            mutation_reader::forwarding fwd_mr) override;
 
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
-        dismantle_reader(shard, std::move(reader_fut));
-    }
+    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
         return *_semaphores[engine().cpu_id()];
@@ -288,7 +274,7 @@ std::string_view read_context::reader_state_to_string(const std::variant<
     return reader_state_names.at(rs.index());
 }
 
-flat_mutation_reader read_context::make_remote_reader(
+flat_mutation_reader read_context::create_reader(
         schema_ptr schema,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
@@ -326,7 +312,7 @@ flat_mutation_reader read_context::make_remote_reader(
     return reader;
 }
 
-void read_context::dismantle_reader(shard_id shard, future<stopped_reader>&& reader_fut) {
+void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
     with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
         return reader_fut.then_wrapped([this, shard] (future<stopped_reader>&& reader_fut) {
             auto& rs = _readers[shard];
