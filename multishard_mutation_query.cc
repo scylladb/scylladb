@@ -93,13 +93,7 @@ class read_context : public reader_lifecycle_policy {
         foreign_unique_ptr<reader_params> params;
         foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
     };
-    struct dismantling_state {
-        foreign_unique_ptr<reader_params> params;
-        foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
-        paused_reader reader;
-        circular_buffer<mutation_fragment> buffer;
-    };
-    struct ready_to_save_state {
+    struct saving_state {
         foreign_unique_ptr<reader_params> params;
         foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
         paused_reader reader;
@@ -121,11 +115,7 @@ class read_context : public reader_lifecycle_policy {
     // (2) |                      |
     //     |                  (4) |
     //     |                      |
-    //     |                 dismantling
-    //     |                      |
-    //     |                  (2) |
-    //     |                      |
-    //     +---------------> ready_to_save
+    //     +---------------> saving_state
     //                            |
     //                           (O)
     //
@@ -137,8 +127,7 @@ class read_context : public reader_lifecycle_policy {
         inexistent_state,
         successful_lookup_state,
         used_state,
-        dismantling_state,
-        ready_to_save_state>;
+        saving_state>;
 
     struct dismantle_buffer_stats {
         size_t partitions = 0;
@@ -213,7 +202,7 @@ class read_context : public reader_lifecycle_policy {
 
     dismantle_buffer_stats dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
-    future<> save_reader(ready_to_save_state& current_state, const dht::decorated_key& last_pkey,
+    future<> save_reader(saving_state& current_state, const dht::decorated_key& last_pkey,
             const std::optional<clustering_key_prefix>& last_ckey);
 
 public:
@@ -262,14 +251,12 @@ std::string_view read_context::reader_state_to_string(const std::variant<
         inexistent_state,
         successful_lookup_state,
         used_state,
-        dismantling_state,
-        ready_to_save_state>& rs) {
+        saving_state>& rs) {
     static const std::array<const char*, 7> reader_state_names{
         "inexistent",
         "successful_lookup",
         "used",
-        "dismantling",
-        "ready_to_save",
+        "saving",
     };
     return reader_state_names.at(rs.index());
 }
@@ -329,7 +316,7 @@ void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_
             if (auto* maybe_used_state = std::get_if<used_state>(&rs)) {
                 auto read_operation = std::move(maybe_used_state->read_operation);
                 auto params = std::move(maybe_used_state->params);
-                rs = dismantling_state{std::move(params), std::move(read_operation),
+                rs = saving_state{std::move(params), std::move(read_operation),
                     paused_reader{std::move(reader.handle), reader.has_pending_next_partition}, std::move(reader.unconsumed_fragments)};
             } else {
                 mmq_log.warn(
@@ -348,10 +335,10 @@ future<> read_context::stop() {
     auto gate_fut = _dismantling_gate.is_closed() ? make_ready_future<>() : _dismantling_gate.close();
     gate_fut.then([this] {
         for (shard_id shard = 0; shard != smp::count; ++shard) {
-            if (auto* maybe_dismantling_state = std::get_if<dismantling_state>(&_readers[shard])) {
-                _db.invoke_on(shard, [schema = global_schema_ptr(_schema), handle = std::move(maybe_dismantling_state->reader.handle),
-                        params = std::move(maybe_dismantling_state->params),
-                        read_operation = std::move(maybe_dismantling_state->read_operation)] (database& db) mutable {
+            if (auto* maybe_saving_state = std::get_if<saving_state>(&_readers[shard])) {
+                _db.invoke_on(shard, [schema = global_schema_ptr(_schema), reader = std::move(maybe_saving_state->reader),
+                        params = std::move(maybe_saving_state->params),
+                        read_operation = std::move(maybe_saving_state->read_operation)] (database& db) mutable {
                     // We cannot use semaphore() here, as this can be already destroyed.
                     auto& table = db.find_column_family(schema);
                     table.read_concurrency_semaphore().unregister_inactive_read(std::move(*handle));
@@ -378,12 +365,12 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
     for (;rit != rend; ++rit) {
         if (rit->is_partition_start()) {
             const auto shard = partitioner.shard_of(rit->as_partition_start().key().token());
-            auto maybe_dismantling_state = std::get_if<dismantling_state>(&_readers[shard]);
+            auto maybe_saving_state = std::get_if<saving_state>(&_readers[shard]);
 
             // It is possible that the reader this partition originates from
             // does not exist anymore. Either because we failed stopping it or
             // because it was evicted.
-            if (!maybe_dismantling_state) {
+            if (!maybe_saving_state) {
                 for (auto& smf : tmp_buffer) {
                     stats.add_discarded(*_schema, smf);
                 }
@@ -392,7 +379,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
                 continue;
             }
 
-            auto& shard_buffer = maybe_dismantling_state->buffer;
+            auto& shard_buffer = maybe_saving_state->buffer;
             for (auto& smf : tmp_buffer) {
                 stats.add(*_schema, smf);
                 shard_buffer.emplace_front(std::move(smf));
@@ -406,7 +393,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
     }
 
     const auto shard = partitioner.shard_of(pkey.token());
-    auto& shard_buffer = std::get<dismantling_state>(_readers[shard]).buffer;
+    auto& shard_buffer = std::get<saving_state>(_readers[shard]).buffer;
     for (auto& smf : tmp_buffer) {
         stats.add(*_schema, smf);
         shard_buffer.emplace_front(std::move(smf));
@@ -419,12 +406,12 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
     auto stats = dismantle_buffer_stats();
     auto& partitioner = dht::global_partitioner();
     const auto shard = partitioner.shard_of(compaction_state.partition_start.key().token());
-    auto maybe_dismantling_state = std::get_if<dismantling_state>(&_readers[shard]);
+    auto maybe_saving_state = std::get_if<saving_state>(&_readers[shard]);
 
     // It is possible that the reader this partition originates from does not
     // exist anymore. Either because we failed stopping it or because it was
     // evicted.
-    if (!maybe_dismantling_state) {
+    if (!maybe_saving_state) {
         for (auto& rt : compaction_state.range_tombstones) {
             stats.add_discarded(*_schema, rt);
         }
@@ -435,7 +422,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
         return stats;
     }
 
-    auto& shard_buffer = maybe_dismantling_state->buffer;
+    auto& shard_buffer = maybe_saving_state->buffer;
 
     for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
         stats.add(*_schema, rt);
@@ -453,7 +440,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
     return stats;
 }
 
-future<> read_context::save_reader(ready_to_save_state& current_state, const dht::decorated_key& last_pkey,
+future<> read_context::save_reader(saving_state& current_state, const dht::decorated_key& last_pkey,
         const std::optional<clustering_key_prefix>& last_ckey) {
     const auto shard = current_state.reader.handle.get_owner_shard();
 
@@ -569,16 +556,13 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
             return parallel_for_each(_readers, [this, &last_pkey, &last_ckey] (reader_state& rs) {
                 if (auto* maybe_successful_lookup_state = std::get_if<successful_lookup_state>(&rs)) {
                     auto& current_state = *maybe_successful_lookup_state;
-                    rs = ready_to_save_state{std::move(current_state.params), std::move(current_state.read_operation),
+                    rs = saving_state{std::move(current_state.params), std::move(current_state.read_operation),
                             paused_reader{std::move(current_state.handle), false}, circular_buffer<mutation_fragment>{}};
-                    return save_reader(std::get<ready_to_save_state>(rs), last_pkey, last_ckey);
+                    return save_reader(std::get<saving_state>(rs), last_pkey, last_ckey);
                 }
 
-                if (auto* maybe_dismantling_state = std::get_if<dismantling_state>(&rs)) {
-                    auto& current_state = *maybe_dismantling_state;
-                    rs = ready_to_save_state{std::move(current_state.params), std::move(current_state.read_operation),
-                            std::move(current_state.reader), std::move(current_state.buffer)};
-                    return save_reader(std::get<ready_to_save_state>(rs), last_pkey, last_ckey);
+                if (auto* maybe_saving_state = std::get_if<saving_state>(&rs)) {
+                    return save_reader(*maybe_saving_state, last_pkey, last_ckey);
                 }
 
                 return make_ready_future<>();
