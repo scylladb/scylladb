@@ -191,7 +191,7 @@ void querier_cache::scan_cache_entries() {
     while (it != end && it->is_expired(now)) {
         ++_stats.time_based_evictions;
         --_stats.population;
-        _sem.unregister_inactive_read(it->get_inactive_handle());
+        _sem.unregister_inactive_read(std::move(*it).get_inactive_handle());
         it = _entries.erase(it);
     }
 }
@@ -277,7 +277,7 @@ static void insert_querier(
         auto it = entries.begin();
         while (it != entries.end() && memory_usage >= max_queriers_memory_usage) {
             memory_usage -= it->memory_usage();
-            sem.unregister_inactive_read(it->get_inactive_handle());
+            sem.unregister_inactive_read(std::move(*it).get_inactive_handle());
             it = entries.erase(it);
             --stats.population;
             ++stats.memory_based_evictions;
@@ -288,7 +288,7 @@ static void insert_querier(
     e.set_pos(--entries.end());
 
     if (auto irh = sem.register_inactive_read(std::make_unique<querier_inactive_read>(entries, e.pos(), stats))) {
-        e.set_inactive_handle(irh);
+        e.set_inactive_handle(std::move(irh));
         index.insert(e);
         ++stats.population;
     }
@@ -328,7 +328,7 @@ static std::optional<Querier> lookup_querier(
     }
 
     auto q = std::move(*it).template value<Querier>();
-    sem.unregister_inactive_read(it->get_inactive_handle());
+    sem.unregister_inactive_read(std::move(*it).get_inactive_handle());
     entries.erase(it);
     --stats.population;
 
@@ -380,7 +380,7 @@ bool querier_cache::evict_one() {
 
     ++_stats.resource_based_evictions;
     --_stats.population;
-    _sem.unregister_inactive_read(_entries.front().get_inactive_handle());
+    _sem.unregister_inactive_read(std::move(_entries.front()).get_inactive_handle());
     _entries.pop_front();
 
     return true;
@@ -392,7 +392,7 @@ void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
     while (it != end) {
         if (it->schema().id() == schema_id) {
             --_stats.population;
-            _sem.unregister_inactive_read(it->get_inactive_handle());
+            _sem.unregister_inactive_read(std::move(*it).get_inactive_handle());
             it = _entries.erase(it);
         } else {
             ++it;

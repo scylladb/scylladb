@@ -124,11 +124,17 @@ public:
 
         friend class reader_concurrency_semaphore;
 
-        inactive_read_handle() = default;
         explicit inactive_read_handle(uint64_t id)
             : _id(id) {
         }
     public:
+        inactive_read_handle() = default;
+        inactive_read_handle(inactive_read_handle&& o) : _id(std::exchange(o._id, 0)) {
+        }
+        inactive_read_handle& operator=(inactive_read_handle&& o) {
+            _id = std::exchange(o._id, 0);
+            return *this;
+        }
         explicit operator bool() const {
             return bool(_id);
         }
