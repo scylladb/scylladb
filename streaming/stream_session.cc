@@ -183,7 +183,8 @@ void stream_session::init_messaging_service_handler() {
                     };
                     distribute_reader_and_consume_on_shards(s, dht::global_partitioner(),
                         make_generating_reader(s, std::move(get_next_mutation_fragment)),
-                        [&cf, plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
+                        [plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
+                            auto& cf = get_local_db().find_column_family(reader.schema());
                             return db::view::check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
                                 sstables::shared_sstable sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
                                 schema_ptr s = reader.schema();
