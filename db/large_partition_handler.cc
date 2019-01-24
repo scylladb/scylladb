@@ -79,4 +79,15 @@ future<> cql_table_large_partition_handler::delete_large_partitions_entry(const 
         });
 }
 
+void cql_table_large_partition_handler::log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, uint64_t row_size) const {
+    const schema &s = *sst.get_schema();
+    if (clustering_key) {
+        large_partition_logger.warn("Writing large row {}/{}: {} {} ({} bytes)", s.ks_name(), s.cf_name(),
+                partition_key.to_partition_key(s).with_schema(s), clustering_key->with_schema(s), row_size);
+    } else {
+        large_partition_logger.warn("Writing large static row {}/{}: {} ({} bytes)", s.ks_name(), s.cf_name(),
+                partition_key.to_partition_key(s).with_schema(s), row_size);
+    }
+}
 }
