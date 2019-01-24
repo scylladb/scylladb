@@ -162,7 +162,7 @@ struct cell {
     /// The cell value can be either a deletion time (if the cell is dead),
     /// a delta (counter update cell), fixed-size value or variable-sized value.
     using value_variant = imr::variant<tags::value,
-        imr::member<tags::dead, imr::pod<int32_t>>,
+        imr::member<tags::dead, imr::pod<int64_t>>,
         imr::member<tags::counter_update, imr::pod<int64_t>>,
         imr::member<tags::fixed_value, fixed_value>,
         imr::member<tags::variable_value, variable_value::structure>
@@ -178,7 +178,7 @@ struct cell {
         imr::member<tags::timestamp, imr::pod<api::timestamp_type>>,
         imr::optional_member<tags::expiring, imr::structure<
             imr::member<tags::ttl, imr::pod<int32_t>>,
-            imr::member<tags::expiry, imr::pod<int32_t>>
+            imr::member<tags::expiry, imr::pod<int64_t>>
         >>,
         imr::member<tags::value, value_variant>
     >;
@@ -382,7 +382,7 @@ public:
                 .template serialize_as_nested<tags::atomic_cell>()
                     .serialize(ts)
                     .serialize_nested()
-                        .serialize(ttl.count())
+                        .serialize(gc_clock::as_int32(ttl))
                         .serialize(expiry.time_since_epoch().count())
                         .done();
             return [&] {
