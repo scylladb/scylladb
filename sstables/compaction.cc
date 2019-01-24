@@ -330,7 +330,7 @@ protected:
         , _sstable_level(sstable_level)
     {
         _info->cf = &cf;
-        for (auto sst : sstables) {
+        for (auto sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
         }
         _cf.get_compaction_manager().register_compaction(_info);
