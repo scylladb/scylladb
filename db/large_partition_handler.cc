@@ -28,7 +28,7 @@
 namespace db {
 
 future<> large_partition_handler::maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
-    if (partition_size > _threshold_bytes) {
+    if (partition_size > _partition_threshold_bytes) {
         ++_stats.partitions_bigger_than_threshold;
 
         const schema& s = *sst.get_schema();
@@ -39,7 +39,7 @@ future<> large_partition_handler::maybe_update_large_partitions(const sstables::
 
 future<> large_partition_handler::maybe_delete_large_partitions_entry(const sstables::sstable& sst) const {
     try {
-        if (sst.data_size() > _threshold_bytes) {
+        if (sst.data_size() > _partition_threshold_bytes) {
             const schema& s = *sst.get_schema();
             return delete_large_partitions_entry(s, sst.get_filename());
         }

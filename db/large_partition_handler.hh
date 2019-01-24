@@ -38,11 +38,11 @@ public:
     };
 
 private:
-    uint64_t _threshold_bytes;
+    uint64_t _partition_threshold_bytes;
     mutable large_partition_handler::stats _stats;
 
 public:
-    explicit large_partition_handler(uint64_t threshold_bytes = std::numeric_limits<uint64_t>::max()) : _threshold_bytes(threshold_bytes) {}
+    explicit large_partition_handler(uint64_t partition_threshold_bytes = std::numeric_limits<uint64_t>::max()) : _partition_threshold_bytes(partition_threshold_bytes) {}
     virtual ~large_partition_handler() {}
 
     future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
