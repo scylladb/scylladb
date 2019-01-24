@@ -1153,24 +1153,60 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
 
 SEASTAR_TEST_CASE(test_time_overflow_with_default_ttl) {
     return do_with_cql_env([] (cql_test_env& e) {
+        auto verify = [&e] (int value, bool bypass_cache) -> future<> {
+            auto sq = format("select i from cf where p1 = 'key1' {};", bypass_cache ? "bypass cache" : "");
+            return e.execute_cql(sq).then([value] (shared_ptr<cql_transport::messages::result_message> msg) {
+                assert_that(msg).is_rows()
+                    .with_size(1)
+                    .with_row({
+                         {int32_type->decompose(value)},
+                     });
+            });
+        };
+
         auto cr = format("create table cf (p1 varchar primary key, i int) with default_time_to_live = {:d};", max_ttl.count());
         return e.execute_cql(cr).discard_result().then([&e] {
             auto q = format("insert into cf (p1, i) values ('key1', 1);");
             return e.execute_cql(q).discard_result();
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1);
+        }).then([&e, &verify] {
+            return verify(1, false);
+        }).then([&e, &verify] {
+            return verify(1, true);
+        }).then([&e] {
+            return e.execute_cql("update cf set i = 2 where p1 = 'key1';").discard_result();
+        }).then([&e, &verify] {
+            return verify(2, true);
+        }).then([&e, &verify] {
+            return verify(2, false);
         });
     });
 }
 
 SEASTAR_TEST_CASE(test_time_overflow_using_ttl) {
     return do_with_cql_env([] (cql_test_env& e) {
+        auto verify = [&e] (int value, bool bypass_cache) -> future<> {
+            auto sq = format("select i from cf where p1 = 'key1' {};", bypass_cache ? "bypass cache" : "");
+            return e.execute_cql(sq).then([value] (shared_ptr<cql_transport::messages::result_message> msg) {
+                assert_that(msg).is_rows()
+                    .with_size(1)
+                    .with_row({
+                         {int32_type->decompose(value)},
+                     });
+            });
+        };
+
         auto cr = "create table cf (p1 varchar primary key, i int);";
         return e.execute_cql(cr).discard_result().then([&e] {
             auto q = format("insert into cf (p1, i) values ('key1', 1) using ttl {:d};", max_ttl.count());
             return e.execute_cql(q).discard_result();
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1);
+        }).then([&e, &verify] {
+            return verify(1, true);
+        }).then([&e, &verify] {
+            return verify(1, false);
         }).then([&e] {
             auto q = format("insert into cf (p1, i) values ('key2', 0);");
             return e.execute_cql(q).discard_result();
@@ -1179,6 +1215,10 @@ SEASTAR_TEST_CASE(test_time_overflow_using_ttl) {
             return e.execute_cql(q).discard_result();
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key2")}, {}, "i", 2);
+        }).then([&e, &verify] {
+            return verify(1, false);
+        }).then([&e, &verify] {
+            return verify(1, true);
         });
     });
 }
