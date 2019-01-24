@@ -99,7 +99,6 @@ private:
     ::shared_ptr<sharded<auth::service>> _auth_service;
     ::shared_ptr<sharded<db::view::view_builder>> _view_builder;
     ::shared_ptr<sharded<db::view::view_update_generator>> _view_update_generator;
-    lw_shared_ptr<tmpdir> _data_dir;
 private:
     struct core_local_state {
         service::client_state client_state;
