@@ -42,7 +42,7 @@ private:
     mutable large_partition_handler::stats _stats;
 
 public:
-    explicit large_partition_handler(uint64_t partition_threshold_bytes = std::numeric_limits<uint64_t>::max()) : _partition_threshold_bytes(partition_threshold_bytes) {}
+    explicit large_partition_handler(uint64_t partition_threshold_bytes) : _partition_threshold_bytes(partition_threshold_bytes) {}
     virtual ~large_partition_handler() {}
 
     future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
@@ -69,6 +69,8 @@ protected:
 
 class nop_large_partition_handler : public large_partition_handler {
 public:
+    nop_large_partition_handler()
+        : large_partition_handler(std::numeric_limits<uint64_t>::max()) {}
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override {
         return make_ready_future<>();
     }
