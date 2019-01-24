@@ -86,9 +86,25 @@
 #include "db/data_listeners.hh"
 #include "distributed_loader.hh"
 
+#include "user_types_metadata.hh"
+#include <seastar/core/shared_ptr_incomplete.hh>
+
 using namespace std::chrono_literals;
 
 logging::logger dblog("database");
+
+namespace seastar {
+
+void
+lw_shared_ptr_deleter<user_types_metadata>::dispose(user_types_metadata* o) {
+    delete o;
+}
+
+}
+
+template
+user_types_metadata*
+seastar::internal::lw_shared_ptr_accessors<user_types_metadata, void>::to_value(seastar::lw_shared_ptr_counter_base*);
 
 sstables::sstable::version_types get_highest_supported_format() {
     if (service::get_local_storage_service().cluster_supports_mc_sstable()) {
@@ -120,6 +136,49 @@ make_compaction_manager(db::config& cfg, database_config& dbcfg) {
         return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory, cfg.compaction_static_shares());
     }
     return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory);
+}
+
+const lw_shared_ptr<user_types_metadata>& keyspace_metadata::user_types() const {
+    return _user_types;
+}
+
+lw_shared_ptr<keyspace_metadata>
+keyspace_metadata::new_keyspace(sstring name,
+                                sstring strategy_name,
+                                std::map<sstring, sstring> options,
+                                bool durables_writes,
+                                std::vector<schema_ptr> cf_defs)
+{
+    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs);
+}
+
+void keyspace_metadata::add_user_type(const user_type ut) {
+    _user_types->add_type(ut);
+}
+
+void keyspace_metadata::remove_user_type(const user_type ut) {
+    _user_types->remove_type(ut);
+}
+
+keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg)
+    : _metadata(std::move(metadata))
+    , _config(std::move(cfg))
+{}
+
+lw_shared_ptr<keyspace_metadata> keyspace::metadata() const {
+    return _metadata;
+}
+
+void keyspace::add_or_update_column_family(const schema_ptr& s) {
+    _metadata->add_or_update_column_family(s);
+}
+
+void keyspace::add_user_type(const user_type ut) {
+    _metadata->add_user_type(ut);
+}
+
+void keyspace::remove_user_type(const user_type ut) {
+    _metadata->remove_user_type(ut);
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
@@ -889,6 +948,18 @@ using strategy_class_registry = class_registry<
     locator::token_metadata&,
     locator::snitch_ptr&,
     const std::map<sstring, sstring>&>;
+
+keyspace_metadata::keyspace_metadata(sstring name,
+             sstring strategy_name,
+             std::map<sstring, sstring> strategy_options,
+             bool durable_writes,
+             std::vector<schema_ptr> cf_defs)
+    : keyspace_metadata(std::move(name),
+                        std::move(strategy_name),
+                        std::move(strategy_options),
+                        durable_writes,
+                        std::move(cf_defs),
+                        make_lw_shared<user_types_metadata>()) { }
 
 keyspace_metadata::keyspace_metadata(sstring name,
              sstring strategy_name,

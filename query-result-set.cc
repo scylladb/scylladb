@@ -23,6 +23,7 @@
 #include "query-result-reader.hh"
 #include "partition_slice_builder.hh"
 #include "mutation.hh"
+#include "types/map.hh"
 
 namespace query {
 

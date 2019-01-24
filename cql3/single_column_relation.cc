@@ -45,6 +45,8 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/lists.hh"
 #include "unimplemented.hh"
+#include "types/map.hh"
+#include "types/list.hh"
 
 using namespace cql3::restrictions;
 

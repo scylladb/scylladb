@@ -27,6 +27,10 @@
 #include "cql3/util.hh"
 #include "ut_name.hh"
 #include "database.hh"
+#include "user_types_metadata.hh"
+#include "types/map.hh"
+#include "types/set.hh"
+#include "types/list.hh"
 
 namespace cql3 {
 

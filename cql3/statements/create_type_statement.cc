@@ -41,6 +41,7 @@
 #include "prepared_statement.hh"
 #include "database.hh"
 #include "service/migration_manager.hh"
+#include "user_types_metadata.hh"
 
 namespace cql3 {
 

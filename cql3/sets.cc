@@ -22,6 +22,8 @@
 #include "sets.hh"
 #include "constants.hh"
 #include "cql3_type.hh"
+#include "types/map.hh"
+#include "types/set.hh"
 
 namespace cql3 {
 
@@ -211,6 +213,11 @@ sets::delayed_value::bind(const query_options& options) {
     return ::make_shared<value>(std::move(buffers));
 }
 
+
+sets::marker::marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+    : abstract_marker{bind_index, std::move(receiver)} {
+        assert(dynamic_cast<const set_type_impl*>(_receiver->type.get()));
+    }
 
 ::shared_ptr<terminal>
 sets::marker::bind(const query_options& options) {

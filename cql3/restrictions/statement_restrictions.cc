@@ -32,6 +32,9 @@
 
 #include "cql3/single_column_relation.hh"
 #include "cql3/constants.hh"
+#include "types/map.hh"
+#include "types/list.hh"
+#include "types/set.hh"
 
 namespace cql3 {
 namespace restrictions {

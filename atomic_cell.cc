@@ -22,6 +22,7 @@
 #include "atomic_cell.hh"
 #include "atomic_cell_or_collection.hh"
 #include "types.hh"
+#include "types/collection.hh"
 
 /// LSA mirator for cells with irrelevant type
 ///

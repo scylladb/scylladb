@@ -44,6 +44,7 @@
 #include "service/migration_manager.hh"
 #include "database.hh"
 #include "boost/range/adaptor/map.hpp"
+#include "user_types_metadata.hh"
 
 namespace cql3 {
 

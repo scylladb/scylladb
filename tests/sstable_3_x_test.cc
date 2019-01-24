@@ -44,6 +44,7 @@
 #include "sstables/types.hh"
 #include "keys.hh"
 #include "types.hh"
+#include "types/user.hh"
 #include "partition_slice_builder.hh"
 #include "schema.hh"
 #include "utils/UUID_gen.hh"

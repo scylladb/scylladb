@@ -26,10 +26,14 @@
 #include <seastar/net/ip.hh>
 #include <boost/multiprecision/cpp_int.hpp>
 #include "types.hh"
+#include "types/tuple.hh"
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "cql3/cql3_type.hh"
 #include "utils/big_decimal.hh"
+#include "types/map.hh"
+#include "types/list.hh"
+#include "types/set.hh"
 
 using namespace std::literals::chrono_literals;
 

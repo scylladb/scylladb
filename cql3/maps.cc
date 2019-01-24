@@ -47,6 +47,7 @@
 #include "exceptions/exceptions.hh"
 #include "cql3/cql3_type.hh"
 #include "constants.hh"
+#include "types/map.hh"
 
 namespace cql3 {
 

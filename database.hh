@@ -992,25 +992,17 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         mutation_reader::forwarding fwd_mr,
         sstables::read_monitor_generator& monitor_generator = sstables::default_read_monitor_generator());
 
-class user_types_metadata {
-    std::unordered_map<bytes, user_type> _user_types;
-public:
-    user_type get_type(const bytes& name) const {
-        return _user_types.at(name);
-    }
-    const std::unordered_map<bytes, user_type>& get_all_types() const {
-        return _user_types;
-    }
-    void add_type(user_type type) {
-        auto i = _user_types.find(type->_name);
-        assert(i == _user_types.end() || type->is_compatible_with(*i->second));
-        _user_types[type->_name] = std::move(type);
-    }
-    void remove_type(user_type type) {
-        _user_types.erase(type->_name);
-    }
-    friend std::ostream& operator<<(std::ostream& os, const user_types_metadata& m);
+class user_types_metadata;
+
+// Customize deleter so that lw_shared_ptr can work with an incomplete user_types_metadata class
+namespace seastar {
+
+template <>
+struct lw_shared_ptr_deleter<user_types_metadata> {
+    static void dispose(user_types_metadata* o);
 };
+
+}
 
 class keyspace_metadata final {
     sstring _name;
@@ -1024,17 +1016,19 @@ public:
                  sstring strategy_name,
                  std::map<sstring, sstring> strategy_options,
                  bool durable_writes,
-                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
-                 lw_shared_ptr<user_types_metadata> user_types = make_lw_shared<user_types_metadata>());
+                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
+    keyspace_metadata(sstring name,
+                 sstring strategy_name,
+                 std::map<sstring, sstring> strategy_options,
+                 bool durable_writes,
+                 std::vector<schema_ptr> cf_defs,
+                 lw_shared_ptr<user_types_metadata> user_types);
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(sstring name,
                  sstring strategy_name,
                  std::map<sstring, sstring> options,
                  bool durables_writes,
-                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{})
-    {
-        return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs);
-    }
+                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
     void validate() const;
     const sstring& name() const {
         return _name;
@@ -1051,21 +1045,15 @@ public:
     bool durable_writes() const {
         return _durable_writes;
     }
-    const lw_shared_ptr<user_types_metadata>& user_types() const {
-        return _user_types;
-    }
+    const lw_shared_ptr<user_types_metadata>& user_types() const;
     void add_or_update_column_family(const schema_ptr& s) {
         _cf_meta_data[s->cf_name()] = s;
     }
     void remove_column_family(const schema_ptr& s) {
         _cf_meta_data.erase(s->cf_name());
     }
-    void add_user_type(const user_type ut) {
-        _user_types->add_type(ut);
-    }
-    void remove_user_type(const user_type ut) {
-        _user_types->remove_type(ut);
-    }
+    void add_user_type(const user_type ut);
+    void remove_user_type(const user_type ut);
     std::vector<schema_ptr> tables() const;
     std::vector<view_ptr> views() const;
     friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
@@ -1102,10 +1090,7 @@ private:
     lw_shared_ptr<keyspace_metadata> _metadata;
     config _config;
 public:
-    explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg)
-        : _metadata(std::move(metadata))
-        , _config(std::move(cfg))
-    {}
+    explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg);
 
     void update_from(lw_shared_ptr<keyspace_metadata>);
 
@@ -1113,9 +1098,7 @@ public:
      * semi-volatile. I.e. we could do alter keyspace at any time, and
      * boom, it is replaced.
      */
-    lw_shared_ptr<keyspace_metadata> metadata() const {
-        return _metadata;
-    }
+    lw_shared_ptr<keyspace_metadata> metadata() const;
     void create_replication_strategy(const std::map<sstring, sstring>& options);
     /**
      * This should not really be return by reference, since replication
@@ -1128,15 +1111,9 @@ public:
     const locator::abstract_replication_strategy& get_replication_strategy() const;
     column_family::config make_column_family_config(const schema& s, const database& db) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
-    void add_or_update_column_family(const schema_ptr& s) {
-        _metadata->add_or_update_column_family(s);
-    }
-    void add_user_type(const user_type ut) {
-        _metadata->add_user_type(ut);
-    }
-    void remove_user_type(const user_type ut) {
-        _metadata->remove_user_type(ut);
-    }
+    void add_or_update_column_family(const schema_ptr& s);
+    void add_user_type(const user_type ut);
+    void remove_user_type(const user_type ut);
 
     // FIXME to allow simple registration at boostrap
     void set_replication_strategy(std::unique_ptr<locator::abstract_replication_strategy> replication_strategy);
