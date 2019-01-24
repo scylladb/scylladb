@@ -97,7 +97,7 @@ void validate_cf_def(const CfDef& cf_def) {
 void validate_column_name(const std::string& name) {
     auto max_name_length = static_cast<uint32_t>(utils::fb_utilities::MAX_UNSIGNED_SHORT);
     if (name.size() > max_name_length) {
-        throw make_exception<InvalidRequestException>("column name length must not be greater than %s", max_name_length);
+        throw make_exception<InvalidRequestException>("column name length must not be greater than %u", max_name_length);
     }
     if (name.empty()) {
         throw make_exception<InvalidRequestException>("column name must not be empty");
