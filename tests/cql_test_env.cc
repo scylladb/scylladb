@@ -318,17 +318,20 @@ public:
             auto db = ::make_shared<distributed<database>>();
             auto cfg = make_lw_shared<db::config>(std::move(cfg_in));
             tmpdir data_dir;
+            auto& data_dir_path = data_dir.path;
             if (!cfg->data_file_directories.is_set()) {
-                cfg->data_file_directories() = {data_dir.path};
+                cfg->data_file_directories() = {data_dir_path};
+            } else {
+                data_dir_path = cfg->data_file_directories()[0];
             }
-            cfg->commitlog_directory() = data_dir.path + "/commitlog.dir";
-            cfg->hints_directory() = data_dir.path + "/hints.dir";
-            cfg->view_hints_directory() = data_dir.path + "/view_hints.dir";
+            cfg->commitlog_directory() = data_dir_path + "/commitlog.dir";
+            cfg->hints_directory() = data_dir_path + "/hints.dir";
+            cfg->view_hints_directory() = data_dir_path + "/view_hints.dir";
             cfg->num_tokens() = 256;
             cfg->ring_delay_ms() = 500;
             cfg->experimental() = true;
             cfg->shutdown_announce_in_ms() = 0;
-            boost::filesystem::create_directories((data_dir.path + "/system").c_str());
+            boost::filesystem::create_directories((data_dir_path + "/system").c_str());
             boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
             boost::filesystem::create_directories(cfg->hints_directory().c_str());
             boost::filesystem::create_directories(cfg->view_hints_directory().c_str());
