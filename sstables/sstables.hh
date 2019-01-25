@@ -57,7 +57,7 @@
 #include "utils/phased_barrier.hh"
 #include "component_type.hh"
 #include "sstable_version.hh"
-#include "db/large_partition_handler.hh"
+#include "db/large_data_handler.hh"
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
@@ -117,7 +117,7 @@ struct sstable_writer_config {
     std::optional<db::replay_position> replay_position;
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
-    db::large_partition_handler* large_partition_handler;
+    db::large_data_handler* large_data_handler;
     utils::UUID run_identifier = utils::make_random_uuid();
 };
 
@@ -848,7 +848,7 @@ future<> await_background_jobs_on_all_shards();
 // until all shards agree it can be deleted.
 //
 // This function only solves the second problem for now.
-future<> delete_atomically(std::vector<shared_sstable> ssts, const db::large_partition_handler& large_partition_handler);
+future<> delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;

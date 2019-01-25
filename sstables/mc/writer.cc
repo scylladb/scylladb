@@ -678,7 +678,7 @@ private:
     void write_static_row(const row& static_row);
     void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key) {
         ++_c_stats.rows_count;
-        _cfg.large_partition_handler->maybe_log_large_row(_sst, *_partition_key, clustering_key, row_size);
+        _cfg.large_data_handler->maybe_log_large_row(_sst, *_partition_key, clustering_key, row_size);
     }
 
     // Clustered is a term used to denote an entity that has a clustering key prefix
@@ -1330,7 +1330,7 @@ stop_iteration writer::consume_end_of_partition() {
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
 
-    _cfg.large_partition_handler->maybe_update_large_partitions(_sst, *_partition_key, _c_stats.partition_size).get();
+    _cfg.large_data_handler->maybe_update_large_partitions(_sst, *_partition_key, _c_stats.partition_size).get();
 
     // update is about merging column_stats with the data being stored by collector.
     _sst.get_metadata_collector().update(std::move(_c_stats));

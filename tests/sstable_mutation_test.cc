@@ -46,7 +46,7 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
-static db::nop_large_partition_handler nop_lp_handler;
+static db::nop_large_data_handler nop_lp_handler;
 
 SEASTAR_THREAD_TEST_CASE(nonexistent_key) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
@@ -419,7 +419,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
             for (auto index_block_size : {1, 128, 64*1024}) {
                 sstable_writer_config cfg;
                 cfg.promoted_index_block_size = index_block_size;
-                cfg.large_partition_handler = &nop_lp_handler;
+                cfg.large_data_handler = &nop_lp_handler;
                 test_mutation_source(cfg, version);
             }
         }
@@ -926,7 +926,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
                                 sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
         assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
@@ -979,7 +979,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
@@ -1039,7 +1039,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
@@ -1096,7 +1096,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
                                               sstables::sstable::format_types::big);
             sstable_writer_config cfg;
             cfg.promoted_index_block_size = 1;
-            cfg.large_partition_handler = &nop_lp_handler;
+            cfg.large_data_handler = &nop_lp_handler;
             sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
             sst->load().get();
 
@@ -1142,7 +1142,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                                           version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
@@ -1183,7 +1183,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
@@ -1224,7 +1224,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.correctly_serialize_non_compound_range_tombstones = false;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
@@ -1277,7 +1277,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
                                           version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(make_combined_reader(s,
             mt1->make_flat_reader(s),
             mt2->make_flat_reader(s)), 1, s, cfg).get();
@@ -1313,7 +1313,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             ss.add_row(m2, ss.make_ckey(6), "v");
 
             sstable_writer_config cfg;
-            cfg.large_partition_handler = &nop_lp_handler;
+            cfg.large_data_handler = &nop_lp_handler;
 
             tmpdir dir;
             auto ms = make_sstable_mutation_source(s, dir.path, {m1, m2}, cfg, version);
@@ -1399,7 +1399,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
                                       sstable_version_types::ka,
                                       sstables::sstable::format_types::big);
     sstable_writer_config cfg;
-    cfg.large_partition_handler = &nop_lp_handler;
+    cfg.large_data_handler = &nop_lp_handler;
     sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
     sst->load().get();
 
@@ -1442,7 +1442,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                 }
                 created_with_base_schema = sstables::make_sstable(base, dir->path, gen, version, sstables::sstable::format_types::big);
                 sstable_writer_config cfg;
-                cfg.large_partition_handler = &nop_lp_handler;
+                cfg.large_data_handler = &nop_lp_handler;
                 created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, cfg).get();
                 created_with_base_schema->load().get();
 
