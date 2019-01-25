@@ -286,6 +286,9 @@ struct cf_stats {
 
     // How many view updates were dropped due to overload.
     int64_t dropped_view_updates = 0;
+
+    // How many times view building was paused (e.g. due to node unavailability)
+    int64_t view_building_paused = 0;
 };
 
 class table;
