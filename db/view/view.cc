@@ -1420,6 +1420,7 @@ future<> view_builder::do_build_step() {
             } catch (const abort_requested_exception&) {
                 return;
             } catch (...) {
+                ++_current_step->second.base->cf_stats()->view_building_paused;
                 auto base = _current_step->second.base->schema();
                 vlogger.warn("Error executing build step for base {}.{}: {}", base->ks_name(), base->cf_name(), std::current_exception());
                 r.retry(_as).get();
