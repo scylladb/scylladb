@@ -999,7 +999,8 @@ future<> mutate_MV(
                         std::move(mut),
                         *paired_endpoint,
                         std::move(pending_endpoints),
-                        db::write_type::VIEW, stats).then_wrapped(
+                        db::write_type::VIEW,
+                        stats).then_wrapped(
                                 [paired_endpoint,
                                  is_endpoint_local,
                                  updates_pushed_remote,

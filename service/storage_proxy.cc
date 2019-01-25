@@ -1400,20 +1400,17 @@ future<> storage_proxy::send_to_endpoint(
         gms::inet_address target,
         std::vector<gms::inet_address> pending_endpoints,
         db::write_type type,
-        write_stats& stats) {
+        write_stats& stats,
+        allow_hints allow_hints) {
     utils::latency_counter lc;
     lc.start();
 
     std::optional<clock_type::time_point> timeout;
-    db::consistency_level cl;
+    db::consistency_level cl = allow_hints ? db::consistency_level::ANY : db::consistency_level::ONE;
     if (type == db::write_type::VIEW) {
-        // View updates use consistency level ANY in order to fall back to hinted handoff in case of a failed update.
-        // They also have a near-infinite timeout to avoid incurring the extra work of writting hints and to apply
-        // backpressure.
+        // View updates have a near-infinite timeout to avoid incurring the extra work of writting hints
+        // and to apply backpressure.
         timeout = clock_type::now() + 5min;
-        cl = db::consistency_level::ANY;
-    } else {
-        cl = db::consistency_level::ONE;
     }
     return mutate_prepare(std::array{std::move(m)}, cl, type,
             [this, target = std::array{target}, pending_endpoints = std::move(pending_endpoints), &stats] (
@@ -1452,13 +1449,15 @@ future<> storage_proxy::send_to_endpoint(
         frozen_mutation_and_schema fm_a_s,
         gms::inet_address target,
         std::vector<gms::inet_address> pending_endpoints,
-        db::write_type type) {
+        db::write_type type,
+        allow_hints allow_hints) {
     return send_to_endpoint(
             std::make_unique<shared_mutation>(std::move(fm_a_s)),
             std::move(target),
             std::move(pending_endpoints),
             type,
-            _stats);
+            _stats,
+            allow_hints);
 }
 
 future<> storage_proxy::send_to_endpoint(
@@ -1466,13 +1465,15 @@ future<> storage_proxy::send_to_endpoint(
         gms::inet_address target,
         std::vector<gms::inet_address> pending_endpoints,
         db::write_type type,
-        write_stats& stats) {
+        write_stats& stats,
+        allow_hints allow_hints) {
     return send_to_endpoint(
             std::make_unique<shared_mutation>(std::move(fm_a_s)),
             std::move(target),
             std::move(pending_endpoints),
             type,
-            stats);
+            stats,
+            allow_hints);
 }
 
 /**
