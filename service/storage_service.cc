@@ -184,6 +184,13 @@ storage_service::storage_service(distributed<database>& db, gms::gossiper& gossi
     } else {
         _sstables_format = sstables::sstable_version_types::mc;
     }
+
+    _unbounded_range_tombstones_feature.when_enabled().then([&db] () mutable {
+        slogger.debug("Enabling infinite bound range deletions");
+        db.invoke_on_all([] (database& local_db) mutable {
+            local_db.enable_infinite_bound_range_deletions();
+        });
+    });
 }
 
 void storage_service::enable_all_features() {
