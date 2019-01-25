@@ -1296,6 +1296,8 @@ private:
     friend db::data_listeners;
     std::unique_ptr<db::data_listeners> _data_listeners;
 
+    bool _supports_infinite_bound_range_deletions = false;
+
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
@@ -1509,6 +1511,14 @@ public:
 
     db::data_listeners& data_listeners() const {
         return *_data_listeners;
+    }
+
+    void enable_infinite_bound_range_deletions() {
+        _supports_infinite_bound_range_deletions = true;
+    }
+
+    bool supports_infinite_bound_range_deletions() {
+        return _supports_infinite_bound_range_deletions;
     }
 };
 
