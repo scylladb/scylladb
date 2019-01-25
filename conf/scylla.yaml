@@ -612,7 +612,7 @@ commitlog_total_space_in_mb: -1
 # of compaction, including validation compaction.
 # compaction_throughput_mb_per_sec: 16
 
-# Log a warning when compacting partitions larger than this value
+# Log a warning when writing partitions larger than this value
 # compaction_large_partition_warning_threshold_mb: 100
 
 # When compacting, the replacement sstable(s) can be opened before they
