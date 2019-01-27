@@ -81,26 +81,28 @@ if [ $LOCALRPM -eq 1 ]; then
         cd build
         git clone --depth 1 https://github.com/scylladb/scylla-jmx.git
         cd scylla-jmx
-        dist/redhat/build_rpm.sh --target epel-7-x86_64
+        reloc/build_reloc.sh
+        reloc/build_rpm.sh
         cd ../..
-        cp build/scylla-jmx/build/rpms/scylla-jmx-`cat build/scylla-jmx/build/SCYLLA-VERSION-FILE`-`cat build/scylla-jmx/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-jmx.noarch.rpm
+        cp build/scylla-jmx/build/redhat/RPMS/noarch/scylla-jmx-`cat build/scylla-jmx/build/SCYLLA-VERSION-FILE`-`cat build/scylla-jmx/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/scylla-jmx.noarch.rpm
     fi
     if [ ! -f dist/ami/files/scylla-tools.noarch.rpm ] || [ ! -f dist/ami/files/scylla-tools-core.noarch.rpm ]; then
         cd build
         git clone --depth 1 https://github.com/scylladb/scylla-tools-java.git
         cd scylla-tools-java
-        dist/redhat/build_rpm.sh --target epel-7-x86_64
+        reloc/build_reloc.sh
+        reloc/build_rpm.sh
         cd ../..
-        cp build/scylla-tools-java/build/rpms/scylla-tools-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-tools.noarch.rpm
-        cp build/scylla-tools-java/build/rpms/scylla-tools-core-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-tools-core.noarch.rpm
+        cp build/scylla-tools-java/build/redhat/RPMS/noarch/scylla-tools-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/scylla-tools.noarch.rpm
+        cp build/scylla-tools-java/build/redhat/RPMS/noarch/scylla-tools-core-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/scylla-tools-core.noarch.rpm
     fi
     if [ ! -f dist/ami/files/scylla-ami.noarch.rpm ]; then
         cd build
         git clone --depth 1 https://github.com/scylladb/scylla-ami.git
         cd scylla-ami
-        dist/redhat/build_rpm.sh --target epel-7-x86_64
+        dist/redhat/build_rpm.sh --target centos7
         cd ../..
-        cp build/scylla-ami/build/rpms/scylla-ami-`cat build/scylla-ami/build/SCYLLA-VERSION-FILE`-`cat build/scylla-ami/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-ami.noarch.rpm
+        cp build/scylla-ami/build/RPMS/noarch/scylla-ami-`cat build/scylla-ami/build/SCYLLA-VERSION-FILE`-`cat build/scylla-ami/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-ami.noarch.rpm
     fi
 fi
 
