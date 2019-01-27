@@ -605,3 +605,16 @@ SEASTAR_TEST_CASE(test_secondary_index_create_custom_index) {
         assert_that_failed(e.execute_cql("create index on cf (a) using 'org.apache.cassandra.index.sasi.SASIIndex'"));
     });
 }
+
+// Reproducer for #4144
+SEASTAR_TEST_CASE(test_secondary_index_contains_virtual_columns) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p int, c int, v int, primary key(p, c))").get();
+        e.execute_cql("create index on cf (c)").get();
+        e.execute_cql("update cf set v = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto res = e.execute_cql("select * from cf where c = 1").get0();
+            assert_that(res).is_rows().with_rows({{{int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}}});
+        });
+    });
+}
