@@ -25,7 +25,7 @@
 
 #include <seastar/util/defer.hh>
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"

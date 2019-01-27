@@ -29,7 +29,8 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/thread.hh>
-#include <seastar/tests/test-utils.hh>
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <random>
 
 namespace {

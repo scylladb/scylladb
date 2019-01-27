@@ -24,7 +24,7 @@
 #include "service/priority_manager.hh"
 #include "database.hh"
 #include "utils/UUID_gen.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "schema_builder.hh"
 
 #include <seastar/core/thread.hh>

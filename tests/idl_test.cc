@@ -25,8 +25,6 @@
 
 #include <seastar/util/variant_utils.hh>
 
-#include "tests/test-utils.hh"
-
 #include <map>
 #include <vector>
 #include <optional>

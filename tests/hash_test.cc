@@ -24,7 +24,7 @@
 #include <seastar/core/future.hh>
 
 #include "seastarx.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "utils/hash.hh"
 
 SEASTAR_TEST_CASE(test_pair_hash){

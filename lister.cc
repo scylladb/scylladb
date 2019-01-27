@@ -1,3 +1,4 @@
+#include <seastar/core/print.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
 #include "lister.hh"

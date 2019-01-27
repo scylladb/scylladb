@@ -19,7 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "sstable_test.hh"
 
 using namespace sstables;

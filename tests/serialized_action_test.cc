@@ -23,7 +23,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/semaphore.hh>
 #include "utils/serialized_action.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "utils/phased_barrier.hh"
 
 SEASTAR_TEST_CASE(test_serialized_action_triggering) {

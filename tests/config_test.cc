@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <iostream>
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/future-util.hh>
 #include "db/config.hh"
 

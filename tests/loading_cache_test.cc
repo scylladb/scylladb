@@ -33,7 +33,8 @@
 
 #include "seastarx.hh"
 #include "tests/eventually.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "tmpdir.hh"
 #include "log.hh"
 

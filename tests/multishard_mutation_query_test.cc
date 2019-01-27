@@ -26,7 +26,7 @@
 #include "tests/cql_assertions.hh"
 #include "tests/mutation_assertions.hh"
 
-#include <seastar/tests/test-utils.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include <experimental/source_location>
 

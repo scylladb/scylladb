@@ -26,7 +26,7 @@
 #include "sstables/key.hh"
 #include "sstables/compress.hh"
 #include "sstables/compaction.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "database.hh"

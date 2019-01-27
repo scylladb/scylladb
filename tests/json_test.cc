@@ -26,7 +26,6 @@
 
 #include <seastar/core/sstring.hh>
 
-#include "tests/test-utils.hh"
 #include "json.hh"
 
 using namespace seastar;

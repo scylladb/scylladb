@@ -39,7 +39,7 @@
 #include "seastarx.hh"
 #include "service/client_state.hh"
 #include "tests/cql_test_env.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 
 static const auto alice = std::string_view("alice");
 static const auto bob = std::string_view("bob");

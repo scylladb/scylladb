@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <seastar/tests/test-utils.hh>
+#include <seastar/testing/test_case.hh>
 #include <seastar/net/inet_address.hh>
 #include <utils/UUID_gen.hh>
 #include <boost/asio/ip/address_v4.hpp>

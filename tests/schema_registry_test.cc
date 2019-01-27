@@ -23,7 +23,7 @@
 #include <seastar/core/thread.hh>
 
 #include "tests/test_services.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "schema_registry.hh"
 #include "schema_builder.hh"
 #include "mutation_source_test.hh"

@@ -19,9 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
-#include <boost/test/unit_test.hpp>
-
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
@@ -31,7 +28,7 @@
 #include "sstables/compaction_manager.hh"
 #include "sstables/key.hh"
 #include "sstable_utils.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "schema.hh"
 #include "compress.hh"
 #include "database.hh"

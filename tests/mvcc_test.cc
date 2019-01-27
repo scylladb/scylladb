@@ -31,7 +31,7 @@
 #include "partition_snapshot_row_cursor.hh"
 #include "partition_snapshot_reader.hh"
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "tests/mutation_assertions.hh"
 #include "tests/simple_schema.hh"
 #include "tests/mutation_source_test.hh"

@@ -21,7 +21,7 @@
 
 
 #include <seastar/core/thread.hh>
-#include <seastar/tests/test-utils.hh>
+#include <seastar/testing/test_case.hh>
 #include <seastar/util/bool_class.hh>
 
 #include "mutation_fragment.hh"

@@ -22,7 +22,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/gossiping_property_file_snitch.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include <boost/filesystem.hpp>
 #include <vector>
 #include <string>

@@ -29,7 +29,8 @@
 #include <query-result-writer.hh>
 
 #include "tests/test_services.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "tests/mutation_assertions.hh"
 #include "tests/result_set_assertions.hh"
 #include "tests/mutation_source_test.hh"

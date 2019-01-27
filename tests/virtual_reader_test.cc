@@ -27,7 +27,7 @@
 #include <boost/test/unit_test.hpp>
 #include <stdint.h>
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 #include "tests/test_services.hh"

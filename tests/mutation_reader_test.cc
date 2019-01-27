@@ -22,7 +22,6 @@
 
 #include <random>
 
-#include <boost/test/unit_test.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
 
@@ -30,7 +29,8 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "tests/mutation_assertions.hh"
 #include "tests/flat_mutation_reader_assertions.hh"
 #include "tests/tmpdir.hh"

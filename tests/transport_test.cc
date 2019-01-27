@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <seastar/tests/test-utils.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "transport/request.hh"
 #include "transport/response.hh"

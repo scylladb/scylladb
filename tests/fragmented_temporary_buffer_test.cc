@@ -20,7 +20,7 @@
  */
 
 #include <seastar/core/thread.hh>
-#include <seastar/tests/test-utils.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "utils/fragmented_temporary_buffer.hh"
 

@@ -30,7 +30,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 

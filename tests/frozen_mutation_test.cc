@@ -23,7 +23,8 @@
 #include <boost/test/unit_test.hpp>
 
 #include "tests/test_services.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "frozen_mutation.hh"
 #include "schema_builder.hh"

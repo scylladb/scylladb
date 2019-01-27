@@ -21,7 +21,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 #include "cql3/query_processor.hh"

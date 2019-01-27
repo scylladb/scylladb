@@ -7,7 +7,7 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/distributed.hh>
 #include "sstables/sstables.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "schema.hh"
 #include "database.hh"
 #include "sstables/compaction_manager.hh"

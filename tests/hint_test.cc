@@ -28,7 +28,7 @@
 #include <unordered_set>
 
 #include "tests/test_services.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 
 #include "tests/mutation_source_test.hh"
 #include "tests/mutation_assertions.hh"

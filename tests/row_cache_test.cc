@@ -26,7 +26,7 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <boost/algorithm/cxx11/any_of.hpp>
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include "tests/mutation_assertions.hh"
 #include "tests/flat_mutation_reader_assertions.hh"
 #include "tests/mutation_source_test.hh"

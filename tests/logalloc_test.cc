@@ -26,10 +26,12 @@
 #include <chrono>
 #include <random>
 
+#include <seastar/core/print.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/sleep.hh>
-#include <seastar/tests/test-utils.hh>
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
 #include <deque>
 #include "utils/phased_barrier.hh"

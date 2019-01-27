@@ -25,7 +25,7 @@
 #include "utils/sequenced_set.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "locator/network_topology_strategy.hh"
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/sstring.hh>
 #include "log.hh"
 #include <vector>

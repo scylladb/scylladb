@@ -21,7 +21,7 @@
 
 
 #include <seastar/core/thread.hh>
-#include <seastar/tests/test-utils.hh>
+#include <seastar/testing/test_case.hh>
 #include "query-result-writer.hh"
 
 #include "tests/cql_test_env.hh"

@@ -23,7 +23,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "tests/test-utils.hh"
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/thread.hh>
 #include "schema_builder.hh"
 #include "keys.hh"
