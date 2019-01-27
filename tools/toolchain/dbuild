@@ -32,6 +32,7 @@ docker run \
        -v /tmp:/tmp \
        -v /etc/passwd:/etc/passwd:ro \
        -v /etc/group:/etc/group:ro \
+       -v /etc/localtime:/etc/localtime:ro \
        -w "$PWD" \
        "${docker_args[@]}" \
        "$(<"$here/image")" \
