@@ -134,6 +134,11 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         }
         builder.with_column(col.name(), col.type, column_kind::clustering_key);
     }
+    if (index_target->is_primary_key()) {
+        for (auto& def : schema->regular_columns()) {
+            db::view::create_virtual_column(builder, def.name(), def.type);
+        }
+    }
     const sstring where_clause = format("{} IS NOT NULL", cql3::util::maybe_quote(index_target_name));
     builder.with_view_info(*schema, false, where_clause);
     return view_ptr{builder.build()};
