@@ -53,6 +53,26 @@ constexpr std::string_view qualified_name("system_auth.role_members");
 
 }
 
+namespace role_attributes_table {
+constexpr std::string_view name{"role_attributes", 15};
+
+static std::string_view qualified_name() noexcept {
+    static const sstring instance = format("{}.{}", AUTH_KS, name);
+    return instance;
+}
+static std::string_view creation_query() noexcept {
+    static const sstring instance = format(
+            "CREATE TABLE {} ("
+            "  role text,"
+            "  name text,"
+            "  value text,"
+            "  PRIMARY KEY(role, name)"
+            ")",
+            qualified_name());
+
+    return instance;
+}
+}
 }
 
 static logging::logger log("standard_role_manager");
@@ -152,6 +172,11 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
                     meta::role_members_table::name,
                     _qp,
                     create_role_members_query,
+                    _migration_manager),
+            create_metadata_table_if_missing(
+                    meta::role_attributes_table::name,
+                    _qp,
+                    meta::role_attributes_table::creation_query(),
                     _migration_manager)).discard_result();
 }
 
@@ -345,6 +370,12 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
             });
         };
 
+        // Delete all attributes for that role
+        const auto remove_attributes_of = [this, role_name] {
+            static const sstring query = format("DELETE FROM {} WHERE role = ?", meta::role_attributes_table::qualified_name());
+            return _qp.execute_internal(query, {sstring(role_name)}).discard_result();
+        };
+
         // Finally, delete the role itself.
         auto delete_role = [this, role_name] {
             static const sstring query = format("DELETE FROM {} WHERE {} = ?",
@@ -358,7 +389,8 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
                     {sstring(role_name)}).discard_result();
         };
 
-        return when_all_succeed(revoke_from_members(), revoke_members_of()).then_unpack([delete_role = std::move(delete_role)] {
+        return when_all_succeed(revoke_from_members(), revoke_members_of(),
+                remove_attributes_of()).then_unpack([delete_role = std::move(delete_role)] {
             return delete_role();
         });
     });
@@ -536,4 +568,56 @@ future<bool> standard_role_manager::can_login(std::string_view role_name) const 
     });
 }
 
+future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name) const {
+    static const sstring query = format("SELECT name, value FROM {} WHERE role = ? AND name = ?", meta::role_attributes_table::qualified_name());
+    return _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name)}).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
+        if (!result_set->empty()) {
+            const cql3::untyped_result_set_row &row = result_set->one();
+            return std::optional<sstring>(row.get_as<sstring>("value"));
+        }
+        return std::optional<sstring>{};
+    });
+}
+
+future<role_manager::attribute_vals> standard_role_manager::query_attribute_for_all (std::string_view attribute_name) const {
+    return query_all().then([this, attribute_name] (role_set roles) {
+        return do_with(attribute_vals{}, [this, attribute_name, roles = std::move(roles)] (attribute_vals &role_to_att_val) {
+            return parallel_for_each(roles.begin(), roles.end(), [this, &role_to_att_val, attribute_name] (sstring role) {
+                return get_attribute(role, attribute_name).then([&role_to_att_val, role] (std::optional<sstring> att_val) {
+                    if (att_val) {
+                        role_to_att_val.emplace(std::move(role), std::move(*att_val));
+                    }
+                });
+            }).then([&role_to_att_val] () {
+                return make_ready_future<attribute_vals>(std::move(role_to_att_val));
+            });
+        });
+    });
+}
+
+future<> standard_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) const {
+    static const sstring query = format("INSERT INTO {} (role, name, value)  VALUES (?, ?, ?)", meta::role_attributes_table::qualified_name());
+    return do_with(sstring(role_name), sstring(attribute_name), sstring(attribute_value), [this] (sstring& role_name, sstring &attribute_name,
+            sstring &attribute_value) {
+        return exists(role_name).then([&role_name, &attribute_name, &attribute_value, this] (bool role_exists) {
+            if (!role_exists) {
+                throw auth::nonexistant_role(role_name);
+            }
+            return _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}).discard_result();
+        });
+    });
+
+}
+
+future<> standard_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name) const {
+    static const sstring query = format("DELETE FROM {} WHERE role = ? AND name = ?", meta::role_attributes_table::qualified_name());
+    return do_with(sstring(role_name), sstring(attribute_name), [this] (sstring& role_name, sstring &attribute_name) {
+        return exists(role_name).then([&role_name, &attribute_name, this] (bool role_exists) {
+            if (!role_exists) {
+                throw auth::nonexistant_role(role_name);
+            }
+            return _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name)}).discard_result();
+        });
+    });
+}
 }

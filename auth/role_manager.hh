@@ -102,6 +102,11 @@ enum class recursive_role_query { yes, no };
 ///
 class role_manager {
 public:
+    // this type represents a mapping between a role and some attribute value.
+    // i.e: given attribute name  'a' this map holds role name and it's assigned
+    // value of 'a'.
+    using attribute_vals = std::unordered_map<sstring, sstring>;
+public:
     virtual ~role_manager() = default;
 
     virtual std::string_view qualified_java_name() const noexcept = 0;
@@ -164,6 +169,26 @@ public:
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
     virtual future<bool> can_login(std::string_view role_name) const = 0;
-};
 
+    ///
+    /// \returns the value of the named attribute, if one is set.
+    ///
+    virtual future<std::optional<sstring>> get_attribute(std::string_view role_name, std::string_view attribute_name) const = 0;
+
+    ///
+    /// \returns a mapping of each role's value for the named attribute, if one is set for the role.
+    ///
+    virtual future<attribute_vals> query_attribute_for_all(std::string_view attribute_name) const = 0;
+
+    /// Sets `attribute_name` with `attribute_value` for `role_name`.
+    /// \returns an exceptional future with nonexistant_role if the role does not exist.
+    ///
+    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) const = 0;
+
+    /// Removes `attribute_name` for `role_name`.
+    /// \returns an exceptional future with nonexistant_role if the role does not exist.
+    /// \note: This is a no-op if the role does not have the named attribute set.
+    ///
+    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name) const = 0;
+};
 }
