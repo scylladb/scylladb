@@ -95,7 +95,7 @@ future<> create_partitions(cql_test_env& env, test_config& cfg) {
     });
 }
 
-future<> test_read(cql_test_env& env, test_config& cfg) {
+future<std::vector<double>> test_read(cql_test_env& env, test_config& cfg) {
     return create_partitions(env, cfg).then([&env] {
         return env.prepare("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?");
     }).then([&env, &cfg](auto id) {
@@ -106,7 +106,7 @@ future<> test_read(cql_test_env& env, test_config& cfg) {
     });
 }
 
-future<> test_write(cql_test_env& env, test_config& cfg) {
+future<std::vector<double>> test_write(cql_test_env& env, test_config& cfg) {
     return env.prepare("UPDATE cf SET "
                            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
                            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
@@ -122,7 +122,7 @@ future<> test_write(cql_test_env& env, test_config& cfg) {
         });
 }
 
-future<> test_delete(cql_test_env& env, test_config& cfg) {
+future<std::vector<double>> test_delete(cql_test_env& env, test_config& cfg) {
     return create_partitions(env, cfg).then([&env] {
         return env.prepare("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf WHERE \"KEY\" = ?");
     }).then([&env, &cfg](auto id) {
@@ -133,7 +133,7 @@ future<> test_delete(cql_test_env& env, test_config& cfg) {
     });
 }
 
-future<> test_counter_update(cql_test_env& env, test_config& cfg) {
+future<std::vector<double>> test_counter_update(cql_test_env& env, test_config& cfg) {
     return env.prepare("UPDATE cf SET "
                            "\"C0\" = \"C0\" + 1,"
                            "\"C1\" = \"C1\" + 2,"
@@ -160,7 +160,7 @@ schema_ptr make_counter_schema(const sstring& ks_name) {
             .build();
 }
 
-future<> do_test(cql_test_env& env, test_config& cfg) {
+future<std::vector<double>> do_test(cql_test_env& env, test_config& cfg) {
     std::cout << "Running test with config: " << cfg << std::endl;
     return env.create_table([&cfg] (auto ks_name) {
         if (cfg.counters) {

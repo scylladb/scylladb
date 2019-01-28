@@ -115,26 +115,32 @@ public:
  * in parallel, with given number of concurrent executions per core.
  *
  * Runs many iterations. Prints partial total throughput after each iteraton.
+ *
+ * Returns a vector of throughputs achieved in each iteration.
  */
 template <typename Func>
 static
-future<> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
+future<std::vector<double>> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
     using clk = std::chrono::steady_clock;
     if (operations_per_shard) {
         iterations = 1;
     }
-    return do_n_times(iterations, [func, concurrency_per_core, operations_per_shard] {
+  return do_with(std::vector<double>{}, [&] (std::vector<double>& results) {
+    return do_n_times(iterations, [func, concurrency_per_core, operations_per_shard, &results] {
         auto start = clk::now();
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);
         auto exec = ::make_shared<distributed<executor<Func>>>();
         return exec->start(concurrency_per_core, func, std::move(end_at), operations_per_shard).then([exec] {
             return exec->map_reduce(adder<uint64_t>(), [] (auto& oc) { return oc.run(); });
-        }).then([start] (auto total) {
+        }).then([start, &results] (auto total) {
             auto end = clk::now();
             auto duration = std::chrono::duration<double>(end - start).count();
-            std::cout << format("{:.2f}", (double)total / duration) << " tps\n";
+            auto result = static_cast<double>(total) / duration;
+            std::cout << format("{:.2f}", result) << " tps\n";
+            results.emplace_back(result);
         }).then([exec] {
             return exec->stop().finally([exec] {});
         });
-    });
+    }).then([&results] { return std::move(results); });
+  });
 }
