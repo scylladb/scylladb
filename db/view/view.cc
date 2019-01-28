@@ -933,7 +933,8 @@ future<> mutate_MV(
         const dht::token& base_token,
         std::vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
-        db::timeout_semaphore_units pending_view_updates)
+        db::timeout_semaphore_units pending_view_updates,
+        service::allow_hints allow_hints)
 {
     auto fs = std::make_unique<std::vector<future<>>>();
     fs->reserve(view_updates.size());
@@ -999,7 +1000,9 @@ future<> mutate_MV(
                         std::move(mut),
                         *paired_endpoint,
                         std::move(pending_endpoints),
-                        db::write_type::VIEW, stats).then_wrapped(
+                        db::write_type::VIEW,
+                        stats,
+                        allow_hints).then_wrapped(
                                 [paired_endpoint,
                                  is_endpoint_local,
                                  updates_pushed_remote,
@@ -1025,7 +1028,8 @@ future<> mutate_MV(
                     std::move(mut),
                     target,
                     std::move(pending_endpoints),
-                    db::write_type::VIEW).then_wrapped(
+                    db::write_type::VIEW,
+                    allow_hints).then_wrapped(
                             [target,
                              updates_pushed_remote,
                              maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) {
@@ -1416,6 +1420,7 @@ future<> view_builder::do_build_step() {
             } catch (const abort_requested_exception&) {
                 return;
             } catch (...) {
+                ++_current_step->second.base->cf_stats()->view_building_paused;
                 auto base = _current_step->second.base->schema();
                 vlogger.warn("Error executing build step for base {}.{}: {}", base->ks_name(), base->cf_name(), std::current_exception());
                 r.retry(_as).get();

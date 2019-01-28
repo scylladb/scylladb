@@ -358,6 +358,9 @@ database::setup_metrics() {
         sm::make_derive("dropped_view_updates", _cf_stats.dropped_view_updates,
                        sm::description("Counts the number of view updates that have been dropped due to cluster overload. ")),
 
+       sm::make_derive("view_building_paused", _cf_stats.view_building_paused,
+                      sm::description("Counts the number of times view building process was paused (e.g. due to node unavailability). ")),
+
         sm::make_derive("total_writes", _stats->total_writes,
                        sm::description("Counts the total number of successful write operations performed by this shard.")),
 

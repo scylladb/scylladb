@@ -2161,7 +2161,7 @@ future<> table::populate_views(
                  units_to_consume = update_size - units_to_wait_for,
                  this] (db::timeout_semaphore_units&& units) mutable {
             units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, units_to_consume));
-            return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units));
+            return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units), service::allow_hints::no);
         });
     });
 }

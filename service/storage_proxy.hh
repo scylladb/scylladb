@@ -87,6 +87,9 @@ struct view_update_backlog_timestamped {
     api::timestamp_type ts;
 };
 
+struct allow_hints_tag {};
+using allow_hints = bool_class<allow_hints_tag>;
+
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
@@ -281,7 +284,8 @@ private:
             gms::inet_address target,
             std::vector<gms::inet_address> pending_endpoints,
             db::write_type type,
-            write_stats& stats);
+            write_stats& stats,
+            allow_hints allow_hints = allow_hints::yes);
 
     db::view::update_backlog get_view_update_backlog() const;
 
@@ -358,8 +362,8 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats);
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type);
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats, allow_hints allow_hints = allow_hints::yes);
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, allow_hints allow_hints = allow_hints::yes);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
