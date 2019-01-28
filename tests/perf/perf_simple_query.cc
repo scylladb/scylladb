@@ -220,7 +220,18 @@ int main(int argc, char** argv) {
             if (app.configuration().count("operations-per-shard")) {
                 cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
             }
-            do_test(env, cfg).get();
+            auto results = do_test(env, cfg).get0();
+
+            std::sort(results.begin(), results.end());
+            auto median = results[results.size() / 2];
+            auto min = results[0];
+            auto max = results[results.size() - 1];
+            for (auto& r : results) {
+                r = abs(r - median);
+            }
+            std::sort(results.begin(), results.end());
+            auto mad = results[results.size() / 2];
+            std::cout << format("\nmedian {:.2f}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}\n", median, mad, max, min);
 
             return make_ready_future<>();
         });
