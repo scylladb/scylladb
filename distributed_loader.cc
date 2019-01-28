@@ -533,11 +533,19 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
     auto verifier = make_lw_shared<std::unordered_map<unsigned long, sstable_descriptor>>();
 
     return do_with(std::vector<future<>>(), [&db, sstdir = std::move(sstdir), verifier, ks, cf] (std::vector<future<>>& futures) {
-        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, &futures] (fs::path sstdir, directory_entry de) {
+        return lister::scan_dir(sstdir, { directory_entry_type::regular, directory_entry_type::directory }, [&db, verifier, &futures] (fs::path sstdir, directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
 
-            if (de.type && *de.type == directory_entry_type::directory && sstables::sstable::is_temp_dir(de.name)) {
-                return lister::rmdir(sstdir / de.name);
+            // push future returned by probe_file/rmdir into an array of futures,
+            // so that the supplied callback will not block scan_dir() from
+            // reading the next entry in the directory.
+            if (de.type && *de.type == directory_entry_type::directory) {
+                fs::path dirpath = sstdir / de.name;
+                if (engine().cpu_id() == 0 && sstables::sstable::is_temp_dir(dirpath)) {
+                    dblog.info("Found temporary sstable directory: {}, removing", dirpath);
+                    futures.push_back(lister::rmdir(dirpath));
+                }
+                return make_ready_future<>();
             }
 
             auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, sstdir, de] (auto entry) {
@@ -571,9 +579,6 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                 return make_ready_future<>();
             });
 
-            // push future returned by probe_file into an array of futures,
-            // so that the supplied callback will not block scan_dir() from
-            // reading the next entry in the directory.
             futures.push_back(std::move(f));
 
             return make_ready_future<>();

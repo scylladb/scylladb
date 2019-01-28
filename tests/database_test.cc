@@ -20,6 +20,7 @@
  */
 
 
+#include <seastar/core/reactor.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/tests/test-utils.hh>
 
@@ -32,6 +33,9 @@
 #include "mutation_source_test.hh"
 #include "schema_registry.hh"
 #include "service/migration_manager.hh"
+#include "sstables/sstables.hh"
+#include "db/config.hh"
+#include "tmpdir.hh"
 
 SEASTAR_TEST_CASE(test_querying_with_limits) {
     return do_with_cql_env([](cql_test_env& e) {
@@ -106,4 +110,57 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
         });
         return make_ready_future<>();
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
+    using sst = sstables::sstable;
+
+    tmpdir data_dir;
+    db::config db_cfg;
+
+    db_cfg.data_file_directories({data_dir.path}, db::config::config_source::CommandLine);
+
+    // Create incomplete sstables in test data directory
+    sstring ks = "system";
+    sstring cf = "local-7ad54392bcdd35a684174e047860b377";
+    sstring sst_dir = data_dir.path + "/" + ks + "/" + cf;
+
+    auto require_exist = [] (const sstring& name, bool should_exist) {
+        auto exists = file_exists(name).get0();
+        BOOST_REQUIRE(exists == should_exist);
+    };
+
+    auto touch_dir = [&require_exist] (const sstring& dir_name) {
+        recursive_touch_directory(dir_name).get();
+        require_exist(dir_name, true);
+    };
+
+    auto touch_file = [&require_exist] (const sstring& file_name) {
+        auto f = open_file_dma(file_name, open_flags::create).get0();
+        f.close().get();
+        require_exist(file_name, true);
+    };
+
+    auto temp_sst_dir = sst::temp_sst_dir(sst_dir, 2);
+    touch_dir(temp_sst_dir);
+
+    temp_sst_dir = sst::temp_sst_dir(sst_dir, 3);
+    touch_dir(temp_sst_dir);
+    auto temp_file_name = sst::filename(temp_sst_dir, ks, cf, sst::version_types::mc, 3, sst::format_types::big, component_type::TemporaryTOC);
+    touch_file(temp_file_name);
+
+    temp_file_name = sst::filename(sst_dir, ks, cf, sst::version_types::mc, 4, sst::format_types::big, component_type::TemporaryTOC);
+    touch_file(temp_file_name);
+    temp_file_name = sst::filename(sst_dir, ks, cf, sst::version_types::mc, 4, sst::format_types::big, component_type::Data);
+    touch_file(temp_file_name);
+
+    do_with_cql_env([&sst_dir, &ks, &cf, &require_exist] (cql_test_env& e) {
+        require_exist(sst::temp_sst_dir(sst_dir, 2), false);
+        require_exist(sst::temp_sst_dir(sst_dir, 3), false);
+
+        require_exist(sst::filename(sst_dir, ks, cf, sst::version_types::mc, 4, sst::format_types::big, component_type::TemporaryTOC), false);
+        require_exist(sst::filename(sst_dir, ks, cf, sst::version_types::mc, 4, sst::format_types::big, component_type::Data), false);
+
+        return make_ready_future<>();
+    }, db_cfg).get();
 }
