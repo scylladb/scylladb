@@ -871,6 +871,7 @@ deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc', '
 deps['tests/log_heap_test'] = ['tests/log_heap_test.cc']
 deps['tests/anchorless_list_test'] = ['tests/anchorless_list_test.cc']
 deps['tests/perf/perf_fast_forward'] += ['release.cc']
+deps['tests/perf/perf_simple_query'] += ['release.cc']
 deps['tests/meta_test'] = ['tests/meta_test.cc']
 deps['tests/imr_test'] = ['tests/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/reusable_buffer_test'] = ['tests/reusable_buffer_test.cc']
