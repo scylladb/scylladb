@@ -92,8 +92,8 @@ ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
 # foobar/bin/scylla               a shell script invoking everything
 # foobar/libexec/scylla.bin       the real binary
 # foobar/libexec/scylla           a symlink to ../lib/ld.so
-# foobar/lib/ld.so                the dynamic linker
-# foobar/lib/lib...               all the other libraries
+# foobar/libreloc/ld.so                the dynamic linker
+# foobar/libreloc/lib...               all the other libraries
 
 # the transformations (done by the thunk and symlinks) are:
 #
@@ -107,7 +107,7 @@ b="$(basename "$x")"
 d="$(dirname "$x")/.."
 ldso="$d/libexec/$b"
 realexe="$d/libexec/$b.bin"
-LD_LIBRARY_PATH="$d/lib" exec -a "$0" "$ldso" "$realexe" "$@"
+LD_LIBRARY_PATH="$d/libreloc" exec -a "$0" "$ldso" "$realexe" "$@"
 '''
 
 for exe in executables:
@@ -120,11 +120,11 @@ for exe in executables:
     ar.addfile(ti, fileobj=io.BytesIO(thunk))
     ti = tarfile.TarInfo(name='libexec/' + basename)
     ti.type = tarfile.SYMTYPE
-    ti.linkname = '../lib/ld.so'
+    ti.linkname = '../libreloc/ld.so'
     ti.mtime = os.stat(exe).st_mtime
     ar.addfile(ti)
 for lib, libfile in libs.items():
-    ar.add(libfile, arcname='lib/' + lib)
+    ar.add(libfile, arcname='libreloc/' + lib)
 ar.add('conf')
 ar.add('dist')
 ar.add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')

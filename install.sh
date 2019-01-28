@@ -91,7 +91,7 @@ SYSCONFDIR="/etc/sysconfig"
 REPOFILES="'/etc/yum.repos.d/scylla*.repo'"
 
 
-install -d -m755 "$retc"/scylla "$rprefix/lib/systemd/system" "$rprefix/lib/scylla" "$rprefix/bin" "$root/opt/scylladb/bin" "$root/opt/scylladb/libexec" "$root/opt/scylladb/lib"
+install -d -m755 "$retc"/scylla "$rprefix/lib/systemd/system" "$rprefix/lib/scylla" "$rprefix/bin" "$root/opt/scylladb/bin" "$root/opt/scylladb/libexec" "$root/opt/scylladb/libreloc"
 install -m644 conf/scylla.yaml -Dt "$retc"/scylla
 install -m644 conf/cassandra-rackdc.properties -Dt "$retc"/scylla
 install -m644 build/*.service -Dt "$rprefix"/lib/systemd/system
@@ -111,7 +111,7 @@ for f in libexec/*; do
         cp -P "$f" "$root/opt/scylladb/libexec"
     fi
 done
-install -m755 lib/* -Dt "$root/opt/scylladb/lib"
+install -m755 libreloc/* -Dt "$root/opt/scylladb/libreloc"
 # use relative paths instead?
 ln -sf /opt/scylladb/bin/scylla "$rprefix/bin/scylla"
 ln -sf /opt/scylladb/bin/iotune "$rprefix/bin/iotune"
