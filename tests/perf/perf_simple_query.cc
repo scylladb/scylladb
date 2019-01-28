@@ -204,23 +204,25 @@ int main(int argc, char** argv) {
 
     return app.run(argc, argv, [&app] {
         return do_with_cql_env([&app] (auto&& env) {
-            auto cfg = make_lw_shared<test_config>();
-            cfg->partitions = app.configuration()["partitions"].as<unsigned>();
-            cfg->duration_in_seconds = app.configuration()["duration"].as<unsigned>();
-            cfg->concurrency = app.configuration()["concurrency"].as<unsigned>();
-            cfg->query_single_key = app.configuration().count("query-single-key");
-            cfg->counters = app.configuration().count("counters");
+            auto cfg = test_config();
+            cfg.partitions = app.configuration()["partitions"].as<unsigned>();
+            cfg.duration_in_seconds = app.configuration()["duration"].as<unsigned>();
+            cfg.concurrency = app.configuration()["concurrency"].as<unsigned>();
+            cfg.query_single_key = app.configuration().count("query-single-key");
+            cfg.counters = app.configuration().count("counters");
             if (app.configuration().count("write")) {
-                cfg->mode = test_config::run_mode::write;
+                cfg.mode = test_config::run_mode::write;
             } else if (app.configuration().count("delete")) {
-                cfg->mode = test_config::run_mode::del;
+                cfg.mode = test_config::run_mode::del;
             } else {
-                cfg->mode = test_config::run_mode::read;
+                cfg.mode = test_config::run_mode::read;
             };
             if (app.configuration().count("operations-per-shard")) {
-                cfg->operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
+                cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
             }
-            return do_test(env, *cfg).finally([cfg] {});
+            do_test(env, cfg).get();
+
+            return make_ready_future<>();
         });
     });
 }
