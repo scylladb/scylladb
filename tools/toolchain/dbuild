@@ -27,9 +27,9 @@ docker run \
        -u "$(id -u):$(id -g)" \
        "${group_args[@]}" \
        --cap-add SYS_PTRACE \
-       -v "$PWD:$PWD" \
-       -v "$toplevel:$toplevel" \
-       -v /tmp:/tmp \
+       -v "$PWD:$PWD:z" \
+       -v "$toplevel:$toplevel:z" \
+       -v /tmp:/tmp:z \
        -v /etc/passwd:/etc/passwd:ro \
        -v /etc/group:/etc/group:ro \
        -v /etc/localtime:/etc/localtime:ro \
