@@ -35,6 +35,7 @@
 #include "service/migration_manager.hh"
 #include "service/load_meter.hh"
 #include "service/view_update_backlog_broker.hh"
+#include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -783,6 +784,16 @@ int main(int ac, char** av) {
                 mscfg.tcp_nodelay = netw::messaging_service::tcp_nodelay_what::local;
             }
 
+            static sharded<auth::service> auth_service;
+            static sharded<qos::service_level_controller> sl_controller;
+
+            //starting service level controller
+            qos::service_level_options default_service_level_configuration;
+            sl_controller.start(std::ref(auth_service), default_service_level_configuration).get();
+            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            //This starts the update loop - but no real update happens until the data accessor is not initialized.
+            sl_controller.local().update_from_distributed_data(std::chrono::seconds(10));
+
             netw::messaging_service::scheduling_config scfg;
             scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
             scfg.streaming = dbcfg.streaming_scheduling_group;
@@ -794,7 +805,6 @@ int main(int ac, char** av) {
                 netw::uninit_messaging_service(messaging).get();
             });
 
-            static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<cql3::cql_config> cql_config;
