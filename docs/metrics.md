@@ -25,6 +25,7 @@ https://github.com/scylladb/scylla-grafana-monitoring on how to install and
 use it. The scylla-grafana-monitoring project allows you to continuously
 collect metrics from several Scylla nodes into a Prometheus metric-collection
 server, and then to visualize these metrics using Grafana and a web browser.
+Prometheus and Grafana will be described in separate sections below.
 
 ## Metric labels: instance and shard
 Different Scylla nodes will have different values for each metric (e.g.,
@@ -146,3 +147,50 @@ way to see the list of metrics currently exposed by Scylla, because it
 includes a textual description in a comment above each metric.
 
 TODO: mention source files in which a developer should add new metrics.
+
+# Prometheus
+So far, we described Scylla's internal metric-retrieval recapability,
+a REST API for retrieving the current values of all metrics from a single
+node. But in production, as well as more advanced debugging sessions, one
+usually wants to collect metrics from multiple Scylla nodes, and to collect
+and to graph a history of each metric over time. As already mentioned above,
+we provide a separate project "scylla-grafana-monitoring" which does exactly
+this using the Prometheus time-series database.
+
+Prometheus is installed on a separate monitoring node (which we shall call
+below "monitornode"). It connects to several Scylla nodes, and saves their
+metrics into a time-series database. Prometheus then allows querying,
+analyzing, and and graphing this data, via a Web interface at:
+
+    http://monitornode:9090/
+
+Through this Web interface, a user can search for a metric name (type
+a word and see the list of all metrics with this word as part of their
+name), and then see the current value of this metric over all shards and
+nodes (the "Console" tab), and also see a graph of the value of this
+metric over time (the "Graph" tab).
+
+Prometheus allows querying and graphing not only the metric itself, but
+also various functions and aggregates of these metrics. For example, if
+a user asks to graph some metric `xyz` the result is a graph with multiple
+lines, one line for each shard and node. But asking to graph `sum(xyz)` will
+plot just one line, with the total of the metric `xyz` over all shards in
+all nodes. The expression `irate(xyz[1m])` graphs the rate of change (i.e.,
+the derivative) of the metric `xyz`. In this last example, the "1m"
+selector is ignored by the `irate()` function, but some duration is required
+by the Prometheus syntax.
+
+Prometheus supports many more functions and aggregations, which are described
+in its documentation:
+https://prometheus.io/docs/prometheus/latest/querying/basics/
+
+# Grafana
+While Prometheus already allows analyzing and graphing metric data, Grafana
+is a more advanced user interface which allows displaying many of these graphs
+in professional-looking "dashboards" which are more convenient for end-users
+who don't know which metrics Scylla has and what they mean, and want to see
+pre-canned dashboards of graphs that are useful for particular purposes.
+
+The Grafana user interface is available in:
+
+    http://monitornode:3000/
