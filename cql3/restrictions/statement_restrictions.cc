@@ -785,7 +785,7 @@ bool single_column_restriction::contains::is_satisfied_by(bytes_view collection_
         if (!fragmented_val) {
             continue;
         }
-        return with_linearized(*fragmented_val, [&] (bytes_view val) {
+        const bool value_matches = with_linearized(*fragmented_val, [&] (bytes_view val) {
             auto exists_in = [&](auto&& range) {
                 auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
                     return element_type->compare(element.serialize(), val) == 0;
@@ -808,6 +808,9 @@ bool single_column_restriction::contains::is_satisfied_by(bytes_view collection_
             }
             return true;
         });
+        if (!value_matches) {
+            return false;
+        }
     }
     if (col_type->is_map()) {
         auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
