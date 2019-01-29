@@ -3165,11 +3165,71 @@ delete_sstable_and_maybe_large_data_entries(shared_sstable sst, const db::large_
 
 future<>
 delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
-    // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
     return seastar::async([ssts = std::move(ssts), &large_data_handler] {
+        sstring sstdir;
+        min_max_tracker<int64_t> gen_tracker;
+
+        for (const auto& sst : ssts) {
+            gen_tracker.update(sst->generation());
+
+            if (sstdir.empty()) {
+                sstdir = sst->get_dir();
+            } else {
+                // All sstables are assumed to be in the same column_family, hence
+                // sharing their base directory.
+                assert (sstdir == sst->get_dir());
+            }
+        }
+
+        sstring pending_delete_dir = sstdir + "/" + sstable::pending_delete_dir_basename();
+        sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
+        sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
+        sstlog.trace("Writing {}", tmp_pending_delete_log);
+        try {
+            touch_directory(pending_delete_dir).get();
+            auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+            // Create temporary pending_delete log file.
+            auto f = open_file_dma(tmp_pending_delete_log, oflags).get0();
+            // Write all toc names into the log file.
+            file_output_stream_options options;
+            options.buffer_size = 4096;
+            auto w = file_writer(std::move(f), options);
+
+            for (const auto& sst : ssts) {
+                auto toc = sst->component_basename(component_type::TOC);
+                w.write(toc.c_str(), toc.size());
+                w.write("\n", 1);
+            }
+
+            w.flush();
+            w.close();
+
+            auto dir_f = open_directory(pending_delete_dir).get0();
+            // Once flushed and closed, the temporary log file can be renamed.
+            rename_file(tmp_pending_delete_log, pending_delete_log).get();
+
+            // Guarantee that the changes above reached the disk.
+            dir_f.flush().get();
+            dir_f.close().get();
+            sstlog.debug("{} written successfully.", pending_delete_log);
+        } catch (...) {
+            sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log), std::current_exception();
+        }
+
         parallel_for_each(ssts, [&large_data_handler] (shared_sstable sst) {
             return delete_sstable_and_maybe_large_data_entries(sst, large_data_handler);
         }).get();
+
+        // Once all sstables are deleted, the log file can be removed.
+        // Note: the log file will be removed also if
+        //   delete_sstable_and_maybe_large_data_entries failed to remove
+        //   any sstable and ignored the error.
+        try {
+            remove_file(pending_delete_log).get();
+            sstlog.debug("{} removed.", pending_delete_log);
+        } catch (...) {
+            sstlog.warn("Error removing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
+        }
     });
 }
 

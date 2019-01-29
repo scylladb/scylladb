@@ -395,6 +395,15 @@ public:
         return dirpath.extension().string() == ".sstable";
     }
 
+    static sstring pending_delete_dir_basename() {
+        return "pending_delete";
+    }
+
+    static bool is_pending_delete_dir(const fs::path& dirpath)
+    {
+        return dirpath.filename().string() == pending_delete_dir_basename().c_str();
+    }
+
     const sstring& get_dir() const {
         return _dir;
     }
