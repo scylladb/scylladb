@@ -485,6 +485,9 @@ void write_compound_non_dense_column_name(sstable_version_types v, Writer& out, 
     // marker should be in the end of it, and we just join them together as we
     // do for any normal component
     if (c.size() == 1) {
+        if (ck_bview.empty()) {
+            throw std::runtime_error("Open-ended range tombstones are not allowed in LA/KA SSTables.");
+        }
         ck_bview.remove_suffix(1);
     }
     size_t sz = ck_bview.size() + c.size();
