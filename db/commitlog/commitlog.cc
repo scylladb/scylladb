@@ -135,23 +135,20 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     return c;
 }
 
-db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v)
-        : id(i), ver(v), filename_prefix(fname_prefix) {
+db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v, sstring fname)
+        : _filename(std::move(fname)), id(i), ver(v), filename_prefix(fname_prefix) {
 }
 
 db::commitlog::descriptor::descriptor(replay_position p, const std::string& fname_prefix)
         : descriptor(p.id, fname_prefix) {
 }
 
-db::commitlog::descriptor::descriptor(std::pair<uint64_t, uint32_t> p, const std::string& fname_prefix)
-        : descriptor(p.first, fname_prefix, p.second) {
-}
 
 db::commitlog::descriptor::descriptor(const sstring& filename, const std::string& fname_prefix)
         : descriptor([&filename, &fname_prefix]() {
             std::smatch m;
             // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
-                std::regex rx("(?:.*/)?" + fname_prefix + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
+                std::regex rx("(?:.*/)?(?:Recycled-)?" + fname_prefix + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
                 std::string sfilename = filename;
                 if (!std::regex_match(sfilename, m, rx)) {
                     throw std::domain_error("Cannot parse the version of the file: " + filename);
@@ -164,11 +161,14 @@ db::commitlog::descriptor::descriptor(const sstring& filename, const std::string
                 segment_id_type id = std::stoull(m[3].str().substr(1));
                 uint32_t ver = std::stoul(m[2].str());
 
-                return std::make_pair(id, ver);
-            }(), fname_prefix) {
+                return descriptor(id, fname_prefix, ver, filename);
+            }()) {
 }
 
 sstring db::commitlog::descriptor::filename() const {
+    if (!_filename.empty()) {
+        return _filename;
+    }
     return filename_prefix + std::to_string(ver) + SEPARATOR
             + std::to_string(id) + FILENAME_EXTENSION;
 }

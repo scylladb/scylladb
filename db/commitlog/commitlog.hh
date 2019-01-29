@@ -136,7 +136,7 @@ public:
 
     struct descriptor {
     private:
-        descriptor(std::pair<uint64_t, uint32_t> p, const std::string& fname_prefix);
+        sstring _filename;
     public:
         static const std::string SEPARATOR;
         static const std::string FILENAME_PREFIX;
@@ -144,7 +144,7 @@ public:
 
         descriptor(descriptor&&) = default;
         descriptor(const descriptor&) = default;
-        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = 1);
+        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = 1, sstring = {});
         descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
         descriptor(const sstring& filename, const std::string& fname_prefix = FILENAME_PREFIX);
 
