@@ -36,6 +36,7 @@
 #include "seastar/core/sleep.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
+#include "types/list.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -368,11 +369,27 @@ SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
         BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE d = 1").get(), exceptions::invalid_request_exception);
         BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE e = 5").get(), exceptions::invalid_request_exception);
 
-        // Collection filtering queries are not supported yet
-        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE f contains 2").get(), exceptions::invalid_request_exception);
-        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE g contains 1").get(), exceptions::invalid_request_exception);
+        auto my_list_type = list_type_impl::get_instance(int32_type, true);
 
-        auto msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE c = 3 ALLOW FILTERING").get0();
+        auto msg = e.execute_cql("SELECT f FROM t WHERE f contains 1 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{1}}))},
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{1, 2}}))},
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{1, 2, 3}}))},
+        });
+
+        msg = e.execute_cql("SELECT f FROM t WHERE f contains 2 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{1, 2}}))},
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{1, 2, 3}}))},
+        });
+
+        msg = e.execute_cql("SELECT f FROM t WHERE f contains 2 AND f contains 3 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{1, 2, 3}}))},
+        });
+
+        msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE c = 3 ALLOW FILTERING").get0();
         assert_that(msg).is_rows().with_rows({{
             int32_type->decompose(1),
             int32_type->decompose(2),
