@@ -173,9 +173,12 @@ metric over time (the "Graph" tab).
 Prometheus allows querying and graphing not only the metric itself, but
 also various functions and aggregates of these metrics. For example, if
 a user asks to graph some metric `xyz` the result is a graph with multiple
-lines, one line for each shard and node. But asking to graph `sum(xyz)` will
-plot just one line, with the total of the metric `xyz` over all shards in
-all nodes. The expression `irate(xyz[1m])` graphs the rate of change (i.e.,
+lines, one line for each shard and node. The syntax `xyz{instance="..."}`
+will limit the lines to all shards of just one node (given the node's IP
+address), and the syntax `xyz{instance="...",shard="0"}` will show only
+one shard of one node. The syntax `sum(xyz)` will plot just one line, with
+the total of the metric `xyz` over all shards in all nodes.
+The expression `irate(xyz[1m])` graphs the rate of change (i.e.,
 the derivative) of the metric `xyz`. In this last example, the "1m"
 selector is ignored by the `irate()` function, but some duration is required
 by the Prometheus syntax.
