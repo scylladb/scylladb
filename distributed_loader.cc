@@ -558,6 +558,33 @@ future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir)
     });
 }
 
+future<> distributed_loader::handle_sstables_pending_delete(sstring pending_delete_dir) {
+    return do_with(std::vector<future<>>(), [dir = std::move(pending_delete_dir)] (std::vector<future<>>& futures) {
+        return lister::scan_dir(dir, { directory_entry_type::regular }, [&futures] (fs::path dir, directory_entry de) {
+            // push nested futures that remove files/directories into an array of futures,
+            // so that the supplied callback will not block scan_dir() from
+            // reading the next entry in the directory.
+            fs::path file_path = dir / de.name;
+            if (file_path.extension() == ".tmp") {
+                dblog.info("Found temporary pending_delete log file: {}, deleting", file_path);
+                futures.push_back(remove_file(file_path.string()));
+            } else if (file_path.extension() == ".log") {
+                dblog.info("Found pending_delete log file: {}, replaying", file_path);
+                auto f = sstables::replay_pending_delete_log(file_path.string()).then([file_path = std::move(file_path)] {
+                    dblog.debug("Replayed {}, removing", file_path);
+                    return remove_file(file_path.string());
+                });
+                futures.push_back(std::move(f));
+            } else {
+                dblog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
+            }
+            return make_ready_future<>();
+        }).then([&futures] {
+            return execute_futures(futures);
+        });
+    });
+}
+
 future<> distributed_loader::do_populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf) {
     // We can catch most errors when we try to load an sstable. But if the TOC
     // file is the one missing, we won't try to load the sstable at all. This
@@ -646,9 +673,14 @@ future<> distributed_loader::do_populate_column_family(distributed<database>& db
 
 future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf) {
     return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf)] {
-        // First pass, cleanup temporary sstable directories.
+        // First pass, cleanup temporary sstable directories and sstables pending delete.
         if (engine().cpu_id() == 0) {
             cleanup_column_family_temp_sst_dirs(sstdir).get();
+            auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
+            auto exists = file_exists(pending_delete_dir).get0();
+            if (exists) {
+                handle_sstables_pending_delete(pending_delete_dir).get();
+            }
         }
         // Second pass, cleanup sstables with temporary TOCs and load the rest.
         do_populate_column_family(db, std::move(sstdir), std::move(ks), std::move(cf)).get();
