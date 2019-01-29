@@ -165,3 +165,125 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
         return make_ready_future<>();
     }, db_cfg).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
+    using sst = sstables::sstable;
+
+    tmpdir data_dir;
+    db::config db_cfg;
+
+    db_cfg.data_file_directories({data_dir.path().string()}, db::config::config_source::CommandLine);
+
+    // Create incomplete sstables in test data directory
+    sstring ks = "system";
+    sstring cf = "local-7ad54392bcdd35a684174e047860b377";
+    sstring sst_dir = (data_dir.path() / std::string_view(ks) / std::string_view(cf)).string();
+    sstring pending_delete_dir = sst_dir + "/" + sst::pending_delete_dir_basename();
+
+    auto require_exist = [] (const sstring& name, bool should_exist) {
+        auto exists = file_exists(name).get0();
+        if (should_exist) {
+            BOOST_REQUIRE(exists);
+        } else {
+            BOOST_REQUIRE(!exists);
+        }
+    };
+
+    auto touch_dir = [&require_exist] (const sstring& dir_name) {
+        recursive_touch_directory(dir_name).get();
+        require_exist(dir_name, true);
+    };
+
+    auto touch_file = [&require_exist] (const sstring& file_name) {
+        auto f = open_file_dma(file_name, open_flags::create).get0();
+        f.close().get();
+        require_exist(file_name, true);
+    };
+
+    auto write_file = [&require_exist] (const sstring& file_name, const sstring& text) {
+        auto f = open_file_dma(file_name, open_flags::wo | open_flags::create | open_flags::truncate).get0();
+        auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), text.size());
+        ::memcpy(buf.get_write(), text.c_str(), text.size());
+        auto count = f.dma_write(0, buf.get(), text.size()).get0();
+        BOOST_REQUIRE(count == text.size());
+        f.close().get();
+        require_exist(file_name, true);
+    };
+
+    auto component_basename = [&ks, &cf] (int64_t gen, component_type ctype) {
+        return sst::component_basename(ks, cf, sst::version_types::mc, gen, sst::format_types::big, ctype);
+    };
+
+    auto gen_filename = [&sst_dir, &ks, &cf] (int64_t gen, component_type ctype) {
+        return sst::filename(sst_dir, ks, cf, sst::version_types::mc, gen, sst::format_types::big, ctype);
+    };
+
+    touch_dir(pending_delete_dir);
+
+    // Empty log file
+    touch_file(pending_delete_dir + "/sstables-0-0.log");
+
+    // Empty temporary log file
+    touch_file(pending_delete_dir + "/sstables-1-1.log.tmp");
+
+    const sstring toc_text = "TOC.txt\nData.db\n";
+
+    // Regular log file with single entry
+    write_file(gen_filename(2, component_type::TOC), toc_text);
+    touch_file(gen_filename(2, component_type::Data));
+    write_file(pending_delete_dir + "/sstables-2-2.log",
+               component_basename(2, component_type::TOC) + "\n");
+
+    // Temporary log file with single entry
+    write_file(pending_delete_dir + "/sstables-3-3.log.tmp",
+               component_basename(3, component_type::TOC) + "\n");
+
+    // Regular log file with multiple entries
+    write_file(gen_filename(4, component_type::TOC), toc_text);
+    touch_file(gen_filename(4, component_type::Data));
+    write_file(gen_filename(5, component_type::TOC), toc_text);
+    touch_file(gen_filename(5, component_type::Data));
+    write_file(pending_delete_dir + "/sstables-4-5.log",
+               component_basename(4, component_type::TOC) + "\n" +
+               component_basename(5, component_type::TOC) + "\n");
+
+    // Regular log file with multiple entries and some deleted sstables
+    write_file(gen_filename(6, component_type::TemporaryTOC), toc_text);
+    touch_file(gen_filename(6, component_type::Data));
+    write_file(gen_filename(7, component_type::TemporaryTOC), toc_text);
+    write_file(pending_delete_dir + "/sstables-6-8.log",
+               component_basename(6, component_type::TOC) + "\n" +
+               component_basename(7, component_type::TOC) + "\n" +
+               component_basename(8, component_type::TOC) + "\n");
+
+    do_with_cql_env([&] (cql_test_env& e) {
+        // Empty log file
+        require_exist(pending_delete_dir + "/sstables-0-0.log", false);
+
+        // Empty temporary log file
+        require_exist(pending_delete_dir + "/sstables-1-1.log.tmp", false);
+
+        // Regular log file with single entry
+        require_exist(gen_filename(2, component_type::TOC), false);
+        require_exist(gen_filename(2, component_type::Data), false);
+        require_exist(pending_delete_dir + "/sstables-2-2.log", false);
+
+        // Temporary log file with single entry
+        require_exist(pending_delete_dir + "/sstables-3-3.log.tmp", false);
+
+        // Regular log file with multiple entries
+        require_exist(gen_filename(4, component_type::TOC), false);
+        require_exist(gen_filename(4, component_type::Data), false);
+        require_exist(gen_filename(5, component_type::TOC), false);
+        require_exist(gen_filename(5, component_type::Data), false);
+        require_exist(pending_delete_dir + "/sstables-4-5.log", false);
+
+        // Regular log file with multiple entries and some deleted sstables
+        require_exist(gen_filename(6, component_type::TemporaryTOC), false);
+        require_exist(gen_filename(6, component_type::Data), false);
+        require_exist(gen_filename(7, component_type::TemporaryTOC), false);
+        require_exist(pending_delete_dir + "/sstables-6-8.log", false);
+
+        return make_ready_future<>();
+    }, db_cfg).get();
+}
