@@ -785,29 +785,32 @@ bool single_column_restriction::contains::is_satisfied_by(bytes_view collection_
         if (!fragmented_val) {
             continue;
         }
-      return with_linearized(*fragmented_val, [&] (bytes_view val) {
-        auto exists_in = [&](auto&& range) {
-            auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
-                return element_type->compare(element.serialize(), val) == 0;
-            });
-            return found != range.end();
-        };
-        if (col_type->is_list()) {
-            if (!exists_in(value_cast<list_type_impl::native_type>(deserialized))) {
-                return false;
+        const bool value_matches = with_linearized(*fragmented_val, [&] (bytes_view val) {
+            auto exists_in = [&](auto&& range) {
+                auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
+                    return element_type->compare(element.serialize(), val) == 0;
+                });
+                return found != range.end();
+            };
+            if (col_type->is_list()) {
+                if (!exists_in(value_cast<list_type_impl::native_type>(deserialized))) {
+                    return false;
+                }
+            } else if (col_type->is_set()) {
+                if (!exists_in(value_cast<set_type_impl::native_type>(deserialized))) {
+                    return false;
+                }
+            } else {
+                auto data_map = value_cast<map_type_impl::native_type>(deserialized);
+                if (!exists_in(data_map | boost::adaptors::transformed([] (auto&& p) { return p.second; }))) {
+                    return false;
+                }
             }
-        } else if (col_type->is_set()) {
-            if (!exists_in(value_cast<set_type_impl::native_type>(deserialized))) {
-                return false;
-            }
-        } else {
-            auto data_map = value_cast<map_type_impl::native_type>(deserialized);
-            if (!exists_in(data_map | boost::adaptors::transformed([] (auto&& p) { return p.second; }))) {
-                return false;
-            }
+            return true;
+        });
+        if (!value_matches) {
+            return false;
         }
-        return true;
-      });
     }
     if (col_type->is_map()) {
         auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
