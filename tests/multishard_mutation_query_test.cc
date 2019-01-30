@@ -25,34 +25,11 @@
 #include "tests/eventually.hh"
 #include "tests/cql_assertions.hh"
 #include "tests/mutation_assertions.hh"
+#include "tests/test_table.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 
 #include <experimental/source_location>
-
-static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_cf(cql_test_env& env, unsigned partition_count = 10 * smp::count,
-        unsigned row_per_partition_count = 10) {
-    env.execute_cql("CREATE KEYSPACE multishard_mutation_query_cache_ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
-    env.execute_cql("CREATE TABLE multishard_mutation_query_cache_ks.test (pk int, ck int, v int, PRIMARY KEY(pk, ck));").get();
-
-    const auto insert_id = env.prepare("INSERT INTO multishard_mutation_query_cache_ks.test (\"pk\", \"ck\", \"v\") VALUES (?, ?, ?);").get0();
-
-    auto s = env.local_db().find_column_family("multishard_mutation_query_cache_ks", "test").schema();
-
-    std::vector<dht::decorated_key> pkeys;
-
-    for (int pk = 0; pk < int(partition_count); ++pk) {
-        pkeys.emplace_back(dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, data_value(pk).serialize())));
-        for (int ck = 0; ck < int(row_per_partition_count); ++ck) {
-            env.execute_prepared(insert_id, {{
-                    cql3::raw_value::make_value(data_value(pk).serialize()),
-                    cql3::raw_value::make_value(data_value(ck).serialize()),
-                    cql3::raw_value::make_value(data_value(pk ^ ck).serialize())}}).get();
-        }
-    }
-
-    return std::pair(std::move(s), std::move(pkeys));
-}
 
 static uint64_t aggregate_querier_cache_stat(distributed<database>& db, uint64_t query::querier_cache::stats::*stat) {
     return map_reduce(boost::irange(0u, smp::count), [stat, &db] (unsigned shard) {
