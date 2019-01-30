@@ -1019,9 +1019,6 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
         explicit operator bool() const {
             return bool(_state->reader);
         }
-        bool done() const {
-            return _state->reader && _state->reader->is_buffer_empty() && _state->reader->is_end_of_stream();
-        }
         void read_ahead(db::timeout_clock::time_point timeout);
         bool is_read_ahead_in_progress() const {
             return _read_ahead.has_value();
@@ -1029,13 +1026,27 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
         void pause();
     };
 
+    struct shard_and_token {
+        shard_id shard;
+        dht::token token;
+
+        bool operator<(const shard_and_token& o) const {
+            // Reversed, as we want a min-heap.
+            return token > o.token;
+        }
+    };
+
     std::vector<shard_reader> _shard_readers;
+    // Contains the position of each shard with token granularity, organized
+    // into a min-heap. Used to select the shard with the smallest token each
+    // time a shard reader produces a new partition.
+    std::vector<shard_and_token> _shard_selection_min_heap;
     unsigned _current_shard;
-    dht::token _next_token;
     bool _crossed_shards;
     unsigned _concurrency = 1;
 
-    void move_to_next_shard();
+    void on_partition_range_change();
+    bool maybe_move_to_next_shard(const dht::token* const t = nullptr);
     future<> handle_empty_reader_buffer(db::timeout_clock::time_point timeout);
 
 public:
@@ -1346,20 +1357,54 @@ void multishard_combining_reader::shard_reader::pause() {
     });
 }
 
-void multishard_combining_reader::move_to_next_shard() {
+void multishard_combining_reader::on_partition_range_change() {
+    _shard_selection_min_heap.clear();
+    _shard_selection_min_heap.reserve(_partitioner.shard_count());
+
+    auto token = _pr->start() ? _pr->start()->value().token() : dht::minimum_token();
+    _current_shard = _partitioner.shard_of(token);
+
+    const auto update_and_push_token_for_shard = [this, &token] (shard_id shard) {
+        token = _partitioner.token_for_next_shard(token, shard);
+        _shard_selection_min_heap.push_back(shard_and_token{shard, token});
+        boost::push_heap(_shard_selection_min_heap);
+    };
+
+    for (auto shard = _current_shard + 1; shard < smp::count; ++shard) {
+        update_and_push_token_for_shard(shard);
+    }
+    for (auto shard = 0u; shard < _current_shard; ++shard) {
+        update_and_push_token_for_shard(shard);
+    }
+}
+
+bool multishard_combining_reader::maybe_move_to_next_shard(const dht::token* const t) {
+    if (_shard_selection_min_heap.empty() || (t && *t < _shard_selection_min_heap.front().token)) {
+        return false;
+    }
+
+    boost::pop_heap(_shard_selection_min_heap);
+    const auto next_shard = _shard_selection_min_heap.back().shard;
+    _shard_selection_min_heap.pop_back();
+
+    if (t) {
+        _shard_selection_min_heap.push_back(shard_and_token{_current_shard, *t});
+        boost::push_heap(_shard_selection_min_heap);
+    }
+
     _crossed_shards = true;
-    _current_shard = (_current_shard + 1) % _partitioner.shard_count();
-    _next_token = _partitioner.token_for_next_shard(_next_token, _current_shard);
+    _current_shard = next_shard;
+    return true;
 }
 
 future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clock::time_point timeout) {
     auto& reader = _shard_readers[_current_shard];
 
     if (reader.is_end_of_stream()) {
-        if (std::all_of(_shard_readers.begin(), _shard_readers.end(), std::mem_fn(&shard_reader::done))) {
+        if (_shard_selection_min_heap.empty()) {
             _end_of_stream = true;
         } else {
-            move_to_next_shard();
+            maybe_move_to_next_shard();
         }
         reader.pause();
         return make_ready_future<>();
@@ -1399,10 +1444,10 @@ multishard_combining_reader::multishard_combining_reader(
     , _ps(ps)
     , _pc(pc)
     , _trace_state(std::move(trace_state))
-    , _fwd_mr(fwd_mr)
-    , _current_shard(pr.start() ? _partitioner.shard_of(pr.start()->value().token()) : _partitioner.shard_of_minimum_token())
-    , _next_token(_partitioner.token_for_next_shard(pr.start() ? pr.start()->value().token() : dht::minimum_token(),
-                (_current_shard + 1) % _partitioner.shard_count())) {
+    , _fwd_mr(fwd_mr) {
+
+    on_partition_range_change();
+
     _shard_readers.reserve(_partitioner.shard_count());
     for (unsigned i = 0; i < _partitioner.shard_count(); ++i) {
         _shard_readers.emplace_back(*this, i);
@@ -1422,8 +1467,7 @@ future<> multishard_combining_reader::fill_buffer(db::timeout_clock::time_point 
         }
 
         while (!reader.is_buffer_empty() && !is_buffer_full()) {
-            if (const auto& mf = reader.peek_buffer(); mf.is_partition_start() && mf.as_partition_start().key().token() >= _next_token) {
-                move_to_next_shard();
+            if (const auto& mf = reader.peek_buffer(); mf.is_partition_start() && maybe_move_to_next_shard(&mf.as_partition_start().key().token())) {
                 reader.pause();
                 return make_ready_future<>();
             }
@@ -1441,17 +1485,10 @@ void multishard_combining_reader::next_partition() {
 }
 
 future<> multishard_combining_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
-    if (pr.start()) {
-        auto& t = pr.start()->value().token();
-        _current_shard = _partitioner.shard_of(t);
-        _next_token = _partitioner.token_for_next_shard(t, (_current_shard + 1) % _partitioner.shard_count());
-    } else {
-        _current_shard = _partitioner.shard_of_minimum_token();
-        _next_token = _partitioner.token_for_next_shard(dht::minimum_token(), (_current_shard + 1) % _partitioner.shard_count());
-    }
     _pr = &pr;
     clear_buffer();
     _end_of_stream = false;
+    on_partition_range_change();
     return parallel_for_each(_shard_readers, [this, timeout] (shard_reader& sr) {
         return sr.fast_forward_to(*_pr, timeout);
     });
