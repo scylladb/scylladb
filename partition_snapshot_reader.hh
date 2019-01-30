@@ -78,23 +78,22 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             });
         }
         void refresh_state(const query::clustering_range& ck_range,
-                           const position_in_partition& last_row,
-                           range_tombstone_stream& range_tombstones,
-                           bool new_range) {
+                           const std::optional<position_in_partition>& last_row,
+                           range_tombstone_stream& range_tombstones) {
             _clustering_rows.clear();
 
-            if (new_range) {
+            if (!last_row) {
                 // New range. Collect all relevant range tombstone.
                 for (auto&& v : _snapshot->versions()) {
-                    range_tombstones.apply(v.partition().row_tombstones(), ck_range, last_row);
+                    range_tombstones.apply(v.partition().row_tombstones(), ck_range, true);
                 }
             }
 
             for (auto&& v : _snapshot->versions()) {
                 auto cr_end = v.partition().upper_bound(_schema, ck_range);
                 auto cr = [&] () -> mutation_partition::rows_type::const_iterator {
-                    if (!new_range) {
-                        return v.partition().clustered_rows().upper_bound(last_row, _cmp);
+                    if (last_row) {
+                        return v.partition().clustered_rows().upper_bound(*last_row, _cmp);
                     } else {
                         return v.partition().lower_bound(_schema, ck_range);
                     }
@@ -158,22 +157,19 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         }
 
         // Returns next clustered row in the range.
-        // `last_row` should be the position of the last emitted row or
-        // range tombstone.
-        // `new_range` should be set when the read entered a new ck
-        // range. When entering new range, range_tombstones will be populated
-        // with all relevant tombstones. Tombstones, whose start position is
-        // not strictly greater than `last_row` will not be applied to
-        // `range_tombstones`. This is to ensure tombstones that span
-        // more than one ck range are emitted just once.
+        // If the ck_range is the same as the one used previously last_row needs
+        // to be engaged and equal the position of the row returned last time.
+        // If the ck_range is different or this is the first call to this
+        // function last_row has to be disengaged. Additionally, when entering
+        // new range range_tombstones will be populated with all relevant
+        // tombstones.
         mutation_fragment_opt next_row(const query::clustering_range& ck_range,
-                                       const position_in_partition& last_row,
-                                       range_tombstone_stream& range_tombstones,
-                                       bool new_range) {
+                                       const std::optional<position_in_partition>& last_row,
+                                       range_tombstone_stream& range_tombstones) {
             return in_alloc_section([&] () -> mutation_fragment_opt {
                 auto mark = _snapshot->get_change_mark();
-                if (new_range || mark != _change_mark) {
-                    refresh_state(ck_range, last_row, range_tombstones, new_range);
+                if (!last_row || mark != _change_mark) {
+                    refresh_state(ck_range, last_row, range_tombstones);
                     _change_mark = mark;
                 }
                 while (has_more_rows()) {
@@ -207,10 +203,9 @@ private:
     query::clustering_row_ranges::const_iterator _current_ck_range;
     query::clustering_row_ranges::const_iterator _ck_range_end;
 
-    position_in_partition _last_entry;
+    std::optional<position_in_partition> _last_entry;
     mutation_fragment_opt _next_row;
     range_tombstone_stream _range_tombstones;
-    bool _new_range = true;
 
     lsa_partition_reader _reader;
     bool _no_more_rows_in_current_range = false;
@@ -228,7 +223,7 @@ private:
 
     mutation_fragment_opt read_next() {
         if (!_next_row && !_no_more_rows_in_current_range) {
-            _next_row = _reader.next_row(*_current_ck_range, _last_entry, _range_tombstones, std::exchange(_new_range, false));
+            _next_row = _reader.next_row(*_current_ck_range, _last_entry, _range_tombstones);
         }
         if (_next_row) {
             auto pos_view = _next_row->as_clustering_row().position();
@@ -263,7 +258,7 @@ private:
             if (mfopt) {
                 emplace_mutation_fragment(std::move(*mfopt));
             } else {
-                _new_range = true;
+                _last_entry = std::nullopt;
                 _current_ck_range = std::next(_current_ck_range);
                 on_new_range();
             }
@@ -281,7 +276,6 @@ public:
         , _ck_ranges(std::move(crr))
         , _current_ck_range(_ck_ranges.begin())
         , _ck_range_end(_ck_ranges.end())
-        , _last_entry(position_in_partition::before_all_clustered_rows())
         , _range_tombstones(*_schema)
         , _reader(*_schema, std::move(snp), region, read_section, digest_requested)
     {

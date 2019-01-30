@@ -175,16 +175,18 @@ struct expected_tombstone {
     }
 };
 
-static void assert_cached_tombstones(partition_snapshot_ptr snp, std::deque<range_tombstone> expected) {
-    const range_tombstone_list& rts = snp->version()->partition().row_tombstones();
-    for (auto&& rt : rts) {
-        BOOST_REQUIRE(!expected.empty());
-        if (!expected.front().equal(*SCHEMA, rt)) {
-            BOOST_FAIL(format("Expected {}, but found {}", expected.front(), rt));
-        }
-        expected.pop_front();
+static void assert_cached_tombstones(partition_snapshot_ptr snp, std::deque<range_tombstone> expected, const query::clustering_row_ranges& ck_ranges) {
+    range_tombstone_list rts = snp->version()->partition().row_tombstones();
+    rts.trim(*SCHEMA, ck_ranges);
+
+    range_tombstone_list expected_list(*SCHEMA);
+    for (auto&& rt : expected) {
+        expected_list.apply(*SCHEMA, rt);
     }
-    BOOST_REQUIRE(expected.empty());
+
+    expected_list.trim(*SCHEMA, ck_ranges);
+
+    BOOST_REQUIRE(rts.equal(*SCHEMA, expected_list));
 }
 
 class cache_tester {
@@ -235,7 +237,7 @@ void test_slice_single_version(mutation& underlying,
         auto snp = cache_tester::snapshot_for_key(cache, DK);
         assert_single_version(snp);
         assert_cached_rows(snp, expected_cache_rows);
-        assert_cached_tombstones(snp, expected_cache_tombstones);
+        assert_cached_tombstones(snp, expected_cache_tombstones, slice.row_ranges(*SCHEMA, DK.key()));
     } catch (...) {
         std::cerr << "cache: " << cache << "\n";
         throw;

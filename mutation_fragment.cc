@@ -263,17 +263,12 @@ void range_tombstone_stream::forward_to(position_in_partition_view pos) {
     });
 }
 
-void range_tombstone_stream::apply(const range_tombstone_list& list, const query::clustering_range& range) {
-    for (const range_tombstone& rt : list.slice(_schema, range)) {
-        _list.apply(_schema, rt);
-    }
-}
-void range_tombstone_stream::apply(const range_tombstone_list& list, const query::clustering_range& range, position_in_partition_view last_pos) {
-    auto tri_cmp = position_in_partition::tri_compare(_schema);
-    for (const range_tombstone& rt : list.slice(_schema, range)) {
-        if (tri_cmp(rt.position(), last_pos) > 0) {
-            _list.apply(_schema, rt);
+void range_tombstone_stream::apply(const range_tombstone_list& list, const query::clustering_range& range, bool trim_front) {
+    for (range_tombstone rt : list.slice(_schema, range)) {
+        if (trim_front) {
+            rt.trim_front(_schema, position_in_partition_view::for_range_start(range));
         }
+        _list.apply(_schema, std::move(rt));
     }
 }
 
