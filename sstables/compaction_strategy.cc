@@ -198,7 +198,10 @@ public:
         _sstables.push_back(std::move(sst));
     }
     virtual void erase(shared_sstable sst) override {
-        _sstables.erase(boost::range::find(_sstables, sst));
+        auto it = boost::range::find(_sstables, sst);
+        if (it != _sstables.end()){
+            _sstables.erase(it);
+        }
     }
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;

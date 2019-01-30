@@ -662,6 +662,7 @@ private:
             // so we need to release reference to them.
             std::for_each(exhausted, _sstables.end(), [this] (shared_sstable& sst) {
                 _compacting_for_max_purgeable_func.erase(sst);
+                // Fully expired sstable is not actually compacted, therefore it's not present in the compacting set.
                 _compacting->erase(sst);
                 _monitor_generator.remove_sstable(_info->tracking, sst);
             });
