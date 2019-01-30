@@ -37,6 +37,8 @@
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
 #include "types/list.hh"
+#include "types/set.hh"
+#include "types/map.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -357,19 +359,23 @@ SEASTAR_TEST_CASE(test_allow_filtering_static_column) {
 
 SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, f list<int>, g set<int>, PRIMARY KEY(a, b));").get();
+        e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, f list<int>, g set<int>, h map<int, text>, PRIMARY KEY(a, b));").get();
         e.require_table_exists("ks", "t").get();
 
         e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 1, 1, 1, 1, [1], {})").get();
         e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 2, 3, 4, 5, [1, 2], {1, 2, 3})").get();
         e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 3, 5, 1, 9, [1, 2, 3], {1, 2})").get();
         e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 4, 5, 7, 5, [], {1})").get();
+        e.execute_cql("INSERT INTO t (a, b, g, h) VALUES (9, 5, {1, 2, 7}, {3: 'three'})").get();
+        e.execute_cql("INSERT INTO t (a, b, g, h) VALUES (9, 6, {1, 3}, {3: 'three', 4: 'four'})").get();
 
         BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE c = 5").get(), exceptions::invalid_request_exception);
         BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE d = 1").get(), exceptions::invalid_request_exception);
         BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE e = 5").get(), exceptions::invalid_request_exception);
 
         auto my_list_type = list_type_impl::get_instance(int32_type, true);
+        auto my_set_type = set_type_impl::get_instance(int32_type, true);
+        auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
 
         auto msg = e.execute_cql("SELECT f FROM t WHERE f contains 1 ALLOW FILTERING").get0();
         assert_that(msg).is_rows().with_rows({
@@ -387,6 +393,32 @@ SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
         msg = e.execute_cql("SELECT f FROM t WHERE f contains 2 AND f contains 3 ALLOW FILTERING").get0();
         assert_that(msg).is_rows().with_rows({
             {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{1, 2, 3}}))},
+        });
+
+        msg = e.execute_cql("SELECT g FROM t WHERE g contains 7 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_set_type->decompose(make_set_value(my_set_type, set_type_impl::native_type{{1, 2, 7}}))},
+        });
+
+        msg = e.execute_cql("SELECT g FROM t WHERE g contains 1 and g contains 7 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_set_type->decompose(make_set_value(my_set_type, set_type_impl::native_type{{1, 2, 7}}))},
+        });
+
+        msg = e.execute_cql("SELECT h FROM t WHERE h contains key 3 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type{{{3, "three"}}}))},
+            {my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type{{{3, "three"}, {4, "four"}}}))},
+        });
+
+        msg = e.execute_cql("SELECT h FROM t WHERE h contains 'four' ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type{{{3, "three"}, {4, "four"}}}))},
+        });
+
+        msg = e.execute_cql("SELECT h FROM t WHERE h contains key 3 and h contains 'four' ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type{{{3, "three"}, {4, "four"}}}))},
         });
 
         msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE c = 3 ALLOW FILTERING").get0();
