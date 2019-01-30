@@ -803,8 +803,8 @@ static future<> repair_cf_range(repair_info& ri,
                     for (unsigned i = 0; i < checksums.size(); i++) {
                         if (checksums[i].failed()) {
                             rlogger.warn(
-                                "Checksum of range {} on {} failed: {}",
-                                range,
+                                "Checksum of ks={}, table={}, range={} on {} failed: {}",
+                                ri.keyspace, cf, range,
                                 (i ? neighbors[i-1] :
                                  utils::fb_utilities::get_broadcast_address()),
                                 checksums[i].get_exception());
@@ -922,8 +922,8 @@ static future<> repair_cf_range(repair_info& ri,
                         }
                     }
                     if (!(live_neighbors_in.empty() && live_neighbors_out.empty())) {
-                        rlogger.debug("Found differing range {} on nodes {}, in = {}, out = {}", range,
-                                live_neighbors, live_neighbors_in, live_neighbors_out);
+                        rlogger.debug("Found differing ks={}, table={}, range={} on nodes={}, in = {}, out = {}",
+                                ri.keyspace, cf, range, live_neighbors, live_neighbors_in, live_neighbors_out);
                         ri.check_in_abort();
                         return ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
                     }
@@ -937,13 +937,13 @@ static future<> repair_cf_range(repair_info& ri,
                     // tell the caller.
                     success = false;
                     ri.nr_failed_ranges++;
-                    rlogger.warn("Failed sync of range {}: {}", range, eptr);
+                    rlogger.warn("Failed to sync ks={}, table={}, range={}: {}", ri.keyspace, cf, range, eptr);
                 });
             });
-        }).finally([&success, &completion] {
-            return completion.close().then([&success] {
+        }).finally([&success, &completion, &ri, &cf] {
+            return completion.close().then([&success, &ri, &cf] {
                 if (!success) {
-                    rlogger.warn("Checksum or sync of partial range failed");
+                    rlogger.warn("Checksum or sync of partial range failed, ks={}, table={}", ri.keyspace, cf);
                 }
                 // We probably want the repair contiunes even if some
                 // ranges fail to do the checksum. We need to set the
