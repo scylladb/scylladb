@@ -86,6 +86,8 @@
 #include "multishard_mutation_query.hh"
 #include "database.hh"
 
+namespace bi = boost::intrusive;
+
 namespace service {
 
 static logging::logger slogger("storage_proxy");
@@ -464,6 +466,16 @@ public:
                         std::move(targets), std::move(tr_state), stats, pending_endpoints.size(), std::move(dead_endpoints)) {
         _total_endpoints = _targets.size();
     }
+};
+
+class view_update_write_response_handler : public write_response_handler, public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
+public:
+    view_update_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl,
+            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
+            const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state,
+            storage_proxy::write_stats& stats):
+                write_response_handler(std::move(p), ks, cl, db::write_type::VIEW, std::move(mh),
+                        std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats) { }
 };
 
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
