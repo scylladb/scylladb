@@ -64,7 +64,7 @@
 #include "db/config.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema_builder.hh"
-#include "md5_hasher.hh"
+#include "hashers.hh"
 #include "release.hh"
 #include "log.hh"
 #include "serializer.hh"

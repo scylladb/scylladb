@@ -33,6 +33,7 @@
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
+#include "hashers.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -42,7 +43,6 @@
 #include <boost/range/algorithm_ext.hpp>
 #include <boost/range/adaptor/map.hpp>
 
-#include <cryptopp/sha.h>
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 
@@ -325,24 +325,6 @@ static void check_in_shutdown() {
     repair_tracker.check_in_shutdown();
 }
 
-class sha256_hasher {
-    CryptoPP::SHA256 hash{};
-public:
-    void update(const char* ptr, size_t length) {
-        // In Crypto++ v6, the `byte` typedef has been moved to CryptoPP:: namespace
-        // We bring the namespace in to make the same code work for both 5.x and 6.x versions
-        using namespace CryptoPP;
-        static_assert(sizeof(char) == sizeof(byte), "Assuming lengths will be the same");
-        hash.Update(reinterpret_cast<const byte*>(ptr), length * sizeof(byte));
-    }
-
-    void finalize(std::array<uint8_t, 32>& digest) {
-        static_assert(CryptoPP::SHA256::DIGESTSIZE == std::tuple_size<std::remove_reference_t<decltype(digest)>>::value * sizeof(digest[0]),
-                "digest size");
-        hash.Final(reinterpret_cast<unsigned char*>(digest.data()));
-    }
-};
-
 class partition_hasher {
     const schema& _schema;
     sha256_hasher _hasher;
@@ -451,8 +433,7 @@ public:
     stop_iteration consume_end_of_partition() {
         consume_range_tombstones_until_end();
 
-        std::array<uint8_t, 32> digest;
-        _hasher.finalize(digest);
+        std::array<uint8_t, 32> digest = _hasher.finalize_array();
         _hasher = { };
 
         _checksum.add(partition_checksum(digest));
@@ -474,10 +455,9 @@ future<partition_checksum> partition_checksum::compute_legacy(flat_mutation_read
                 if (!mopt) {
                     return stop_iteration::yes;
                 }
-                std::array<uint8_t, 32> digest;
                 sha256_hasher h;
                 feed_hash(h, *mopt);
-                h.finalize(digest);
+                std::array<uint8_t, 32> digest = h.finalize_array();
                 checksum.add(partition_checksum(digest));
                 return stop_iteration::no;
             });

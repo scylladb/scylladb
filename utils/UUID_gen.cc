@@ -40,9 +40,7 @@
 
 #include <stdlib.h>
 #include <atomic>
-
-#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
-#include <cryptopp/md5.h>
+#include "hashers.hh"
 
 namespace utils {
 
@@ -85,12 +83,7 @@ UUID UUID_gen::get_name_UUID(sstring_view s) {
 }
 
 UUID UUID_gen::get_name_UUID(const unsigned char *s, size_t len) {
-    static_assert(CryptoPP::Weak1::MD5::DIGESTSIZE == 16, "MD5 digests should be 16 bytes long");
-    int8_t digest[16];
-
-    CryptoPP::Weak::MD5 hash;
-    static_assert(sizeof(char) == sizeof(int8_t), "Assumed that chars are bytes");
-    hash.CalculateDigest(reinterpret_cast<unsigned char*>(digest), s, len);
+    bytes digest = md5_hasher::calculate(std::string_view(reinterpret_cast<const char*>(s), len));
 
     // set version to 3
     digest[6] &= 0x0f;

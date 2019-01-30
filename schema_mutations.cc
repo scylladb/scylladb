@@ -22,7 +22,7 @@
 #include "schema_mutations.hh"
 #include "canonical_mutation.hh"
 #include "db/schema_tables.hh"
-#include "md5_hasher.hh"
+#include "hashers.hh"
 
 schema_mutations::schema_mutations(canonical_mutation columnfamilies,
                                    canonical_mutation columns,

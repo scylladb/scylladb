@@ -22,7 +22,7 @@
 #pragma once
 
 #include "digest_algorithm.hh"
-#include "md5_hasher.hh"
+#include "hashers.hh"
 #include "xx_hasher.hh"
 
 #include <type_traits>

@@ -25,7 +25,7 @@
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include "mutation_query.hh"
-#include "md5_hasher.hh"
+#include "hashers.hh"
 #include "xx_hasher.hh"
 
 #include <seastar/core/sstring.hh>
