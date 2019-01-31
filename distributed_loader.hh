@@ -68,4 +68,7 @@ public:
     static future<> init_system_keyspace(distributed<database>& db);
     static future<> ensure_system_table_directories(distributed<database>& db);
     static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy);
+private:
+    static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
+    static future<> do_populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
 };
