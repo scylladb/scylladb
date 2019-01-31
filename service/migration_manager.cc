@@ -204,6 +204,10 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
                 return make_ready_future<>();
             }
             const auto* value = ep_state->get_application_state_ptr(gms::application_state::SCHEMA);
+            if (!value) {
+                mlogger.debug("application_state::SCHEMA does not exist for {}, not submitting migration task", endpoint);
+                return make_ready_future<>();
+            }
             utils::UUID current_version{value->value};
             auto& db = proxy.get_db().local();
             if (db.get_version() == current_version) {
