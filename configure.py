@@ -1187,6 +1187,7 @@ with open(buildfile, 'w') as f:
         serializers = {}
         thrifts = set()
         antlr3_grammars = set()
+        seastar_dep = 'seastar/build/{}/libseastar.a'.format(mode)
         for binary in build_artifacts:
             if binary in other:
                 continue
@@ -1223,12 +1224,12 @@ with open(buildfile, 'w') as f:
                     # So we strip the tests by default; The user can very
                     # quickly re-link the test unstripped by adding a "_g"
                     # to the test name, e.g., "ninja build/release/testname_g"
-                    f.write('build $builddir/{}/{}: {}.{} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs)))
+                    f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs), seastar_dep))
                     f.write('   libs = {}\n'.format(local_libs))
-                    f.write('build $builddir/{}/{}_g: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
+                    f.write('build $builddir/{}/{}_g: link.{} {} | {}\n'.format(mode, binary, mode, str.join(' ', objs), seastar_dep))
                     f.write('   libs = {}\n'.format(local_libs))
                 else:
-                    f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
+                    f.write('build $builddir/{}/{}: link.{} {} | {}\n'.format(mode, binary, mode, str.join(' ', objs), seastar_dep))
                     if has_thrift:
                         f.write('   libs =  {} {} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system')))
             for src in srcs:
@@ -1251,8 +1252,8 @@ with open(buildfile, 'w') as f:
         compiles['$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'] = 'utils/gz/gen_crc_combine_table.cc'
         f.write('build {}: run {}\n'.format('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc',
                                             '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
-        f.write('build {}: link.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
-                                                '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'))
+        f.write('build {}: link.{} {} | {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
+                                                '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o', seastar_dep))
         f.write(
             'build {mode}-objects: phony {objs}\n'.format(
                 mode=mode,
@@ -1269,7 +1270,7 @@ with open(buildfile, 'w') as f:
                 gen_headers += g.headers('$builddir/{}/gen'.format(mode))
             gen_headers += list(swaggers.keys())
             gen_headers += list(serializers.keys())
-            f.write('build {}: cxx.{} {} | {} || {}\n'.format(obj, mode, src, 'seastar/build/{}/libseastar.a'.format(mode), ' '.join(gen_headers)))
+            f.write('build {}: cxx.{} {} || {} {}\n'.format(obj, mode, src, seastar_dep, ' '.join(gen_headers)))
             if src in extra_cxxflags:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[src], **modeval))
         for hh in swaggers:
