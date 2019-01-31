@@ -651,8 +651,22 @@ class scylla_memory(gdb.Command):
             gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {wasted_percent:5.1f}\n'
                       .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, wasted_percent=wasted_percent))
 
+        idx = 0
+        large_allocs = defaultdict(int) # key: span size [B], value: span count
+        nr_pages = int(cpu_mem['nr_pages'])
+        pages = cpu_mem['pages']
+        while idx < nr_pages:
+            page = pages[idx]
+            span_size = int(page['span_size'])
+            if span_size == 0:
+                span_size = 1
+            if not page['pool'] and not page['free']:
+                large_allocs[span_size * page_size] += 1
+            idx += span_size
+
         gdb.write('Page spans:\n')
-        gdb.write('{index:5} {size:>13} {total}\n'.format(index="index", size="size [B]", total="free [B]"))
+        gdb.write('{index:5} {size:>13} {total:>13} {allocated_size:>13} {allocated_count:>7}\n'.format(
+            index="index", size="size [B]", total="free [B]", allocated_size="large [B]", allocated_count="[spans]"))
         for index in range(int(cpu_mem['nr_span_lists'])):
             span_list = cpu_mem['free_spans'][index]
             front = int(span_list['_front'])
@@ -662,7 +676,11 @@ class scylla_memory(gdb.Command):
                 span = pages[front]
                 total += int(span['span_size'])
                 front = int(span['link']['_next'])
-            gdb.write('{index:5} {size:13} {total}\n'.format(index=index, size=(1 << index) * page_size, total=total * page_size))
+            span_size = (1 << index) * page_size
+            allocated_size = large_allocs[span_size] * span_size
+            gdb.write('{index:5} {size:13} {total:13} {allocated_size:13} {allocated_count:7}\n'.format(index=index, size=span_size, total=total * page_size,
+                                                                allocated_count=large_allocs[span_size],
+                                                                allocated_size=allocated_size))
 
 
 class TreeNode(object):
