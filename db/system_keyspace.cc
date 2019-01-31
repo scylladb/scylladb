@@ -243,9 +243,7 @@ schema_ptr built_indexes() {
                 {"broadcast_address", inet_addr_type},
                 {"listen_address", inet_addr_type},
                 {"supported_features", utf8_type},
-                {"scylla_cpu_sharding_algorithm", utf8_type },
-                {"scylla_nr_shards", int32_type },
-                {"scylla_msb_ignore", int32_type },
+
         },
         // static columns
         {},
@@ -991,14 +989,9 @@ schema_ptr aggregates() {
 
 static future<> setup_version() {
     return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([](gms::inet_address a) {
-        sstring req = format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features, scylla_cpu_sharding_algorithm, scylla_nr_shards, scylla_msb_ignore) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        sstring req = sprint("INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         , db::system_keyspace::LOCAL);
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-
-        int32_t scylla_msb_ignore =
-            dht::global_partitioner().name() == "org.apache.cassandra.dht.Murmur3Partitioner"
-            ? (qctx->db().get_config().murmur3_partitioner_ignore_msb_bits())
-            : 0;
 
         return execute_cql(req, sstring(db::system_keyspace::LOCAL),
                              version::release(),
@@ -1011,10 +1004,7 @@ static future<> setup_version() {
                              a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
                              netw::get_local_messaging_service().listen_address().addr(),
-                             service::storage_service::get_config_supported_features(),
-                             dht::global_partitioner().cpu_sharding_algorithm_name(),
-                             int32_t(smp::count),
-                             int32_t(scylla_msb_ignore)
+                             service::storage_service::get_config_supported_features()
         ).discard_result();
     });
 }
