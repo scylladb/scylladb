@@ -13,6 +13,7 @@ Obsoletes:	scylla-server < 1.1
 %global _debugsource_template %{nil}
 %global _debuginfo_subpackages %{nil}
 %global __brp_python_bytecompile %{nil}
+%global __brp_mangle_shebangs %{nil}
 
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
@@ -165,6 +166,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_config_get.py
 %{_prefix}/lib/scylla/scylla_util.py
 %{_prefix}/lib/scylla/scylla-gdb.py
+%{_prefix}/lib/scylla/libexec/*
 /opt/scylladb/bin/*
 /opt/scylladb/libreloc/*
 /opt/scylladb/libexec/*
