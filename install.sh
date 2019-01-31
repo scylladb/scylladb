@@ -112,9 +112,8 @@ for f in libexec/*; do
     fi
 done
 install -m755 libreloc/* -Dt "$root/opt/scylladb/libreloc"
-# use relative paths instead?
-ln -sf /opt/scylladb/bin/scylla "$rprefix/bin/scylla"
-ln -sf /opt/scylladb/bin/iotune "$rprefix/bin/iotune"
+ln -srf "$root/opt/scylladb/bin/scylla" "$rprefix/bin/scylla"
+ln -srf "$root/opt/scylladb/bin/iotune" "$rprefix/bin/iotune"
 install -m755 dist/common/bin/scyllatop -Dt "$rprefix/bin"
 install -m644 dist/common/scripts/scylla_blocktune.py -Dt "$rprefix"/lib/scylla/
 install -m755 dist/common/scripts/scylla-blocktune -Dt "$rprefix"/lib/scylla/
