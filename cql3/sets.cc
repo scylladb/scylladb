@@ -228,6 +228,13 @@ sets::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     } else {
         auto as_set_type = static_pointer_cast<const set_type_impl>(_receiver->type);
+        try {
+            with_linearized(*value, [&] (bytes_view v) {
+                as_set_type->validate(v, options.get_cql_serialization_format());
+            });
+        } catch (marshal_exception& e) {
+            throw exceptions::invalid_request_exception(e.what());
+        }
         return make_shared(value::from_serialized(*value, as_set_type, options.get_cql_serialization_format()));
     }
 }
