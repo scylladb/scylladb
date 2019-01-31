@@ -3603,6 +3603,22 @@ void storage_proxy::allow_replaying_hints() noexcept {
     return _hints_resource_manager.allow_replaying();
 }
 
+void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
+
+void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint) {};
+
+void storage_proxy::on_up(const gms::inet_address& endpoint) {};
+
+void storage_proxy::on_down(const gms::inet_address& endpoint) {
+    for (auto it = _view_update_handlers_list->begin(); it != _view_update_handlers_list->end(); ++it) {
+        auto guard = it->shared_from_this();
+        if (it->get_targets().count(endpoint) > 0) {
+            it->timeout_cb();
+        }
+        seastar::thread::yield();
+    }
+};
+
 future<> storage_proxy::stop_hints_manager() {
     return _hints_resource_manager.stop();
 }

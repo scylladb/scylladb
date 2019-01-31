@@ -111,7 +111,7 @@ public:
     bool empty() const;
 };
 
-class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
+class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
     struct config {
@@ -447,6 +447,11 @@ public:
     const stats& get_stats() const {
         return _stats;
     }
+
+    virtual void on_join_cluster(const gms::inet_address& endpoint) override;
+    virtual void on_leave_cluster(const gms::inet_address& endpoint) override;
+    virtual void on_up(const gms::inet_address& endpoint) override;
+    virtual void on_down(const gms::inet_address& endpoint) override;
 
     friend class abstract_read_executor;
     friend class abstract_write_response_handler;
