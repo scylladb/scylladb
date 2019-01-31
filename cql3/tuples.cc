@@ -147,6 +147,19 @@ shared_ptr<terminal> tuples::in_marker::bind(const query_options& options) {
         throw exceptions::invalid_request_exception(format("Invalid unset value for tuple {}", _receiver->name->text()));
     } else {
         auto as_list_type = static_pointer_cast<const list_type_impl>(_receiver->type);
+        auto as_tuple_type = static_pointer_cast<const tuple_type_impl>(as_list_type->get_elements_type());
+        try {
+            with_linearized(*value, [&] (bytes_view v) {
+                as_list_type->validate(v, options.get_cql_serialization_format());
+                auto l = value_cast<list_type_impl::native_type>(as_list_type->deserialize(v, options.get_cql_serialization_format()));
+
+                for (auto&& element : l) {
+                    as_tuple_type->validate(as_tuple_type->decompose(element), options.get_cql_serialization_format());
+                }
+            });
+        } catch (marshal_exception& e) {
+            throw exceptions::invalid_request_exception(e.what());
+        }
         return make_shared(tuples::in_value::from_serialized(*value, as_list_type, options));
     }
 }
