@@ -637,6 +637,7 @@ class scylla_memory(gdb.Command):
         nr = small_pools['nr_small_pools']
         gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {wasted_percent:>5}\n'
                   .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory', wasted_percent='wst%'))
+        total_small_bytes = 0
         for i in range(int(nr)):
             sp = small_pools['_u']['a'][i]
             object_size = int(sp['_object_size'])
@@ -644,12 +645,14 @@ class scylla_memory(gdb.Command):
             free_count = int(sp['_free_count'])
             pages_in_use = int(sp['_pages_in_use'])
             memory = pages_in_use * page_size
+            total_small_bytes += memory
             # use_count can be off if we used fallback spans rather than preferred spans
             use_count = int(memory / span_size) * int(span_size / object_size) - free_count
             wasted = free_count * object_size
             wasted_percent = wasted * 100.0 / memory if memory else 0
             gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {wasted_percent:5.1f}\n'
                       .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, wasted_percent=wasted_percent))
+        gdb.write('Small allocations: %d [B]\n' % total_small_bytes)
 
         idx = 0
         large_allocs = defaultdict(int) # key: span size [B], value: span count
@@ -667,6 +670,7 @@ class scylla_memory(gdb.Command):
         gdb.write('Page spans:\n')
         gdb.write('{index:5} {size:>13} {total:>13} {allocated_size:>13} {allocated_count:>7}\n'.format(
             index="index", size="size [B]", total="free [B]", allocated_size="large [B]", allocated_count="[spans]"))
+        total_large_bytes = 0
         for index in range(int(cpu_mem['nr_span_lists'])):
             span_list = cpu_mem['free_spans'][index]
             front = int(span_list['_front'])
@@ -678,9 +682,11 @@ class scylla_memory(gdb.Command):
                 front = int(span['link']['_next'])
             span_size = (1 << index) * page_size
             allocated_size = large_allocs[span_size] * span_size
+            total_large_bytes += allocated_size
             gdb.write('{index:5} {size:13} {total:13} {allocated_size:13} {allocated_count:7}\n'.format(index=index, size=span_size, total=total * page_size,
                                                                 allocated_count=large_allocs[span_size],
                                                                 allocated_size=allocated_size))
+        gdb.write('Large allocations: %d [B]\n' % total_large_bytes)
 
 
 class TreeNode(object):
