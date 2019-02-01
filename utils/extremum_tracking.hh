@@ -48,6 +48,12 @@ public:
         }
     }
 
+    void update(const extremum_tracker& other) {
+        if (other._is_set) {
+            update(other._value);
+        }
+    }
+
     T get() const {
         if (_is_set) {
             return _value;
@@ -85,8 +91,8 @@ public:
     }
 
     void update(const min_max_tracker<T>& other) {
-        _min_tracker.update(other.min());
-        _max_tracker.update(other.max());
+        _min_tracker.update(other._min_tracker);
+        _max_tracker.update(other._max_tracker);
     }
 
     T min() const {
@@ -97,4 +103,3 @@ public:
         return _max_tracker.get();
     }
 };
-
