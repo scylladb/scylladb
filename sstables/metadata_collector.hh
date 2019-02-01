@@ -82,9 +82,6 @@ struct column_stats {
         rows_count(0),
         start_offset(0),
         partition_size(0),
-        timestamp_tracker(),
-        local_deletion_time_tracker(std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max()),
-        ttl_tracker(0, 0),
         tombstone_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE),
         has_legacy_counter_shards(false)
         {
@@ -155,8 +152,8 @@ private:
     db::replay_position _replay_position;
     min_max_tracker<api::timestamp_type> _timestamp_tracker;
     uint64_t _repaired_at = 0;
-    min_max_tracker<int32_t> _local_deletion_time_tracker;
-    min_max_tracker<int32_t> _ttl_tracker;
+    min_max_tracker<int32_t> _local_deletion_time_tracker{std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max()};
+    min_max_tracker<int32_t> _ttl_tracker{0, 0};
     double _compression_ratio = NO_COMPRESSION_RATIO;
     std::set<int> _ancestors;
     utils::streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
@@ -289,5 +286,3 @@ public:
 };
 
 }
-
-
