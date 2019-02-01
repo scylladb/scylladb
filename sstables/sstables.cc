@@ -2399,9 +2399,10 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 encoding_stats sstable::get_encoding_stats_for_compaction() const {
     encoding_stats enc_stats;
 
-    enc_stats.min_timestamp = _c_stats.timestamp_tracker.min();
-    enc_stats.min_local_deletion_time = gc_clock::time_point(gc_clock::duration(_c_stats.local_deletion_time_tracker.min()));
-    enc_stats.min_ttl = gc_clock::duration(_c_stats.ttl_tracker.min());
+    auto& stats = get_stats_metadata();
+    enc_stats.min_timestamp = stats.min_timestamp;
+    enc_stats.min_local_deletion_time = gc_clock::time_point(gc_clock::duration(stats.min_local_deletion_time));
+    enc_stats.min_ttl = gc_clock::duration(stats.min_ttl);
 
     return enc_stats;
 }
