@@ -78,7 +78,7 @@ public:
     void add_clustered_cell(const key& ck, const sstring& column, value v);
     void add_clustered_expiring_cell(const key& ck, const sstring& column, atomic_value v,
                                      gc_clock::duration ttl, gc_clock::time_point expiry_point);
-    void add_clustered_row_marker(const key& ck);
+    void add_clustered_row_marker(const key& ck, api::timestamp_type timestamp = data_timestamp);
 
     void remove_static_column(const sstring& name);
     void remove_regular_column(const sstring& name);

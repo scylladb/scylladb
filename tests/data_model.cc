@@ -59,8 +59,8 @@ void mutation_description::add_clustered_expiring_cell(const key& ck, const sstr
     _clustered_rows[ck].cells.emplace_back(cell { column, std::move(v), expiry_info { ttl, expiry_point } });
 }
 
-void mutation_description::add_clustered_row_marker(const key& ck) {
-    _clustered_rows[ck].marker = data_timestamp;
+void mutation_description::add_clustered_row_marker(const key& ck, api::timestamp_type timestamp) {
+    _clustered_rows[ck].marker = timestamp;
 }
 
 void mutation_description::remove_static_column(const sstring& name) {
