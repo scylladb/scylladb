@@ -41,9 +41,14 @@ public:
     using collection = std::vector<collection_element>;
     using atomic_value = bytes;
     using value = std::variant<atomic_value, collection>;
+    struct expiry_info {
+        gc_clock::duration ttl;
+        gc_clock::time_point expiry_point;
+    };
     struct cell {
         sstring column_name;
         value data_value;
+        std::optional<expiry_info> expiring;
     };
     using row = std::vector<cell>;
     struct clustered_row {
@@ -68,7 +73,11 @@ public:
     explicit mutation_description(key partition_key);
 
     void add_static_cell(const sstring& column, value v);
+    void add_static_expiring_cell(const sstring& column, atomic_value v,
+                                  gc_clock::duration ttl, gc_clock::time_point expiry_point);
     void add_clustered_cell(const key& ck, const sstring& column, value v);
+    void add_clustered_expiring_cell(const key& ck, const sstring& column, atomic_value v,
+                                     gc_clock::duration ttl, gc_clock::time_point expiry_point);
     void add_clustered_row_marker(const key& ck);
 
     void remove_static_column(const sstring& name);
