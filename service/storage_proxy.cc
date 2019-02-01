@@ -3619,6 +3619,17 @@ void storage_proxy::on_down(const gms::inet_address& endpoint) {
     }
 };
 
+future<> storage_proxy::drain_on_shutdown() {
+    return do_with(::shared_ptr<abstract_write_response_handler>(), [this] (::shared_ptr<abstract_write_response_handler>& intrusive_list_guard) {
+        return do_for_each(*_view_update_handlers_list, [&intrusive_list_guard] (abstract_write_response_handler& handler) {
+            intrusive_list_guard = handler.shared_from_this();
+            handler.timeout_cb();
+        });
+    }).then([this] {
+        return _hints_resource_manager.stop();
+    });
+}
+
 future<> storage_proxy::stop_hints_manager() {
     return _hints_resource_manager.stop();
 }

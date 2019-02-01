@@ -1385,7 +1385,7 @@ future<> storage_service::drain_on_shutdown() {
 
             get_storage_proxy().invoke_on_all([&ss] (storage_proxy& local_proxy) mutable {
                 ss.unregister_subscriber(&local_proxy);
-                return local_proxy.stop_hints_manager();
+                return local_proxy.drain_on_shutdown();
             }).get();
             slogger.info("Drain on shutdown: hints manager is stopped");
 
