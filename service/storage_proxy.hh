@@ -440,7 +440,6 @@ public:
 
 
     future<> stop();
-    future<> stop_hints_manager();
     future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     void allow_replaying_hints() noexcept;
     future<> drain_on_shutdown();

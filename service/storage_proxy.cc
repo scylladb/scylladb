@@ -3630,10 +3630,6 @@ future<> storage_proxy::drain_on_shutdown() {
     });
 }
 
-future<> storage_proxy::stop_hints_manager() {
-    return _hints_resource_manager.stop();
-}
-
 future<>
 storage_proxy::stop() {
     // FIXME: hints manager should be stopped here but it seems like this function is never called
