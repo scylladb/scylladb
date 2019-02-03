@@ -142,13 +142,6 @@ def flag_supported(flag, compiler):
     return try_compile(flags=['-Werror'] + split, compiler=compiler)
 
 
-def debug_compress_flag(compiler):
-    if try_compile(compiler=compiler, flags=['-gz']):
-        return '-gz'
-    else:
-        return ''
-
-
 def gold_supported(compiler):
     src_main = 'int main(int argc, char **argv) { return 0; }'
     if try_compile_and_link(source=src_main, flags=['-fuse-ld=gold'], compiler=compiler):
@@ -1034,7 +1027,7 @@ if args.alloc_failure_injector:
 if args.split_dwarf:
     seastar_flags += ['--split-dwarf']
 
-debug_flags = ' ' + debug_compress_flag(compiler=args.cxx) + ' ' + dbgflag
+debug_flags = ' -gz ' + dbgflag
 modes['debug']['opt'] += debug_flags
 modes['release']['opt'] += debug_flags
 
