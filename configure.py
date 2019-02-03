@@ -1068,7 +1068,7 @@ for mode in build_modes:
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 args.user_cflags += ' -march=' + args.target
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
-                 maybe_static(args.staticboost, '-lboost_filesystem'), ' -lstdc++fs', ' -lcrypt', ' -lcryptopp',
+                 maybe_static(args.staticboost, '-lboost_filesystem'), ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  maybe_static(args.staticboost, '-lboost_date_time'), ])
 
 xxhash_dir = 'xxHash'
@@ -1144,16 +1144,17 @@ with open(buildfile, 'w') as f:
         f.write(textwrap.dedent('''\
             cxxflags_{mode} = {opt} -DXXH_PRIVATE_API -DSEASTAR_TESTING_MAIN -I. -I $builddir/{mode}/gen
             libs_{mode} = seastar/build/{mode}/_cooking/installed/lib/{fmt_lib}
+            seastar_libs_{mode} = {seastar_libs}
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {sanitize} {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx  $cxxflags_{mode} {sanitize} {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode} {seastar_libs}
+              command = $cxx  $cxxflags_{mode} {sanitize} {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
-              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode} {seastar_libs}
+              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
               pool = link_pool
             rule ar.{mode}
@@ -1211,7 +1212,7 @@ with open(buildfile, 'w') as f:
                 ]])
                 objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
                 if binary.startswith('tests/'):
-                    local_libs = '$libs'
+                    local_libs = '$seastar_libs_{} $libs'.format(mode)
                     if binary in pure_boost_tests:
                         local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                     if binary not in tests_not_using_seastar_test_framework:
@@ -1231,7 +1232,7 @@ with open(buildfile, 'w') as f:
                 else:
                     f.write('build $builddir/{}/{}: link.{} {} | {}\n'.format(mode, binary, mode, str.join(' ', objs), seastar_dep))
                     if has_thrift:
-                        f.write('   libs =  {} {} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system')))
+                        f.write('   libs =  {} {} $seastar_libs_{} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system'), mode))
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -1252,8 +1253,8 @@ with open(buildfile, 'w') as f:
         compiles['$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'] = 'utils/gz/gen_crc_combine_table.cc'
         f.write('build {}: run {}\n'.format('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc',
                                             '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
-        f.write('build {}: link.{} {} | {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
-                                                '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o', seastar_dep))
+        f.write('build {}: link.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
+                                                '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'))
         f.write(
             'build {mode}-objects: phony {objs}\n'.format(
                 mode=mode,
