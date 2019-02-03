@@ -213,7 +213,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         auto identifier = static_pointer_cast<column_identifier::raw>(selectable);
         auto* def = get_column_definition(schema, *identifier);
         if (!def) {
-            throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement : ", identifier));
+            throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement: {}", identifier));
         }
         return def;
     }));
@@ -244,10 +244,10 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         for (auto&& identifier : keys) {
             auto* def = get_column_definition(schema, *identifier);
             if (!def) {
-                throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement : ", identifier));
+                throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement: {}", identifier));
             }
             if (!target_primary_keys.insert(def).second) {
-                throw exceptions::invalid_request_exception(format("Duplicate entry found in PRIMARY KEY: ", identifier));
+                throw exceptions::invalid_request_exception(format("Duplicate entry found in PRIMARY KEY: {}", identifier));
             }
             target_keys.push_back(def);
             has_non_pk_column |= validate_primary_key(schema, def, base_primary_key_cols, has_non_pk_column, *restrictions);
