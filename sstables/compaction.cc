@@ -595,7 +595,7 @@ public:
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
             cfg.monitor = &_active_write_monitors.back();
-            cfg.large_partition_handler = _cf.get_large_partition_handler();
+            cfg.large_data_handler = _cf.get_large_data_handler();
             cfg.run_identifier = _run_identifier;
             _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, get_encoding_stats(), priority));
         }
@@ -830,7 +830,7 @@ public:
 
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
-            cfg.large_partition_handler = _cf.get_large_partition_handler();
+            cfg.large_data_handler = _cf.get_large_data_handler();
             auto&& priority = service::get_local_compaction_priority();
             writer.emplace(sst->get_writer(*_cf.schema(), partitions_per_sstable(_shard), cfg, get_encoding_stats(), priority, _shard));
         }

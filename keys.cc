@@ -31,10 +31,12 @@ std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
     return out << "pk{" << to_hex(pk) << "}";
 }
 
-std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wrapper& pk) {
-    auto type_iterator = pk.pkey.get_compound_type(pk.s)->types().begin();
+template<typename T>
+static std::ostream& print_key(std::ostream& out, const T& key_with_schema) {
+    const auto& [schema, key] = key_with_schema;
+    auto type_iterator = key.get_compound_type(schema)->types().begin();
     bool first = true;
-    for (auto&& e : pk.pkey.components(pk.s)) {
+    for (auto&& e : key.components(schema)) {
         if (!first) {
             out << ":";
         }
@@ -43,6 +45,14 @@ std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wra
         ++type_iterator;
     }
     return out;
+}
+
+std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wrapper& pk) {
+    return print_key(out, pk);
+}
+
+std::ostream& operator<<(std::ostream& out, const clustering_key_prefix::with_schema_wrapper& ck) {
+    return print_key(out, ck);
 }
 
 std::ostream& operator<<(std::ostream& out, const partition_key_view& pk) {

@@ -21,7 +21,7 @@
 
 using namespace sstables;
 
-static db::nop_large_partition_handler nop_lp_handler;
+static db::nop_large_data_handler nop_lp_handler;
 
 static inline dht::token create_token_from_key(sstring key) {
     sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
@@ -72,7 +72,7 @@ void run_sstable_resharding_test() {
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     column_family::config cfg;
-    cfg.large_partition_handler = &nop_lp_handler;
+    cfg.large_data_handler = &nop_lp_handler;
     auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, tracker);
     cf->mark_ready_for_writes();
     std::unordered_map<shard_id, std::vector<mutation>> muts;

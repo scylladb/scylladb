@@ -71,11 +71,11 @@ using namespace sstables;
 static sstring some_keyspace("ks");
 static sstring some_column_family("cf");
 
-static db::nop_large_partition_handler nop_lp_handler;
+static db::nop_large_data_handler nop_lp_handler;
 
 static column_family::config column_family_test_config() {
     column_family::config cfg;
-    cfg.large_partition_handler = &nop_lp_handler;
+    cfg.large_data_handler = &nop_lp_handler;
     return cfg;
 }
 
@@ -1057,7 +1057,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
     cfg.datadir = tmp->path;
     cfg.enable_commitlog = false;
     cfg.enable_incremental_backups = false;
-    cfg.large_partition_handler = &nop_lp_handler;
+    cfg.large_data_handler = &nop_lp_handler;
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
     auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
@@ -1257,7 +1257,7 @@ struct column_family_for_tests {
         _data->s = s;
         _data->cfg.enable_disk_writes = false;
         _data->cfg.enable_commitlog = false;
-        _data->cfg.large_partition_handler = &nop_lp_handler;
+        _data->cfg.large_data_handler = &nop_lp_handler;
         _data->cf = make_lw_shared<column_family>(_data->s, _data->cfg, column_family::no_commitlog(), _data->cm, _data->cl_stats, _data->tracker);
         _data->cf->mark_ready_for_writes();
     }
@@ -3734,7 +3734,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 100;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         auto mut = mutation(table.schema(), table.make_pkey("key"));
         for (auto&& mf : fragments) {
             mut.apply(mf);
@@ -3789,7 +3789,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         auto sst = make_sstable_easy(dir.path, flat_mutation_reader_from_mutations(partitions), cfg, version);
 
         auto ms = as_mutation_source(sst);
@@ -4809,7 +4809,7 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
         auto tmp = make_lw_shared<tmpdir>();
         sstable_writer_config cfg;
         cfg.run_identifier = utils::make_random_uuid();
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         auto sst = make_sstable_easy(tmp->path,  flat_mutation_reader_from_mutations({ std::move(mut) }), cfg, la);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);

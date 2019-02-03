@@ -51,6 +51,7 @@
 #include "utils/UUID_gen.hh"
 #include "encoding_stats.hh"
 #include "sstables/mc/writer.hh"
+#include "simple_schema.hh"
 
 using namespace sstables;
 
@@ -2873,9 +2874,9 @@ static std::vector<sstables::shared_sstable> open_sstables(schema_ptr s, sstring
 static flat_mutation_reader compacted_sstable_reader(schema_ptr s,
                      sstring table_name, std::vector<unsigned long> generations) {
     auto column_family_test_config = [] {
-        static db::nop_large_partition_handler nop_lp_handler;
+        static db::nop_large_data_handler nop_lp_handler;
         column_family::config cfg;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         return cfg;
     };
     storage_service_for_tests ssft;
@@ -3066,12 +3067,12 @@ static void compare_sstables(sstring result_path, sstring table_name) {
 }
 
 static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2) {
-    static db::nop_large_partition_handler nop_lp_handler;
+    static db::nop_large_data_handler nop_lp_handler;
     storage_service_for_tests ssft;
     tmpdir tmp;
     auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
     sstable_writer_config cfg;
-    cfg.large_partition_handler = &nop_lp_handler;
+    cfg.large_data_handler = &nop_lp_handler;
     sst->write_components(make_combined_reader(s,
         mt1->make_flat_reader(s),
         mt2->make_flat_reader(s)), 1, s, cfg, mt1->get_encoding_stats()).get();
@@ -4902,7 +4903,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
-    db::nop_large_partition_handler nop_lp_handler;
+    db::nop_large_data_handler nop_lp_handler;
     api::timestamp_type write_timestamp = 1525385507816568;
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     storage_service_for_tests ssft;
@@ -4938,7 +4939,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = index_block_size;
-        cfg.large_partition_handler = &nop_lp_handler;
+        cfg.large_data_handler = &nop_lp_handler;
         auto sst = sstables::make_sstable(write_schema,
             dir.path,
             1 /* generation */,
@@ -4960,4 +4961,80 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
                 return e.what() == "Column val1 missing in current schema in sstable " + sst->get_filename();
             });
     }
+}
+
+namespace {
+struct large_row_handler : public db::large_data_handler {
+    using callback_t = std::function<void(const schema& s, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, uint64_t row_size)>;
+    callback_t callback;
+
+    large_row_handler(uint64_t threshold, callback_t callback)
+        : large_data_handler(std::numeric_limits<uint64_t>::max(), threshold)
+        , callback(std::move(callback)) {}
+
+    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
+        const schema_ptr s = sst.get_schema();
+        callback(*s, partition_key, clustering_key, row_size);
+    }
+
+    virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name,
+            const sstables::key& partition_key, uint64_t partition_size) const override {
+        return make_ready_future<>();
+    }
+
+    virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override {
+        return make_ready_future<>();
+    }
+};
+}
+
+static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const partition_key& pk,
+        std::vector<clustering_key*> expected, uint64_t threshold) {
+    tmpdir dir;
+    auto sst = sstables::make_sstable(
+            s, dir.path, 1 /* generation */, sstable_version_types::mc, sstables::sstable::format_types::big);
+
+    unsigned i = 0;
+    auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
+                     const clustering_key_prefix* clustering_key, uint64_t row_size) {
+        BOOST_REQUIRE_EQUAL(pk.components(s), partition_key.to_partition_key(s).components(s));
+        BOOST_REQUIRE(i < expected.size());
+        BOOST_REQUIRE(row_size > threshold);
+
+        if (clustering_key) {
+            BOOST_REQUIRE(expected[i]->equal(s, *clustering_key));
+        } else {
+            BOOST_REQUIRE_EQUAL(expected[i], nullptr);
+        }
+        ++i;
+    };
+
+    large_row_handler handler(threshold, f);
+    sstable_writer_config cfg;
+    cfg.large_data_handler = &handler;
+
+    sst->write_components(mt.make_flat_reader(s), 1, s, std::move(cfg)).get();
+    BOOST_REQUIRE_EQUAL(i, expected.size());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
+    storage_service_for_tests ssft;
+    simple_schema s;
+    mutation partition = s.new_mutation("pv");
+    const partition_key& pk = partition.key();
+    s.add_static_row(partition, "foo bar zed");
+
+    auto ck1 = s.make_ckey("cv1");
+    s.add_row(partition, ck1, "foo");
+
+    auto ck2 = s.make_ckey("cv2");
+    s.add_row(partition, ck2, "foo bar");
+
+    auto mt = make_lw_shared<memtable>(s.schema());
+    mt->apply(partition);
+
+    test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck1, &ck2}, 21);
+    test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck2}, 22);
 }

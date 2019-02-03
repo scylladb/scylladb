@@ -32,7 +32,7 @@
 
 using namespace sstables;
 
-static db::nop_large_partition_handler nop_lp_handler;
+static db::nop_large_data_handler nop_lp_handler;
 
 class test_env {
 public:
@@ -171,7 +171,7 @@ public:
                 cell_locker_stats cl_stats;
                 auto cm = make_lw_shared<compaction_manager>();
                 column_family::config cfg;
-                cfg.large_partition_handler = &nop_lp_handler;
+                cfg.large_data_handler = &nop_lp_handler;
                 auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, tracker);
 
                 auto start = test_env::now();

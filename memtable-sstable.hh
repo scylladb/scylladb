@@ -37,7 +37,7 @@ future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
         sstables::write_monitor& mon,
-        db::large_partition_handler* lp_handler,
+        db::large_data_handler* lp_handler,
         bool backup = false,
         const io_priority_class& pc = default_priority_class(),
         bool leave_unsealed = false);
@@ -45,4 +45,4 @@ write_memtable_to_sstable(memtable& mt,
 future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
-        db::large_partition_handler* lp_handler);
+        db::large_data_handler* lp_handler);

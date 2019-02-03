@@ -676,6 +676,10 @@ private:
     void write_cells(bytes_ostream& writer, column_kind kind, const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
     void write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion);
     void write_static_row(const row& static_row);
+    void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key) {
+        ++_c_stats.rows_count;
+        _cfg.large_data_handler->maybe_log_large_row(_sst, *_partition_key, clustering_key, row_size);
+    }
 
     // Clustered is a term used to denote an entity that has a clustering key prefix
     // and constitutes an entry of a partition.
@@ -1163,8 +1167,7 @@ void writer::write_static_row(const row& static_row) {
 
     _partition_header_length += (_data_writer->offset() - current_pos);
 
-    // Collect statistics
-    ++_c_stats.rows_count;
+    collect_row_stats(_data_writer->offset() - current_pos, nullptr);
 }
 
 stop_iteration writer::consume(static_row&& sr) {
@@ -1175,6 +1178,7 @@ stop_iteration writer::consume(static_row&& sr) {
 }
 
 void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_row_size) {
+    uint64_t current_pos = _data_writer->offset();
     row_flags flags = row_flags::none;
     row_extended_flags ext_flags = row_extended_flags::none;
     const row_marker& marker = clustered_row.marker();
@@ -1219,7 +1223,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
         column_name_helper::min_max_components(_schema, _sst.get_metadata_collector().min_column_names(),
             _sst.get_metadata_collector().max_column_names(), clustered_row.key().components());
     }
-    ++_c_stats.rows_count;
+    collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key());
 }
 
 stop_iteration writer::consume(clustering_row&& cr) {
@@ -1326,7 +1330,7 @@ stop_iteration writer::consume_end_of_partition() {
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
 
-    _cfg.large_partition_handler->maybe_update_large_partitions(_sst, *_partition_key, _c_stats.partition_size).get();
+    _cfg.large_data_handler->maybe_update_large_partitions(_sst, *_partition_key, _c_stats.partition_size).get();
 
     // update is about merging column_stats with the data being stored by collector.
     _sst.get_metadata_collector().update(std::move(_c_stats));

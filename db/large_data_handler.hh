@@ -31,44 +31,59 @@ class key;
 
 namespace db {
 
-class large_partition_handler {
+class large_data_handler {
 public:
     struct stats {
         int64_t partitions_bigger_than_threshold = 0; // number of large partition updates exceeding threshold_bytes
     };
 
 private:
-    uint64_t _threshold_bytes;
-    mutable large_partition_handler::stats _stats;
+    uint64_t _partition_threshold_bytes;
+    uint64_t _row_threshold_bytes;
+    mutable large_data_handler::stats _stats;
 
 public:
-    explicit large_partition_handler(uint64_t threshold_bytes = std::numeric_limits<uint64_t>::max()) : _threshold_bytes(threshold_bytes) {}
-    virtual ~large_partition_handler() {}
+    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes)
+        : _partition_threshold_bytes(partition_threshold_bytes)
+        , _row_threshold_bytes(row_threshold_bytes) {}
+    virtual ~large_data_handler() {}
+
+    void maybe_log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, uint64_t row_size) const {
+        if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
+            log_large_row(sst, partition_key, clustering_key, row_size);
+        }
+    }
 
     future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
     future<> maybe_delete_large_partitions_entry(const sstables::sstable& sst) const;
 
-    const large_partition_handler::stats& stats() const { return _stats; }
+    const large_data_handler::stats& stats() const { return _stats; }
 
 protected:
+    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const = 0;
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const = 0;
 };
 
-class cql_table_large_partition_handler : public large_partition_handler {
+class cql_table_large_data_handler : public large_data_handler {
 protected:
-    static logging::logger large_partition_logger;
+    static logging::logger large_data_logger;
 
 public:
-    explicit cql_table_large_partition_handler(uint64_t threshold_bytes) : large_partition_handler(threshold_bytes) {}
+    explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes)
+        : large_data_handler(partition_threshold_bytes, row_threshold_bytes) {}
 
 protected:
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override;
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override;
+    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
 };
 
-class nop_large_partition_handler : public large_partition_handler {
+class nop_large_data_handler : public large_data_handler {
 public:
+    nop_large_data_handler()
+        : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {}
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override {
         return make_ready_future<>();
     }
@@ -76,6 +91,9 @@ public:
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override {
         return make_ready_future<>();
     }
+
+    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
+                               const clustering_key_prefix* clustering_key, uint64_t row_size) const override {}
 };
 
 }

@@ -22,13 +22,13 @@
 #include <seastar/core/print.hh>
 #include "db/query_context.hh"
 #include "db/system_keyspace.hh"
-#include "db/large_partition_handler.hh"
+#include "db/large_data_handler.hh"
 #include "sstables/sstables.hh"
 
 namespace db {
 
-future<> large_partition_handler::maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
-    if (partition_size > _threshold_bytes) {
+future<> large_data_handler::maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
+    if (partition_size > _partition_threshold_bytes) {
         ++_stats.partitions_bigger_than_threshold;
 
         const schema& s = *sst.get_schema();
@@ -37,9 +37,9 @@ future<> large_partition_handler::maybe_update_large_partitions(const sstables::
     return make_ready_future<>();
 }
 
-future<> large_partition_handler::maybe_delete_large_partitions_entry(const sstables::sstable& sst) const {
+future<> large_data_handler::maybe_delete_large_partitions_entry(const sstables::sstable& sst) const {
     try {
-        if (sst.data_size() > _threshold_bytes) {
+        if (sst.data_size() > _partition_threshold_bytes) {
             const schema& s = *sst.get_schema();
             return delete_large_partitions_entry(s, sst.get_filename());
         }
@@ -50,9 +50,9 @@ future<> large_partition_handler::maybe_delete_large_partitions_entry(const ssta
     return make_ready_future<>();
 }
 
-logging::logger cql_table_large_partition_handler::large_partition_logger("large_partition");
+logging::logger cql_table_large_data_handler::large_data_logger("large_data");
 
-future<> cql_table_large_partition_handler::update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& key, uint64_t partition_size) const {
+future<> cql_table_large_data_handler::update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& key, uint64_t partition_size) const {
     static const sstring req = format("INSERT INTO system.{} (keyspace_name, table_name, sstable_name, partition_size, partition_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?) USING TTL 2592000",
             db::system_keyspace::LARGE_PARTITIONS);
     auto ks_name = s.ks_name();
@@ -65,18 +65,29 @@ future<> cql_table_large_partition_handler::update_large_partitions(const schema
     .then_wrapped([ks_name, cf_name, key_str, partition_size](auto&& f) {
         try {
             f.get();
-            large_partition_logger.warn("Writing large partition {}/{}:{} ({} bytes)", ks_name, cf_name, key_str, partition_size);
+            large_data_logger.warn("Writing large partition {}/{}:{} ({} bytes)", ks_name, cf_name, key_str, partition_size);
         } catch (...) {
-            large_partition_logger.warn("Failed to update {}: {}", db::system_keyspace::LARGE_PARTITIONS, std::current_exception());
+            large_data_logger.warn("Failed to update {}: {}", db::system_keyspace::LARGE_PARTITIONS, std::current_exception());
         }
     });
 }
 
-future<> cql_table_large_partition_handler::delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const {
+future<> cql_table_large_data_handler::delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const {
     static const sstring req = format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?", db::system_keyspace::LARGE_PARTITIONS);
     return db::execute_cql(req, s.ks_name(), s.cf_name(), sstable_name).discard_result().handle_exception([](std::exception_ptr ep) {
-            large_partition_logger.warn("Failed to drop entries from {}: {}", db::system_keyspace::LARGE_PARTITIONS, ep);
+            large_data_logger.warn("Failed to drop entries from {}: {}", db::system_keyspace::LARGE_PARTITIONS, ep);
         });
 }
 
+void cql_table_large_data_handler::log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, uint64_t row_size) const {
+    const schema &s = *sst.get_schema();
+    if (clustering_key) {
+        large_data_logger.warn("Writing large row {}/{}: {} {} ({} bytes)", s.ks_name(), s.cf_name(),
+                partition_key.to_partition_key(s).with_schema(s), clustering_key->with_schema(s), row_size);
+    } else {
+        large_data_logger.warn("Writing large static row {}/{}: {} ({} bytes)", s.ks_name(), s.cf_name(),
+                partition_key.to_partition_key(s).with_schema(s), row_size);
+    }
+}
 }

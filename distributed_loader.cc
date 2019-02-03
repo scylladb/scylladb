@@ -406,7 +406,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                             }
                         }).then([&cf, sstables] {
                             // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
-                            sstables::delete_atomically(std::move(sstables), *cf->get_large_partition_handler()).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
+                            sstables::delete_atomically(std::move(sstables), *cf->get_large_data_handler()).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
                                 try {
                                     std::rethrow_exception(eptr);
                                 } catch (...) {
