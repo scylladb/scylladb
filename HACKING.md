@@ -288,7 +288,7 @@ In this example, `10.0.0.2` will be sent up to 16 jobs and the local machine wil
 
 When a compilation is in progress, the status of jobs on all remote machines can be visualized in the terminal with `distccmon-text` or graphically as a GTK application with `distccmon-gnome`.
 
-One thing to keep in mind is that linking object files happens on the coordinating machine, which can be a bottleneck. See the next section speeding up this process.
+One thing to keep in mind is that linking object files happens on the coordinating machine, which can be a bottleneck. See the next sections speeding up this process.
 
 ### Using the `gold` linker
 
@@ -297,6 +297,24 @@ Linking Scylla can be slow. The gold linker can replace GNU ld and often speeds 
 ```bash
 $ sudo alternatives --config ld
 ```
+
+### Using split dwarf
+
+With debug info enabled, most of the link time is spent copying and
+relocating it. It is possible to leave most of the debug info out of
+the link by writing it to a side .dwo file. This is done by passing
+`-gsplit-dwarf` to gcc.
+
+Unfortunately just `-gsplit-dwarf` would slow down `gdb` startup. To
+avoid that the gold linker can be told to create an index with
+`--gdb-index`.
+
+More info at https://gcc.gnu.org/wiki/DebugFission.
+
+Both options can be enable by passing `--split-dwarf` to configure.py.
+
+Note that distcc is *not* compatible with it, but icecream
+(https://github.com/icecc/icecream) is.
 
 ### Testing changes in Seastar with Scylla
 

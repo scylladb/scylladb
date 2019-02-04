@@ -433,6 +433,8 @@ arg_parser.add_argument('--python', action='store', dest='python', default='pyth
                         help='Python3 path')
 add_tristate(arg_parser, name='hwloc', dest='hwloc', help='hwloc support')
 add_tristate(arg_parser, name='xen', dest='xen', help='Xen support')
+arg_parser.add_argument('--split-dwarf', dest='split_dwarf', action='store_true', default=False,
+                        help='use of split dwarf (https://gcc.gnu.org/wiki/DebugFission) to speed up linking')
 arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='store_true', default=False,
                         help='enable experimental support for C++ Concepts as implemented in GCC 6')
 arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_injector', action='store_true', default=False,
@@ -1030,6 +1032,8 @@ if args.gcc6_concepts:
     seastar_flags += ['--enable-gcc6-concepts']
 if args.alloc_failure_injector:
     seastar_flags += ['--enable-alloc-failure-injector']
+if args.split_dwarf:
+    seastar_flags += ['--split-dwarf']
 
 debug_flags = ' ' + debug_compress_flag(compiler=args.cxx) + ' ' + dbgflag
 modes['debug']['opt'] += debug_flags
