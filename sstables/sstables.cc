@@ -2856,9 +2856,6 @@ int sstable::compare_by_max_timestamp(const sstable& other) const {
     return (ts1 > ts2 ? 1 : (ts1 == ts2 ? 0 : -1));
 }
 
-future<>
-delete_sstables(std::vector<sstring> tocs);
-
 sstable::~sstable() {
     if (_index_file) {
         _index_file.close().handle_exception([save = _index_file, op = background_jobs().start()] (auto ep) {
@@ -2881,7 +2878,12 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            delete_sstables({filename(component_type::TOC)}).handle_exception(
+            // FIXME: need to call large_data_handler.maybe_delete_large_partitions_entry
+            // - Short term fix plan is passing large_data_handler upon construction and
+            //   using it from this path to update large_data_handler.
+            // - Longer term fix is to hand off deletion of sstables to a manager that can
+            //   deal with sstable marked to be deleted after the corresponding object is destructed.
+            remove_by_toc_name(toc_filename()).handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
                             try {
                                 std::rethrow_exception(eptr);
