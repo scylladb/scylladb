@@ -21,7 +21,9 @@
 
 #include "tests/test_table.hh"
 
-std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_cf(cql_test_env& env, unsigned partition_count, unsigned row_per_partition_count) {
+namespace test {
+
+std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, unsigned partition_count, unsigned row_per_partition_count) {
     env.execute_cql("CREATE KEYSPACE multishard_mutation_query_cache_ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
     env.execute_cql("CREATE TABLE multishard_mutation_query_cache_ks.test (pk int, ck int, v int, PRIMARY KEY(pk, ck));").get();
 
@@ -43,3 +45,5 @@ std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_cf(cql_test_e
 
     return std::pair(std::move(s), std::move(pkeys));
 }
+
+} // namespace test
