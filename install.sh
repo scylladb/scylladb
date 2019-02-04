@@ -114,7 +114,8 @@ done
 install -m755 libreloc/* -Dt "$root/opt/scylladb/libreloc"
 ln -srf "$root/opt/scylladb/bin/scylla" "$rprefix/bin/scylla"
 ln -srf "$root/opt/scylladb/bin/iotune" "$rprefix/bin/iotune"
-install -m755 dist/common/bin/scyllatop -Dt "$rprefix/bin"
+ln -srf "$rprefix/lib/scylla/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
+
 install -m644 dist/common/scripts/scylla_blocktune.py -Dt "$rprefix"/lib/scylla/
 install -m755 dist/common/scripts/scylla-blocktune -Dt "$rprefix"/lib/scylla/
 install -m755 dist/common/scripts/scylla-housekeeping -Dt "$rprefix"/lib/scylla/
