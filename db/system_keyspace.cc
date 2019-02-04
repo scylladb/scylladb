@@ -583,6 +583,33 @@ schema_ptr local() {
     return schema;
 }
 
+schema_ptr truncated() {
+    static thread_local auto local = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, TRUNCATED), NAME, TRUNCATED,
+        // partition key
+        {{"table_uuid", uuid_type}},
+        // clustering key
+        {{"shard", int32_type}},
+        // regular columns
+        {
+                {"position", int32_type},
+                {"segment_id", long_type}
+        },
+        // static columns
+        {
+                {"truncated_at", timestamp_type},
+        },
+        // regular column name type
+        utf8_type,
+        // comment
+        "information about table truncation"
+       )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return local;
+}
+
 schema_ptr peers() {
     // identical
     return db::system_keyspace::peers();
@@ -1142,9 +1169,131 @@ typedef utils::UUID truncation_key;
 typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
 static constexpr uint8_t current_version = 1;
-static thread_local std::optional<truncation_map> truncation_records;
+static bool need_legacy_truncation_records = true;
 
-future<> save_truncation_records(const column_family& cf, db_clock::time_point truncated_at, replay_positions positions) {
+/**
+ * This method is used to remove information about truncation time for specified column family
+ */
+future<> remove_truncation_record(utils::UUID id) {
+    sstring req = format("DELETE * from system.{} WHERE table_uuid = ?", TRUNCATED);
+    return qctx->qp().execute_internal(req, {id}).discard_result().then([] {
+        return force_blocking_flush(TRUNCATED);
+    });
+}
+
+static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
+    sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
+    return qctx->qp().execute_internal(req, {cf_id}).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
+        truncation_record r{truncation_record::current_magic};
+
+        for (const cql3::untyped_result_set_row& row : *rs) {
+            auto shard = row.get_as<int32_t>("shard");
+            auto ts = row.get_as<db_clock::time_point>("truncated_at");
+            auto pos = row.get_as<int32_t>("position");
+            auto id = row.get_as<int64_t>("segment_id");
+
+            r.time_stamp = ts;
+            r.positions.emplace_back(replay_position(shard, id, pos));
+        }
+        return make_ready_future<truncation_record>(std::move(r));
+    });
+}
+
+future<> migrate_truncation_records() {
+    sstring req = format("SELECT truncated_at FROM system.{} WHERE key = '{}'", LOCAL, LOCAL);
+    return qctx->qp().execute_internal(req).then([](::shared_ptr<cql3::untyped_result_set> rs) {
+        truncation_map tmp;
+        if (!rs->empty() && rs->one().has("truncated_at")) {
+            auto map = rs->one().get_map<utils::UUID, bytes>("truncated_at");
+            for (auto& p : map) {
+                auto uuid = p.first;
+                auto buf = p.second;
+
+                try {
+                    truncation_record e;
+
+                    if (buf.size() & 1) {
+                        // new record.
+                        if (buf[0] != current_version) {
+                            slogger.warn("Found truncation record of unknown version {}. Ignoring.", int(buf[0]));
+                            continue;
+                        }
+                        e = ser::deserialize_from_buffer(buf, boost::type<truncation_record>(), 1);
+                        if (e.magic == truncation_record::current_magic) {
+                            tmp[uuid] = e;
+                            continue;
+                        }
+                    } else {
+                        // old scylla records. (We hope)
+                        // Read 64+64 bit RP:s, even though the
+                        // struct (and official serial size) is 64+32.
+                        data_input in(buf);
+
+                        slogger.debug("Reading old type record");
+                        while (in.avail() > sizeof(db_clock::rep)) {
+                            auto id = in.read<uint64_t>();
+                            auto pos = in.read<uint64_t>();
+                            e.positions.emplace_back(id, position_type(pos));
+                        }
+                        if (in.avail() == sizeof(db_clock::rep)) {
+                            e.time_stamp = db_clock::time_point(db_clock::duration(in.read<db_clock::rep>()));
+                            tmp[uuid] = e;
+                            continue;
+                        }
+                    }
+                } catch (std::out_of_range &) {
+                }
+                // Trying to load an origin table.
+                // This is useless to us, because the only usage for this
+                // data is commit log and batch replay, and we cannot replay
+                // either from origin anyway.
+                slogger.warn("Error reading truncation record for {}. "
+                                "Most likely this is data from a cassandra instance."
+                                "Make sure you have cleared commit and batch logs before upgrading.",
+                                uuid
+                );
+            }
+        }
+
+        auto i = tmp.begin();
+        auto e = tmp.end();
+        return parallel_for_each(i, e, [](const truncation_map::value_type& p) {
+            const utils::UUID& uuid = p.first;
+            const truncation_record& tr = p.second;
+            return get_truncation_record(uuid).then([&](truncation_record new_record) {
+                if (!new_record.positions.empty() && new_record.time_stamp >= tr.time_stamp) {
+                    return make_ready_future<>();
+                }
+                return parallel_for_each(tr.positions, [&](replay_position rp) {
+                    return save_truncation_record(uuid, tr.time_stamp, rp);
+                });
+            });
+        }).then([tmp = std::move(tmp)] {
+            auto& ss = service::get_local_storage_service();
+            need_legacy_truncation_records = !ss.cluster_supports_truncation_table();
+
+            if (need_legacy_truncation_records || !tmp.empty()) {
+                ss.cluster_supports_truncation_table().when_enabled().then([] {
+                    // this potentially races with a truncation, i.e. someone could be inserting into
+                    // the legacy column while we delete it. But this is ok, it will just mean we have
+                    // some unneeded data and will do a merge again next boot, but eventually we
+                    // will remove the legacy data...
+                    auto level = need_legacy_truncation_records ? seastar::log_level::info : seastar::log_level::debug;
+                    slogger.log(level, "Got cluster agreement on truncation table feature. Removing legacy records.");
+                    need_legacy_truncation_records = false;
+                    sstring req = format("DELETE truncated_at from system.{} WHERE key = '{}'", LOCAL, LOCAL);
+                    return qctx->qp().execute_internal(req).discard_result().then([level] {
+                        slogger.log(level, "Legacy records deleted.");
+                        return force_blocking_flush(LOCAL);
+                    });
+                });
+            }
+            return make_ready_future<>();
+        });
+    });
+}
+
+static future<> save_legacy_truncation_records(utils::UUID id, db_clock::time_point truncated_at, replay_positions positions) {
     truncation_record r;
 
     r.magic = truncation_record::current_magic;
@@ -1159,96 +1308,24 @@ future<> save_truncation_records(const column_family& cf, db_clock::time_point t
     assert(buf.size() & 1); // verify we've created an odd-numbered buffer
 
     map_type_impl::native_type tmp;
-    tmp.emplace_back(cf.schema()->id(), data_value(buf));
+    tmp.emplace_back(id, data_value(buf));
     auto map_type = map_type_impl::get_instance(uuid_type, bytes_type, true);
 
     sstring req = format("UPDATE system.{} SET truncated_at = truncated_at + ? WHERE key = '{}'", LOCAL, LOCAL);
     return qctx->qp().execute_internal(req, {make_map_value(map_type, tmp)}).then([](auto rs) {
-        truncation_records = {};
         return force_blocking_flush(LOCAL);
     });
 }
 
-/**
- * This method is used to remove information about truncation time for specified column family
- */
-future<> remove_truncation_record(utils::UUID id) {
-    sstring req = format("DELETE truncated_at[?] from system.{} WHERE key = '{}'", LOCAL, LOCAL);
-    return qctx->qp().execute_internal(req, {id}).then([](auto rs) {
-        truncation_records = {};
-        return force_blocking_flush(LOCAL);
-    });
-}
-
-static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
-    if (!truncation_records) {
-        sstring req = format("SELECT truncated_at FROM system.{} WHERE key = '{}'", LOCAL, LOCAL);
-        return qctx->qp().execute_internal(req).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
-            truncation_map tmp;
-            if (!rs->empty() && rs->one().has("truncated_at")) {
-                auto map = rs->one().get_map<utils::UUID, bytes>("truncated_at");
-                for (auto& p : map) {
-                    auto uuid = p.first;
-                    auto buf = p.second;
-
-                    try {
-                        truncation_record e;
-
-                        if (buf.size() & 1) {
-                            // new record.
-                            if (buf[0] != current_version) {
-                                slogger.warn("Found truncation record of unknown version {}. Ignoring.", int(buf[0]));
-                                continue;
-                            }
-                            e = ser::deserialize_from_buffer(buf, boost::type<truncation_record>(), 1);
-                            if (e.magic == truncation_record::current_magic) {
-                                tmp[uuid] = e;
-                                continue;
-                            }
-                        } else {
-                            // old scylla records. (We hope)
-                            // Read 64+64 bit RP:s, even though the
-                            // struct (and official serial size) is 64+32.
-                            data_input in(buf);
-
-                            slogger.debug("Reading old type record");
-                            while (in.avail() > sizeof(db_clock::rep)) {
-                                auto id = in.read<uint64_t>();
-                                auto pos = in.read<uint64_t>();
-                                e.positions.emplace_back(id, position_type(pos));
-                            }
-                            if (in.avail() == sizeof(db_clock::rep)) {
-                                e.time_stamp = db_clock::time_point(db_clock::duration(in.read<db_clock::rep>()));
-                                tmp[uuid] = e;
-                                continue;
-                            }
-                        }
-                    } catch (std::out_of_range &) {
-                    }
-                    // Trying to load an origin table.
-                    // This is useless to us, because the only usage for this
-                    // data is commit log and batch replay, and we cannot replay
-                    // either from origin anyway.
-                    slogger.warn("Error reading truncation record for {}. "
-                                    "Most likely this is data from a cassandra instance."
-                                    "Make sure you have cleared commit and batch logs before upgrading.",
-                                    uuid
-                    );
-                }
-            }
-            truncation_records = std::move(tmp);
-            return get_truncation_record(cf_id);
-        });
+static future<> maybe_save_legacy_truncation_record(utils::UUID id, db_clock::time_point truncated_at, db::replay_position rp) {
+    if (!need_legacy_truncation_records) {
+        return make_ready_future<>();
     }
-    return make_ready_future<truncation_record>((*truncation_records)[cf_id]);
-}
-
-future<> save_truncation_record(const column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
     // TODO: this is horribly ineffective, we're doing a full flush of all system tables for all cores
     // once, for each core (calling us). But right now, redesigning so that calling here (or, rather,
     // save_truncation_records), is done from "somewhere higher, once per machine, not shard" is tricky.
     // Mainly because drop_tables also uses truncate. And is run per-core as well. Gah.
-    return get_truncation_record(cf.schema()->id()).then([&cf, truncated_at, rp](truncation_record e) {
+    return get_truncation_record(id).then([id, truncated_at, rp](truncation_record e) {
         auto i = std::find_if(e.positions.begin(), e.positions.end(), [rp](replay_position& p) {
             return p.shard_id() == rp.shard_id();
         });
@@ -1257,8 +1334,21 @@ future<> save_truncation_record(const column_family& cf, db_clock::time_point tr
         } else {
             *i = rp;
         }
-        return save_truncation_records(cf, std::max(truncated_at, e.time_stamp), e.positions);
+        return save_legacy_truncation_records(id, std::max(truncated_at, e.time_stamp), e.positions);
     });
+}
+
+future<> save_truncation_record(utils::UUID id, db_clock::time_point truncated_at, db::replay_position rp) {
+    sstring req = format("INSERT INTO system.{} (table_uuid, shard, position, segment_id, truncated_at) VALUES(?,?,?,?,?)", TRUNCATED);
+    return qctx->qp().execute_internal(req, {id, int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}).discard_result().then([] {
+        return force_blocking_flush(TRUNCATED);
+    }).then([=] {
+        return maybe_save_legacy_truncation_record(id, truncated_at, rp);
+    });
+}
+
+future<> save_truncation_record(const column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
+    return save_truncation_record(cf.schema()->id(), truncated_at, rp);
 }
 
 future<db::replay_position> get_truncated_position(utils::UUID cf_id, uint32_t shard) {
@@ -1272,7 +1362,7 @@ future<db::replay_position> get_truncated_position(utils::UUID cf_id, uint32_t s
     });
 }
 
- future<replay_positions> get_truncated_position(utils::UUID cf_id) {
+future<replay_positions> get_truncated_position(utils::UUID cf_id) {
     return get_truncation_record(cf_id).then([](truncation_record e) {
         return make_ready_future<replay_positions>(e.positions);
     });
@@ -1575,6 +1665,7 @@ std::vector<schema_ptr> all_tables() {
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), size_estimates(), large_partitions(), v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
+                    v3::truncated(),
     });
     // legacy schema
     r.insert(r.end(), {

@@ -79,6 +79,7 @@ static constexpr auto BATCHLOG = "batchlog";
 static constexpr auto PAXOS = "paxos";
 static constexpr auto BUILT_INDEXES = "IndexInfo";
 static constexpr auto LOCAL = "local";
+static constexpr auto TRUNCATED = "truncated";
 static constexpr auto PEERS = "peers";
 static constexpr auto PEER_EVENTS = "peer_events";
 static constexpr auto RANGE_XFERS = "range_xfers";
@@ -372,8 +373,9 @@ enum class bootstrap_state {
 
     typedef std::vector<db::replay_position> replay_positions;
 
+    future<> migrate_truncation_records();
+    future<> save_truncation_record(utils::UUID, db_clock::time_point truncated_at, db::replay_position);
     future<> save_truncation_record(const column_family&, db_clock::time_point truncated_at, db::replay_position);
-    future<> save_truncation_records(const column_family&, db_clock::time_point truncated_at, replay_positions);
     future<> remove_truncation_record(utils::UUID);
     future<replay_positions> get_truncated_position(utils::UUID);
     future<db::replay_position> get_truncated_position(utils::UUID, uint32_t shard);
