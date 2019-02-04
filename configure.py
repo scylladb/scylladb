@@ -241,6 +241,12 @@ modes = {
         'opt': '-O3',
         'libs': '',
     },
+    'dev': {
+        'sanitize': '',
+        'sanitize_libs': '',
+        'opt': '-O1',
+        'libs': '',
+    },
 }
 
 scylla_tests = [
@@ -1025,8 +1031,10 @@ if args.gcc6_concepts:
 if args.alloc_failure_injector:
     seastar_flags += ['--enable-alloc-failure-injector']
 
-args.user_cflags += ' ' + debug_compress_flag(compiler=args.cxx)
-args.user_cflags += ' ' + dbgflag
+debug_flags = ' ' + debug_compress_flag(compiler=args.cxx) + ' ' + dbgflag
+modes['debug']['opt'] += debug_flags
+modes['release']['opt'] += debug_flags
+
 seastar_cflags = args.user_cflags
 seastar_cflags += ' -Wno-error'
 if args.target != '':
