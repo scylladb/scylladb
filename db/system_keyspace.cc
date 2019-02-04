@@ -243,6 +243,9 @@ schema_ptr built_indexes() {
                 {"broadcast_address", inet_addr_type},
                 {"listen_address", inet_addr_type},
                 {"supported_features", utf8_type},
+                {"scylla_cpu_sharding_algorithm", utf8_type},
+                {"scylla_nr_shards", int32_type},
+                {"scylla_msb_ignore", int32_type},
 
         },
         // static columns
@@ -253,6 +256,9 @@ schema_ptr built_indexes() {
         "information about the local node"
        )));
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.remove_column("scylla_cpu_sharding_algorithm");
+       builder.remove_column("scylla_nr_shards");
+       builder.remove_column("scylla_msb_ignore");
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
