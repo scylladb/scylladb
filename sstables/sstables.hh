@@ -409,6 +409,9 @@ public:
         return create_links(dir, _generation);
     }
 
+    // Delete the sstable by unlinking all sstable files
+    future<> unlink();
+
     /**
      * Note. This is using the Origin definition of
      * max_data_age, which is load time. This could maybe

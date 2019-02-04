@@ -3115,24 +3115,58 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
     return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
 }
 
+// FIXME: although this is unused at the moment
+// keep it around to be used for replaying pending_delete logs
 future<>
 delete_sstables(std::vector<sstring> tocs) {
-    // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
     return parallel_for_each(tocs, [] (sstring name) {
         return remove_by_toc_name(name);
     });
 }
 
 future<>
-delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
-    future<> update = parallel_for_each(ssts, [&large_data_handler] (shared_sstable& sst) {
-        return large_data_handler.maybe_delete_large_partitions_entry(*sst);
+sstable::unlink()
+{
+    auto name = toc_filename();
+    return remove_by_toc_name(name).then_wrapped([name = std::move(name)] (future<> f) {
+        if (f.failed()) {
+            // Log and ignore the failure since there is nothing much we can do about it at this point.
+            // a. Compaction will retry deleting the sstable in the next pass, and
+            // b. in the future sstables_manager is planned to handle sstables deletion.
+            // c. Eventually we may want to record these failures in a system table
+            //    and notify the administrator about that for manual handling (rather than aborting).
+            sstlog.warn("Failed to delete {}: {}. Ignoring.", name, f.get_exception());
+        }
+        return make_ready_future<>();
     });
-    auto sstables_to_delete_atomically = boost::copy_range<std::vector<sstring>>(ssts
-            | boost::adaptors::transformed([] (auto&& sst) { return sst->toc_filename(); }));
+}
 
-    future<> del = delete_sstables(std::move(sstables_to_delete_atomically));
-    return when_all(std::move(del), std::move(update)).discard_result();
+static future<>
+maybe_delete_large_data_entry(shared_sstable sst, const db::large_data_handler& large_data_handler)
+{
+    auto name = sst->get_filename();
+    return large_data_handler.maybe_delete_large_partitions_entry(*sst).then_wrapped([name = std::move(name)] (future<> f) {
+        if (f.failed()) {
+            // Just log and ignore failures to delete large data entries.
+            // They are not critical to the operation of the database.
+            sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", name, f.get_exception());
+        }
+        return make_ready_future<>();
+    });
+}
+
+static future<>
+delete_sstable_and_maybe_large_data_entries(shared_sstable sst, const db::large_data_handler& large_data_handler)
+{
+    return when_all(sst->unlink(), maybe_delete_large_data_entry(sst, large_data_handler)).discard_result();
+}
+
+future<>
+delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
+    // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
+    return parallel_for_each(ssts, [&large_data_handler] (shared_sstable sst) {
+        return delete_sstable_and_maybe_large_data_entries(sst, large_data_handler);
+    });
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
