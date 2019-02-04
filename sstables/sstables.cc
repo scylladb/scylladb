@@ -3166,8 +3166,10 @@ delete_sstable_and_maybe_large_data_entries(shared_sstable sst, const db::large_
 future<>
 delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
     // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
-    return parallel_for_each(ssts, [&large_data_handler] (shared_sstable sst) {
-        return delete_sstable_and_maybe_large_data_entries(sst, large_data_handler);
+    return seastar::async([ssts = std::move(ssts), &large_data_handler] {
+        parallel_for_each(ssts, [&large_data_handler] (shared_sstable sst) {
+            return delete_sstable_and_maybe_large_data_entries(sst, large_data_handler);
+        }).get();
     });
 }
 
