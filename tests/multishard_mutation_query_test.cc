@@ -301,34 +301,3 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         return make_ready_future<>();
     }).get();
 }
-
-// Best run with SMP>=2
-SEASTAR_THREAD_TEST_CASE(test_many_partitions) {
-    do_with_cql_env([] (cql_test_env& env) -> future<> {
-        using namespace std::chrono_literals;
-
-        env.db().invoke_on_all([] (database& db) {
-            db.set_querier_cache_entry_ttl(2s);
-        }).get();
-
-        // This test is designed to shake out any possible read-ahead related
-        // concurrent access problems in the code. As such it is only really
-        // useful when running fast, in release mode. As well as not being
-        // useful it would also be unbearably slow in debug mode.
-        // Let's still run it but with a much-reduced partition count.
-#ifdef DEBUG
-        const int pcount = 4 * smp::count;
-#else
-        const int pcount = 4000 * smp::count;
-#endif
-        const int rcount = 100;
-        create_test_cf(env, pcount, rcount);
-
-        auto res = env.execute_cql("SELECT COUNT(*) FROM multishard_mutation_query_cache_ks.test").get0();
-        assert_that(res).is_rows().with_rows({{data_value(int64_t{pcount * rcount}).serialize()}});
-
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
-
-        return make_ready_future<>();
-    }).get();
-}
