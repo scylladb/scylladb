@@ -23,13 +23,14 @@
 
 namespace test {
 
-std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, unsigned partition_count, unsigned row_per_partition_count) {
-    env.execute_cql("CREATE KEYSPACE multishard_mutation_query_cache_ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
-    env.execute_cql("CREATE TABLE multishard_mutation_query_cache_ks.test (pk int, ck int, v int, PRIMARY KEY(pk, ck));").get();
+std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, const sstring& ks_name, const sstring& table_name,
+        unsigned partition_count, unsigned row_per_partition_count) {
+    env.execute_cql(sprint("CREATE KEYSPACE {} WITH REPLICATION = {{'class' : 'SimpleStrategy', 'replication_factor' : 1}};", ks_name)).get();
+    env.execute_cql(sprint("CREATE TABLE {}.{} (pk int, ck int, v int, PRIMARY KEY(pk, ck));", ks_name, table_name)).get();
 
-    const auto insert_id = env.prepare("INSERT INTO multishard_mutation_query_cache_ks.test (\"pk\", \"ck\", \"v\") VALUES (?, ?, ?);").get0();
+    const auto insert_id = env.prepare(sprint("INSERT INTO {}.{} (\"pk\", \"ck\", \"v\") VALUES (?, ?, ?);")).get0();
 
-    auto s = env.local_db().find_column_family("multishard_mutation_query_cache_ks", "test").schema();
+    auto s = env.local_db().find_column_family(ks_name, table_name).schema();
 
     std::vector<dht::decorated_key> pkeys;
 

@@ -23,7 +23,7 @@
 
 namespace test {
 
-std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, unsigned partition_count = 10 * smp::count,
-        unsigned row_per_partition_count = 10);
+std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, const sstring& ks_name, const sstring& table_name,
+        unsigned partition_count = 10 * smp::count, unsigned row_per_partition_count = 10);
 
 } // namespace test

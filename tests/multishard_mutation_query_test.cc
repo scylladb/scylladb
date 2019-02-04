@@ -31,6 +31,8 @@
 
 #include <experimental/source_location>
 
+const sstring KEYSPACE_NAME = "multishard_mutation_query_test";
+
 static uint64_t aggregate_querier_cache_stat(distributed<database>& db, uint64_t query::querier_cache::stats::*stat) {
     return map_reduce(boost::irange(0u, smp::count), [stat, &db] (unsigned shard) {
         return db.invoke_on(shard, [stat] (database& local_db) {
@@ -71,7 +73,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, _] = test::create_test_table(env);
+        auto [s, _] = test::create_test_table(env, KEYSPACE_NAME, "test_abandoned_read");
         (void)_;
 
         auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), 7, gc_clock::now(), std::nullopt, query::max_partitions,
@@ -207,7 +209,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env);
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_read_all");
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
@@ -249,7 +251,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env);
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_evict_a_shard_reader_on_each_page");
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
