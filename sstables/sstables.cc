@@ -2549,9 +2549,8 @@ bool sstable::requires_view_building() const {
     return boost::algorithm::ends_with(_dir, "staging") || boost::algorithm::ends_with(_dir, "upload");
 }
 
-sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                           format_types format, component_type component) {
-    sstring basename = [&] {
         switch (version) {
         case sstable::version_types::ka:
             return ks + "-" + cf + "-" + _version_string.at(version) + "-" + to_sstring(generation) + "-" +
@@ -2564,9 +2563,11 @@ sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& 
                    sstable_version_constants::get_component_map(version).at(component);
         }
         assert(0 && "invalid version");
-    }();
+}
 
-    return dir + "/" + basename;
+sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                          format_types format, component_type component) {
+    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,

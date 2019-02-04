@@ -174,6 +174,8 @@ public:
     static component_type component_from_sstring(version_types version, sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
+    static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                                      format_types format, component_type component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                             format_types format, component_type component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
@@ -353,6 +355,10 @@ public:
     // SSTable comparator using the max timestamp.
     // Return values are those of a trichotomic comparison.
     int compare_by_max_timestamp(const sstable& other) const;
+
+    sstring component_basename(component_type f) const {
+        return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+    }
 
     sstring filename(const sstring& dir, component_type f) const {
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
@@ -827,6 +833,11 @@ struct entry_descriptor {
                      int64_t generation, sstable::format_types format,
                      component_type component)
         : sstdir(sstdir), ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
+
+    entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
+                     int64_t generation, sstable::format_types format,
+                     component_type component)
+        : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
 };
 
 // Waits for all prior tasks started on current shard related to sstable management to finish.
