@@ -75,6 +75,7 @@
 #include <boost/range/empty.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/intrusive/list.hpp>
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
@@ -474,9 +475,20 @@ public:
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats):
-                write_response_handler(std::move(p), ks, cl, db::write_type::VIEW, std::move(mh),
-                        std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats) { }
+                write_response_handler(p, ks, cl, db::write_type::VIEW, std::move(mh),
+                        std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats) {
+        register_in_intrusive_list(*p);
+    }
+private:
+    void register_in_intrusive_list(storage_proxy& p);
 };
+
+class storage_proxy::view_update_handlers_list : public bi::list<view_update_write_response_handler, bi::base_hook<view_update_write_response_handler>, bi::constant_time_size<false>> {
+};
+
+void view_update_write_response_handler::register_in_intrusive_list(storage_proxy& p) {
+    p.get_view_update_handlers_list().push_back(*this);
+}
 
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
     struct dc_info {
@@ -788,7 +800,8 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
-    , _max_view_update_backlog(max_view_update_backlog) {
+    , _max_view_update_backlog(max_view_update_backlog)
+    , _view_update_handlers_list(std::make_unique<view_update_handlers_list>()) {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"), [this]{ return _stats.estimated_read.get_histogram(16, 20);}),

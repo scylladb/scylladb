@@ -208,6 +208,10 @@ private:
     db::view::node_update_backlog& _max_view_update_backlog;
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
 
+    //NOTICE(sarna): This opaque pointer is here just to avoid moving write handler class definitions from .cc to .hh. It's slow path.
+    class view_update_handlers_list;
+    std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
+
 private:
     void uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -320,6 +324,10 @@ public:
     }
     distributed<database>& get_db() {
         return _db;
+    }
+
+    view_update_handlers_list& get_view_update_handlers_list() {
+        return *_view_update_handlers_list;
     }
 
     response_id_type get_next_response_id() {
