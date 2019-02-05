@@ -47,7 +47,7 @@ pkg_install() {
 }
 
 if [ ! -e SCYLLA-RELOCATABLE-FILE ]; then
-    echo "do not directly execute build_rpm.sh, use reloc/build_rpm.sh instead."
+    echo "do not directly execute build_deb.sh, use reloc/build_deb.sh instead."
     exit 1
 fi
 
