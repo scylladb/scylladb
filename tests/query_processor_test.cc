@@ -112,3 +112,64 @@ SEASTAR_TEST_CASE(test_execute_internal_update) {
         });
     });
 }
+
+/*
+ * Testing query with paging and consumer function.
+ *
+ * The following scenarios are beeing tested.
+ * 1. Query of an empty table
+ * 2. Insert 900 lines and query (under the page size).
+ * 3. Fill up to 2200 lines and query (using multipl pages).
+ * 4. Read only 1100 lines and stop using the stop iterator.
+ */
+SEASTAR_TEST_CASE(test_querying_with_consumer) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        int counter = 0;
+        int sum = 0;
+        int total = 0;
+        e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
+        auto& db = e.local_db();
+        auto s = db.find_schema("ks", "cf");
+
+        e.local_qp().query("SELECT * from ks.cf", [&counter] (const cql3::untyped_result_set::row& row) mutable {
+            counter++;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }).get();
+
+        BOOST_CHECK_EQUAL(counter, 0);
+
+        for (auto i = 0; i < 900; i++) {
+            total += i;
+            e.local_qp().execute_internal("insert into ks.cf (k , v) values (?, ? );", { to_sstring(i), i}).get();
+        }
+        e.local_qp().query("SELECT * from ks.cf", [&counter, &sum] (const cql3::untyped_result_set::row& row) mutable {
+            counter++;
+            sum += row.get_as<int>("v");
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }).get();
+        BOOST_CHECK_EQUAL(counter, 900);
+        BOOST_CHECK_EQUAL(total, sum);
+        counter = 0;
+        sum = 0;
+        for (auto i = 900; i < 2200; i++) {
+            total += i;
+            e.local_qp().execute_internal("insert into ks.cf (k , v) values (?, ? );", { to_sstring(i), i}).get();
+        }
+        e.local_qp().query("SELECT * from ks.cf", [&counter, &sum] (const cql3::untyped_result_set::row& row) mutable {
+            counter++;
+            sum += row.get_as<int>("v");
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }).get();
+        BOOST_CHECK_EQUAL(counter, 2200);
+        BOOST_CHECK_EQUAL(total, sum);
+        counter = 1000;
+        e.local_qp().query("SELECT * from ks.cf", [&counter] (const cql3::untyped_result_set::row& row) mutable {
+            counter++;
+            if (counter == 1010) {
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }).get();
+        BOOST_CHECK_EQUAL(counter, 1010);
+    });
+}

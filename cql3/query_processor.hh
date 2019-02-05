@@ -241,6 +241,49 @@ public:
                 create_paged_state(query_string, { data_value(std::forward<Args>(args))... }), std::move(f));
     }
 
+    /*!
+     * \brief iterate over all cql results using paging
+     *
+     * You Create a statement with optional paraemter and pass
+     * a function that goes over the results.
+     *
+     * The passed function would be called for all the results, return future<stop_iteration::yes>
+     * to stop during iteration.
+     *
+     * For example:
+            return query("SELECT * from system.compaction_history",
+                         [&history] (const cql3::untyped_result_set::row& row) mutable {
+                ....
+                ....
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            });
+
+     * You can use place holder in the query, the prepared statement will only be done once.
+     *
+     *
+     * query_string - the cql string, can contain place holder
+     * values - query parameters value
+     * f - a function to be run on each of the query result, if the function return stop_iteration::no the iteration
+     * would stop
+     */
+    future<> query(
+            const sstring& query_string,
+            const std::initializer_list<data_value>& values,
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
+
+    /*
+     * \brief iterate over all cql results using paging
+     * An overload of the query with future function without query parameters.
+     *
+     * query_string - the cql string, can contain place holder
+     * f - a function to be run on each of the query result, if the function return stop_iteration::no the iteration
+     * would stop
+     */
+    future<> query(
+            const sstring& query_string,
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
+
+
     future<::shared_ptr<untyped_result_set>> process(
             const sstring& query_string,
             db::consistency_level,
@@ -317,6 +360,13 @@ private:
     future<> for_each_cql_result(
             ::shared_ptr<cql3::internal_query_state> state,
             std::function<stop_iteration(const cql3::untyped_result_set_row&)>&& f);
+
+    /*!
+     * \brief iterate over all results using paging, accept a function that returns a future
+     */
+    future<> for_each_cql_result(
+            ::shared_ptr<cql3::internal_query_state> state,
+             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
 
     /*!
      * \brief check, based on the state if there are additional results

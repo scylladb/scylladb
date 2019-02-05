@@ -367,7 +367,8 @@ enum class bootstrap_state {
 
     future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
                                        std::unordered_map<int32_t, int64_t> rows_merged);
-    future<std::vector<compaction_history_entry>> get_compaction_history();
+    using compaction_history_consumer = noncopyable_function<future<>(const compaction_history_entry&)>;
+    future<> get_compaction_history(compaction_history_consumer&& f);
 
     typedef std::vector<db::replay_position> replay_positions;
 

@@ -553,6 +553,36 @@ future<> query_processor::for_each_cql_result(
     });
 }
 
+future<> query_processor::for_each_cql_result(
+        ::shared_ptr<cql3::internal_query_state> state,
+         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)>&& f) {
+    // repeat can move the lambda's capture, so we need to hold f and it so the internal loop
+    // will be able to use it.
+    return do_with(noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)>(std::move(f)),
+            untyped_result_set::rows_type::const_iterator(),
+            [state, this](noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)>& f,
+                    untyped_result_set::rows_type::const_iterator& it) mutable {
+        return repeat([state, &f, &it, this]() mutable {
+            return this->execute_paged_internal(state).then([state, &f, &it, this](::shared_ptr<cql3::untyped_result_set> msg) mutable {
+                it = msg->begin();
+                return repeat_until_value([&it, &f, msg, state, this]() mutable {
+                    if (it == msg->end()) {
+                        return make_ready_future<std::optional<stop_iteration>>(std::optional<stop_iteration>(!this->has_more_results(state)));
+                    }
+
+                    return f(*it).then([&it, msg](stop_iteration i) {
+                        if (i == stop_iteration::yes) {
+                            return std::optional<stop_iteration>(i);
+                        }
+                        ++it;
+                        return std::optional<stop_iteration>();
+                    });
+                });
+            });
+        });
+    });
+}
+
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state) {
     return state->p->statement->execute(_proxy, *_internal_state, *state->opts).then(
@@ -740,6 +770,19 @@ bool query_processor::migration_subscriber::should_invalidate(
         std::optional<sstring> cf_name,
         ::shared_ptr<cql_statement> statement) {
     return statement->depends_on_keyspace(ks_name) && (!cf_name || statement->depends_on_column_family(*cf_name));
+}
+
+future<> query_processor::query(
+        const sstring& query_string,
+        const std::initializer_list<data_value>& values,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
+    return for_each_cql_result(create_paged_state(query_string, values), std::move(f));
+}
+
+future<> query_processor::query(
+        const sstring& query_string,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
+    return for_each_cql_result(create_paged_state(query_string, {}), std::move(f));
 }
 
 }
