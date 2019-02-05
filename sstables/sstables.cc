@@ -3122,15 +3122,14 @@ delete_sstables(std::vector<sstring> tocs) {
 
 future<>
 delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
-    // Asynchronously issue delete operations for large partitions, do not handle their outcome.
-    // If any of the operations fail, large_data_handler should be responsible for logging or otherwise handling it.
-    for (const auto& sst : ssts) {
-        large_data_handler.maybe_delete_large_partitions_entry(*sst);
-    }
+    future<> update = parallel_for_each(ssts, [&large_data_handler] (shared_sstable& sst) {
+        return large_data_handler.maybe_delete_large_partitions_entry(*sst);
+    });
     auto sstables_to_delete_atomically = boost::copy_range<std::vector<sstring>>(ssts
             | boost::adaptors::transformed([] (auto&& sst) { return sst->toc_filename(); }));
 
-    return delete_sstables(std::move(sstables_to_delete_atomically));
+    future<> del = delete_sstables(std::move(sstables_to_delete_atomically));
+    return when_all(std::move(del), std::move(update)).discard_result();
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
