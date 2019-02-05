@@ -212,11 +212,6 @@ private:
     bool is_map_entry_equality() const {
         return _map_key && is_EQ();
     }
-
-private:
-    bool can_have_only_one_value() {
-        return is_EQ() || (is_IN() && _in_values.size() == 1);
-    }
 };
 
 };
