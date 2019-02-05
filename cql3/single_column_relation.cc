@@ -101,16 +101,6 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
         throw exceptions::invalid_request_exception(format("Predicates on the non-primary-key column ({}) of a COMPACT table are not yet supported", column_def.name_as_text()));
     }
 
-    if (is_IN()) {
-        // We only allow IN on the row key and the clustering key so far, never on non-PK columns, and this even if
-        // there's an index
-        // Note: for backward compatibility reason, we conside a IN of 1 value the same as a EQ, so we let that
-        // slide.
-        if (!column_def.is_primary_key() && !can_have_only_one_value()) {
-            throw exceptions::invalid_request_exception(format("IN predicates on non-primary-key columns ({}) is not yet supported", column_def.name_as_text()));
-        }
-    }
-
     if (is_contains() && !receiver->type->is_collection()) {
         throw exceptions::invalid_request_exception(format("Cannot use CONTAINS on non-collection column \"{}\"", receiver->name));
     }

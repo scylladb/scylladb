@@ -820,6 +820,54 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
     });
 }
 
+SEASTAR_TEST_CASE(test_allow_filtering_with_in_on_regular_column) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (k int, c int, v int, PRIMARY KEY (k, c));").get();
+        e.require_table_exists("ks", "t").get();
+
+        e.execute_cql("INSERT INTO t (k, c, v) VALUES (1, 2, 1)").get();
+        e.execute_cql("INSERT INTO t (k, c, v) VALUES (1, 3, 2)").get();
+        e.execute_cql("INSERT INTO t (k, c, v) VALUES (2, 2, 3)").get();
+
+        auto msg = e.execute_cql("SELECT * FROM t WHERE v IN (1) ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1)
+            }
+        });
+
+        msg = e.execute_cql("SELECT * FROM t WHERE v IN (2, 3) ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(3),
+                int32_type->decompose(2)
+            },
+            {
+                int32_type->decompose(2),
+                int32_type->decompose(2),
+                int32_type->decompose(3)
+           }
+        });
+
+        msg = e.execute_cql("SELECT * FROM t WHERE c in (2, 4) AND v IN (1, 2, 3, 4, 5) ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1)
+            },
+            {
+                int32_type->decompose(2),
+                int32_type->decompose(2),
+                int32_type->decompose(3)
+           }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_filtering) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE cf (k int, v int,m int,n int,o int,p int static, PRIMARY KEY ((k,v),m,n));").get();
