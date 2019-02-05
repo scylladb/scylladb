@@ -116,6 +116,106 @@ std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_tes
     return std::pair(std::move(pop_desc.schema), std::move(pkeys));
 }
 
+population_description create_test_table(cql_test_env& env, const sstring& ks_name, const sstring& table_name, uint32_t seed,
+        std::vector<partition_configuration> part_configs, generate_blob_function gen_blob) {
+    class configurable_random_partition_content_generator : public test::partition_content_generator {
+        std::mt19937& _engine;
+        partition_configuration& _config;
+        generate_blob_function& _gen_blob;
+        std::uniform_int_distribution<int> _key_dist;
+
+    public:
+        configurable_random_partition_content_generator(std::mt19937& engine, partition_configuration& config, generate_blob_function& gen_blob)
+            : _engine(engine)
+            , _config(config)
+            , _gen_blob(gen_blob)
+            , _key_dist(std::numeric_limits<int>::min(), std::numeric_limits<int>::max()) {
+        }
+        virtual partition_key generate_partition_key(const schema& schema) override {
+            return partition_key::from_single_value(schema, data_value(_key_dist(_engine)).serialize());
+        }
+        virtual bool has_static_row() override {
+            return _config.static_row_size_dist.has_value();
+        }
+        virtual bytes generate_static_row(const schema& schema, const partition_key& pk) override {
+            return _gen_blob(schema, (*_config.static_row_size_dist)(_engine), pk, nullptr);
+        }
+        virtual int clustering_row_count() override {
+            return _config.clustering_row_count_dist(_engine);
+        }
+        virtual row generate_row(const schema& schema, const partition_key& pk) override {
+            auto ck = clustering_key::from_single_value(schema, data_value(_key_dist(_engine)).serialize());
+            auto value = _gen_blob(schema, _config.clustering_row_size_dist(_engine), pk, &ck);
+            return row{std::move(ck), std::move(value)};
+        }
+        virtual query::clustering_row_ranges generate_delete_ranges(const schema& schema, const std::vector<clustering_key>& rows) override {
+            const auto count = _config.range_deletion_count_dist(_engine);
+            if (!count) {
+                return {};
+            }
+
+            std::uniform_int_distribution<int> index_dist(0, rows.size() - 1);
+            std::uniform_int_distribution<int> inclusive_dist(0, 1);
+
+            using range_bound = query::clustering_range::bound;
+
+            query::clustering_row_ranges ranges;
+            for (auto i = 0; i < count - 1; ++i) {
+                const auto size = _config.range_deletion_size_dist(_engine);
+                if (size == 0) {
+                    continue;
+                }
+                if (size >= int(rows.size())) {
+                    ranges.emplace_back(range_bound(rows.front(), true), range_bound(rows.back(), true));
+                    continue;
+                }
+
+                const bool b1_inclusive = inclusive_dist(_engine);
+                const bool b2_inclusive = size_t(size) == rows.size() - 1 ? true : inclusive_dist(_engine);
+
+                auto param = std::uniform_int_distribution<int>::param_type(0, rows.size() - size - !b1_inclusive - !b2_inclusive);
+                const auto b1 = index_dist(_engine, param);
+
+                const auto b2 = b1 + size - 1 + !b1_inclusive + !b2_inclusive;
+                ranges.emplace_back(range_bound(rows.at(b1), b1_inclusive), range_bound(rows.at(b2), b2_inclusive));
+            }
+            return ranges;
+        }
+    };
+
+    class configurable_random_population_generator : public test::population_generator {
+        std::mt19937 _engine;
+        std::vector<partition_configuration> _part_configs;
+        size_t _count;
+        generate_blob_function _gen_blob;
+
+    public:
+        configurable_random_population_generator(uint32_t seed, std::vector<partition_configuration> part_configs, generate_blob_function gen_blob)
+            : _engine(seed)
+            , _part_configs(std::move(part_configs))
+            , _count(boost::accumulate(_part_configs, size_t(0), [] (size_t c, const partition_configuration& part_config) {
+                    return c + part_config.count;
+            }))
+            , _gen_blob(std::move(gen_blob)) {
+        }
+        virtual size_t partition_count() override {
+            return _count;
+        }
+        virtual std::unique_ptr<partition_content_generator> make_partition_content_generator() override {
+            const auto index = std::uniform_int_distribution<int>(0, _part_configs.size() - 1)(_engine);
+            auto& partition_config = _part_configs.at(index);
+            auto gen = std::make_unique<configurable_random_partition_content_generator>(_engine, partition_config, _gen_blob);
+            if (!--partition_config.count) {
+                std::swap(partition_config, _part_configs.back());
+                _part_configs.pop_back();
+            }
+            return gen;
+        }
+    };
+    return create_test_table(env, ks_name, table_name, std::make_unique<configurable_random_population_generator>(seed, std::move(part_configs),
+                std::move(gen_blob)));
+}
+
 namespace {
 
 static size_t maybe_generate_static_row(cql_test_env& env, const schema& schema,partition_content_generator& part_gen,

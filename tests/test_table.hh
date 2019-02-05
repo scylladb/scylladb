@@ -78,6 +78,18 @@ struct population_description {
     std::vector<partition_description> partitions;
 };
 
+struct partition_configuration {
+    std::optional<std::uniform_int_distribution<int>> static_row_size_dist;
+    std::uniform_int_distribution<int> clustering_row_count_dist;
+    std::uniform_int_distribution<int> clustering_row_size_dist;
+    std::uniform_int_distribution<int> range_deletion_count_dist;
+    std::uniform_int_distribution<int> range_deletion_size_dist; // how many keys a range should include
+    int count;
+};
+
+using generate_blob_function = noncopyable_function<bytes(const schema& schema, size_t size, const partition_key& pk,
+        const clustering_key* const ck)>;
+
 /// Return those keys that overlap with at least one range.
 ///
 /// \param keys sorted list of ck values.
@@ -106,6 +118,22 @@ std::vector<clustering_key> slice_keys(const schema& schema, const std::vector<c
 /// The vector is sorted by ring order.
 std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, const sstring& ks_name, const sstring& table_name,
         int partition_count = 10 * smp::count, int row_per_partition_count = 10);
+
+/// Create and populate a test table (advanced version).
+///
+/// Uses the same schema as the "beginner version".
+/// Populates the table according to the passed in
+/// `population_distribution configuration`.
+/// Values for the column `v` and `s` are generated with the passed in
+/// `gen_blob` function.
+/// Allows for generating non-trivial random population in a controlled way.
+/// The partition configurations will be processed in a random order, using a
+/// deterministic pseudo-random engine. Passing the same seed will yield the
+/// same population.
+///
+/// \returns the description of the generated population.
+population_description create_test_table(cql_test_env& env, const sstring& ks_name, const sstring& table_name, uint32_t seed,
+        std::vector<partition_configuration> part_configs, generate_blob_function gen_blob);
 
 /// Create and populate a test table (expert version).
 ///
