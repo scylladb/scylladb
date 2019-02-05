@@ -13,6 +13,7 @@ Obsoletes:	scylla-server < 1.1
 %global _debugsource_template %{nil}
 %global _debuginfo_subpackages %{nil}
 %global __brp_python_bytecompile %{nil}
+%global __brp_mangle_shebangs %{nil}
 
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
@@ -45,13 +46,10 @@ Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 BuildRequires: pystache
-{{#fedora}}
-Requires: python3 python3-PyYAML
-{{/fedora}}
 {{#centos7}}
-Requires: python34 python34-PyYAML kernel >= 3.10.0-514
+Requires: kernel >= 3.10.0-514
 {{/centos7}}
-Requires:       {{product}}-conf systemd-libs hwloc PyYAML python-urwid pciutils pyparsing python-requests curl util-linux python-setuptools pciutils python3-pyudev mdadm xfsprogs python34-setuptools file
+Requires:       {{product}}-conf systemd-libs hwloc curl util-linux pciutils mdadm xfsprogs file scylla-python3
 Conflicts:      abrt
 AutoReqProv:    no
 
@@ -165,6 +163,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_config_get.py
 %{_prefix}/lib/scylla/scylla_util.py
 %{_prefix}/lib/scylla/scylla-gdb.py
+%{_prefix}/lib/scylla/libexec/*
 /opt/scylladb/bin/*
 /opt/scylladb/libreloc/*
 /opt/scylladb/libexec/*
