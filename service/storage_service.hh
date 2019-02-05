@@ -296,6 +296,7 @@ private:
     gms::feature _stream_with_rpc_stream_feature;
     gms::feature _mc_sstable_feature;
     gms::feature _row_level_repair_feature;
+    gms::feature _truncation_table;
 public:
     void enable_all_features();
 
@@ -2287,6 +2288,9 @@ public:
 
     bool cluster_supports_row_level_repair() const {
         return bool(_row_level_repair_feature);
+    }
+    const gms::feature& cluster_supports_truncation_table() const {
+        return _truncation_table;
     }
 private:
     future<> set_cql_ready(bool ready);
