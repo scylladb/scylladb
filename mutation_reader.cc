@@ -1118,25 +1118,10 @@ void multishard_combining_reader::shard_reader::adjust_partition_slice() {
 
     const auto& schema = *_parent._schema;
     _slice_override->clear_range(schema, _last_pkey->key());
+
     auto& last_ckey = _last_position_in_partition->key();
-
-    auto cmp = bound_view::compare(schema);
-    auto eq = clustering_key_prefix::equality(schema);
-
     auto ranges = _slice_override->default_row_ranges();
-    auto it = ranges.begin();
-    while (it != ranges.end()) {
-        auto range = bound_view::from_range(*it);
-        if (cmp(range.second, last_ckey) || eq(range.second.prefix(), last_ckey)) {
-            it = ranges.erase(it);
-        } else {
-            if (cmp(range.first, last_ckey)) {
-                assert(cmp(last_ckey, range.second));
-                *it = query::clustering_range(query::clustering_range::bound{last_ckey, false}, it->end());
-            }
-            ++it;
-        }
-    }
+    query::trim_clustering_row_ranges_to(schema, ranges, last_ckey);
 
     _slice_override->clear_ranges();
     _slice_override->set_range(schema, _last_pkey->key(), std::move(ranges));

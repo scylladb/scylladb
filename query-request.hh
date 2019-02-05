@@ -56,6 +56,15 @@ bool is_single_row(const schema& s, const query::clustering_range& range) {
 
 typedef std::vector<clustering_range> clustering_row_ranges;
 
+/// Trim the clustering ranges.
+///
+/// Equivalent of intersecting each range with [key, +inf), or (-inf, key] if
+/// reversed == true. Ranges that do not intersect are dropped. Ranges that
+/// partially overlap are trimmed.
+/// Result: each range will overlap fully with [key, +inf), or (-int, key] if
+/// reversed is true.
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed = false);
+
 class specific_ranges {
 public:
     specific_ranges(partition_key pk, clustering_row_ranges ranges)

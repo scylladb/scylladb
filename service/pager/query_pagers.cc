@@ -147,43 +147,6 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                 qlogger.trace("Result ranges {}", ranges);
             };
 
-            // Because of #1446 we don't have a comparator to use with
-            // range<clustering_key_prefix> which would produce correct results.
-            // This means we cannot reuse the same logic for dealing with
-            // partition and clustering keys.
-            auto modify_ck_ranges = [reversed] (const schema& s, auto& ranges, auto& lo) {
-                typedef typename std::remove_reference_t<decltype(ranges)>::value_type range_type;
-                typedef typename range_type::bound bound_type;
-
-                auto cmp = [reversed, bv_cmp = bound_view::compare(s)] (const auto& a, const auto& b) {
-                    return reversed ? bv_cmp(b, a) : bv_cmp(a, b);
-                };
-                auto start_bound = [reversed] (const auto& range) -> const bound_view& {
-                    return reversed ? range.second : range.first;
-                };
-                auto end_bound = [reversed] (const auto& range) -> const bound_view& {
-                    return reversed ? range.first : range.second;
-                };
-                clustering_key_prefix::equality eq(s);
-
-                auto it = ranges.begin();
-                while (it != ranges.end()) {
-                    auto range = bound_view::from_range(*it);
-                    if (cmp(end_bound(range), lo) || eq(end_bound(range).prefix(), lo)) {
-                        qlogger.trace("Remove ck range {}", *it);
-                        it = ranges.erase(it);
-                        continue;
-                    } else if (cmp(start_bound(range), lo)) {
-                        assert(cmp(lo, end_bound(range)));
-                        auto r = reversed ? range_type(it->start(), bound_type { lo, false })
-                                          : range_type(bound_type { lo, false }, it->end());
-                        qlogger.trace("Modify ck range {} -> {}", *it, r);
-                        *it = std::move(r);
-                    }
-                    ++it;
-                }
-            };
-
             // last ck can be empty depending on whether we
             // deserialized state or not. This case means "last page ended on
             // something-not-bound-by-clustering" (i.e. a static row, alone)
@@ -196,7 +159,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             if (has_ck) {
                 query::clustering_row_ranges row_ranges = _cmd->slice.default_row_ranges();
                 clustering_key_prefix ckp = clustering_key_prefix::from_exploded(*_schema, _last_ckey->explode(*_schema));
-                modify_ck_ranges(*_schema, row_ranges, ckp);
+                query::trim_clustering_row_ranges_to(*_schema, row_ranges, ckp, reversed);
 
                 _cmd->slice.set_range(*_schema, *_last_pkey, row_ranges);
             }

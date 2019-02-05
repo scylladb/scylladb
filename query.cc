@@ -71,6 +71,34 @@ std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
     return out << "{" << s._pk << " : " << join(", ", s._ranges) << "}";
 }
 
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed) {
+    auto cmp = [reversed, bv_cmp = bound_view::compare(s)] (const auto& a, const auto& b) {
+        return reversed ? bv_cmp(b, a) : bv_cmp(a, b);
+    };
+    auto start_bound = [reversed] (const auto& range) -> const bound_view& {
+        return reversed ? range.second : range.first;
+    };
+    auto end_bound = [reversed] (const auto& range) -> const bound_view& {
+        return reversed ? range.first : range.second;
+    };
+    clustering_key_prefix::equality eq(s);
+
+    auto it = ranges.begin();
+    while (it != ranges.end()) {
+        auto range = bound_view::from_range(*it);
+        if (cmp(end_bound(range), key) || eq(end_bound(range).prefix(), key)) {
+            it = ranges.erase(it);
+            continue;
+        } else if (cmp(start_bound(range), key)) {
+            assert(cmp(key, end_bound(range)));
+            auto r = reversed ? clustering_range(it->start(), clustering_range::bound { key, false })
+                : clustering_range(clustering_range::bound { key, false }, it->end());
+            *it = std::move(r);
+        }
+        ++it;
+    }
+}
+
 partition_slice::partition_slice(clustering_row_ranges row_ranges,
     query::column_id_vector static_columns,
     query::column_id_vector regular_columns,
