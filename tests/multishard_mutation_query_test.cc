@@ -117,53 +117,73 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
 using stateful_query = bool_class<class stateful>;
 
 static std::pair<std::vector<mutation>, size_t>
-read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, size_t page_size, stateful_query is_stateful,
-        const std::function<void(size_t)>& page_hook) {
-    const auto max_size = std::numeric_limits<uint64_t>::max();
+read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+        const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
     std::vector<mutation> results;
-    auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), page_size, gc_clock::now(), std::nullopt, query::max_partitions,
-            query_uuid, true);
+    auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid, true);
+
+    bool has_more = true;
 
     // First page is special, needs to have `is_first_page` set.
     {
-        auto res = query_mutations_on_all_shards(db, s, cmd, {query::full_partition_range}, nullptr, max_size).get0();
+        auto res = query_mutations_on_all_shards(db, s, cmd, {range}, nullptr, max_size).get0();
         for (auto& part : res->partitions()) {
-            results.emplace_back(part.mut().unfreeze(s));
+            auto mut = part.mut().unfreeze(s);
+            results.emplace_back(std::move(mut));
         }
         cmd.is_first_page = false;
+        has_more = !res->partitions().empty();
     }
 
-    size_t nrows = page_size;
+    if (!has_more) {
+        return std::pair(results, 1);
+    }
+
     unsigned npages = 0;
 
-    // Rest of the pages.
-    // Loop until a page turns up with less rows than the limit.
-    while (nrows == page_size) {
-        page_hook(npages);
+    const auto last_ckey_of = [] (const mutation& mut) -> std::optional<clustering_key> {
+        if (mut.partition().clustered_rows().empty()) {
+            return std::nullopt;
+        }
+        return mut.partition().clustered_rows().rbegin()->key();
+    };
+
+    auto last_pkey = results.back().decorated_key();
+    auto last_ckey = last_ckey_of(results.back());
+
+    // Rest of the pages. Loop until an empty page turns up. Not very
+    // sophisticated but simple and safe.
+    while (has_more) {
+        if (page_hook) {
+            page_hook(npages);
+        }
+
+        ++npages;
+
+        auto pkrange = dht::partition_range(dht::partition_range::bound(last_pkey, last_ckey.has_value()), range.end());
+
+        if (last_ckey) {
+            auto ckranges = cmd.slice.default_row_ranges();
+            query::trim_clustering_row_ranges_to(*s, ckranges, *last_ckey);
+            cmd.slice.clear_range(*s, last_pkey.key());
+            cmd.slice.clear_ranges();
+            cmd.slice.set_range(*s, last_pkey.key(), std::move(ckranges));
+        }
+
+        auto res = query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, max_size).get0();
+
         if (is_stateful) {
             BOOST_REQUIRE(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);
         }
 
-        const auto& last_pkey = results.back().decorated_key();
-        const auto& last_ckey = results.back().partition().clustered_rows().rbegin()->key();
-        auto pkrange = dht::partition_range::make_starting_with(dht::partition_range::bound(last_pkey, true));
-        auto ckrange = query::clustering_range::make_starting_with(query::clustering_range::bound(last_ckey, false));
-        if (const auto& sr = cmd.slice.get_specific_ranges(); sr) {
-            cmd.slice.clear_range(*s, sr->pk());
-        }
-        cmd.slice.set_range(*s, last_pkey.key(), {ckrange});
-
-        auto res = query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, max_size).get0();
-
-        if (res->partitions().empty()) {
-            nrows = 0;
-        } else {
+        if (!res->partitions().empty()) {
             auto it = res->partitions().begin();
             auto end = res->partitions().end();
             auto first_mut = it->mut().unfreeze(s);
 
-            nrows = first_mut.live_row_count();
+            last_pkey = first_mut.decorated_key();
+            last_ckey = last_ckey_of(first_mut);
 
             // The first partition of the new page may overlap with the last
             // partition of the last page.
@@ -175,15 +195,23 @@ read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, siz
             ++it;
             for (;it != end; ++it) {
                 auto mut = it->mut().unfreeze(s);
-                nrows += mut.live_row_count();
+                last_pkey = mut.decorated_key();
+                last_ckey = last_ckey_of(mut);
                 results.emplace_back(std::move(mut));
             }
         }
 
-        ++npages;
+        has_more = !res->partitions().empty();
     }
 
     return std::pair(results, npages);
+}
+
+static std::pair<std::vector<mutation>, size_t>
+read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, stateful_query is_stateful,
+        const std::function<void(size_t)>& page_hook) {
+    return read_partitions_with_paged_scan(db, s, page_size, std::numeric_limits<uint64_t>::max(), is_stateful, query::full_partition_range,
+            s->full_slice(), page_hook);
 }
 
 void check_results_are_equal(std::vector<mutation>& results1, std::vector<mutation>& results2) {
