@@ -67,6 +67,33 @@ rows_assertions::is_not_empty() {
 }
 
 rows_assertions
+rows_assertions::rows_assertions::is_null() {
+    auto rs = _rows->rs().result_set();
+    for (auto&& row : rs.rows()) {
+        for (const bytes_opt& v : row) {
+            if (v) {
+                fail(format("Expected null values. Found: {}\n", v));
+            }
+        }
+    }
+    return {*this};
+}
+
+rows_assertions
+rows_assertions::rows_assertions::is_not_null() {
+    auto rs = _rows->rs().result_set();
+    for (auto&& row : rs.rows()) {
+        for (const bytes_opt& v : row) {
+            if (!v) {
+                fail(format("Expected non-null values. {}\n", to_string(row)));
+            }
+        }
+    }
+    return is_not_empty();
+}
+
+
+rows_assertions
 rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
     auto rs = _rows->rs().result_set();
     std::vector<bytes_opt> expected_row(values);
