@@ -686,6 +686,21 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
     });
 }
 
+static ::shared_ptr<service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+    auto paging_state = rows->rs().get_metadata().paging_state();
+    if (!paging_state) {
+        return nullptr;
+    }
+    return ::make_shared<service::pager::paging_state>(*paging_state);
+};
+
+static size_t count_rows_fetched(::shared_ptr<cql_transport::messages::result_message> res) {
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+    return rows->rs().result_set().size();
+};
+
+
 SEASTAR_TEST_CASE(test_allow_filtering_limit) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE timeline (user text, c int, liked boolean, PRIMARY KEY (user, c));").get();
@@ -748,20 +763,6 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
             { int32_type->decompose(2), boolean_type->decompose(false)},
             { int32_type->decompose(4), boolean_type->decompose(false)}
         });
-
-        auto extract_paging_state = [] (::shared_ptr<cql_transport::messages::result_message> res) -> ::shared_ptr<service::pager::paging_state> {
-            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
-            auto paging_state = rows->rs().get_metadata().paging_state();
-            if (!paging_state) {
-                return nullptr;
-            }
-            return ::make_shared<service::pager::paging_state>(*paging_state);
-        };
-
-        auto count_rows_fetched = [] (::shared_ptr<cql_transport::messages::result_message> res) {
-            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
-            return rows->rs().result_set().size();
-        };
 
         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
