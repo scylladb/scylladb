@@ -1037,7 +1037,7 @@ static future<> setup_version() {
                              a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
                              netw::get_local_messaging_service().listen_address().addr(),
-                             service::storage_service::get_config_supported_features()
+                             service::get_local_storage_service().get_config_supported_features()
         ).discard_result();
     });
 }

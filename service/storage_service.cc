@@ -131,10 +131,11 @@ int get_generation_number() {
 }
 
 storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service)
+        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, std::set<sstring> disabled_features)
         : _feature_service(feature_service)
         , _db(db)
         , _auth_service(auth_service)
+        , _disabled_features(std::move(disabled_features))
         , _range_tombstones_feature(_feature_service, RANGE_TOMBSTONES_FEATURE)
         , _large_partitions_feature(_feature_service, LARGE_PARTITIONS_FEATURE)
         , _materialized_views_feature(_feature_service, MATERIALIZED_VIEWS_FEATURE)
@@ -164,23 +165,32 @@ storage_service::storage_service(distributed<database>& db, sharded<auth::servic
 }
 
 void storage_service::enable_all_features() {
-    _range_tombstones_feature.enable();
-    _large_partitions_feature.enable();
-    _materialized_views_feature.enable();
-    _counters_feature.enable();
-    _indexes_feature.enable();
-    _digest_multipartition_read_feature.enable();
-    _correct_counter_order_feature.enable();
-    _schema_tables_v3.enable();
-    _correct_non_compound_range_tombstones.enable();
-    _write_failure_reply_feature.enable();
-    _xxhash_feature.enable();
-    _roles_feature.enable();
-    _la_sstable_feature.enable();
-    _stream_with_rpc_stream_feature.enable();
-    _mc_sstable_feature.enable();
-    _row_level_repair_feature.enable();
-    _truncation_table.enable();
+    auto features = get_config_supported_features_set();
+
+    for (gms::feature& f : {
+        std::ref(_range_tombstones_feature),
+        std::ref(_large_partitions_feature),
+        std::ref(_materialized_views_feature),
+        std::ref(_counters_feature),
+        std::ref(_indexes_feature),
+        std::ref(_digest_multipartition_read_feature),
+        std::ref(_correct_counter_order_feature),
+        std::ref(_schema_tables_v3),
+        std::ref(_correct_non_compound_range_tombstones),
+        std::ref(_write_failure_reply_feature),
+        std::ref(_xxhash_feature),
+        std::ref(_roles_feature),
+        std::ref(_la_sstable_feature),
+        std::ref(_stream_with_rpc_stream_feature),
+        std::ref(_mc_sstable_feature),
+        std::ref(_row_level_repair_feature),
+        std::ref(_truncation_table),
+    })
+    {
+        if (features.count(f.name())) {
+            f.enable();
+        }
+    }
 }
 
 enum class node_external_status {
@@ -239,10 +249,14 @@ bool storage_service::is_auto_bootstrap() {
 }
 
 sstring storage_service::get_config_supported_features() {
+    return join(",", get_config_supported_features_set());
+}
+
+std::set<sstring> storage_service::get_config_supported_features_set() {
     // Add features supported by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
-    std::vector<sstring> features = {
+    std::set<sstring> features = {
         RANGE_TOMBSTONES_FEATURE,
         LARGE_PARTITIONS_FEATURE,
         COUNTERS_FEATURE,
@@ -260,14 +274,27 @@ sstring storage_service::get_config_supported_features() {
         ROW_LEVEL_REPAIR,
         TRUNCATION_TABLE,
     };
-    auto& config = service::get_local_storage_service()._db.local().get_config();
-    if (config.enable_sstables_mc_format()) {
-        features.push_back(MC_SSTABLE_FEATURE);
+
+    // Do not respect config in the case database is not started
+    // This should only be true in tests (see cql_test_env.cc:storage_service_for_tests)
+    auto& db = service::get_local_storage_service().db();
+    if (db.local_is_initialized()) {
+        auto& config = service::get_local_storage_service().db().local().get_config();
+        if (config.enable_sstables_mc_format()) {
+            features.insert(MC_SSTABLE_FEATURE);
+        }
+        if (config.experimental()) {
+            // push additional experimental features
+        }
     }
-    if (config.experimental()) {
-        // push additional experimental features
+    for (const sstring& s : _disabled_features) {
+        features.erase(s);
     }
-    return join(",", features);
+    return features;
+}
+
+void storage_service::set_disabled_features(std::set<sstring> s) {
+    _disabled_features = std::move(s);
 }
 
 std::set<inet_address> get_seeds() {
