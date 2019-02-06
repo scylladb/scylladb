@@ -61,7 +61,6 @@ REGION=us-east-1
 SSH_USERNAME=centos
 
 if [ $LOCALRPM -eq 1 ]; then
-    sudo rm -rf build/*
     REPO=`./scripts/scylla_current_repo --target centos`
     INSTALL_ARGS="$INSTALL_ARGS --localrpm --repo $REPO"
     if [ ! -f /usr/bin/git ]; then
@@ -79,7 +78,13 @@ if [ $LOCALRPM -eq 1 ]; then
     fi
     if [ ! -f dist/ami/files/scylla-jmx.noarch.rpm ]; then
         cd build
-        git clone --depth 1 https://github.com/scylladb/scylla-jmx.git
+        if [ ! -f scylla-jmx/reloc/build_reloc.sh ]; then
+            # directory exists but file is missing, so need to try clone again
+            rm -rf scylla-jmx
+            git clone --depth 1 https://github.com/scylladb/scylla-jmx.git
+        else
+            git pull
+        fi
         cd scylla-jmx
         reloc/build_reloc.sh
         reloc/build_rpm.sh
@@ -88,7 +93,13 @@ if [ $LOCALRPM -eq 1 ]; then
     fi
     if [ ! -f dist/ami/files/scylla-tools.noarch.rpm ] || [ ! -f dist/ami/files/scylla-tools-core.noarch.rpm ]; then
         cd build
-        git clone --depth 1 https://github.com/scylladb/scylla-tools-java.git
+        if [ ! -f scylla-tools-java/reloc/build_reloc.sh ]; then
+            # directory exists but file is missing, so need to try clone again
+            rm -rf scylla-tools-java
+            git clone --depth 1 https://github.com/scylladb/scylla-tools-java.git
+        else
+            git pull
+        fi
         cd scylla-tools-java
         reloc/build_reloc.sh
         reloc/build_rpm.sh
@@ -98,7 +109,13 @@ if [ $LOCALRPM -eq 1 ]; then
     fi
     if [ ! -f dist/ami/files/scylla-ami.noarch.rpm ]; then
         cd build
-        git clone --depth 1 https://github.com/scylladb/scylla-ami.git
+        if [ ! -f scylla-ami/dist/redhat/build_rpm.sh ]; then
+            # directory exists but file is missing, so need to try clone again
+            rm -rf scylla-ami
+            git clone --depth 1 https://github.com/scylladb/scylla-ami.git
+        else
+            git pull
+        fi
         cd scylla-ami
         dist/redhat/build_rpm.sh --target centos7
         cd ../..
