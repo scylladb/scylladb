@@ -318,7 +318,7 @@ public:
             auto db = ::make_shared<distributed<database>>();
             auto cfg = make_lw_shared<db::config>(std::move(cfg_in));
             tmpdir data_dir;
-            auto& data_dir_path = data_dir.path;
+            auto data_dir_path = data_dir.path;
             if (!cfg->data_file_directories.is_set()) {
                 cfg->data_file_directories() = {data_dir_path};
             } else {
