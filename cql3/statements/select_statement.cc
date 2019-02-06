@@ -230,12 +230,12 @@ select_statement::make_partition_slice(const query_options& options)
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, options.get_cql_serialization_format());
 }
 
-int32_t select_statement::get_limit(const query_options& options) const {
-    if (!_limit || _selection->is_aggregate()) {
+int32_t select_statement::do_get_limit(const query_options& options, ::shared_ptr<term> limit) const {
+    if (!limit || _selection->is_aggregate()) {
         return std::numeric_limits<int32_t>::max();
     }
 
-    auto val = _limit->bind_and_get(options);
+    auto val = limit->bind_and_get(options);
     if (val.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of limit");
     }
