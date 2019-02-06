@@ -357,7 +357,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
 
     auto timeout = db::timeout_clock::now() + timeout_duration;
     if (_selection->is_trivial() && !restrictions_need_filtering) {
-        return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p, limit] (result_generator generator) {
+        return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p] (result_generator generator) {
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
                     auto meta = make_shared<metadata>(*_selection->get_result_metadata());
@@ -805,7 +805,6 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
 
     validate_for_read(cl);
 
-    int32_t limit = get_limit(options);
     auto now = gc_clock::now();
 
     ++_stats.reads;
@@ -850,13 +849,13 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     if (whole_partitions || partition_slices) {
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
-        return find_index_partition_ranges(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges, ::shared_ptr<const service::pager::paging_state> paging_state) {
+        return find_index_partition_ranges(proxy, state, options).then([now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges, ::shared_ptr<const service::pager::paging_state> paging_state) {
             return this->execute_base_query(proxy, std::move(partition_ranges), state, options, now, std::move(paging_state));
         });
     } else {
         // In this case, we need to retrieve a list of rows (not entire
         // partitions) and then retrieve those specific rows.
-        return find_index_clustering_rows(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys, ::shared_ptr<const service::pager::paging_state> paging_state) {
+        return find_index_clustering_rows(proxy, state, options).then([now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys, ::shared_ptr<const service::pager::paging_state> paging_state) {
             return this->execute_base_query(proxy, std::move(primary_keys), state, options, now, std::move(paging_state));
         });
     }
