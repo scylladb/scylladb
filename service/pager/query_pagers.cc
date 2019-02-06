@@ -280,7 +280,7 @@ public:
             qr.query_result->ensure_counts();
             _stats.filtered_rows_read_total += *qr.query_result->row_count();
             handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
-                          cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max)),
+                          cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _cmd->slice.partition_row_limit())),
                           std::move(qr.query_result), page_size, now);
         });
     }

@@ -346,7 +346,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                                                          const query::result_row_view& row) const {
     static logging::logger rlogger("restrictions_filter");
 
-    if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0) {
+    if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0 || _per_partition_remaining == 0) {
         return false;
     }
 
@@ -437,8 +437,13 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
     const bool accepted = do_filter(selection, partition_key, clustering_key, static_row, row);
     if (!accepted) {
         ++_rows_dropped;
-    } else if (_remaining > 0) {
-        --_remaining;
+    } else {
+        if (_remaining > 0) {
+            --_remaining;
+        }
+        if (_per_partition_remaining > 0) {
+            --_per_partition_remaining;
+        }
     }
     return accepted;
 }
