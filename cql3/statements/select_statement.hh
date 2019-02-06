@@ -77,6 +77,7 @@ protected:
     ::shared_ptr<restrictions::statement_restrictions> _restrictions;
     bool _is_reversed;
     ::shared_ptr<term> _limit;
+    ::shared_ptr<term> _per_partition_limit;
 
     template<typename T>
     using compare_fn = raw::select_statement::compare_fn<T>;
@@ -103,6 +104,7 @@ public:
             bool is_reversed,
             ordering_comparator_type ordering_comparator,
             ::shared_ptr<term> limit,
+            ::shared_ptr<term> per_partition_limit,
             cql_stats& stats);
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
@@ -155,6 +157,7 @@ public:
                      bool is_reversed,
                      ordering_comparator_type ordering_comparator,
                      ::shared_ptr<term> limit,
+                     ::shared_ptr<term> per_partition_limit,
                      cql_stats &stats);
 };
 
@@ -171,6 +174,7 @@ public:
                                                                     bool is_reversed,
                                                                     ordering_comparator_type ordering_comparator,
                                                                     ::shared_ptr<term> limit,
+                                                                     ::shared_ptr<term> per_partition_limit,
                                                                     cql_stats &stats);
 
     indexed_table_select_statement(schema_ptr schema,
@@ -181,6 +185,7 @@ public:
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
                                    ::shared_ptr<term> limit,
+                                   ::shared_ptr<term> per_partition_limit,
                                    cql_stats &stats,
                                    const secondary_index::index& index,
                                    schema_ptr view_schema);

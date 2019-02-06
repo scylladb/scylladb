@@ -130,6 +130,7 @@ select_statement::select_statement(schema_ptr schema,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
                                    ::shared_ptr<term> limit,
+                                   ::shared_ptr<term> per_partition_limit,
                                    cql_stats& stats)
     : cql_statement(select_timeout(*restrictions))
     , _schema(schema)
@@ -139,6 +140,7 @@ select_statement::select_statement(schema_ptr schema,
     , _restrictions(std::move(restrictions))
     , _is_reversed(is_reversed)
     , _limit(std::move(limit))
+    , _per_partition_limit(std::move(per_partition_limit))
     , _ordering_comparator(std::move(ordering_comparator))
     , _stats(stats)
 {
@@ -675,8 +677,10 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
                                                            ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
-                                                           ::shared_ptr<term> limit, cql_stats &stats)
-    : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, stats}
+                                                           ::shared_ptr<term> limit,
+                                                           ::shared_ptr<term> per_partition_limit,
+                                                           cql_stats &stats)
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
 {}
 
 ::shared_ptr<cql3::statements::select_statement>
@@ -688,7 +692,9 @@ indexed_table_select_statement::prepare(database& db,
                                         ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                         bool is_reversed,
                                         ordering_comparator_type ordering_comparator,
-                                        ::shared_ptr<term> limit, cql_stats &stats)
+                                        ::shared_ptr<term> limit,
+                                         ::shared_ptr<term> per_partition_limit,
+                                         cql_stats &stats)
 {
     auto& sim = db.find_column_family(schema).get_index_manager();
     auto index_opt = restrictions->find_idx(sim);
@@ -709,6 +715,7 @@ indexed_table_select_statement::prepare(database& db,
             is_reversed,
             std::move(ordering_comparator),
             limit,
+            per_partition_limit,
             stats,
             *index_opt,
             view_schema);
@@ -721,10 +728,12 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
-                                                           ::shared_ptr<term> limit, cql_stats &stats,
+                                                           ::shared_ptr<term> limit,
+                                                           ::shared_ptr<term> per_partition_limit,
+                                                           cql_stats &stats,
                                                            const secondary_index::index& index,
                                                            schema_ptr view_schema)
-    : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, stats}
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
     , _index{index}
     , _view_schema(view_schema)
 {}
@@ -1043,12 +1052,14 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
                                    ::shared_ptr<parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
                                    std::vector<::shared_ptr<relation>> where_clause,
-                                   ::shared_ptr<term::raw> limit)
+                                   ::shared_ptr<term::raw> limit,
+                                   ::shared_ptr<term::raw> per_partition_limit)
     : cf_statement(std::move(cf_name))
     , _parameters(std::move(parameters))
     , _select_clause(std::move(select_clause))
     , _where_clause(std::move(where_clause))
     , _limit(std::move(limit))
+    , _per_partition_limit(std::move(per_partition_limit))
 { }
 
 void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr schema) {
@@ -1129,7 +1140,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                 std::move(restrictions),
                 is_reversed_,
                 std::move(ordering_comparator),
-                prepare_limit(db, bound_names),
+                prepare_limit(db, bound_names, _limit),
+                prepare_limit(db, bound_names, _per_partition_limit),
                 stats);
     } else {
         stmt = ::make_shared<cql3::statements::primary_key_select_statement>(
@@ -1140,7 +1152,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                 std::move(restrictions),
                 is_reversed_,
                 std::move(ordering_comparator),
-                prepare_limit(db, bound_names),
+                prepare_limit(db, bound_names, _limit),
+                prepare_limit(db, bound_names, _per_partition_limit),
                 stats);
     }
 
@@ -1170,13 +1183,13 @@ select_statement::prepare_restrictions(database& db,
 
 /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
 ::shared_ptr<term>
-select_statement::prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names)
+select_statement::prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names, ::shared_ptr<term::raw> limit)
 {
-    if (!_limit) {
+    if (!limit) {
         return {};
     }
 
-    auto prep_limit = _limit->prepare(db, keyspace(), limit_receiver());
+    auto prep_limit = limit->prepare(db, keyspace(), limit_receiver());
     prep_limit->collect_marker_specification(bound_names);
     return prep_limit;
 }
@@ -1360,8 +1373,9 @@ bool select_statement::contains_alias(::shared_ptr<column_identifier> name) {
     });
 }
 
-::shared_ptr<column_specification> select_statement::limit_receiver() {
-    return ::make_shared<column_specification>(keyspace(), column_family(), ::make_shared<column_identifier>("[limit]", true),
+::shared_ptr<column_specification> select_statement::limit_receiver(bool per_partition) {
+    sstring name = per_partition ? "[per_partition_limit]" : "[limit]";
+    return ::make_shared<column_specification>(keyspace(), column_family(), ::make_shared<column_identifier>(name, true),
         int32_type);
 }
 
