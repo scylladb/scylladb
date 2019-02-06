@@ -381,6 +381,7 @@ selectStatement returns [shared_ptr<raw::select_statement> expr]
     @init {
         bool is_distinct = false;
         ::shared_ptr<cql3::term::raw> limit;
+        ::shared_ptr<cql3::term::raw> per_partition_limit;
         raw::select_statement::parameters::orderings_type orderings;
         bool allow_filtering = false;
         bool is_json = false;
@@ -394,13 +395,14 @@ selectStatement returns [shared_ptr<raw::select_statement> expr]
       K_FROM cf=columnFamilyName
       ( K_WHERE wclause=whereClause )?
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
+      ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = rows; } )?
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
       {
           auto params = ::make_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, is_json, bypass_cache);
           $expr = ::make_shared<raw::select_statement>(std::move(cf), std::move(params),
-            std::move(sclause), std::move(wclause), std::move(limit), nullptr);
+            std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit));
       }
     ;
 
@@ -1721,6 +1723,8 @@ basic_unreserved_keyword returns [sstring str]
         | K_JSON
         | K_CACHE
         | K_BYPASS
+        | K_PER
+        | K_PARTITION
         ) { $str = $k.text; }
     ;
 
@@ -1865,6 +1869,9 @@ K_EMPTY:       E M P T Y;
 
 K_BYPASS:      B Y P A S S;
 K_CACHE:       C A C H E;
+
+K_PER:         P E R;
+K_PARTITION:   P A R T I T I O N;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
