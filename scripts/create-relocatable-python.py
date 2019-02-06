@@ -102,15 +102,20 @@ def fix_dynload(ar, binpath, targetpath):
     ar.add(patched_binary, arcname=targetpath, recursive=False)
 
 def gen_python_thunk(ar, pybin):
-    thunk=b'''\
+    base_thunk='''\
 #!/bin/bash
 x="$(readlink -f "$0")"
 b="$(basename "$x")"
 d="$(dirname "$x")/.."
 ldso="$d/libexec/ld.so"
 realexe="$d/libexec/$b.bin"
-exec -a "$0" "$ldso" "$realexe" "$@"
+PYTHONPATH="$d/{sitepackages}:$d/{sitepackages64}:$PYTHONPATH" exec -a "$0" "$ldso" "$realexe" -s "$@"
 '''
+
+    sitepackages = os.path.join("local/lib/", pybin, "site-packages")
+    sitepackages64 = os.path.join("local/lib64/", pybin, "site-packages")
+
+    thunk = base_thunk.format(sitepackages=sitepackages, sitepackages64=sitepackages64).encode()
 
     ti = tarfile.TarInfo(name=os.path.join("bin", pybin))
     ti.size = len(thunk)
