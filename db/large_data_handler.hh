@@ -57,7 +57,7 @@ public:
         _stopped = true;
     }
 
-    void maybe_log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
+    void maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const {
         if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
             log_large_row(sst, partition_key, clustering_key, row_size);
