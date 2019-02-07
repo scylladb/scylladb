@@ -60,7 +60,7 @@ public:
     void maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const {
         if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
-            log_large_row(sst, partition_key, clustering_key, row_size);
+            record_large_rows(sst, partition_key, clustering_key, row_size);
         }
     }
 
@@ -76,7 +76,7 @@ public:
     const large_data_handler::stats& stats() const { return _stats; }
 
 protected:
-    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
+    virtual void record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const = 0;
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const = 0;
 };
@@ -92,7 +92,7 @@ public:
 protected:
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override;
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override;
-    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
+    virtual void record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
 };
 
 class nop_large_data_handler : public large_data_handler {
@@ -107,8 +107,8 @@ public:
         return make_ready_future<>();
     }
 
-    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
-                               const clustering_key_prefix* clustering_key, uint64_t row_size) const override {}
+    virtual void record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, uint64_t row_size) const override {}
 };
 
 }
