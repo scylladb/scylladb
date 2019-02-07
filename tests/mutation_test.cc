@@ -97,15 +97,15 @@ static mutation_partition get_partition(memtable& mt, const partition_key& key) 
 future<>
 with_column_family(schema_ptr s, column_family::config cfg, noncopyable_function<future<> (column_family&)> func) {
     auto tracker = make_lw_shared<cache_tracker>();
-    auto dir = make_lw_shared<tmpdir>();
-    cfg.datadir = { dir->path };
+    auto dir = tmpdir();
+    cfg.datadir = dir.path().string();
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
     cf->mark_ready_for_writes();
     return func(*cf).then([cf, cm] {
         return cf->stop();
-    }).finally([cf, cm, dir, cl_stats, tracker] () mutable { cf = { }; });
+    }).finally([cf, cm, dir = std::move(dir), cl_stats, tracker] () mutable { cf = { }; });
 }
 
 SEASTAR_TEST_CASE(test_mutation_is_applied) {

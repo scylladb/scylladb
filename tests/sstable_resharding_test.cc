@@ -67,7 +67,7 @@ void run_sstable_resharding_test() {
     cache_tracker tracker;
   for (const auto version : all_sstable_versions) {
     storage_service_for_tests ssft;
-    auto tmp = make_lw_shared<tmpdir>();
+    auto tmp = tmpdir();
     auto s = get_schema();
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
@@ -97,10 +97,10 @@ void run_sstable_resharding_test() {
                 mt->apply(std::move(m));
             }
         }
-        auto sst = sstables::make_sstable(s, tmp->path, 0, version, sstables::sstable::format_types::big);
+        auto sst = sstables::make_sstable(s, tmp.path().string(), 0, version, sstables::sstable::format_types::big);
         write_memtable_to_sstable_for_test(*mt, sst).get();
     }
-    auto sst = sstables::make_sstable(s, tmp->path, 0, version, sstables::sstable::format_types::big);
+    auto sst = sstables::make_sstable(s, tmp.path().string(), 0, version, sstables::sstable::format_types::big);
     sst->load().get();
 
     // FIXME: sstable write has a limitation in which it will generate sharding metadata only
@@ -112,14 +112,14 @@ void run_sstable_resharding_test() {
     auto filter_fname = sstables::test(sst).filename(component_type::Filter);
     uint64_t bloom_filter_size_before = file_size(filter_fname).get0();
 
-    auto creator = [&cf, tmp, version] (shard_id shard) mutable {
+    auto creator = [&cf, &tmp, version] (shard_id shard) mutable {
         // we need generation calculated by instance of cf at requested shard,
         // or resource usage wouldn't be fairly distributed among shards.
         auto gen = smp::submit_to(shard, [&cf] () {
             return column_family_test::calculate_generation_for_new_table(*cf);
         }).get0();
 
-        auto sst = sstables::make_sstable(cf->schema(), tmp->path, gen,
+        auto sst = sstables::make_sstable(cf->schema(), tmp.path().string(), gen,
             version, sstables::sstable::format_types::big,
             gc_clock::now(), default_io_error_handler_gen());
         return sst;
@@ -130,7 +130,7 @@ void run_sstable_resharding_test() {
     uint64_t bloom_filter_size_after = 0;
 
     for (auto& sstable : new_sstables) {
-        auto new_sst = sstables::make_sstable(s, tmp->path, sstable->generation(),
+        auto new_sst = sstables::make_sstable(s, tmp.path().string(), sstable->generation(),
             version, sstables::sstable::format_types::big);
         new_sst->load().get();
         filter_fname = sstables::test(new_sst).filename(component_type::Filter);
@@ -156,4 +156,3 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
         run_sstable_resharding_test();
     });
 }
-

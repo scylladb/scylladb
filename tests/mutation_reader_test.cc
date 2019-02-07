@@ -447,15 +447,15 @@ SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
     const mutation expexted_mutation_4 = sstable_level_0_0_mutations[2] + sstable_level_2_0_mutations[1];
     const mutation expexted_mutation_5 = sstable_level_2_1_mutations[0];
 
-    auto tmp = make_lw_shared<tmpdir>();
+    auto tmp = tmpdir();
 
     unsigned gen{0};
     std::vector<sstables::shared_sstable> sstable_list = {
-            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 0), std::move(sstable_level_0_0_mutations)),
-            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 1), std::move(sstable_level_1_0_mutations)),
-            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 1), std::move(sstable_level_1_1_mutations)),
-            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 2), std::move(sstable_level_2_0_mutations)),
-            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 2), std::move(sstable_level_2_1_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 0), std::move(sstable_level_0_0_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 1), std::move(sstable_level_1_0_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 1), std::move(sstable_level_1_1_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 2), std::move(sstable_level_2_0_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 2), std::move(sstable_level_2_1_mutations)),
     };
 
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, {});
@@ -731,10 +731,10 @@ sstables::shared_sstable create_sstable(simple_schema& sschema, const sstring& p
 
 static
 sstables::shared_sstable create_sstable(schema_ptr s, std::vector<mutation> mutations) {
-    static thread_local auto tmp = make_lw_shared<tmpdir>();
+    static thread_local auto tmp = tmpdir();
     static int gen = 0;
     return make_sstable_containing([&] {
-        return make_lw_shared<sstables::sstable>(s, tmp->path, gen++, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+        return make_lw_shared<sstables::sstable>(s, tmp.path().string(), gen++, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
     }, mutations);
 }
 
@@ -979,8 +979,8 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
 
         {
             simple_schema s;
-            auto tmp = make_lw_shared<tmpdir>();
-            auto sst = create_sstable(s, tmp->path);
+            auto tmp = tmpdir();
+            auto sst = create_sstable(s, tmp.path().string());
 
             auto reader1 = reader_wrapper(semaphore, s.schema(), sst);
 
@@ -1050,8 +1050,8 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
 
         {
             simple_schema s;
-            auto tmp = make_lw_shared<tmpdir>();
-            auto sst = create_sstable(s, tmp->path);
+            auto tmp = tmpdir();
+            auto sst = create_sstable(s, tmp.path().string());
 
             auto timeout = std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{1});
 
@@ -1098,8 +1098,8 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
 
         {
             simple_schema s;
-            auto tmp = make_lw_shared<tmpdir>();
-            auto sst = create_sstable(s, tmp->path);
+            auto tmp = tmpdir();
+            auto sst = create_sstable(s, tmp.path().string());
 
             auto reader1_ptr = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst);
             (*reader1_ptr)().get();
@@ -1134,8 +1134,8 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
 
         {
             simple_schema s;
-            auto tmp = make_lw_shared<tmpdir>();
-            auto sst = create_sstable(s, tmp->path);
+            auto tmp = tmpdir();
+            auto sst = create_sstable(s, tmp.path().string());
 
             {
                 auto reader = reader_wrapper(semaphore, s.schema(), sst);

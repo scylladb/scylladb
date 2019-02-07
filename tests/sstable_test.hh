@@ -706,22 +706,22 @@ public:
     static future<> do_with_tmp_directory(std::function<future<> (sstring tmpdir_path)>&& fut) {
         return seastar::async([fut = std::move(fut)] {
             storage_service_for_tests ssft;
-            auto tmp = make_lw_shared<tmpdir>();
-            fut(tmp->path).get();
+            auto tmp = tmpdir();
+            fut(tmp.path().string()).get();
         });
     }
 
     static future<> do_with_cloned_tmp_directory(sstring src, std::function<future<> (sstring srcdir_path, sstring destdir_path)>&& fut) {
         return seastar::async([fut = std::move(fut), src = std::move(src)] {
             storage_service_for_tests ssft;
-            auto src_dir = make_lw_shared<tmpdir>();
-            auto dest_dir = make_lw_shared<tmpdir>();
-            for (const auto& entry : boost::filesystem::directory_iterator(src.c_str())) {
-                boost::filesystem::copy(entry.path(), boost::filesystem::path(src_dir->path)/entry.path().filename());
+            auto src_dir = tmpdir();
+            auto dest_dir = tmpdir();
+            for (const auto& entry : seastar::compat::filesystem::directory_iterator(src.c_str())) {
+                seastar::compat::filesystem::copy(entry.path(), src_dir.path() / entry.path().filename());
             }
-            auto dest_path = boost::filesystem::path(dest_dir->path)/src.c_str();
-            boost::filesystem::create_directories(dest_path);
-            fut(src_dir->path, dest_path.string()).get();
+            auto dest_path = dest_dir.path() / src.c_str();
+            seastar::compat::filesystem::create_directories(dest_path);
+            fut(src_dir.path().string(), dest_path.string()).get();
         });
     }
 };

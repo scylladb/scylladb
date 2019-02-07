@@ -409,7 +409,7 @@ void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_
     std::vector<tmpdir> dirs;
     run_mutation_source_tests([&dirs, &cfg, version] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
         dirs.emplace_back();
-        return make_sstable_mutation_source(s, dirs.back().path, partitions, cfg, version);
+        return make_sstable_mutation_source(s, dirs.back().path().string(), partitions, cfg, version);
     });
 }
 
@@ -433,7 +433,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     return seastar::async([] {
         auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         auto s = make_lw_shared(schema({}, "ks", "cf",
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
@@ -449,7 +449,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         mt->apply(std::move(m));
 
         auto sst = sstables::make_sstable(s,
-                dir->path,
+                dir.path().string(),
                 1 /* generation */,
                 sstables::sstable::version_types::la,
                 sstables::sstable::format_types::big);
@@ -806,7 +806,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -824,7 +824,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         mt->apply(std::move(m));
 
         auto sst = sstables::make_sstable(s,
-                                dir->path,
+                                dir.path().string(),
                                 1 /* generation */,
                                 version,
                                 sstables::sstable::format_types::big);
@@ -842,7 +842,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
         auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         for (const auto version : all_sstable_versions) {
             storage_service_for_tests ssft;
-            auto dir = make_lw_shared<tmpdir>();
+            auto dir = tmpdir();
             schema_builder builder("ks", "cf");
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -860,7 +860,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             mt->apply(std::move(m));
 
             auto sst = sstables::make_sstable(s,
-                                    dir->path,
+                                    dir.path().string(),
                                     1 /* generation */,
                                     version,
                                     sstables::sstable::format_types::big);
@@ -888,7 +888,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
     return seastar::async([] {
         auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -923,7 +923,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         mt->apply(std::move(m));
 
         auto sst = sstables::make_sstable(s,
-                                dir->path,
+                                dir.path().string(),
                                 1 /* generation */,
                                 sstables::sstable::version_types::ka,
                                 sstables::sstable::format_types::big);
@@ -941,7 +941,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -976,7 +976,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         mt->apply(std::move(m));
 
         auto sst = sstables::make_sstable(s,
-                                          dir->path,
+                                          dir.path().string(),
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
@@ -1005,7 +1005,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -1036,7 +1036,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
         mt->apply(std::move(m));
 
         auto sst = sstables::make_sstable(s,
-                                          dir->path,
+                                          dir.path().string(),
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
@@ -1065,7 +1065,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         int id = 0;
         for (auto& compact : { schema_builder::compact_storage::no, schema_builder::compact_storage::yes }) {
             const auto generation = id++;
@@ -1093,7 +1093,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
             mt->apply(m);
 
             auto sst = sstables::make_sstable(s,
-                                              dir->path,
+                                              dir.path().string(),
                                               generation,
                                               version,
                                               sstables::sstable::format_types::big);
@@ -1119,7 +1119,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -1140,7 +1140,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
         mt->apply(m);
 
         auto sst = sstables::make_sstable(s,
-                                          dir->path,
+                                          dir.path().string(),
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
@@ -1164,7 +1164,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("v", int32_type);
@@ -1180,7 +1180,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         mt->apply(m);
 
         auto sst = sstables::make_sstable(s,
-                                          dir->path,
+                                          dir.path().string(),
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
@@ -1200,7 +1200,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -1221,7 +1221,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
         mt->apply(m);
 
         auto sst = sstables::make_sstable(s,
-                                          dir->path,
+                                          dir.path().string(),
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
@@ -1246,7 +1246,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
-        auto dir = make_lw_shared<tmpdir>();
+        auto dir = tmpdir();
         simple_schema ss;
         auto s = ss.schema();
 
@@ -1275,7 +1275,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         mt2->apply(m2);
 
         auto sst = sstables::make_sstable(s,
-                                          dir->path,
+                                          dir.path().string(),
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
@@ -1319,7 +1319,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             cfg.large_data_handler = &nop_lp_handler;
 
             tmpdir dir;
-            auto ms = make_sstable_mutation_source(s, dir.path, {m1, m2}, cfg, version);
+            auto ms = make_sstable_mutation_source(s, dir.path().string(), {m1, m2}, cfg, version);
 
             auto index_accesses = [] {
                 auto&& stats = sstables::shared_index_lists::shard_stats();
@@ -1347,7 +1347,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
     // series of partitions with small keys. This should result in large index page.
 
     storage_service_for_tests ssft;
-    auto dir = make_lw_shared<tmpdir>();
+    auto dir = tmpdir();
 
     simple_schema ss;
     auto s = ss.schema();
@@ -1397,7 +1397,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
     }
 
     auto sst = sstables::make_sstable(s,
-                                      dir->path,
+                                      dir.path().string(),
                                       1 /* generation */,
                                       sstable_version_types::ka,
                                       sstables::sstable::format_types::big);
@@ -1425,7 +1425,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
 }
 
 SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
-    auto dir = make_lw_shared<tmpdir>();
+    auto dir = tmpdir();
     storage_service_for_tests ssft;
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     int gen = 1;
@@ -1443,13 +1443,13 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                 for (auto& m : base_mutations) {
                     mt->apply(m);
                 }
-                created_with_base_schema = sstables::make_sstable(base, dir->path, gen, version, sstables::sstable::format_types::big);
+                created_with_base_schema = sstables::make_sstable(base, dir.path().string(), gen, version, sstables::sstable::format_types::big);
                 sstable_writer_config cfg;
                 cfg.large_data_handler = &nop_lp_handler;
                 created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, cfg, mt->get_encoding_stats()).get();
                 created_with_base_schema->load().get();
 
-                created_with_changed_schema = sstables::make_sstable(changed, dir->path, gen, version, sstables::sstable::format_types::big);
+                created_with_changed_schema = sstables::make_sstable(changed, dir.path().string(), gen, version, sstables::sstable::format_types::big);
                 created_with_changed_schema->load().get();
 
                 cache.emplace(std::tuple { version, base }, std::tuple { created_with_base_schema, gen });
@@ -1457,7 +1457,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
             } else {
                 created_with_base_schema = std::get<shared_sstable>(it->second);
 
-                created_with_changed_schema = sstables::make_sstable(changed, dir->path, std::get<int>(it->second), version, sstables::sstable::format_types::big);
+                created_with_changed_schema = sstables::make_sstable(changed, dir.path().string(), std::get<int>(it->second), version, sstables::sstable::format_types::big);
                 created_with_changed_schema->load().get();
             }
 
@@ -1479,7 +1479,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
-    auto dir = make_lw_shared<tmpdir>();
+    auto dir = tmpdir();
     storage_service_for_tests ssft;
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
 
@@ -1522,13 +1522,13 @@ SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
         // SSTable class has way too many responsibilities. In particular, it mixes the reading and
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
-        auto sst = sstables::make_sstable(s, dir->path, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+        auto sst = sstables::make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 2, s, cfg, mt->get_encoding_stats()).get();
     }
 
-    auto sst = sstables::make_sstable(s, dir->path, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+    auto sst = sstables::make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
     sst->load().get();
 
     auto hdr = sst->get_serialization_header();

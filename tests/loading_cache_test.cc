@@ -70,7 +70,7 @@ static future<> prepare() {
         return make_ready_future<>();
     }
 
-    return open_file_dma((boost::filesystem::path(get_tmpdir().path) / test_file_name.c_str()).c_str(), open_flags::create | open_flags::wo).then([] (file f) {
+    return open_file_dma((get_tmpdir().path() / test_file_name.c_str()).c_str(), open_flags::create | open_flags::wo).then([] (file f) {
         return do_with(std::move(f), [] (file& f) {
             auto size = test_string.size() + 1;
             auto aligned_size = align_up(size, f.disk_write_dma_alignment());
@@ -88,7 +88,7 @@ static future<> prepare() {
 }
 
 static future<sstring> loader(const int& k) {
-    return open_file_dma((boost::filesystem::path(get_tmpdir().path) / test_file_name.c_str()).c_str(), open_flags::ro).then([] (file f) -> future<sstring> {
+    return open_file_dma((get_tmpdir().path() / test_file_name.c_str()).c_str(), open_flags::ro).then([] (file f) -> future<sstring> {
         return do_with(std::move(f), [] (file& f) -> future<sstring> {
             auto size = align_up(test_string.size() + 1, f.disk_read_dma_alignment());
             return f.dma_read_exactly<char>(0, size).then([] (auto buf) {

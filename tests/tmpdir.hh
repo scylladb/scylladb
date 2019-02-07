@@ -19,40 +19,44 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <stdlib.h>
-#include <boost/filesystem.hpp>
-
 #pragma once
+
+#include <fmt/format.h>
+
+#include <seastar/util/std-compat.hh>
+
+#include "utils/UUID.hh"
 
 // Creates a new empty directory with arbitrary name, which will be removed
 // automatically when tmpdir object goes out of scope.
-struct tmpdir {
-    tmpdir() {
-        char tmp[] = "/tmp/tmpdir_XXXXXX";
-        auto * dir = ::mkdtemp(tmp);
-        if (dir == NULL) {
-            throw std::runtime_error("Could not create temp dir");
+class tmpdir {
+    seastar::compat::filesystem::path _path;
+
+private:
+    void remove() {
+        if (!_path.empty()) {
+            seastar::compat::filesystem::remove_all(_path);
         }
-        path = dir;
-        //std::cout << path << std::endl;
     }
-    tmpdir(tmpdir&& v)
-        : path(std::move(v.path)) {
-        assert(v.path.empty());
+
+public:
+    tmpdir()
+     : _path(seastar::compat::filesystem::temp_directory_path() /
+             fmt::format(FMT_STRING("scylla-{}"), utils::make_random_uuid())) {
+        seastar::compat::filesystem::create_directories(_path);
     }
+
+    tmpdir(tmpdir&& other) noexcept : _path(std::exchange(other._path, {})) { }
     tmpdir(const tmpdir&) = delete;
+    void operator=(tmpdir&& other) noexcept {
+        remove();
+        _path = std::exchange(other._path, {});
+    }
+    void operator=(const tmpdir&) = delete;
+
     ~tmpdir() {
-        if (!path.empty()) {
-            boost::filesystem::remove_all(path.c_str());
-        }
+        remove();
     }
-    tmpdir & operator=(tmpdir&& v) {
-        if (&v != this) {
-            this->~tmpdir();
-            new (this) tmpdir(std::move(v));
-        }
-        return *this;
-    }
-    tmpdir & operator=(const tmpdir&) = delete;
-    sstring path;
+
+    const seastar::compat::filesystem::path& path() const noexcept { return _path; }
 };

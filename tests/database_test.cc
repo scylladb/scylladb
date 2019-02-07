@@ -119,12 +119,12 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
     tmpdir data_dir;
     db::config db_cfg;
 
-    db_cfg.data_file_directories({data_dir.path}, db::config::config_source::CommandLine);
+    db_cfg.data_file_directories({data_dir.path().string()}, db::config::config_source::CommandLine);
 
     // Create incomplete sstables in test data directory
     sstring ks = "system";
     sstring cf = "local-7ad54392bcdd35a684174e047860b377";
-    sstring sst_dir = data_dir.path + "/" + ks + "/" + cf;
+    sstring sst_dir = (data_dir.path() / std::string_view(ks) / std::string_view(cf)).string();
 
     auto require_exist = [] (const sstring& name, bool should_exist) {
         auto exists = file_exists(name).get0();
