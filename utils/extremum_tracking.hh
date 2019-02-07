@@ -31,8 +31,6 @@ class extremum_tracker {
     bool _is_set = false;
     T _value;
 public:
-    extremum_tracker() {}
-
     explicit extremum_tracker(T default_value) {
         _default_value = default_value;
     }
