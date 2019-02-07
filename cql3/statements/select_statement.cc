@@ -356,7 +356,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     auto timeout = db::timeout_clock::now() + timeout_duration;
-    if (_selection->is_trivial() && !restrictions_need_filtering) {
+    if (_selection->is_trivial() && !restrictions_need_filtering && !_per_partition_limit) {
         return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p] (result_generator generator) {
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
