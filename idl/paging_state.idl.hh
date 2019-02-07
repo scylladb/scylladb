@@ -15,6 +15,7 @@ class paging_state {
     utils::UUID get_query_uuid() [[version 2.2]] = utils::UUID();
     std::unordered_map<dht::token_range, std::vector<utils::UUID>> get_last_replicas() [[version 2.2]] = std::unordered_map<dht::token_range, std::vector<utils::UUID>>();
     std::optional<db::read_repair_decision> get_query_read_repair_decision() [[version 2.3]] = std::nullopt;
+    uint32_t get_rows_fetched_for_last_partition() [[version 3.1]] = 0;
 };
 }
 }

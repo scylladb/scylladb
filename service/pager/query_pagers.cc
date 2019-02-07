@@ -90,6 +90,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             _cmd->is_first_page = false;
             _last_replicas = state->get_last_replicas();
             _query_read_repair_decision = state->get_query_read_repair_decision();
+            _rows_fetched_for_last_partition = state->get_rows_fetched_for_last_partition();
         } else {
             _cmd->query_uuid = utils::make_random_uuid();
             _cmd->is_first_page = true;
@@ -282,7 +283,7 @@ public:
             qr.query_result->ensure_counts();
             _stats.filtered_rows_read_total += *qr.query_result->row_count();
             handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
-                          cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _schema, _per_partition_limit)),
+                          cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _schema, _per_partition_limit, _last_pkey, _rows_fetched_for_last_partition)),
                           std::move(qr.query_result), page_size, now);
         });
     }
@@ -302,6 +303,7 @@ class query_pager::query_result_visitor : public Base {
 public:
     uint32_t total_rows = 0;
     uint32_t dropped_rows = 0;
+    uint32_t last_partition_row_count = 0;
     std::optional<partition_key> last_pkey;
     std::optional<clustering_key> last_ckey;
 
@@ -315,6 +317,7 @@ public:
         total_rows += std::max(row_count, 1u);
         last_pkey = key;
         last_ckey = { };
+        last_partition_row_count = row_count;
         visitor::accept_new_partition(key, row_count);
     }
     void accept_new_row(const clustering_key& key,
@@ -328,7 +331,9 @@ public:
         visitor::accept_new_row(static_row, row);
     }
     void accept_partition_end(const query::result_row_view& static_row) {
-        dropped_rows += visitor::accept_partition_end(static_row);
+        const uint32_t dropped = visitor::accept_partition_end(static_row);
+        dropped_rows += dropped;
+        last_partition_row_count -= dropped;
     }
 };
 
@@ -362,6 +367,14 @@ public:
             row_count = v.total_rows - v.dropped_rows;
             _max = _max - row_count;
             _exhausted = (v.total_rows < page_size && !results->is_short_read() && v.dropped_rows == 0) || _max == 0;
+            // If per partition limit is defined, we need to accumulate rows fetched for last partition key if the key matches
+            if (_cmd->slice.partition_row_limit() < std::numeric_limits<typeof(_cmd->slice.partition_row_limit())>::max()) {
+                if (_last_pkey && v.last_pkey && _last_pkey->equal(*_schema, *v.last_pkey)) {
+                    _rows_fetched_for_last_partition += v.last_partition_row_count;
+                } else {
+                    _rows_fetched_for_last_partition = v.last_partition_row_count;
+                }
+            }
             _last_pkey = v.last_pkey;
             _last_ckey = v.last_ckey;
         } else {
@@ -390,7 +403,7 @@ public:
     }
 
     ::shared_ptr<const paging_state> query_pager::state() const {
-        return ::make_shared<paging_state>(_last_pkey.value_or(partition_key::make_empty()), _last_ckey, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision);
+        return ::make_shared<paging_state>(_last_pkey.value_or(partition_key::make_empty()), _last_ckey, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision, _rows_fetched_for_last_partition);
     }
 
 }
@@ -432,6 +445,11 @@ bool service::pager::query_pagers::may_need_paging(const schema& s, uint32_t pag
         dht::partition_range_vector ranges,
         cql3::cql_stats& stats,
         ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions) {
+    // If partition row limit is applied to paging, we still need to fall back
+    // to filtering the results to avoid extraneous rows on page breaks.
+    if (!filtering_restrictions && cmd->slice.partition_row_limit() < std::numeric_limits<typeof(cmd->slice.partition_row_limit())>::max()) {
+        filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(s, true);
+    }
     if (filtering_restrictions) {
         return ::make_shared<filtering_query_pager>(std::move(s), std::move(selection), state,
                     options, std::move(cmd), std::move(ranges), std::move(filtering_restrictions), stats);

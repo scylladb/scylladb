@@ -88,6 +88,7 @@ protected:
     dht::partition_range_vector _ranges;
     paging_state::replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
+    uint32_t _rows_fetched_for_last_partition = 0;
 public:
     query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
