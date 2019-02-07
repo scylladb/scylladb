@@ -781,6 +781,7 @@ scylla_tests_dependencies = scylla_core + idls + [
     'tests/cql_assertions.cc',
     'tests/result_set_assertions.cc',
     'tests/mutation_source_test.cc',
+    'tests/data_model.cc',
 ]
 
 deps = {

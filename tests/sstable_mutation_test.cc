@@ -43,6 +43,8 @@
 #include "simple_schema.hh"
 #include "tests/sstable_utils.hh"
 #include "tests/make_random_string.hh"
+#include "data_model.hh"
+#include "random-utils.hh"
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -395,7 +397,7 @@ mutation_source make_sstable_mutation_source(schema_ptr s, sstring dir, std::vec
         mt->apply(m);
     }
 
-    sst->write_components(mt->make_flat_reader(s), mutations.size(), s, cfg).get();
+    sst->write_components(mt->make_flat_reader(s), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
 
     return as_mutation_source(sst);
@@ -1444,7 +1446,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                 created_with_base_schema = sstables::make_sstable(base, dir->path, gen, version, sstables::sstable::format_types::big);
                 sstable_writer_config cfg;
                 cfg.large_data_handler = &nop_lp_handler;
-                created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, cfg).get();
+                created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, cfg, mt->get_encoding_stats()).get();
                 created_with_base_schema->load().get();
 
                 created_with_changed_schema = sstables::make_sstable(changed, dir->path, gen, version, sstables::sstable::format_types::big);
@@ -1474,4 +1476,109 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
             mr.produces_end_of_stream();
         }
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
+    auto dir = make_lw_shared<tmpdir>();
+    storage_service_for_tests ssft;
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+
+    auto random_int32_value = [] {
+        return int32_type->decompose(tests::random::get_int<int32_t>());
+    };
+
+    auto td = tests::data_model::table_description({ { "pk", int32_type } }, { { "ck", utf8_type } });
+
+    auto td1 = td;
+    td1.add_static_column("s1", int32_type);
+    td1.add_regular_column("v1", int32_type);
+    td1.add_regular_column("v2", int32_type);
+    auto built_schema = td1.build();
+    auto s = built_schema.schema;
+
+    auto md1 = tests::data_model::mutation_description({ to_bytes("pk1") });
+    md1.add_clustered_row_marker({ to_bytes("ck1") }, -10);
+    md1.add_clustered_cell({ to_bytes("ck1") }, "v1", random_int32_value());
+    auto m1 = md1.build(s);
+
+    auto now = gc_clock::now();
+    auto ttl = gc_clock::duration(std::chrono::hours(1));
+    auto expiry_time = now + ttl;
+
+    auto md2 = tests::data_model::mutation_description({ to_bytes("pk2") });
+    md2.add_static_expiring_cell("s1", random_int32_value(), ttl, expiry_time);
+    auto m2 = md2.build(s);
+
+    auto mt = make_lw_shared<memtable>(s);
+    mt->apply(m1);
+    mt->apply(m2);
+
+    auto md1_overwrite = tests::data_model::mutation_description({ to_bytes("pk1") });
+    md1_overwrite.add_clustered_row_marker({ to_bytes("ck1") }, 10);
+    auto m1ow = md1_overwrite.build(s);
+    mt->apply(m1ow);
+
+    {
+        // SSTable class has way too many responsibilities. In particular, it mixes the reading and
+        // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
+        // carries over that wouldn't normally be read from disk.
+        auto sst = sstables::make_sstable(s, dir->path, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+        sstable_writer_config cfg;
+        cfg.large_data_handler = &nop_lp_handler;
+        sst->write_components(mt->make_flat_reader(s), 2, s, cfg, mt->get_encoding_stats()).get();
+    }
+
+    auto sst = sstables::make_sstable(s, dir->path, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+    sst->load().get();
+
+    auto hdr = sst->get_serialization_header();
+    BOOST_CHECK_EQUAL(hdr.static_columns.elements.size(), 1);
+    BOOST_CHECK_EQUAL(hdr.static_columns.elements[0].name.value, to_bytes("s1"));
+    BOOST_CHECK_EQUAL(hdr.regular_columns.elements.size(), 2);
+    BOOST_CHECK(hdr.regular_columns.elements[0].name.value == to_bytes("v1"));
+    BOOST_CHECK(hdr.regular_columns.elements[1].name.value == to_bytes("v2"));
+
+    BOOST_CHECK_EQUAL(hdr.get_min_timestamp(), -10);
+    BOOST_CHECK_EQUAL(hdr.get_min_local_deletion_time(), expiry_time.time_since_epoch().count());
+    BOOST_CHECK_EQUAL(hdr.get_min_ttl(), ttl.count());
+
+    auto stats = sst->get_encoding_stats_for_compaction();
+    BOOST_CHECK(stats.min_local_deletion_time == expiry_time);
+    BOOST_CHECK_EQUAL(stats.min_timestamp, 10);
+    // Like Cassandra even if a row marker is not expiring we update the metadata with NO_TTL value
+    // which is 0.
+    BOOST_CHECK(stats.min_ttl == gc_clock::duration(0));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merging_encoding_stats) {
+    auto ecc = encoding_stats_collector{};
+    auto ec1 = encoding_stats{};
+
+    ecc.update(ec1);
+    auto ec = ecc.get();
+    BOOST_CHECK_EQUAL(ec.min_timestamp, ec1.min_timestamp);
+    BOOST_CHECK(ec.min_local_deletion_time == ec1.min_local_deletion_time);
+    BOOST_CHECK(ec.min_ttl == ec1.min_ttl);
+
+    ec1.min_timestamp = -10;
+    ec1.min_local_deletion_time = gc_clock::now();
+    ec1.min_ttl = gc_clock::duration(std::chrono::hours(1));
+
+    ecc = encoding_stats_collector{};
+    ecc.update(ec1);
+    ec = ecc.get();
+    BOOST_CHECK_EQUAL(ec.min_timestamp, ec1.min_timestamp);
+    BOOST_CHECK(ec.min_local_deletion_time == ec1.min_local_deletion_time);
+    BOOST_CHECK(ec.min_ttl == ec1.min_ttl);
+
+    auto ec2 = encoding_stats{};
+    ec2.min_timestamp = -20;
+    ec2.min_local_deletion_time = ec1.min_local_deletion_time - std::chrono::seconds(1);
+    ec2.min_ttl = gc_clock::duration(std::chrono::hours(2));
+    ecc.update(ec2);
+
+    ec = ecc.get();
+    BOOST_CHECK_EQUAL(ec.min_timestamp, -20);
+    BOOST_CHECK(ec.min_local_deletion_time == ec2.min_local_deletion_time);
+    BOOST_CHECK(ec.min_ttl == ec1.min_ttl);
 }

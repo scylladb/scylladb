@@ -3039,11 +3039,16 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
 }
 
 static void compare_files(sstring filename1, sstring filename2) {
-    std::ifstream ifs1(filename1);
-    std::ifstream ifs2(filename2);
+    std::ifstream ifs1;
+    ifs1.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    ifs1.open(filename1, std::ios_base::in | std::ios_base::binary);
 
-    std::istream_iterator<char> b1(ifs1), e1;
-    std::istream_iterator<char> b2(ifs2), e2;
+    std::ifstream ifs2;
+    ifs2.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    ifs2.open(filename2);
+
+    std::istreambuf_iterator<char> b1(ifs1), e1;
+    std::istreambuf_iterator<char> b2(ifs2), e2;
     BOOST_CHECK_EQUAL_COLLECTIONS(b1, e1, b2, e2);
 }
 
