@@ -90,6 +90,24 @@ struct view_update_backlog_timestamped {
 struct allow_hints_tag {};
 using allow_hints = bool_class<allow_hints_tag>;
 
+
+class query_ranges_to_vnodes_generator {
+    schema_ptr _s;
+    dht::partition_range_vector _ranges;
+    dht::partition_range_vector::iterator _i; // iterator to current range in _ranges
+    bool _local;
+    locator::token_metadata& _tm;
+    void process_one_range(size_t n, dht::partition_range_vector& ranges);
+public:
+    query_ranges_to_vnodes_generator(schema_ptr s, dht::partition_range_vector ranges, bool local = false);
+    query_ranges_to_vnodes_generator(locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
+    query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;
+    query_ranges_to_vnodes_generator(query_ranges_to_vnodes_generator&&) = default;
+    // generate next 'n' vnodes, may return less than requested number of ranges
+    dht::partition_range_vector operator()(size_t n);
+    bool empty() const;
+};
+
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
