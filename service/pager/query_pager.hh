@@ -75,6 +75,7 @@ protected:
     const bool _has_clustering_keys;
     bool _exhausted = false;
     uint32_t _max;
+    uint32_t _per_partition_limit;
 
     std::optional<partition_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
@@ -155,6 +156,8 @@ protected:
     virtual uint32_t max_rows_to_fetch(uint32_t page_size) {
         return std::min(_max, page_size);
     }
+
+    virtual void maybe_adjust_per_partition_limit(uint32_t page_size) const { }
 };
 
 }

@@ -70,6 +70,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                     dht::partition_range_vector ranges)
                     : _has_clustering_keys(has_clustering_keys(*s, *cmd))
                     , _max(cmd->row_limit)
+                    , _per_partition_limit(cmd->slice.partition_row_limit())
                     , _schema(std::move(s))
                     , _selection(selection)
                     , _state(state)
@@ -212,6 +213,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                     query::partition_slice::option::send_clustering_key>();
         }
         _cmd->row_limit = max_rows;
+        maybe_adjust_per_partition_limit(page_size);
 
         qlogger.debug("Fetching {}, page size={}, max_rows={}",
                 _cmd->cf_id, page_size, max_rows
@@ -280,13 +282,17 @@ public:
             qr.query_result->ensure_counts();
             _stats.filtered_rows_read_total += *qr.query_result->row_count();
             handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
-                          cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _cmd->slice.partition_row_limit())),
+                          cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _per_partition_limit)),
                           std::move(qr.query_result), page_size, now);
         });
     }
 protected:
     virtual uint32_t max_rows_to_fetch(uint32_t page_size) override {
         return page_size;
+    }
+
+    virtual void maybe_adjust_per_partition_limit(uint32_t page_size) const override {
+        _cmd->slice.set_partition_row_limit(page_size);
     }
 };
 
