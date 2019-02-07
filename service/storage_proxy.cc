@@ -2966,8 +2966,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
         lw_shared_ptr<query::read_command> cmd,
         db::consistency_level cl,
-        dht::partition_range_vector::iterator&& i,
-        dht::partition_range_vector&& ranges,
+        query_ranges_to_vnodes_generator&& ranges_to_vnodes,
         int concurrency_factor,
         tracing::trace_state_ptr trace_state,
         uint32_t remaining_row_count,
@@ -2976,7 +2975,6 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     std::vector<::shared_ptr<abstract_read_executor>> exec;
-    auto concurrent_fetch_starting_index = i;
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
@@ -2988,7 +2986,10 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     };
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
-    while (i != ranges.end() && std::distance(concurrent_fetch_starting_index, i) < concurrency_factor) {
+    dht::partition_range_vector ranges = ranges_to_vnodes(concurrency_factor);
+    dht::partition_range_vector::iterator i = ranges.begin();
+
+    while (i != ranges.end()) {
         dht::partition_range& range = *i;
         std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
         std::vector<gms::inet_address> merged_preferred_replicas = preferred_replicas_for_range(*i);
@@ -3082,8 +3083,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     return f.then([p,
             exec = std::move(exec),
             results = std::move(results),
-            i = std::move(i),
-            ranges = std::move(ranges),
+            ranges_to_vnodes = std::move(ranges_to_vnodes),
             cl,
             cmd,
             concurrency_factor,
@@ -3097,7 +3097,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         remaining_row_count -= result->row_count().value();
         remaining_partition_count -= result->partition_count().value();
         results.emplace_back(std::move(result));
-        if (i == ranges.end() || !remaining_row_count || !remaining_partition_count) {
+        if (ranges_to_vnodes.empty() || !remaining_row_count || !remaining_partition_count) {
             auto used_replicas = replicas_per_token_range();
             for (auto& e : exec) {
                 // We add used replicas in separate per-vnode entries even if
@@ -3114,7 +3114,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         } else {
             cmd->row_limit = remaining_row_count;
             cmd->partition_limit = remaining_partition_count;
-            return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i), std::move(ranges),
+            return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(ranges_to_vnodes),
                     concurrency_factor * 2, std::move(trace_state), remaining_row_count, remaining_partition_count, std::move(preferred_replicas));
         }
     }).handle_exception([p] (std::exception_ptr eptr) {
@@ -3130,18 +3130,10 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         storage_proxy::coordinator_query_options query_options) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-    dht::partition_range_vector ranges;
 
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
     // expensive in clusters with vnodes)
-    if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
-        ranges = std::move(partition_ranges);
-    } else {
-        for (auto&& r : partition_ranges) {
-            auto restricted_ranges = get_restricted_ranges(*schema, std::move(r));
-            std::move(restricted_ranges.begin(), restricted_ranges.end(), std::back_inserter(ranges));
-        }
-    }
+    query_ranges_to_vnodes_generator ranges_to_vnodes(schema, std::move(partition_ranges), ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local);
 
     // estimate_result_rows_per_range() is currently broken, and this is not needed
     // when paging is available in any case
@@ -3158,9 +3150,9 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 #endif
 
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
-    results.reserve(ranges.size()/concurrency_factor + 1);
-    slogger.debug("Estimated result rows per range: {}; requested rows: {}, ranges.size(): {}; concurrent range requests: {}",
-            result_rows_per_range, cmd->row_limit, ranges.size(), concurrency_factor);
+
+    slogger.debug("Estimated result rows per range: {}; requested rows: {}, concurrent range requests: {}",
+            result_rows_per_range, cmd->row_limit, concurrency_factor);
 
     // The call to `query_partition_key_range_concurrent()` below
     // updates `cmd` directly when processing the results. Under
@@ -3179,8 +3171,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             std::move(results),
             cmd,
             cl,
-            ranges.begin(),
-            std::move(ranges),
+            std::move(ranges_to_vnodes),
             concurrency_factor,
             std::move(query_options.trace_state),
             cmd->row_limit,
