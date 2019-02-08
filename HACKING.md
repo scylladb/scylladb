@@ -45,9 +45,7 @@ The full suite of options for project configuration is available via
 $ ./configure.py --help
 ```
 
-The most important options are:
-
-- `--mode={release,debug,all}`: Debug mode enables [AddressSanitizer](https://github.com/google/sanitizers/wiki/AddressSanitizer) and allows for debugging with tools like GDB. Debugging builds are generally slower and generate much larger object files than release builds.
+The most important option is:
 
 - `--{enable,disable}-dpdk`: [DPDK](http://dpdk.org/) is a set of libraries and drivers for fast packet processing. During development, it's not necessary to enable support even if it is supported by your platform.
 
@@ -58,6 +56,22 @@ To save time -- for instance, to avoid compiling all unit tests -- you can also 
 ```bash
 $ ninja-build build/release/tests/schema_change_test
 ```
+
+You can also specify a single mode. For example
+
+```bash
+$ ninja-build release
+```
+
+Will build everytihng in release mode. The valid modes are
+
+* Debug: Enables [AddressSanitizer](https://github.com/google/sanitizers/wiki/AddressSanitizer)
+  and other sanity checks. It has no optimizations, which allows for debugging with tools like
+  GDB. Debugging builds are generally slower and generate much larger object files than release builds.
+* Release: Fewer checks and more optimizations. It still has debug info.
+* Dev: No optimizations or debug info. The objective is to compile and link as fast as possible.
+  This is useful for the first iterations of a patch.
+
 
 Note that by default unit tests binaries are stripped so they can't be used with gdb or seastar-addr2line.
 To include debug information in the unit test binary, build the test binary with a `_g` suffix. For example,
