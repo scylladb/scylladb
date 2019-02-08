@@ -101,11 +101,11 @@ public:
                          const query_options& options,
                          gc_clock::time_point now) const override {
         for (auto&& range : bounds_ranges(options)) {
-            if (!range.contains(ckey, clustering_key_prefix::prefix_equal_tri_compare(schema))) {
-                return false;
+            if (range.contains(ckey, clustering_key_prefix::prefix_equal_tri_compare(schema))) {
+                return true;
             }
         }
-        return true;
+        return false;
     }
 
 protected:
