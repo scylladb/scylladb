@@ -3147,7 +3147,7 @@ static future<>
 maybe_delete_large_data_entry(shared_sstable sst, const db::large_data_handler& large_data_handler)
 {
     auto name = sst->get_filename();
-    return large_data_handler.maybe_delete_large_partitions_entry(*sst->get_schema(), name, sst->data_size())
+    return large_data_handler.maybe_delete_large_data_entries(*sst->get_schema(), name, sst->data_size())
             .then_wrapped([name = std::move(name)] (future<> f) {
         if (f.failed()) {
             // Just log and ignore failures to delete large data entries.
