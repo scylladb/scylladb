@@ -53,7 +53,8 @@ atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value) {
             throw marshal_exception("encountered a local shard in a counter cell");
         }
     }
-    auto shard_count = value.size() / shard_size;
+    auto header_length = (size_t(header_size) + 1) * sizeof(int16_t);
+    auto shard_count = (value.size() - header_length) / shard_size;
     if (shard_count != size_t(header_size)) {
         throw marshal_exception("encountered remote shards in a counter cell");
     }
