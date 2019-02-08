@@ -66,7 +66,7 @@ future<> cql_table_large_data_handler::delete_large_partitions_entry(const schem
         });
 }
 
-void cql_table_large_data_handler::record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
+future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, uint64_t row_size) const {
     const schema &s = *sst.get_schema();
     if (clustering_key) {
@@ -76,5 +76,6 @@ void cql_table_large_data_handler::record_large_rows(const sstables::sstable& ss
         large_data_logger.warn("Writing large static row {}/{}: {} ({} bytes)", s.ks_name(), s.cf_name(),
                 partition_key.to_partition_key(s).with_schema(s), row_size);
     }
+    return make_ready_future<>();
 }
 }

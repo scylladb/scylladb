@@ -4980,10 +4980,11 @@ struct large_row_handler : public db::large_data_handler {
         : large_data_handler(std::numeric_limits<uint64_t>::max(), threshold)
         , callback(std::move(callback)) {}
 
-    virtual void record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
+    virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
         const schema_ptr s = sst.get_schema();
         callback(*s, partition_key, clustering_key, row_size);
+        return make_ready_future<>();
     }
 
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name,
