@@ -716,12 +716,12 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         ).get();
 
         auto msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=true ALLOW FILTERING;").get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(3), boolean_type->decompose(true)},
         });
 
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false ALLOW FILTERING;").get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)},
             { int32_type->decompose(2), boolean_type->decompose(false)},
             { int32_type->decompose(4), boolean_type->decompose(false)},
@@ -732,14 +732,14 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=true LIMIT 1 ALLOW FILTERING;", std::move(qo)).get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(3), boolean_type->decompose(true)},
         });
 
         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 5 ALLOW FILTERING;", std::move(qo)).get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)},
             { int32_type->decompose(2), boolean_type->decompose(false)},
             { int32_type->decompose(4), boolean_type->decompose(false)},
@@ -750,7 +750,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 2 ALLOW FILTERING;", std::move(qo)).get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)},
             { int32_type->decompose(2), boolean_type->decompose(false)}
         });
@@ -758,7 +758,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 3 ALLOW FILTERING;", std::move(qo)).get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)},
             { int32_type->decompose(2), boolean_type->decompose(false)},
             { int32_type->decompose(4), boolean_type->decompose(false)}
@@ -768,7 +768,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
                 cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 3 ALLOW FILTERING;", std::move(qo)).get0();
         auto paging_state = extract_paging_state(msg);
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)}
         });
 
@@ -781,7 +781,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
             rows_fetched = count_rows_fetched(msg);
             paging_state = extract_paging_state(msg);
         }
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(2), boolean_type->decompose(false)}
         });
 
@@ -795,7 +795,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
                 paging_state = extract_paging_state(msg);
             }
         }
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(4), boolean_type->decompose(false)}
         });
 
@@ -815,7 +815,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
             }
         }
         BOOST_REQUIRE_EQUAL(rows_fetched, 1U);
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(4), boolean_type->decompose(false)}
         });
     });
