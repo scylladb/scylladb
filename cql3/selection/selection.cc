@@ -45,6 +45,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/result_set.hh"
+#include "cql3/restrictions/multi_column_restriction.hh"
 
 namespace cql3 {
 
@@ -348,6 +349,13 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
 
     if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0 || _per_partition_remaining == 0) {
         return false;
+    }
+
+    auto clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
+    if (clustering_columns_restrictions->is_multi_column()) {
+        auto multi_column_restriction = dynamic_pointer_cast<cql3::restrictions::multi_column_restriction>(clustering_columns_restrictions);
+        clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
+        return multi_column_restriction->is_satisfied_by(*_schema, ckey, _options);
     }
 
     auto static_row_iterator = static_row.iterator();
