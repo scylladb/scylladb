@@ -884,7 +884,8 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
 
     // avoid self-reporting
-    if (s.ks_name() == "system" && s.cf_name() == db::system_keyspace::LARGE_PARTITIONS) {
+    if (s.ks_name() == "system" &&
+            (s.cf_name() == db::system_keyspace::LARGE_PARTITIONS || s.cf_name() == db::system_keyspace::LARGE_ROWS)) {
         cfg.large_data_handler = db.get_nop_large_data_handler();
     } else {
         cfg.large_data_handler = db.get_large_data_handler();
