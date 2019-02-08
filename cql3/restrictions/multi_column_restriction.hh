@@ -46,6 +46,7 @@
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "cql3/restrictions/single_column_primary_key_restrictions.hh"
+#include "cql3/constants.hh"
 
 namespace cql3 {
 
