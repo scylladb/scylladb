@@ -39,15 +39,19 @@ future<> large_data_handler::maybe_update_large_partitions(const sstables::sstab
 
 logging::logger cql_table_large_data_handler::large_data_logger("large_data");
 
+template <typename T> static std::string key_to_str(const T& key, const schema& s) {
+    std::ostringstream oss;
+    oss << key.with_schema(s);
+    return oss.str();
+}
+
 future<> cql_table_large_data_handler::update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& key, uint64_t partition_size) const {
     static const sstring req = format("INSERT INTO system.{} (keyspace_name, table_name, sstable_name, partition_size, partition_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?) USING TTL 2592000",
             db::system_keyspace::LARGE_PARTITIONS);
     auto ks_name = s.ks_name();
     auto cf_name = s.cf_name();
-    std::ostringstream oss;
-    oss << key.to_partition_key(s).with_schema(s);
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
-    auto key_str = oss.str();
+    auto key_str = key_to_str(key.to_partition_key(s), s);
     return db::execute_cql(req, ks_name, cf_name, sstable_name, int64_t(partition_size), key_str, timestamp)
     .then_wrapped([ks_name, cf_name, key_str, partition_size](auto&& f) {
         try {
