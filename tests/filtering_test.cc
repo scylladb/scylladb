@@ -199,6 +199,114 @@ SEASTAR_TEST_CASE(test_allow_filtering_pk_ck) {
     });
 }
 
+SEASTAR_TEST_CASE(test_allow_filtering_multi_column) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY ((a, b), c, d));").get();
+        e.require_table_exists("ks", "t").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (1, 1, 1, 1, 15)").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (1, 1, 1, 2, 18)").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (1, 2, 1, 2, 25)").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (1, 2, 1, 3, 35)").get();
+
+        auto msg = e.execute_cql("SELECT * FROM t WHERE (c, d) = (1, 2) ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(18),
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(25),
+            },
+        });
+
+        msg = e.execute_cql("SELECT * FROM t WHERE (c, d) IN ((1, 2), (1,3), (1,4)) ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(18),
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(25),
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1),
+                int32_type->decompose(3),
+                int32_type->decompose(35),
+            },
+        });
+
+        msg = e.execute_cql("SELECT * FROM t WHERE (c, d) < (1, 3) ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(15),
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(18),
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(25),
+            },
+        });
+
+        msg = e.execute_cql("SELECT * FROM t WHERE (c, d) < (1, 3) AND (c, d) > (1, 1) ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(18),
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(25),
+            },
+        });
+
+        // NOTICE(sarna): Currently multi-column restrictions can be applied to clustering columns only,
+        // both in Scylla and C*. Cases below check that when we encounter a multi-column restriction
+        // on different types of columns we fail in a sane way. If more general multi-column restrictions
+        // that accept more types of columns are implemented, these cases should be replaced.
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE (a, b) < (1,2) ALLOW FILTERING").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE (b, c) < (1,2) ALLOW FILTERING").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE (d, e) < (1,2) ALLOW FILTERING").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE (a, b, c) IN ((1,2,3),(4,5,6)) ALLOW FILTERING").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE (a, c) = (3,4) ALLOW FILTERING").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE (b, d) > (4,5) ALLOW FILTERING").get(), exceptions::invalid_request_exception);
+    });
+}
+
 SEASTAR_TEST_CASE(test_allow_filtering_clustering_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (k int, c int, v int, PRIMARY KEY (k, c));").get();
