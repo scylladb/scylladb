@@ -57,6 +57,7 @@ fedora_packages=(
     python3-requests
     python3-pyudev
     python3-setuptools
+    python3-magic
     dnf-utils
 )
 

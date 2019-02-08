@@ -32,6 +32,7 @@ import shutil
 import sys
 import tarfile
 from tempfile import mkstemp
+import magic
 
 def should_copy(f):
     '''Given a file, returns whether or not we are interested in copying this file.
@@ -96,10 +97,13 @@ def fix_python_binary(ar, binpath):
                                            patched_binary], universal_newlines=True).splitlines()[0]
     ar.add(os.path.realpath(interpreter), arcname=os.path.join("libexec", "ld.so"))
     ar.add(patched_binary, arcname=os.path.join("libexec", pyname + ".bin"))
+    os.remove(patched_binary)
 
-def fix_dynload(ar, binpath, targetpath):
-    patched_binary = fix_binary(ar, binpath, '$ORIGIN/../../')
-    ar.add(patched_binary, arcname=targetpath, recursive=False)
+def fix_sharedlib(ar, binpath, targetpath):
+    relpath =  os.path.join(os.path.relpath("lib64", targetpath), "lib64")
+    patched_binary = fix_binary(ar, binpath, '$ORIGIN/' + relpath)
+    ar.add(patched_binary, arcname=targetpath)
+    os.remove(patched_binary)
 
 def gen_python_thunk(ar, pybin):
     base_thunk='''\
@@ -151,13 +155,15 @@ def copy_file_to_python_env(ar, f):
         # the directory structure, very likely links that transverse paths will break.
         if os.path.islink(f) and os.readlink(f) != os.path.basename(os.readlink(f)):
             ar.add(os.path.realpath(f), arcname=libfile)
-        elif os.path.dirname(f).endswith("lib-dynload"):
-            fix_dynload(ar, f, libfile)
         else:
-            # in case this is a directory that is listed, we don't want to include everything that is in that directory
-            # for instance, the python3 package will own site-packages, but other packages that we are not packaging could have
-            # filled it with stuff.
-            ar.add(f, arcname=libfile, recursive=False)
+            m = magic.detect_from_filename(f)
+            if m and m.mime_type == 'application/x-sharedlib':
+                fix_sharedlib(ar, f, libfile)
+            else:
+                # in case this is a directory that is listed, we don't want to include everything that is in that directory
+                # for instance, the python3 package will own site-packages, but other packages that we are not packaging could have
+                # filled it with stuff.
+                ar.add(f, arcname=libfile, recursive=False)
 
 def filter_basic_packages(package):
     '''Returns true if this package should be filtered out. We filter out packages that are too basic like the Fedora repos,
