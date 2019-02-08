@@ -78,6 +78,7 @@ public:
 
 protected:
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
+    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const = 0;
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const = 0;
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const = 0;
 };
@@ -94,6 +95,7 @@ protected:
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override;
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
+    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const override;
 };
 
 class nop_large_data_handler : public large_data_handler {
@@ -110,6 +112,9 @@ public:
 
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
+        return make_ready_future<>();
+    }
+    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const override {
         return make_ready_future<>();
     }
 };

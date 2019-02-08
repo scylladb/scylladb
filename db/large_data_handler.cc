@@ -78,4 +78,8 @@ future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable
     }
     return make_ready_future<>();
 }
+
+future<> cql_table_large_data_handler::delete_large_rows_entries(const schema& s, const sstring& sstable_name) const {
+    return make_ready_future<>();
+}
 }

@@ -4992,6 +4992,9 @@ struct large_row_handler : public db::large_data_handler {
         return make_ready_future<>();
     }
 
+    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const override {
+        return make_ready_future<>();
+    }
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override {
         return make_ready_future<>();
     }
