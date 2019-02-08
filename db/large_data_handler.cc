@@ -72,18 +72,42 @@ future<> cql_table_large_data_handler::delete_large_partitions_entry(const schem
 
 future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, uint64_t row_size) const {
-    const schema &s = *sst.get_schema();
-    if (clustering_key) {
-        large_data_logger.warn("Writing large row {}/{}: {} {} ({} bytes)", s.ks_name(), s.cf_name(),
-                partition_key.to_partition_key(s).with_schema(s), clustering_key->with_schema(s), row_size);
-    } else {
-        large_data_logger.warn("Writing large static row {}/{}: {} ({} bytes)", s.ks_name(), s.cf_name(),
-                partition_key.to_partition_key(s).with_schema(s), row_size);
-    }
-    return make_ready_future<>();
+    static const sstring req =
+            format("INSERT INTO system.{} (keyspace_name, table_name, sstable_name, row_size, partition_key, "
+                   "clustering_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?, ?) USING TTL 2592000",
+                    db::system_keyspace::LARGE_ROWS);
+    auto f = [clustering_key, &partition_key, &sst, row_size] {
+        const schema &s = *sst.get_schema();
+        auto sstable_name = sst.get_filename();
+        auto ks_name = s.ks_name();
+        auto cf_name = s.cf_name();
+        auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
+        std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
+        if (clustering_key) {
+            std::string ck_str = key_to_str(*clustering_key, s);
+            large_data_logger.warn("Writing large row {}/{}: {} {} ({} bytes)", ks_name, cf_name, pk_str, ck_str, row_size);
+            return db::execute_cql(req, ks_name, cf_name, sstable_name, int64_t(row_size), pk_str, ck_str, timestamp);
+        } else {
+            large_data_logger.warn("Writing large static row {}/{}: {} ({} bytes)", ks_name, cf_name, pk_str, row_size);
+            return db::execute_cql(req, ks_name, cf_name, sstable_name, int64_t(row_size), pk_str, nullptr, timestamp);
+        }
+    };
+    return f().discard_result().handle_exception([&sst] (std::exception_ptr ep) {
+        const schema &s = *sst.get_schema();
+        large_data_logger.warn("Failed to add a record to {}: ks = {}, table = {}, sst = {} exception = {}",
+                db::system_keyspace::LARGE_ROWS, s.ks_name(), s.cf_name(), sst.get_filename(), ep);
+    });
 }
 
 future<> cql_table_large_data_handler::delete_large_rows_entries(const schema& s, const sstring& sstable_name) const {
-    return make_ready_future<>();
+    static const sstring req =
+            format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?",
+                    db::system_keyspace::LARGE_ROWS);
+    return db::execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
+            .discard_result()
+            .handle_exception([&s, sstable_name] (std::exception_ptr ep) {
+                large_data_logger.warn("Failed to drop entries from {}: ks = {}, table = {}, sst = {} exception = {}",
+                        db::system_keyspace::LARGE_ROWS, s.ks_name(), s.cf_name(), sstable_name, ep);
+            });
 }
 }

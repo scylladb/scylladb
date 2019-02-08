@@ -68,10 +68,18 @@ public:
     future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
 
     future<> maybe_delete_large_data_entries(const schema& s, const sstring& filename, uint64_t data_size) const {
-        if (!_stopped && __builtin_expect(data_size > _partition_threshold_bytes, false)) {
-            return delete_large_partitions_entry(s, filename);
+        if (_stopped) {
+            return make_ready_future<>();
         }
-        return make_ready_future<>();
+        future<> large_partitions = make_ready_future<>();
+        if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
+            large_partitions = delete_large_partitions_entry(s, filename);
+        }
+        future<> large_rows = make_ready_future<>();
+        if (__builtin_expect(data_size > _row_threshold_bytes, false)) {
+            large_rows = delete_large_rows_entries(s, filename);
+        }
+        return when_all(std::move(large_partitions), std::move(large_rows)).discard_result();
     }
 
     const large_data_handler::stats& stats() const { return _stats; }
