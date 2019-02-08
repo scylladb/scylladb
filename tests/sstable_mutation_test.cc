@@ -1582,3 +1582,50 @@ SEASTAR_THREAD_TEST_CASE(test_merging_encoding_stats) {
     BOOST_CHECK(ec.min_local_deletion_time == ec2.min_local_deletion_time);
     BOOST_CHECK(ec.min_ttl == ec1.min_ttl);
 }
+
+
+// Reproducer for #4206
+SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
+    auto dir = tmpdir();
+    storage_service_for_tests ssft;
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+
+    auto s = schema_builder("ks", "counter_test")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("c1", counter_type)
+        .build();
+
+    auto pk = partition_key::from_single_value(*s, int32_type->decompose(0));
+    auto ck = clustering_key::from_single_value(*s, int32_type->decompose(0));
+
+    auto& col = *s->get_column_definition(utf8_type->decompose(sstring("c1")));
+
+    auto ids = std::vector<counter_id>();
+    for (auto i = 0; i < 128; i++) {
+        ids.emplace_back(counter_id(utils::make_random_uuid()));
+    }
+    std::sort(ids.begin(), ids.end());
+
+    mutation m(s, pk);
+    counter_cell_builder ccb;
+    for (auto id : ids) {
+        ccb.add_shard(counter_shard(id, 1, 1));
+    }
+    m.set_clustered_cell(ck, col, ccb.build(api::new_timestamp()));
+
+    auto mt = make_lw_shared<memtable>(s);
+    mt->apply(m);
+
+    for (const auto version : all_sstable_versions) {
+        auto sst = sstables::make_sstable(s, dir.path, 1, version, sstables::sstable::format_types::big);
+        sstable_writer_config cfg;
+        cfg.large_data_handler = &nop_lp_handler;
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+        sst->load().get();
+
+        assert_that(sst->as_mutation_source().make_reader(s))
+            .produces(m)
+            .produces_end_of_stream();
+    }
+}
