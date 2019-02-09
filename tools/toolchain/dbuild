@@ -24,6 +24,7 @@ fi
 docker run \
        --sig-proxy=true \
        --rm \
+       --network host \
        -u "$(id -u):$(id -g)" \
        "${group_args[@]}" \
        --cap-add SYS_PTRACE \
