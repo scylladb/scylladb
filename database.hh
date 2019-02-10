@@ -90,6 +90,7 @@
 #include "db/large_data_handler.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>
+#include "disk-error-handler.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -514,6 +515,11 @@ public:
         auto it = _sstables_staging.find(generation);
         return it != _sstables_staging.end() ? it->second : nullptr;
     }
+    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
+            io_error_handler_gen error_handler_gen);
+    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
+    sstables::shared_sstable make_sstable(sstring dir);
+    sstables::shared_sstable make_sstable();
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
