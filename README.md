@@ -12,7 +12,11 @@ $ # Rejoice!
 ```
 
 Please see [HACKING.md](HACKING.md) for detailed information on building and developing Scylla.
+
 **Note**: GCC >= 8.1.1 is require to compile Scylla.
+
+**Note**: See [frozen toolchain](tools/toolchain/README.md) for a way to build and run
+   on an older distribution.
 
 ## Running Scylla
 

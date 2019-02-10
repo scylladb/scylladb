@@ -4,14 +4,18 @@ While we aim to build out-of-the-box on recent distributions, this isn't
 always possible and not everyone runs a recent distribution. For this reason
 a version-controlled toolchain is provided as a docker image.
 
-## Obtaining the current toolchain
+## Quick start
 
-The toolchain is stored in a file called `tools/toolchain/image`. To access
-the toolchain, pull that image:
+If your workstation supports docker (without requiring sudo), you can build and
+run Scylla easily without setting up the build dependencies beforehand:
 
-    docker pull $(<tools/toolchain/image)
+    ./tools/toolchain/dbuild ./configure.py
+    ./tools/toolchain/dbuild ninja build/release/scylla
+    ./tools/toolchain/dbuild ./build/release/scylla --developer-mode 1
 
-A helper script `dbuild` allows you to run command in that toolchain with
+## The `dbuild` script
+
+The script `dbuild` allows you to run any in that toolchain with
 the working directory mounted:
 
     ./tools/toolchain/dbuild ./configure.py
@@ -24,7 +28,32 @@ set environment variables:
 
     ./tools/toolchain/dbuild -v /var/cache/ccache:/var/cache/ccache -- ninja
 
+The script also works from other directories, so if you have `scylla-ccm` checked
+out alongside scylla, you can write
+
+
+    ../scylla/tools/toolchain/dbuild ./ccm ...
+
+You will have access to both scylla and scylla-ccm in the container.
+
+Interactive mode is also supported, using the docker `-i` and `-t` flags:
+
+    ./tools/toolchain/dbuild -it -- bash
+
+this will drop you into a shell, with all of the toolchain accessible.
+
+## Obtaining the current toolchain
+
+The toolchain is stored in a file called `tools/toolchain/image`. Normally,
+`dbuild` will fetch the toolchain automatically. If you want to access
+the toolchain explicitly, pull that image:
+
+    docker pull $(<tools/toolchain/image)
+
 ## Building the toolchain
+
+If you add dependencies (to `install-dependencies.sh` or
+`seastar/install-dependencies.sh`) you should update the toolchain.
 
 Run the command
 
