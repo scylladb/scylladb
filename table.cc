@@ -617,7 +617,12 @@ table::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64
 
 void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
     if (schema()->is_counter() && !sst->has_scylla_component()) {
-        throw std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead.");
+        auto error = "Reading non-Scylla SSTables containing counters is not supported.";
+        if (_config.enable_dangerous_direct_import_of_cassandra_counters) {
+            tlogger.info("{} But trying to continue on user's request", error);
+        } else {
+            throw std::runtime_error(fmt::format("{} Use sstableloader instead"));
+        }
     }
     auto& shards = sst->get_shards_for_this_sstable();
     if (belongs_to_other_shard(shards)) {

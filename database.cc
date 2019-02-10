@@ -867,6 +867,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
     cfg.enable_cache = _config.enable_cache;
+    cfg.enable_dangerous_direct_import_of_cassandra_counters = _config.enable_dangerous_direct_import_of_cassandra_counters;
     cfg.compaction_enforce_min_threshold = _config.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
@@ -1530,6 +1531,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
     }
+    cfg.enable_dangerous_direct_import_of_cassandra_counters = _cfg->enable_dangerous_direct_import_of_cassandra_counters();
     cfg.compaction_enforce_min_threshold = _cfg->compaction_enforce_min_threshold();
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;

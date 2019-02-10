@@ -749,6 +749,8 @@ public:
     val(cpu_scheduler, bool, true, Used, "Enable cpu scheduling") \
     val(view_building, bool, true, Used, "Enable view building; should only be set to false when the node is experience issues due to view building") \
     val(enable_sstables_mc_format, bool, true, Used, "Enable SSTables 'mc' format to be used as the default file format") \
+    val(enable_dangerous_direct_import_of_cassandra_counters, bool, false, Used, "Only turn this option on if you want to import tables from Cassandra containing counters, and you are SURE that no counters in that table were created in a version earlier than Cassandra 2.1." \
+        " It is not enough to have ever since upgraded to newer versions of Cassandra. If you EVER used a version earlier than 2.1 in the cluster where these SSTables come from, DO NOT TURN ON THIS OPTION! You will corrupt your data. You have been warned.") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
