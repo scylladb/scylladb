@@ -119,8 +119,7 @@ void run_sstable_resharding_test() {
         }).get0();
 
         auto sst = sstables::make_sstable(cf->schema(), tmp.path().string(), gen,
-            version, sstables::sstable::format_types::big,
-            gc_clock::now(), default_io_error_handler_gen());
+            version, sstables::sstable::format_types::big);
         return sst;
     };
     auto new_sstables = sstables::reshard_sstables({ sst }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
