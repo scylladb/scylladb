@@ -363,8 +363,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                         }).get0();
 
                         auto sst = sstables::make_sstable(cf->schema(), directory, gen,
-                            get_highest_supported_format(), sstables::sstable::format_types::big,
-                            gc_clock::now(), default_io_error_handler_gen());
+                            get_highest_supported_format(), sstables::sstable::format_types::big);
                         return sst;
                     };
                     auto f = sstables::reshard_sstables(sstables, *cf, creator, max_sstable_bytes, level);
