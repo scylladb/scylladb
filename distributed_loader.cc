@@ -109,7 +109,22 @@ static future<bool> worth_resharding(distributed<database>& db, global_column_fa
 
 static future<std::vector<sstables::shared_sstable>>
 load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, schema_ptr s, sstring dir,
-        noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred);
+        noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred) {
+    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), s, dir, pred = std::move(pred)] (auto& ssts) mutable {
+        return parallel_for_each(std::move(ssts_info), [&ssts, s, dir, pred = std::move(pred)] (auto& info) mutable {
+            if (!pred(info)) {
+                return make_ready_future<>();
+            }
+            auto sst = sstables::make_sstable(s, dir, info.generation, info.version, info.format);
+            return sst->load(std::move(info)).then([&ssts, sst] {
+                ssts.push_back(std::move(sst));
+                return make_ready_future<>();
+            });
+        }).then([&ssts] () mutable {
+            return std::move(ssts);
+        });
+    });
+}
 
 // make a set of sstables available at another shard.
 static future<> forward_sstables_to(shard_id shard, sstring directory, std::vector<sstables::shared_sstable> sstables, global_column_family_ptr cf,
@@ -125,25 +140,6 @@ static future<> forward_sstables_to(shard_id shard, sstring directory, std::vect
                 return func(std::move(sstables));
             });
         }).get();
-    });
-}
-
-static future<std::vector<sstables::shared_sstable>>
-load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, schema_ptr s, sstring dir,
-        noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred) {
-    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), s, dir, pred = std::move(pred)] (auto& ssts) mutable {
-        return parallel_for_each(std::move(ssts_info), [&ssts, s, dir, pred = std::move(pred)] (auto& info) mutable {
-            if (!pred(info)) {
-                return make_ready_future<>();
-            }
-            auto sst = sstables::make_sstable(s, dir, info.generation, info.version, info.format);
-            return sst->load(std::move(info)).then([&ssts, sst] {
-                ssts.push_back(std::move(sst));
-                return make_ready_future<>();
-            });
-        }).then([&ssts] () mutable {
-            return std::move(ssts);
-        });
     });
 }
 
