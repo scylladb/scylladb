@@ -108,14 +108,14 @@ static future<bool> worth_resharding(distributed<database>& db, global_column_fa
 }
 
 static future<std::vector<sstables::shared_sstable>>
-load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, schema_ptr s, sstring dir,
+load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, global_column_family_ptr cf, sstring dir,
         noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred) {
-    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), s, dir, pred = std::move(pred)] (auto& ssts) mutable {
-        return parallel_for_each(std::move(ssts_info), [&ssts, s, dir, pred = std::move(pred)] (auto& info) mutable {
+    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), cf, dir, pred = std::move(pred)] (auto& ssts) mutable {
+        return parallel_for_each(std::move(ssts_info), [&ssts, cf, dir, pred = std::move(pred)] (auto& info) mutable {
             if (!pred(info)) {
                 return make_ready_future<>();
             }
-            auto sst = sstables::make_sstable(s, dir, info.generation, info.version, info.format);
+            auto sst = sstables::make_sstable(cf->schema(), dir, info.generation, info.version, info.format);
             return sst->load(std::move(info)).then([&ssts, sst] {
                 ssts.push_back(std::move(sst));
                 return make_ready_future<>();
@@ -134,7 +134,7 @@ static future<> forward_sstables_to(shard_id shard, sstring directory, std::vect
             | boost::adaptors::transformed([] (auto&& sst) { return sst->get_open_info().get0(); }));
 
         smp::submit_to(shard, [cf, func, infos = std::move(infos), directory] () mutable {
-            return load_sstables_with_open_info(std::move(infos), cf->schema(), directory, [] (auto& p) {
+            return load_sstables_with_open_info(std::move(infos), cf, directory, [] (auto& p) {
                 return true;
             }).then([func] (std::vector<sstables::shared_sstable> sstables) {
                 return func(std::move(sstables));
@@ -146,14 +146,14 @@ static future<> forward_sstables_to(shard_id shard, sstring directory, std::vect
 // Return all sstables that need resharding in the system. Only one instance of a shared sstable is returned.
 static future<std::vector<sstables::shared_sstable>> get_all_shared_sstables(distributed<database>& db, sstring sstdir, global_column_family_ptr cf) {
     class all_shared_sstables {
-        schema_ptr _schema;
         sstring _dir;
+        global_column_family_ptr _cf;
         std::unordered_map<int64_t, sstables::shared_sstable> _result;
     public:
-        all_shared_sstables(const sstring& sstdir, global_column_family_ptr cf) : _schema(cf->schema()), _dir(sstdir) {}
+        all_shared_sstables(const sstring& sstdir, global_column_family_ptr cf) : _dir(sstdir), _cf(cf) {}
 
         future<> operator()(std::vector<sstables::foreign_sstable_open_info> ssts_info) {
-            return load_sstables_with_open_info(std::move(ssts_info), _schema, _dir, [this] (auto& info) {
+            return load_sstables_with_open_info(std::move(ssts_info), _cf, _dir, [this] (auto& info) {
                 // skip loading of shared sstable that is already stored in _result.
                 return !_result.count(info.generation);
             }).then([this] (std::vector<sstables::shared_sstable> sstables) {
