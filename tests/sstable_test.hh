@@ -171,8 +171,8 @@ public:
         });
     }
 
-    static sstable_ptr make_test_sstable(size_t buffer_size, schema_ptr schema, sstring dir, unsigned long generation, sstable::version_types v,
-            sstable::format_types f, gc_clock::time_point now = gc_clock::now()) {
+    static sstable_ptr make_test_sstable(schema_ptr schema, sstring dir, unsigned long generation, sstable::version_types v,
+            sstable::format_types f, size_t buffer_size = default_sstable_buffer_size(), gc_clock::time_point now = gc_clock::now()) {
         return sstables::make_sstable(std::move(schema), dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 

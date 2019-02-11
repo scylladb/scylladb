@@ -138,7 +138,7 @@ public:
             size_t partitions = _mt->partition_count();
 
             test_setup::create_empty_test_dir(dir()).get();
-            auto sst = sstables::test::make_test_sstable(_cfg.buffer_size, s, dir(), idx, sstable::version_types::ka, sstable::format_types::big);
+            auto sst = sstables::test::make_test_sstable(s, dir(), idx, sstable::version_types::ka, sstable::format_types::big, _cfg.buffer_size);
 
             auto start = test_env::now();
             write_memtable_to_sstable_for_test(*_mt, sst).get();
@@ -155,7 +155,7 @@ public:
         return test_setup::create_empty_test_dir(dir()).then([this, idx] {
             return seastar::async([this, idx] {
                 auto sst_gen = [this, gen = make_lw_shared<unsigned>(idx)] () mutable {
-                    return sstables::test::make_test_sstable(_cfg.buffer_size, s, dir(), (*gen)++, sstable::version_types::ka, sstable::format_types::big);
+                    return sstables::test::make_test_sstable(s, dir(), (*gen)++, sstable::version_types::ka, sstable::format_types::big, _cfg.buffer_size);
                 };
 
                 std::vector<shared_sstable> ssts;

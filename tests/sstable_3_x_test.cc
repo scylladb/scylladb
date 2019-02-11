@@ -2885,8 +2885,8 @@ static flat_mutation_reader compacted_sstable_reader(schema_ptr s,
     auto sstables = open_sstables(s, format("tests/sstables/3.x/uncompressed/{}", table_name), generations);
     auto new_generation = generations.back() + 1;
     auto new_sstable = [s, &tmp, new_generation] {
-        return sstables::test::make_test_sstable(4096, s, tmp.path().string(), new_generation,
-                         sstables::sstable_version_types::mc, sstable::format_types::big);
+        return sstables::test::make_test_sstable(s, tmp.path().string(), new_generation,
+                         sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
     };
 
     sstables::compact_sstables(sstables::compaction_descriptor(std::move(sstables)), *cf, new_sstable, replacer_fn_no_op()).get();
@@ -3068,7 +3068,7 @@ static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_share
     static db::nop_large_data_handler nop_lp_handler;
     storage_service_for_tests ssft;
     tmpdir tmp;
-    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big);
+    auto sst = sstables::test::make_test_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
     sstable_writer_config cfg;
     cfg.large_data_handler = &nop_lp_handler;
     sst->write_components(make_combined_reader(s,
@@ -3089,7 +3089,7 @@ static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> m
 static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt) {
     storage_service_for_tests ssft;
     tmpdir tmp;
-    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big);
+    auto sst = sstables::test::make_test_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
     write_memtable_to_sstable_for_test(*mt, sst).get();
     return tmp;
 }
