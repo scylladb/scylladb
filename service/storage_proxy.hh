@@ -104,6 +104,9 @@ public:
     query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;
     query_ranges_to_vnodes_generator(query_ranges_to_vnodes_generator&&) = default;
     // generate next 'n' vnodes, may return less than requested number of ranges
+    // which means either that there are no more ranges
+    // (in which case empty() == true), or too many ranges
+    // are requested
     dht::partition_range_vector operator()(size_t n);
     bool empty() const;
 };

@@ -3369,6 +3369,8 @@ query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(locator::toke
         _s(s), _ranges(std::move(ranges)), _i(_ranges.begin()), _local(local), _tm(tm) {}
 
 dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t n) {
+    n = std::min(n, size_t(1024));
+
     dht::partition_range_vector result;
     result.reserve(n);
     while (_i != _ranges.end() && result.size() != n) {
