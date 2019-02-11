@@ -1170,6 +1170,11 @@ typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
 static constexpr uint8_t current_version = 1;
 static bool need_legacy_truncation_records = true;
+static thread_local shared_promise<> migration_complete;
+
+future<> wait_for_truncation_record_migration_complete() {
+   return migration_complete.get_shared_future();
+}
 
 /**
  * This method is used to remove information about truncation time for specified column family
@@ -1284,7 +1289,11 @@ future<> migrate_truncation_records() {
                     sstring req = format("DELETE truncated_at from system.{} WHERE key = '{}'", LOCAL, LOCAL);
                     return qctx->qp().execute_internal(req).discard_result().then([level] {
                         slogger.log(level, "Legacy records deleted.");
-                        return force_blocking_flush(LOCAL);
+                        return force_blocking_flush(LOCAL).then([] {
+                            return smp::invoke_on_all([] {
+                                migration_complete.set_value();
+                            });
+                        });
                     });
                 });
             }
