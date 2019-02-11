@@ -241,7 +241,11 @@ future<authenticated_user> password_authenticator::authenticate(
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();
-            if (res->empty() || !passwords::check(password, res->one().get_as<sstring>(SALTED_HASH))) {
+            auto salted_hash = std::experimental::optional<sstring>();
+            if (!res->empty()) {
+                salted_hash = res->one().get_opt<sstring>(SALTED_HASH);
+            }
+            if (!salted_hash || !passwords::check(password, *salted_hash)) {
                 throw exceptions::authentication_exception("Username and/or password are incorrect");
             }
             return make_ready_future<authenticated_user>(username);
