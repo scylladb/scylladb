@@ -33,20 +33,20 @@ interactive = False
 
 def when_interactive_ask_service(interactive, msg1, msg2, default = None):
     if not interactive:
-        return False
+        return default
 
     print(msg1)
     print(msg2)
     while True:
-        if default == 'yes':
+        if default == True:
             prompt = '[YES/no]'
-        elif default == 'no':
+        elif default == False:
             prompt = '[yes/NO]'
         else:
             prompt = '[yes/no]'
         ans = input(prompt).lower()
         if len(ans) == 0:
-            ans = default
+            return default
         if ans == 'yes' or ans == 'y':
             return True
         elif ans == 'no' or ans =='n':
@@ -223,25 +223,25 @@ if __name__ == '__main__':
         return when_interactive_ask_service(interactive, msg1, msg2, default)
 
     if is_ec2():
-        ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylla. No - skips the configuration check.', 'yes')
+        ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylla. No - skips the configuration check.', ec2_check)
         args.no_ec2_check = not ec2_check
         if ec2_check:
             nic = interactive_choose_nic()
         if ec2_check:
             run('/usr/lib/scylla/scylla_ec2_check --nic {}'.format(nic))
 
-    kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', 'yes')
+    kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', kernel_check)
     args.no_kernel_check = not kernel_check
     if kernel_check:
         run('/usr/lib/scylla/scylla_kernel_check')
 
-    verify_package = interactive_ask_service('Do you want to verify the ScyllaDB packages are installed?', 'Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check.', 'yes')
+    verify_package = interactive_ask_service('Do you want to verify the ScyllaDB packages are installed?', 'Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check.', verify_package)
     args.no_verify_package = not verify_package
     if verify_package:
         do_verify_package('scylla-jmx')
         do_verify_package('scylla-tools')
 
-    enable_service = interactive_ask_service('Do you want the Scylla server service to automatically start when the Scylla node boots?', 'Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually.', 'yes')
+    enable_service = interactive_ask_service('Do you want the Scylla server service to automatically start when the Scylla node boots?', 'Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually.', enable_service)
     args.no_enable_service = not enable_service
     if enable_service:
         if is_systemd():
@@ -250,7 +250,7 @@ if __name__ == '__main__':
             run('rc-update add scylla-server default')
 
     if not os.path.exists('/etc/scylla.d/housekeeping.cfg'):
-        version_check = interactive_ask_service('Do you want to enable Scylla to check if there is a newer version of Scylla available?', 'Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step.', 'yes')
+        version_check = interactive_ask_service('Do you want to enable Scylla to check if there is a newer version of Scylla available?', 'Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step.', version_check)
         args.no_version_check = not version_check
     if version_check:
         with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
@@ -285,7 +285,7 @@ if __name__ == '__main__':
         print('A Scylla executable was not found, please check your installation {}'.format(new_version))
 
     if is_redhat_variant():
-        selinux_setup = interactive_ask_service('Do you want to disable SELinux?', 'Yes - disables SELinux. Choosing Yes greatly improves performance. No - keeps SELinux activated.', 'yes')
+        selinux_setup = interactive_ask_service('Do you want to disable SELinux?', 'Yes - disables SELinux. Choosing Yes greatly improves performance. No - keeps SELinux activated.', selinux_setup)
         args.no_selinux_setup = not selinux_setup
         if selinux_setup:
             res = run_setup_script('SELinux', '/usr/lib/scylla/scylla_selinux_setup')
@@ -293,12 +293,12 @@ if __name__ == '__main__':
                 selinux_reboot_required=True
 
     if args.ami:
-        bootparam_setup = interactive_ask_service('Do you want add hugepages capability to the bootloader options?', 'Yes - enable hugepages at boot time. Choosing yes greatly improves performance. No - skips this step.', 'yes')
+        bootparam_setup = interactive_ask_service('Do you want add hugepages capability to the bootloader options?', 'Yes - enable hugepages at boot time. Choosing yes greatly improves performance. No - skips this step.', bootparam_setup)
         args.no_bootparam_setup = not bootparam_setup
         if bootparam_setup:
             run_setup_script('boot parameter', '/usr/lib/scylla/scylla_bootparam_setup --ami')
 
-    ntp_setup = interactive_ask_service('Do you want to setup Network Time Protocol(NTP) to auto-synchronize the current time on the node?', 'Yes - enables time-synchronization. This keeps the correct time on the node. No - skips this step.', 'yes')
+    ntp_setup = interactive_ask_service('Do you want to setup Network Time Protocol(NTP) to auto-synchronize the current time on the node?', 'Yes - enables time-synchronization. This keeps the correct time on the node. No - skips this step.', ntp_setup)
     args.no_ntp_setup = not ntp_setup
     if ntp_setup:
         if args.ntp_domain:
@@ -306,9 +306,9 @@ if __name__ == '__main__':
         else:
             run_setup_script('NTP', '/usr/lib/scylla/scylla_ntp_setup')
 
-    res = interactive_ask_service('Do you want to setup RAID0 and XFS?', 'It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompted to choose the unmounted disks to use for Scylla data. Selected disks are formatted as part of the process.\nYes - choose a disk/disks to format and setup for RAID0 and XFS. No - skip this step.', 'yes')
+    res = interactive_ask_service('Do you want to setup RAID0 and XFS?', 'It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompted to choose the unmounted disks to use for Scylla data. Selected disks are formatted as part of the process.\nYes - choose a disk/disks to format and setup for RAID0 and XFS. No - skip this step.', raid_setup)
     if res:
-        raid_setup = interactive_ask_service('Are you sure you want to setup RAID0 and XFS?', 'If you choose Yes, the selected drive will be reformated, erasing all existing data in the process.', 'yes')
+        raid_setup = interactive_ask_service('Are you sure you want to setup RAID0 and XFS?', 'If you choose Yes, the selected drive will be reformated, erasing all existing data in the process.', raid_setup)
     else:
         raid_setup = False
     if res and raid_setup:
@@ -354,7 +354,7 @@ if __name__ == '__main__':
     if raid_setup:
         run_setup_script('RAID', '/usr/lib/scylla/scylla_raid_setup --disks {} --update-fstab'.format(disks))
 
-    coredump_setup = interactive_ask_service('Do you want to enable coredumps?', 'Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step.', 'yes')
+    coredump_setup = interactive_ask_service('Do you want to enable coredumps?', 'Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step.', coredump_setup)
     args.no_coredump_setup = not coredump_setup
     if coredump_setup:
         if disks:
@@ -362,21 +362,21 @@ if __name__ == '__main__':
         else:
             run_setup_script('coredump', '/usr/lib/scylla/scylla_coredump_setup')
 
-    sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', 'yes')
+    sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', sysconfig_setup)
     args.no_sysconfig_setup = not sysconfig_setup
     if sysconfig_setup:
         nic = interactive_choose_nic()
-        set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', 'yes')
+        set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', set_nic_and_disks)
     if sysconfig_setup:
         setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
         run_setup_script('NIC queue', '/usr/lib/scylla/scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
-    io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', 'yes')
+    io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', io_setup)
     args.no_io_setup = not io_setup
     if io_setup:
         run_setup_script('IO configuration', '/usr/lib/scylla/scylla_io_setup')
 
-    node_exporter = interactive_ask_service('Do you want to install node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - install node exporter. No - skip this  step.', 'yes')
+    node_exporter = interactive_ask_service('Do you want to install node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - install node exporter. No - skip this  step.', node_exporter)
     args.no_node_exporter = not node_exporter
     if node_exporter:
         run_setup_script('node exporter', '/usr/lib/scylla/node_exporter_install')
@@ -384,12 +384,12 @@ if __name__ == '__main__':
     if args.developer_mode:
         run_setup_script('developer mode', '/usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1')
 
-    cpuscaling_setup = interactive_ask_service('Do you want to set the CPU scaling governor to Performance level on boot?', 'Yes - sets the CPU scaling governor to performance level. No - skip this step.', 'yes')
+    cpuscaling_setup = interactive_ask_service('Do you want to set the CPU scaling governor to Performance level on boot?', 'Yes - sets the CPU scaling governor to performance level. No - skip this step.', cpuscaling_setup)
     args.no_cpuscaling_setup = not cpuscaling_setup
     if cpuscaling_setup:
         run_setup_script('CPU scaling', '/usr/lib/scylla/scylla_cpuscaling_setup')
 
-    fstrim_setup = interactive_ask_service('Do you want to enable fstrim service?', 'Yes - runs fstrim on your SSD. No - skip this step.', 'yes')
+    fstrim_setup = interactive_ask_service('Do you want to enable fstrim service?', 'Yes - runs fstrim on your SSD. No - skip this step.', fstrim_setup)
     args.no_fstrim_setup = not fstrim_setup
     if fstrim_setup:
         run_setup_script('fstrim', '/usr/lib/scylla/scylla_fstrim_setup')
