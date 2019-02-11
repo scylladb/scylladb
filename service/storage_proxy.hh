@@ -340,8 +340,6 @@ public:
 
     future<> mutate_streaming_mutation(const schema_ptr&, utils::UUID plan_id, const frozen_mutation& m, bool fragmented);
 
-    dht::partition_range_vector get_restricted_ranges(const schema& s, dht::partition_range range);
-
     /**
     * Use this method to have these Mutations applied
     * across all replicas. This method will take care
