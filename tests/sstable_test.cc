@@ -49,7 +49,9 @@ bytes as_bytes(const sstring& s) {
 }
 
 future<> test_using_working_sst(schema_ptr s, sstring dir, int64_t gen) {
-    return working_sst(std::move(s), std::move(dir), gen);
+    return test_env::do_with([s = std::move(s), dir = std::move(dir), gen] (test_env& env) {
+        return env.working_sst(std::move(s), std::move(dir), gen);
+    });
 }
 
 SEASTAR_TEST_CASE(uncompressed_data) {
@@ -68,8 +70,10 @@ SEASTAR_TEST_CASE(composite_index) {
 template<typename Func>
 inline auto
 test_using_reusable_sst(schema_ptr s, sstring dir, unsigned long gen, Func&& func) {
-    return reusable_sst(std::move(s), std::move(dir), gen).then([func = std::move(func)] (sstable_ptr sst) {
-        return func(std::move(sst));
+    return test_env::do_with([s = std::move(s), dir = std::move(dir), gen, func = std::move(func)] (test_env& env) {
+        return env.reusable_sst(std::move(s), std::move(dir), gen).then([func = std::move(func)] (sstable_ptr sst) {
+            return func(std::move(sst));
+        });
     });
 }
 
@@ -169,8 +173,8 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
     });
 }
 
-static future<sstable_ptr> do_write_sst(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
-    return reusable_sst(std::move(schema), load_dir, generation, la).then([write_dir, generation] (sstable_ptr sst) {
+static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
+    return env.reusable_sst(std::move(schema), load_dir, generation, la).then([write_dir, generation] (sstable_ptr sst) {
         sstables::test(sst).change_generation_number(generation + 1);
         sstables::test(sst).change_dir(write_dir);
         auto fut = sstables::test(sst).store();
@@ -178,6 +182,12 @@ static future<sstable_ptr> do_write_sst(schema_ptr schema, sstring load_dir, sst
             return make_ready_future<sstable_ptr>(std::move(sst));
         });
     });
+}
+
+static future<sstable_ptr> do_write_sst(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
+  return test_env::do_with([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir), generation] (test_env& env) {
+      return do_write_sst(env, std::move(schema), std::move(load_dir), std::move(write_dir), generation);
+  });
 }
 
 static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
@@ -239,9 +249,9 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
 template <typename Func>
 inline auto
 write_and_validate_sst(schema_ptr s, sstring dir, Func&& func) {
-    return do_with(tmpdir(), [s = std::move(s), dir = std::move(dir), func = std::move(func)] (tmpdir& tmp) {
-        return do_write_sst(s, dir, tmp.path().string(), 1).then([&tmp, s = std::move(s), func = std::move(func)] (auto sst1) {
-            auto sst2 = make_sstable(s, tmp.path().string(), 2, la, big);
+    return test_env::do_with(tmpdir(), [s = std::move(s), dir = std::move(dir), func = std::move(func)] (test_env& env, tmpdir& tmp) {
+        return do_write_sst(env, s, dir, tmp.path().string(), 1).then([&env, &tmp, s = std::move(s), func = std::move(func)] (auto sst1) {
+            auto sst2 = env.make_sstable(s, tmp.path().string(), 2, la, big);
             return func(std::move(sst1), std::move(sst2));
         });
     });
@@ -855,11 +865,11 @@ test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
 // We will therefore run it in an empty directory, and first link a known SSTable from another
 // directory to it.
 SEASTAR_TEST_CASE(set_generation) {
-    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (sstring uncompressed_dir, sstring generation_dir) {
-        return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir, 1, [generation_dir] (auto sstp) {
+    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
+        return env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).then([generation_dir] (auto sstp) {
             return sstp->create_links(generation_dir).then([sstp] {});
-        }).then([generation_dir] {
-            return test_using_reusable_sst(uncompressed_schema(), generation_dir, 1, [] (auto sstp) {
+        }).then([&env, generation_dir] {
+            return env.reusable_sst(uncompressed_schema(), generation_dir, 1).then([] (auto sstp) {
                 return sstp->set_generation(2).then([sstp] {});
             });
         }).then([generation_dir] {
@@ -873,8 +883,8 @@ SEASTAR_TEST_CASE(set_generation) {
 }
 
 SEASTAR_TEST_CASE(reshuffle) {
-    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (sstring uncompressed_dir, sstring generation_dir) {
-        return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir, 1, [generation_dir] (auto sstp) {
+    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
+        return env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).then([generation_dir] (auto sstp) {
             return sstp->create_links(generation_dir, 1).then([sstp, generation_dir] {
                 return sstp->create_links(generation_dir, 5).then([sstp, generation_dir] {
                     return sstp->create_links(generation_dir, 10);
@@ -917,18 +927,18 @@ SEASTAR_TEST_CASE(reshuffle) {
 }
 
 SEASTAR_TEST_CASE(statistics_rewrite) {
-    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (sstring uncompressed_dir, sstring generation_dir) {
-        return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir, 1, [generation_dir] (auto sstp) {
+    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
+        return env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).then([generation_dir] (auto sstp) {
             return sstp->create_links(generation_dir).then([sstp] {});
         }).then([generation_dir] {
             return test_sstable_exists(generation_dir, 1, true);
-        }).then([generation_dir] {
-            return test_using_reusable_sst(uncompressed_schema(), generation_dir, 1, [] (auto sstp) {
+        }).then([&env, generation_dir] {
+            return env.reusable_sst(uncompressed_schema(), generation_dir, 1).then([] (auto sstp) {
                 // mutate_sstable_level results in statistics rewrite
                 return sstp->mutate_sstable_level(10).then([sstp] {});
             });
-        }).then([generation_dir] {
-            return test_using_reusable_sst(uncompressed_schema(), generation_dir, 1, [] (auto sstp) {
+        }).then([&env, generation_dir] {
+            return env.reusable_sst(uncompressed_schema(), generation_dir, 1).then([] (auto sstp) {
                 BOOST_REQUIRE(sstp->get_sstable_level() == 10);
                 return make_ready_future<>();
             });
@@ -964,10 +974,10 @@ static schema_ptr large_partition_schema() {
     return s;
 }
 
-static future<shared_sstable> load_large_partition_sst(const sstables::sstable::version_types version) {
+static future<shared_sstable> load_large_partition_sst(test_env& env, const sstables::sstable::version_types version) {
     auto s = large_partition_schema();
     auto dir = get_test_dir("large_partition", s);
-    return reusable_sst(std::move(s), std::move(dir), 3, version);
+    return env.reusable_sst(std::move(s), std::move(dir), 3, version);
 }
 
 // This is a rudimentary test that reads an sstable exported from Cassandra
@@ -976,12 +986,14 @@ static future<shared_sstable> load_large_partition_sst(const sstables::sstable::
 // search for anything.
 SEASTAR_TEST_CASE(promoted_index_read) {
   return for_each_sstable_version([] (const sstables::sstable::version_types version) {
-    return load_large_partition_sst(version).then([] (auto sstp) {
+    return test_env::do_with([version] (test_env& env) {
+      return load_large_partition_sst(env, version).then([] (auto sstp) {
         schema_ptr s = large_partition_schema();
         return sstables::test(sstp).read_indexes().then([sstp] (index_list vec) {
             BOOST_REQUIRE(vec.size() == 1);
             BOOST_REQUIRE(vec.front().get_promoted_index_size() > 0);
         });
+      });
     });
   });
 }
@@ -1083,7 +1095,8 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstri
 SEASTAR_TEST_CASE(sub_partition_read) {
   schema_ptr s = large_partition_schema();
   return for_each_sstable_version([s] (const sstables::sstable::version_types version) {
-    return load_large_partition_sst(version).then([s] (auto sstp) {
+   return test_env::do_with([s, version] (test_env& env) {
+    return load_large_partition_sst(env, version).then([s] (auto sstp) {
         return count_rows(sstp, s, "v1", "18wX", "18xB").then([] (int nrows) {
             // there should be 5 rows (out of 13520 = 20*26*26) in this range:
             // 18wX, 18wY, 18wZ, 18xA, 18xB.
@@ -1141,6 +1154,7 @@ SEASTAR_TEST_CASE(sub_partition_read) {
             });
         });
     });
+   });
   });
 }
 
@@ -1150,11 +1164,13 @@ SEASTAR_TEST_CASE(sub_partition_read) {
 SEASTAR_TEST_CASE(sub_partitions_read) {
   schema_ptr s = large_partition_schema();
   return for_each_sstable_version([s] (const sstables::sstable::version_types version) {
-    return load_large_partition_sst(version).then([s] (auto sstp) {
+   return test_env::do_with([s, version] (test_env& env) {
+    return load_large_partition_sst(env, version).then([s] (auto sstp) {
         return count_rows(sstp, s, "18wX", "18xB").then([] (int nrows) {
             BOOST_REQUIRE(nrows == 5);
         });
     });
+   });
   });
 }
 
@@ -1180,7 +1196,7 @@ static future<> compare_files(sstring file1, sstring file2) {
 // writing code, because the promoted index points to offsets in the data).
 SEASTAR_TEST_CASE(promoted_index_write) {
     auto s = large_partition_schema();
-    return test_setup::do_with_tmp_directory([s] (auto dirname) {
+    return test_setup::do_with_tmp_directory([s] (test_env& env, auto dirname) {
         auto mtp = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("v1")});
         mutation m(s, key);
@@ -1200,7 +1216,7 @@ SEASTAR_TEST_CASE(promoted_index_write) {
             }
         }
         mtp->apply(std::move(m));
-        auto sst = make_sstable(s, dirname, 100,
+        auto sst = env.make_sstable(s, dirname, 100,
                 sstables::sstable::version_types::la, big);
         return write_memtable_to_sstable_for_test(*mtp, sst).then([s, dirname] {
             auto large_partition_file = seastar::format("{}/la-3-big-Index.db", get_test_dir("large_partition", s));

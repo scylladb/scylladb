@@ -31,12 +31,13 @@
 #include <seastar/core/thread.hh>
 #include "sstables/index_reader.hh"
 #include "tests/test_services.hh"
+#include "tests/sstable_test_env.hh"
 #include "tmpdir.hh"
 #include <boost/filesystem.hpp>
 #include <array>
 
-static auto la = sstables::sstable::version_types::la;
-static auto big = sstables::sstable::format_types::big;
+constexpr auto la = sstables::sstable::version_types::la;
+constexpr auto big = sstables::sstable::format_types::big;
 
 class column_family_test {
     lw_shared_ptr<column_family> _cf;
@@ -171,11 +172,6 @@ public:
         });
     }
 
-    static sstable_ptr make_test_sstable(schema_ptr schema, sstring dir, unsigned long generation, sstable::version_types v,
-            sstable::format_types f, size_t buffer_size = default_sstable_buffer_size(), gc_clock::time_point now = gc_clock::now()) {
-        return sstables::make_sstable(std::move(schema), dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
-    }
-
     // Used to create synthetic sstables for testing leveled compaction strategy.
     void set_values_for_leveled_strategy(uint64_t fake_data_size, uint32_t sstable_level, int64_t max_timestamp, sstring first_key, sstring last_key) {
         _sst->_data_file_size = fake_data_size;
@@ -247,19 +243,6 @@ GCC6_CONCEPT( requires requires (AsyncAction aa, sstables::sstable::version_type
 inline
 future<> for_each_sstable_version(AsyncAction action) {
     return seastar::do_for_each(all_sstable_versions, std::move(action));
-}
-
-inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir,
-        unsigned long generation, sstable_version_types version = la) {
-    auto sst = sstables::make_sstable(std::move(schema), dir, generation, version, big);
-    auto fut = sst->load();
-    return std::move(fut).then([sst = std::move(sst)] {
-        return make_ready_future<sstable_ptr>(std::move(sst));
-    });
-}
-
-inline future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
-    return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
 }
 
 inline schema_ptr composite_schema() {
@@ -692,15 +675,16 @@ public:
         });
     }
 
-    static future<> do_with_tmp_directory(std::function<future<> (sstring tmpdir_path)>&& fut) {
+    static future<> do_with_tmp_directory(std::function<future<> (test_env&, sstring tmpdir_path)>&& fut) {
         return seastar::async([fut = std::move(fut)] {
             storage_service_for_tests ssft;
             auto tmp = tmpdir();
-            fut(tmp.path().string()).get();
+            test_env env;
+            fut(env, tmp.path().string()).get();
         });
     }
 
-    static future<> do_with_cloned_tmp_directory(sstring src, std::function<future<> (sstring srcdir_path, sstring destdir_path)>&& fut) {
+    static future<> do_with_cloned_tmp_directory(sstring src, std::function<future<> (test_env&, sstring srcdir_path, sstring destdir_path)>&& fut) {
         return seastar::async([fut = std::move(fut), src = std::move(src)] {
             storage_service_for_tests ssft;
             auto src_dir = tmpdir();
@@ -710,7 +694,8 @@ public:
             }
             auto dest_path = dest_dir.path() / src.c_str();
             seastar::compat::filesystem::create_directories(dest_path);
-            fut(src_dir.path().string(), dest_path.string()).get();
+            test_env env;
+            fut(env, src_dir.path().string(), dest_path.string()).get();
         });
     }
 };

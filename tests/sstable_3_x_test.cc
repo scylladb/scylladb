@@ -55,18 +55,22 @@
 using namespace sstables;
 
 class sstable_assertions final {
+    test_env _env;
     shared_sstable _sst;
 public:
     sstable_assertions(schema_ptr schema, const sstring& path, int generation = 1)
-        : _sst(make_sstable(std::move(schema),
+        : _env()
+        , _sst(_env.make_sstable(std::move(schema),
                             path,
                             generation,
                             sstable_version_types::mc,
                             sstable_format_types::big,
-                            gc_clock::now(),
-                            default_io_error_handler_gen(),
                             1))
     { }
+
+    test_env& get_env() {
+        return _env;
+    }
     void read_toc() {
         _sst->read_toc().get();
     }
@@ -2854,23 +2858,19 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
     .produces_end_of_stream();
 }
 
-static sstables::shared_sstable open_sstable(schema_ptr schema, sstring dir, unsigned long generation) {
-    auto sst = sstables::make_sstable(std::move(schema), dir, generation,
-            sstables::sstable::version_types::mc,
-            sstables::sstable::format_types::big);
-    sst->load().get();
-    return sst;
+static sstables::shared_sstable open_sstable(test_env& env, schema_ptr schema, sstring dir, unsigned long generation) {
+    return env.reusable_sst(std::move(schema), dir, generation, sstables::sstable::version_types::mc).get0();
 }
 
-static std::vector<sstables::shared_sstable> open_sstables(schema_ptr s, sstring dir, std::vector<unsigned long> generations) {
+static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<unsigned long> generations) {
     std::vector<sstables::shared_sstable> result;
     for(auto generation: generations) {
-        result.push_back(open_sstable(s, dir, generation));
+        result.push_back(open_sstable(env, s, dir, generation));
     }
     return result;
 }
 
-static flat_mutation_reader compacted_sstable_reader(schema_ptr s,
+static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
                      sstring table_name, std::vector<unsigned long> generations) {
     storage_service_for_tests ssft;
 
@@ -2882,16 +2882,16 @@ static flat_mutation_reader compacted_sstable_reader(schema_ptr s,
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     tmpdir tmp;
-    auto sstables = open_sstables(s, format("tests/sstables/3.x/uncompressed/{}", table_name), generations);
+    auto sstables = open_sstables(env, s, format("tests/sstables/3.x/uncompressed/{}", table_name), generations);
     auto new_generation = generations.back() + 1;
-    auto new_sstable = [s, &tmp, new_generation] {
-        return sstables::test::make_test_sstable(s, tmp.path().string(), new_generation,
+    auto new_sstable = [s, &tmp, &env, new_generation] {
+        return env.make_sstable(s, tmp.path().string(), new_generation,
                          sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
     };
 
     sstables::compact_sstables(sstables::compaction_descriptor(std::move(sstables)), *cf, new_sstable, replacer_fn_no_op()).get();
 
-    auto compacted_sst = open_sstable(s, tmp.path().string(), new_generation);
+    auto compacted_sst = open_sstable(env, s, tmp.path().string(), new_generation);
     return compacted_sst->as_mutation_source().make_reader(s, query::full_partition_range, s->full_slice());
 }
 
@@ -2948,7 +2948,8 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
      *   }
      * ]
      */
-    auto reader = compacted_sstable_reader(s, table_name, {1, 2});
+    test_env env;
+    auto reader = compacted_sstable_reader(env, s, table_name, {1, 2});
     mutation_opt m = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
@@ -3018,7 +3019,8 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
      *]
      *
      */
-    auto reader = compacted_sstable_reader(s, table_name, {1, 2});
+    test_env env;
+    auto reader = compacted_sstable_reader(env, s, table_name, {1, 2});
     mutation_opt m = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
@@ -3064,11 +3066,11 @@ static void compare_sstables(const seastar::compat::filesystem::path& result_pat
     }
 }
 
-static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2) {
+static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2) {
     static db::nop_large_data_handler nop_lp_handler;
     storage_service_for_tests ssft;
     tmpdir tmp;
-    auto sst = sstables::test::make_test_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
+    auto sst = env.make_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
     sstable_writer_config cfg;
     cfg.large_data_handler = &nop_lp_handler;
     sst->write_components(make_combined_reader(s,
@@ -3081,27 +3083,29 @@ static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_share
 // that otherwise takes place for RTs put into one and the same memtable
 static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
                                          sstring table_name) {
-    auto tmp = write_sstables(std::move(s), std::move(mt1), std::move(mt2));
+    test_env env;
+    auto tmp = write_sstables(env, std::move(s), std::move(mt1), std::move(mt2));
     compare_sstables(tmp.path(), table_name);
     return tmp;
 }
 
-static tmpdir write_sstables(schema_ptr s, lw_shared_ptr<memtable> mt) {
+static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt) {
     storage_service_for_tests ssft;
     tmpdir tmp;
-    auto sst = sstables::test::make_test_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
+    auto sst = env.make_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
     write_memtable_to_sstable_for_test(*mt, sst).get();
     return tmp;
 }
 
 static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name) {
-    auto tmp = write_sstables(std::move(s), std::move(mt));
+    test_env env;
+    auto tmp = write_sstables(env, std::move(s), std::move(mt));
     compare_sstables(tmp.path(), table_name);
     return tmp;
 }
 
 static sstable_assertions validate_read(schema_ptr s, const seastar::compat::filesystem::path& path, std::vector<mutation> mutations) {
-    sstable_assertions sst(s, path.string());
+    sstable_assertions sst(s, path.string(), 1);
     sst.load();
 
     auto assertions = assert_that(sst.read_rows_flat());
@@ -3117,8 +3121,7 @@ static constexpr api::timestamp_type write_timestamp = 1525385507816568;
 static constexpr gc_clock::time_point write_time_point = gc_clock::time_point{} + gc_clock::duration{1525385507};
 
 static void validate_stats_metadata(schema_ptr s, sstable_assertions written_sst, sstring table_name) {
-    auto orig_sst = sstables::make_sstable(s, get_write_test_path(table_name), 1, sstable_version_types::mc, big);
-    orig_sst->load().get();
+    auto orig_sst = written_sst.get_env().reusable_sst(s, get_write_test_path(table_name), 1, sstable_version_types::mc).get0();
 
     const auto& orig_stats = orig_sst->get_stats_metadata();
     const auto& written_stats = written_sst.get_stats_metadata();
@@ -3513,7 +3516,8 @@ static void test_write_many_partitions(sstring table_name, tombstone partition_t
     }
 
     bool compressed = cp.get_compressor() != nullptr;
-    tmpdir tmp = compressed ? write_sstables(s, mt) : write_and_compare_sstables(s, mt, table_name);
+    test_env env;
+    tmpdir tmp = compressed ? write_sstables(env, s, mt) : write_and_compare_sstables(s, mt, table_name);
     boost::sort(muts, mutation_decorated_key_less_comparator());
     validate_read(s, tmp.path(), muts);
 }
@@ -4399,10 +4403,8 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
     return std::make_unique<index_reader>(sst, default_priority_class());
 }
 
-shared_sstable make_test_sstable(schema_ptr schema, const sstring& table_name, int64_t gen = 1) {
-    auto sst = sstables::make_sstable(schema, get_read_index_test_path(table_name), gen, sstable_version_types::mc, sstable_format_types::big);
-    sst->load().get();
-    return sst;
+shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name, int64_t gen = 1) {
+    return env.reusable_sst(schema, get_read_index_test_path(table_name), gen, sstable_version_types::mc).get0();
 }
 
 /*
@@ -4420,7 +4422,8 @@ SEASTAR_THREAD_TEST_CASE(test_read_empty_index) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    auto sst = make_test_sstable(s, table_name);
+    test_env env;
+    auto sst = make_test_sstable(env, s, table_name);
     assert_that(get_index_reader(sst)).is_empty(*s);
 }
 
@@ -4439,7 +4442,8 @@ SEASTAR_THREAD_TEST_CASE(test_read_rows_only_index) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    auto sst = make_test_sstable(s, table_name);
+    test_env env;
+    auto sst = make_test_sstable(env, s, table_name);
     assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
 }
 
@@ -4457,7 +4461,8 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstones_only_index) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    auto sst = make_test_sstable(s, table_name);
+    test_env env;
+    auto sst = make_test_sstable(env, s, table_name);
     assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
 }
 
@@ -4483,7 +4488,8 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstone_boundaries_index) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    auto sst = make_test_sstable(s, table_name);
+    test_env env;
+    auto sst = make_test_sstable(env, s, table_name);
     assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
 }
 
@@ -4940,7 +4946,8 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = index_block_size;
         cfg.large_data_handler = &nop_lp_handler;
-        auto sst = sstables::make_sstable(write_schema,
+        test_env env;
+        auto sst = env.make_sstable(write_schema,
             dir.path().string(),
             1 /* generation */,
             sstable_version_types::mc,
@@ -4993,7 +5000,8 @@ struct large_row_handler : public db::large_data_handler {
 static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const partition_key& pk,
         std::vector<clustering_key*> expected, uint64_t threshold) {
     tmpdir dir;
-    auto sst = sstables::make_sstable(
+    test_env env;
+    auto sst = env.make_sstable(
             s, dir.path().string(), 1 /* generation */, sstable_version_types::mc, sstables::sstable::format_types::big);
 
     unsigned i = 0;

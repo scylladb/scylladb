@@ -63,6 +63,7 @@ static schema_ptr get_schema() {
 }
 
 void run_sstable_resharding_test() {
+    test_env env;
     cache_tracker tracker;
   for (const auto version : all_sstable_versions) {
     storage_service_for_tests ssft;
@@ -96,11 +97,10 @@ void run_sstable_resharding_test() {
                 mt->apply(std::move(m));
             }
         }
-        auto sst = sstables::make_sstable(s, tmp.path().string(), 0, version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, tmp.path().string(), 0, version, sstables::sstable::format_types::big);
         write_memtable_to_sstable_for_test(*mt, sst).get();
     }
-    auto sst = sstables::make_sstable(s, tmp.path().string(), 0, version, sstables::sstable::format_types::big);
-    sst->load().get();
+    auto sst = env.reusable_sst(s, tmp.path().string(), 0, version, sstables::sstable::format_types::big).get0();
 
     // FIXME: sstable write has a limitation in which it will generate sharding metadata only
     // for a single shard. workaround that by setting shards manually. from this test perspective,
@@ -111,16 +111,15 @@ void run_sstable_resharding_test() {
     auto filter_fname = sstables::test(sst).filename(component_type::Filter);
     uint64_t bloom_filter_size_before = file_size(filter_fname).get0();
 
-    auto creator = [&cf, &tmp, version] (shard_id shard) mutable {
+    auto creator = [&env, &cf, &tmp, version] (shard_id shard) mutable {
         // we need generation calculated by instance of cf at requested shard,
         // or resource usage wouldn't be fairly distributed among shards.
         auto gen = smp::submit_to(shard, [&cf] () {
             return column_family_test::calculate_generation_for_new_table(*cf);
         }).get0();
 
-        auto sst = sstables::make_sstable(cf->schema(), tmp.path().string(), gen,
+        return env.make_sstable(cf->schema(), tmp.path().string(), gen,
             version, sstables::sstable::format_types::big);
-        return sst;
     };
     auto new_sstables = sstables::reshard_sstables({ sst }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
     BOOST_REQUIRE(new_sstables.size() == smp::count);
@@ -128,9 +127,8 @@ void run_sstable_resharding_test() {
     uint64_t bloom_filter_size_after = 0;
 
     for (auto& sstable : new_sstables) {
-        auto new_sst = sstables::make_sstable(s, tmp.path().string(), sstable->generation(),
-            version, sstables::sstable::format_types::big);
-        new_sst->load().get();
+        auto new_sst = env.reusable_sst(s, tmp.path().string(), sstable->generation(),
+            version, sstables::sstable::format_types::big).get0();
         filter_fname = sstables::test(new_sst).filename(component_type::Filter);
         bloom_filter_size_after += file_size(filter_fname).get0();
         auto shards = new_sst->get_shards_for_this_sstable();
@@ -156,10 +154,12 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_resharding_strategy_tests) {
+    test_env env;
+
     for (const auto version : all_sstable_versions) {
         auto s = make_lw_shared(schema({}, "ks", "cf", {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
         auto get_sstable = [&] (int64_t gen, sstring first_key, sstring last_key) mutable {
-            auto sst = make_sstable(s, "", gen, version, sstables::sstable::format_types::big);
+            auto sst = env.make_sstable(s, "", gen, version, sstables::sstable::format_types::big);
             stats_metadata stats = {};
             stats.sstable_level = 1;
             sstables::test(sst).set_values(std::move(first_key), std::move(last_key), std::move(stats));
