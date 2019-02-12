@@ -56,6 +56,17 @@
 
 using namespace std::chrono_literals;
 
+cql_test_config::cql_test_config()
+    : cql_test_config(db::config())
+{}
+
+cql_test_config::cql_test_config(const db::config& cfg)
+    : db_config(seastar::make_shared<db::config>(cfg))
+{}
+
+cql_test_config::cql_test_config(const cql_test_config&) = default;
+cql_test_config::~cql_test_config() = default;
+
 namespace sstables {
 
 future<> await_background_jobs_on_all_shards();
@@ -295,8 +306,8 @@ public:
         return execute_cql(query).discard_result();
     }
 
-    static future<> do_with(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {
-        return seastar::async([cfg_in, func] {
+    static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in) {
+        return seastar::async([cfg_in = std::move(cfg_in), func] {
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             bool old_active = false;
             if (!active.compare_exchange_strong(old_active, true)) {
@@ -316,7 +327,7 @@ public:
             auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
 
             auto db = ::make_shared<distributed<database>>();
-            auto cfg = make_lw_shared<db::config>(std::move(cfg_in));
+            auto cfg = make_lw_shared<db::config>(*cfg_in.db_config);
             tmpdir data_dir;
             auto data_dir_path = data_dir.path().string();
             if (!cfg->data_file_directories.is_set()) {
@@ -361,7 +372,7 @@ public:
             auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_generator>>();
 
             auto& ss = service::get_storage_service();
-            ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service)).get();
+            ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), cfg_in.disabled_features).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
@@ -475,24 +486,16 @@ public:
 const char* single_node_cql_env::ks_name = "ks";
 std::atomic<bool> single_node_cql_env::active = { false };
 
-future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {
-    return single_node_cql_env::do_with(func, cfg_in);
+future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in) {
+    return single_node_cql_env::do_with(func, std::move(cfg_in));
 }
 
-future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func) {
-    return do_with_cql_env(std::move(func), db::config{});
-}
-
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, const db::config& cfg_in) {
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config cfg_in) {
     return single_node_cql_env::do_with([func = std::move(func)] (auto& e) {
         return seastar::async([func = std::move(func), &e] {
             return func(e);
         });
-    }, cfg_in);
-}
-
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func) {
-    return do_with_cql_env_thread(std::move(func), db::config{});
+    }, std::move(cfg_in));
 }
 
 class storage_service_for_tests::impl {

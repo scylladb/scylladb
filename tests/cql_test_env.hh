@@ -61,6 +61,17 @@ namespace db {
     class config;
 }
 
+class cql_test_config {
+public:
+    seastar::shared_ptr<db::config> db_config;
+    std::set<sstring> disabled_features;
+
+    cql_test_config();
+    cql_test_config(const cql_test_config&);
+    cql_test_config(const db::config&);
+    ~cql_test_config();
+};
+
 class cql_test_env {
 public:
     virtual ~cql_test_env() {};
@@ -107,7 +118,5 @@ public:
     virtual db::view::view_update_generator& local_view_update_generator() = 0;
 };
 
-future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func);
-future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config&);
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func);
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, const db::config&);
+future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {});
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config = {});
