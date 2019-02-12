@@ -56,6 +56,7 @@
 #include <seastar/core/fstream.hh>
 
 #include "types.hh"
+#include "sstables/types.hh"
 #include "checksum_utils.hh"
 #include "../compress.hh"
 
