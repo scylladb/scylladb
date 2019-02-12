@@ -841,17 +841,17 @@ struct entry_descriptor {
     sstring sstdir;
     sstring ks;
     sstring cf;
-    sstable::version_types version;
     int64_t generation;
+    sstable::version_types version;
     sstable::format_types format;
     component_type component;
 
     static entry_descriptor make_descriptor(sstring sstdir, sstring fname);
 
-    entry_descriptor(sstring sstdir, sstring ks, sstring cf, sstable::version_types version,
-                     int64_t generation, sstable::format_types format,
+    entry_descriptor(sstring sstdir, sstring ks, sstring cf, int64_t generation,
+                     sstable::version_types version, sstable::format_types format,
                      component_type component)
-        : sstdir(sstdir), ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
+        : sstdir(sstdir), ks(ks), cf(cf), generation(generation), version(version), format(format), component(component) {}
 };
 
 // Waits for all prior tasks started on current shard related to sstable management to finish.
