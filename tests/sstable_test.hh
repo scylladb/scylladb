@@ -692,17 +692,6 @@ public:
         });
     }
 
-    static future<> do_with_test_directory(std::function<future<> ()>&& fut, sstring p = path()) {
-        return seastar::async([p, fut = std::move(fut)] {
-            storage_service_for_tests ssft;
-            boost::filesystem::create_directories(std::string(p));
-            fut().get();
-            test_setup::empty_test_dir(p).get();
-            // FIXME: this removes only the last component in the path that often contains: `test-name/ks/cf-uuid'
-            engine().remove_file(p).get();
-        });
-    }
-
     static future<> do_with_tmp_directory(std::function<future<> (sstring tmpdir_path)>&& fut) {
         return seastar::async([fut = std::move(fut)] {
             storage_service_for_tests ssft;
