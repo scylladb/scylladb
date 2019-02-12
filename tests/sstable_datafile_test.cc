@@ -987,11 +987,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
 // counting pointer to an sstable - allowing for the returned handle to
 // be passed around until no longer needed.
 static future<sstables::shared_sstable> open_sstable(schema_ptr schema, sstring dir, unsigned long generation) {
-    auto sst = sstables::make_sstable(std::move(schema), dir, generation,
-            sstables::sstable::version_types::la,
-            sstables::sstable::format_types::big);
-    auto fut = sst->load();
-    return fut.then([sst = std::move(sst)] { return std::move(sst); });
+    return reusable_sst(std::move(schema), dir, generation);
 }
 
 // open_sstables() opens several generations of the same sstable, returning,
