@@ -157,28 +157,28 @@ SEASTAR_TEST_CASE(test_updates_no_read_before_update) {
                               "where k is not null and c is not null primary key (k, c)").get();
 
         e.execute_cql("insert into base (k, c, v) values (0, 0, 0);").get();
-        eventually([&] {
         auto msg = e.execute_cql("select k, v from base where k = 0").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(0)} });
-        });
+        eventually([&] {
         auto msg = e.execute_cql("select k, v from mv where k = 0").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(0)} });
+        });
 
         e.execute_cql("insert into base (k, c, v) values (0, 0, 1);").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select k, v from base where k = 0").get0();
+        msg = e.execute_cql("select k, v from base where k = 0").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(1)} });
-        });
+        eventually([&] {
         msg = e.execute_cql("select k, v from mv where k = 0").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(1)} });
+        });
     });
 }
 
@@ -443,15 +443,15 @@ SEASTAR_TEST_CASE(test_all_types) {
         });
 
         e.execute_cql("insert into cf (k, listval) values (0, []);").get();
-        eventually([&] {
         auto msg = e.execute_cql("select k, listval from cf where k = 0").get0();
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)}, {} }});
-        });
 
+        eventually([&] {
         auto msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_rows({{ {int32_type->decompose(0)}, {} }});
+        });
 
         // frozen
         e.execute_cql("insert into cf (k, frozenlistval) values (0, [1, 2, 3]);").get();
@@ -1830,45 +1830,57 @@ SEASTAR_TEST_CASE(test_partition_key_filtering_with_slice) {
             e.execute_cql("insert into cf (a, b, c, d) values (2, 1, 3, 1)").get();
             e.execute_cql("insert into cf (a, b, c, d) values (2, 10, 3, 2)").get();
 
+            eventually([&] {
             auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                                 { {int32_type->decompose(1)}, {int32_type->decompose(10)}, {int32_type->decompose(2)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(2)}, {int32_type->decompose(10)}, {int32_type->decompose(3)}, {int32_type->decompose(2)} }});
+            });
 
             e.execute_cql("insert into cf (a, b, c, d) values (3, 10, 4, 2)").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                                 { {int32_type->decompose(1)}, {int32_type->decompose(10)}, {int32_type->decompose(2)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(2)}, {int32_type->decompose(10)}, {int32_type->decompose(3)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(3)}, {int32_type->decompose(10)}, {int32_type->decompose(4)}, {int32_type->decompose(2)} }});
+            });
 
 
             e.execute_cql("update cf set d = 1 where a = 0 and b = 0 and c = 0").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                                 { {int32_type->decompose(1)}, {int32_type->decompose(10)}, {int32_type->decompose(2)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(2)}, {int32_type->decompose(10)}, {int32_type->decompose(3)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(3)}, {int32_type->decompose(10)}, {int32_type->decompose(4)}, {int32_type->decompose(2)} }});
+            });
 
             e.execute_cql("update cf set d = 100 where a = 3 and b = 10 and c = 4").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                                 { {int32_type->decompose(1)}, {int32_type->decompose(10)}, {int32_type->decompose(2)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(2)}, {int32_type->decompose(10)}, {int32_type->decompose(3)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(3)}, {int32_type->decompose(10)}, {int32_type->decompose(4)}, {int32_type->decompose(100)} }});
+            });
 
             e.execute_cql("delete from cf where a = 0 and b = 0 and c = 0").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                                 { {int32_type->decompose(1)}, {int32_type->decompose(10)}, {int32_type->decompose(2)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(2)}, {int32_type->decompose(10)}, {int32_type->decompose(3)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(3)}, {int32_type->decompose(10)}, {int32_type->decompose(4)}, {int32_type->decompose(100)} }});
+            });
 
             e.execute_cql("delete from cf where a = 3 and b = 10 and c = 4").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                                 { {int32_type->decompose(1)}, {int32_type->decompose(10)}, {int32_type->decompose(2)}, {int32_type->decompose(2)} },
                                 { {int32_type->decompose(2)}, {int32_type->decompose(10)}, {int32_type->decompose(3)}, {int32_type->decompose(2)} }});
+            });
 
             e.execute_cql("drop materialized view vcf").get();
             e.execute_cql("drop table cf").get();
@@ -2259,47 +2271,59 @@ SEASTAR_TEST_CASE(test_clustering_key_in_restrictions) {
             e.execute_cql("insert into cf (a, b, c, d) values (1, 1, 0, 0)").get();
             e.execute_cql("insert into cf (a, b, c, d) values (1, 2, 1, 0)").get();
 
+            eventually([&] {
             auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+            });
 
+            eventually([&] {
             e.execute_cql("update cf set d = 1 where a = 1 and b = 0 and c = 0").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+            });
 
             e.execute_cql("update cf set d = 1 where a = 0 and b = 1 and c = 0").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)} },
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+            });
 
             e.execute_cql("delete from cf where a = 0 and b = 0 and c = 0").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)} },
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+            });
 
             e.execute_cql("delete from cf where a = 1 and b = 1 and c = 0").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_rows_ignore_order({
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)} },
                             { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
                             { {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+            });
 
             e.execute_cql("delete from cf where a in (0, 1) and b >= 1 and b <= 4").get();
-            msg = e.execute_cql("select a, b, c, d from vcf").get0();
+            eventually([&] {
+            auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
             assert_that(msg).is_rows().with_size(0);
+            });
 
             e.execute_cql("drop materialized view vcf").get();
             e.execute_cql("drop table cf").get();
