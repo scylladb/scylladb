@@ -3694,7 +3694,7 @@ static
 shared_sstable make_sstable_easy(const seastar::compat::filesystem::path& path, flat_mutation_reader rd, sstable_writer_config cfg, const sstables::sstable::version_types version) {
     auto s = rd.schema();
     auto sst = make_sstable(s, path.string(), 1, version, big);
-    sst->write_components(std::move(rd), 1, s, cfg).get();
+    sst->write_components(std::move(rd), 1, s, cfg, encoding_stats{}).get();
     sst->load().get();
     return sst;
 }

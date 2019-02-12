@@ -930,7 +930,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
         cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
         assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
     });
@@ -983,7 +983,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
         cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
@@ -1043,7 +1043,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
         cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
@@ -1100,7 +1100,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
             sstable_writer_config cfg;
             cfg.promoted_index_block_size = 1;
             cfg.large_data_handler = &nop_lp_handler;
-            sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+            sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
             sst->load().get();
 
             {
@@ -1146,7 +1146,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
@@ -1187,7 +1187,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
         cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         assert_that(get_index_reader(sst)).is_empty(*s);
@@ -1228,7 +1228,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
         sstable_writer_config cfg;
         cfg.correctly_serialize_non_compound_range_tombstones = false;
         cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
@@ -1283,7 +1283,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(make_combined_reader(s,
             mt1->make_flat_reader(s),
-            mt2->make_flat_reader(s)), 1, s, cfg).get();
+            mt2->make_flat_reader(s)), 1, s, cfg, encoding_stats{}).get();
         sst->load().get();
 
         assert_that(sst->as_mutation_source().make_reader(s))
@@ -1403,7 +1403,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
                                       sstables::sstable::format_types::big);
     sstable_writer_config cfg;
     cfg.large_data_handler = &nop_lp_handler;
-    sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+    sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
 
     auto pr = dht::partition_range::make_singular(small_keys[0]);

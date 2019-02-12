@@ -4950,7 +4950,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
             1 /* generation */,
             sstable_version_types::mc,
             sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(write_schema), 1, write_schema, cfg).get();
+        sst->write_components(mt->make_flat_reader(write_schema), 1, write_schema, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         BOOST_REQUIRE_EXCEPTION(
@@ -5020,7 +5020,11 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     sstable_writer_config cfg;
     cfg.large_data_handler = &handler;
 
-    sst->write_components(mt.make_flat_reader(s), 1, s, std::move(cfg)).get();
+    // The test provides thresholds values for the large row handler. Whether the handler gets
+    // trigger depends on the size of rows after they are written in the MC format and that size
+    // depends on the encoding statistics (because of variable-length encoding). The original values
+    // were chosen with the default-constructed encoding_stats, so let's keep it that way.
+    sst->write_components(mt.make_flat_reader(s), 1, s, std::move(cfg), encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
 }
 
