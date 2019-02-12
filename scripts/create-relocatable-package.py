@@ -70,7 +70,15 @@ for exe in executables:
 
 ld_so = libs['ld.so']
 
-ar = tarfile.open(output, mode='w|gz')
+# Although tarfile.open() can write directly to a compressed tar by using
+# the "w|gz" mode, it does so using a slow Python implementation. It is as
+# much as 3 times faster (!) to output to a pipe running the external gzip
+# command. We can complete the compression even faster by using the pigz
+# command - a parallel implementation of gzip utilizing all processors
+# instead of just one.
+gzip_process = subprocess.Popen("pigz > "+output, shell=True, stdin=subprocess.PIPE)
+
+ar = tarfile.open(fileobj=gzip_process.stdin, mode='w|')
 pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
 ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
 
@@ -142,3 +150,7 @@ ar.add('swagger-ui')
 ar.add('api')
 ar.add('tools')
 ar.add('scylla-gdb.py')
+
+# Complete the tar output, and wait for the gzip process to complete
+ar.close()
+gzip_process.communicate()

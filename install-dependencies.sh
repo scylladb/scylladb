@@ -29,6 +29,7 @@ debian_base_packages=(
     scylla-antlr35-c++-dev
     thrift-compiler
     git
+    pigz
 )
 
 fedora_packages=(
@@ -59,6 +60,7 @@ fedora_packages=(
     python3-setuptools
     python3-magic
     dnf-utils
+    pigz
 )
 
 centos_packages=(
@@ -70,6 +72,7 @@ centos_packages=(
     scylla-boost163-static
     scylla-python34-pyparsing20
     systemd-devel
+    pigz
 )
 
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
