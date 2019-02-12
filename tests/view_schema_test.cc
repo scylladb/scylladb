@@ -32,7 +32,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
-
+#include "exceptions/unrecognized_entity_exception.hh"
 #include "db/config.hh"
 
 using namespace std::literals::chrono_literals;
@@ -3695,6 +3695,31 @@ SEASTAR_TEST_CASE(test_unselected_column) {
             e.execute_cql("select w from vcf").get();
             BOOST_ASSERT(false);
         } catch (exceptions::invalid_request_exception&) {
+        }
+        // Check that we also cannot use the x, y, z, or w columns
+        // as restrictions, despite these columns nominally existing as
+        // virtual columns. This reproduces issue #4216.
+        //
+        // In all these tests, we got errors both before and after fixing
+        // this bug, but the error is different. For example, "select * from
+        // vcf where x = 0" used to give an invalid_request_exception with
+        // the string "Invalid INTEGER constant (0) for "x" of type empty",
+        // but should throw a unrecognized_entity_exception with the string
+        // "Undefined name x in where clause ('x = 0')" as happens when a
+        // completely unknown column name is used.
+        BOOST_TEST_PASSPOINT();
+        try {
+            // This is a baseline check for the error type we should expect
+            // when a completely non-existent column name is used.
+            e.execute_cql("select * from vcf where nonexistent = 0").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::unrecognized_entity_exception&) {
+        }
+        BOOST_TEST_PASSPOINT();
+        try {
+            e.execute_cql("select * from vcf where x = 0").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::unrecognized_entity_exception&) {
         }
     });
 }

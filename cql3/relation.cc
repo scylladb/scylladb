@@ -48,7 +48,7 @@ const column_definition&
 relation::to_column_definition(schema_ptr schema, ::shared_ptr<column_identifier::raw> entity) {
     auto id = entity->prepare_column_identifier(schema);
     auto def = get_column_definition(schema, *id);
-    if (!def) {
+    if (!def || def->is_view_virtual()) {
         throw exceptions::unrecognized_entity_exception(id, shared_from_this());
     }
     return *def;
