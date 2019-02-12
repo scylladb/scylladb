@@ -403,23 +403,27 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
 /// multishard reader itself.
 class reader_lifecycle_policy {
 public:
-    struct paused_or_stopped_reader {
-        // Null when the reader is paused.
-        foreign_ptr<std::unique_ptr<flat_mutation_reader>> remote_reader;
+    struct stopped_reader {
+        foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> handle;
         circular_buffer<mutation_fragment> unconsumed_fragments;
-        // Only set for paused readers.
         bool has_pending_next_partition;
     };
 
+protected:
+    // Helpers for implementations, who might wish to provide the semaphore in
+    // other ways than through the official `semaphore()` override.
+    static reader_concurrency_semaphore::inactive_read_handle pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader);
+    static flat_mutation_reader_opt try_resume(reader_concurrency_semaphore& sem, reader_concurrency_semaphore::inactive_read_handle irh);
+
 public:
-    /// Create an appropriate reader on the specified shard.
+    /// Create an appropriate reader on the shard it is called on.
     ///
     /// Will be called when the multishard reader visits a shard for the
-    /// first time. This method should also enter gates, take locks or
-    /// whatever is appropriate to make sure resources it is using on the
+    /// first time or when a reader has to be recreated after having been
+    /// evicted (while paused). This method should also enter gates, take locks
+    /// or whatever is appropriate to make sure resources it is using on the
     /// remote shard stay alive, during the lifetime of the created reader.
-    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> create_reader(
-            shard_id shard,
+    virtual flat_mutation_reader create_reader(
             schema_ptr schema,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -441,7 +445,19 @@ public:
     /// all the readers being cleaned up is up to the implementation.
     ///
     /// This method will be called from a destructor so it cannot throw.
-    virtual void destroy_reader(shard_id shard, future<paused_or_stopped_reader> reader) noexcept = 0;
+    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
+
+    /// Get the relevant semaphore for this read.
+    ///
+    /// The semaphore is used to register paused readers with as inactive
+    /// readers. The semaphore then can evict these readers when resources are
+    /// in-demand.
+    /// The multishard reader will pause and resume readers via the `pause()`
+    /// and `try_resume()` helper methods. Clients can resume any paused readers
+    /// after the multishard reader is destroyed via the same helper methods.
+    ///
+    /// This method will be called on the shard where the relevant reader lives.
+    virtual reader_concurrency_semaphore& semaphore() = 0;
 
     /// Pause the reader.
     ///
@@ -449,13 +465,19 @@ public:
     /// otherwise inactive. This allows freeing up resources that are in-demand
     /// by evicting these paused readers. Most notably, this allows freeing up
     /// reader permits when the node is overloaded with reads.
-    virtual future<> pause(foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader) = 0;
+    /// This is just a helper method, it uses the semaphore returned by
+    /// `semaphore()` for the actual pausing.
+    /// \see semaphore()
+    reader_concurrency_semaphore::inactive_read_handle pause(flat_mutation_reader reader);
 
     /// Try to resume the reader.
     ///
-    /// The pointer returned will be null when resuming fails. This can happen
-    /// if the reader was evicted while paused.
-    virtual future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> try_resume(shard_id shard) = 0;
+    /// The optional returned will be disengaged when resuming fails. This can
+    /// happen if the reader was evicted while paused.
+    /// This is just a helper method, it uses the semaphore returned by
+    /// `semaphore()` for the actual pausing.
+    /// \see semaphore()
+    flat_mutation_reader_opt try_resume(reader_concurrency_semaphore::inactive_read_handle irh);
 };
 
 /// Make a multishard_combining_reader.

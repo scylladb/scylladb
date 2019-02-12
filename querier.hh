@@ -326,7 +326,7 @@ public:
         const utils::UUID _key;
         const lowres_clock::time_point _expires;
         std::variant<data_querier, mutation_querier, shard_mutation_querier> _value;
-        std::optional<reader_concurrency_semaphore::inactive_read_handle> _handle;
+        reader_concurrency_semaphore::inactive_read_handle _handle;
 
     public:
         template <typename Querier>
@@ -348,8 +348,8 @@ public:
             _handle = std::move(handle);
         }
 
-        reader_concurrency_semaphore::inactive_read_handle get_inactive_handle() const {
-            return *_handle;
+        reader_concurrency_semaphore::inactive_read_handle get_inactive_handle() && {
+            return std::move(_handle);
         }
 
         const utils::UUID& key() const {
