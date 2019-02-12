@@ -32,6 +32,7 @@
 #include "cell_locking.hh"
 #include "sstables/compaction_manager.hh"
 #include "db/large_data_handler.hh"
+#include "sstables/sstables_manager.hh"
 
 // Includes: database, auth, storage_service
 class storage_service_for_tests {

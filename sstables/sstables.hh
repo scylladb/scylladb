@@ -124,13 +124,6 @@ struct sstable_writer_config {
     utils::UUID run_identifier = utils::make_random_uuid();
 };
 
-static constexpr inline size_t default_sstable_buffer_size() {
-    return 128 * 1024;
-}
-
-shared_sstable make_sstable(schema_ptr schema, sstring dir, int64_t generation, sstable_version_types v, sstable_format_types f, gc_clock::time_point now = gc_clock::now(),
-            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_sstable_buffer_size());
-
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
 public:

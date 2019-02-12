@@ -40,6 +40,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "sstables/compaction.hh"
 #include "sstables/remove.hh"
 #include <boost/range/adaptor/transformed.hpp>
@@ -224,6 +225,7 @@ database::database(const db::config& cfg, database_config dbcfg)
               _cfg->compaction_large_row_warning_threshold_mb()*1024*1024,
               _cfg->compaction_large_cell_warning_threshold_mb()*1024*1024))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
+    , _sstables_manager(std::make_unique<sstables::sstables_manager>())
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>(*this))
 {
@@ -907,6 +909,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
         cfg.large_data_handler = db.get_large_data_handler();
     }
 
+    cfg.sstables_manager = &db.get_sstables_manager();
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();

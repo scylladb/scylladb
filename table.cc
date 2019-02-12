@@ -21,6 +21,7 @@
 
 #include "database.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "service/priority_manager.hh"
 #include "db/view/view_updating_consumer.hh"
 #include "cell_locking.hh"
@@ -598,12 +599,12 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
 
 sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
         io_error_handler_gen error_handler_gen) {
-    return sstables::make_sstable(_schema, dir, generation, v, f, gc_clock::now(), error_handler_gen);
+    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f, gc_clock::now(), error_handler_gen);
 }
 
 sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation,
         sstables::sstable_version_types v, sstables::sstable_format_types f) {
-    return sstables::make_sstable(_schema, dir, generation, v, f);
+    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f);
 }
 
 sstables::shared_sstable table::make_sstable(sstring dir) {
@@ -1542,7 +1543,8 @@ table::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager, _config.streaming_scheduling_group);
 }
 
-table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,
+             cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()))

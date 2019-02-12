@@ -113,6 +113,7 @@ class sstable;
 class entry_descriptor;
 class compaction_descriptor;
 class foreign_sstable_open_info;
+class sstables_manager;
 
 }
 
@@ -336,6 +337,7 @@ public:
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         db::large_data_handler* large_data_handler;
+        sstables::sstables_manager* sstables_manager;
         db::timeout_semaphore* view_update_concurrency_semaphore;
         size_t view_update_concurrency_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
@@ -919,6 +921,11 @@ public:
         return _config.large_data_handler;
     }
 
+    sstables::sstables_manager& get_sstables_manager() const {
+        assert(_config.sstables_manager);
+        return *_config.sstables_manager;
+    }
+
     future<> populate_views(
             std::vector<view_ptr>,
             dht::token base_token,
@@ -1286,6 +1293,8 @@ private:
     std::unique_ptr<db::large_data_handler> _large_data_handler;
     std::unique_ptr<db::large_data_handler> _nop_large_data_handler;
 
+    std::unique_ptr<sstables::sstables_manager> _sstables_manager;
+
     query::result_memory_limiter _result_memory_limiter;
 
     friend db::data_listeners;
@@ -1441,6 +1450,11 @@ public:
 
     db::large_data_handler* get_nop_large_data_handler() const {
         return _nop_large_data_handler.get();
+    }
+
+    sstables::sstables_manager& get_sstables_manager() const {
+        assert(_sstables_manager);
+        return *_sstables_manager;
     }
 
     future<> flush_all_memtables();

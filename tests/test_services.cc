@@ -43,10 +43,12 @@ static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
 db::nop_large_data_handler nop_lp_handler;
+thread_local sstables::sstables_manager test_sstables_manager;
 
 column_family::config column_family_test_config() {
     column_family::config cfg;
     cfg.large_data_handler = &nop_lp_handler;
+    cfg.sstables_manager = &test_sstables_manager;
     return cfg;
 }
 
@@ -62,9 +64,9 @@ column_family_for_tests::column_family_for_tests(schema_ptr s)
     : _data(make_lw_shared<data>())
 {
     _data->s = s;
+    _data->cfg = column_family_test_config();
     _data->cfg.enable_disk_writes = false;
     _data->cfg.enable_commitlog = false;
-    _data->cfg.large_data_handler = &nop_lp_handler;
     _data->cf = make_lw_shared<column_family>(_data->s, _data->cfg, column_family::no_commitlog(), _data->cm, _data->cl_stats, _data->tracker);
     _data->cf->mark_ready_for_writes();
 }
