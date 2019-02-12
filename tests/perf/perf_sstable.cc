@@ -36,34 +36,34 @@ using namespace sstables;
 static unsigned iterations = 30;
 static unsigned parallelism = 1;
 
-future<> test_write(distributed<test_env>& dt) {
+future<> test_write(distributed<perf_sstable_test_env>& dt) {
     return seastar::async([&dt] {
         storage_service_for_tests ssft;
-        dt.invoke_on_all([] (test_env &t) {
+        dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.fill_memtable();
         }).then([&dt] {
-            return time_runs(iterations, parallelism, dt, &test_env::flush_memtable);
+            return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::flush_memtable);
         }).get();
     });
 }
 
-future<> test_compaction(distributed<test_env>& dt) {
+future<> test_compaction(distributed<perf_sstable_test_env>& dt) {
     return seastar::async([&dt] {
         storage_service_for_tests ssft;
-        dt.invoke_on_all([] (test_env &t) {
+        dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.fill_memtable();
         }).then([&dt] {
-            return time_runs(iterations, parallelism, dt, &test_env::compaction);
+            return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::compaction);
         }).get();
     });
 }
 
-future<> test_index_read(distributed<test_env>& dt) {
-    return time_runs(iterations, parallelism, dt, &test_env::read_all_indexes);
+future<> test_index_read(distributed<perf_sstable_test_env>& dt) {
+    return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::read_all_indexes);
 }
 
-future<> test_sequential_read(distributed<test_env>& dt) {
-    return time_runs(iterations, parallelism, dt, &test_env::read_sequential_partitions);
+future<> test_sequential_read(distributed<perf_sstable_test_env>& dt) {
+    return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::read_sequential_partitions);
 }
 
 enum class test_modes {
@@ -98,9 +98,9 @@ int main(int argc, char** argv) {
         ("testdir", bpo::value<sstring>()->default_value("/var/lib/scylla/perf-tests"), "directory in which to store the sstables");
 
     return app.run_deprecated(argc, argv, [&app] {
-        auto test = make_lw_shared<distributed<test_env>>();
+        auto test = make_lw_shared<distributed<perf_sstable_test_env>>();
 
-        auto cfg = test_env::conf();
+        auto cfg = perf_sstable_test_env::conf();
         iterations = app.configuration()["iterations"].as<unsigned>();
         parallelism = app.configuration()["parallelism"].as<unsigned>();
         cfg.partitions = app.configuration()["partitions"].as<unsigned>();
@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
             engine().at_exit([test] { return test->stop(); });
             if ((mode == test_modes::index_read) ||
                (mode == test_modes::sequential_read)) {
-                return test->invoke_on_all([] (test_env &t) {
+                return test->invoke_on_all([] (perf_sstable_test_env &t) {
                     return t.load_sstables(iterations);
                 }).then_wrapped([] (future<> f) {
                     try {
