@@ -236,11 +236,20 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
     return check_component_integrity(component_type::CompressionInfo);
 }
 
+template <typename Func>
+inline auto
+write_and_validate_sst(schema_ptr s, sstring dir, Func&& func) {
+    return do_with(tmpdir(), [s = std::move(s), dir = std::move(dir), func = std::move(func)] (tmpdir& tmp) {
+        return do_write_sst(s, dir, tmp.path().string(), 1).then([&tmp, s = std::move(s), func = std::move(func)] (auto sst1) {
+            auto sst2 = make_sstable(s, tmp.path().string(), 2, la, big);
+            return func(std::move(sst1), std::move(sst2));
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(check_summary_func) {
-    auto tmp = make_lw_shared<tmpdir>();
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return do_write_sst(s, "tests/sstables/compressed", tmp->path().string(), 1).then([tmp, s] (auto sst1) {
-        auto sst2 = make_sstable(s, tmp->path().string(), 2, la, big);
+    return write_and_validate_sst(std::move(s), "tests/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_summary().then([sst1, sst2] {
             summary& sst1_s = sstables::test(sst1).get_summary();
             summary& sst2_s = sstables::test(sst2).get_summary();
@@ -250,8 +259,9 @@ SEASTAR_TEST_CASE(check_summary_func) {
             BOOST_REQUIRE(sst1_s.entries == sst2_s.entries);
             BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
             BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
+            return make_ready_future<>();
         });
-    }).then([tmp] {});
+    });
 }
 
 SEASTAR_TEST_CASE(check_filter_func) {
@@ -259,10 +269,8 @@ SEASTAR_TEST_CASE(check_filter_func) {
 }
 
 SEASTAR_TEST_CASE(check_statistics_func) {
-    auto tmp = make_lw_shared<tmpdir>();
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return do_write_sst(s, "tests/sstables/compressed", tmp->path().string(), 1).then([tmp, s] (auto sst1) {
-        auto sst2 = make_sstable(s, tmp->path().string(), 2, la, big);
+    return write_and_validate_sst(std::move(s), "tests/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_statistics().then([sst1, sst2] {
             statistics& sst1_s = sstables::test(sst1).get_statistics();
             statistics& sst2_s = sstables::test(sst2).get_statistics();
@@ -274,22 +282,22 @@ SEASTAR_TEST_CASE(check_statistics_func) {
                 BOOST_REQUIRE(boost::get<0>(e).second ==  boost::get<1>(e).second);
             }
             // TODO: compare the field contents from both sstables.
+            return make_ready_future<>();
         });
-    }).then([tmp] {});
+    });
 }
 
 SEASTAR_TEST_CASE(check_toc_func) {
-    auto tmp = make_lw_shared<tmpdir>();
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return do_write_sst(s, "tests/sstables/compressed", tmp->path().string(), 1).then([tmp, s] (auto sst1) {
-        auto sst2 = sstables::make_sstable(s, tmp->path().string(), 2, la, big);
+    return write_and_validate_sst(std::move(s), "tests/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_toc().then([sst1, sst2] {
             auto& sst1_c = sstables::test(sst1).get_components();
             auto& sst2_c = sstables::test(sst2).get_components();
 
             BOOST_REQUIRE(sst1_c == sst2_c);
+            return make_ready_future<>();
         });
-    }).then([tmp] {});
+    });
 }
 
 SEASTAR_TEST_CASE(uncompressed_random_access_read) {
