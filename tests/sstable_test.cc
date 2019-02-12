@@ -48,17 +48,21 @@ bytes as_bytes(const sstring& s) {
     return { reinterpret_cast<const int8_t*>(s.begin()), s.size() };
 }
 
+future<> test_using_working_sst(schema_ptr s, sstring dir, int64_t gen) {
+    return working_sst(std::move(s), std::move(dir), gen);
+}
+
 SEASTAR_TEST_CASE(uncompressed_data) {
-    return working_sst(uncompressed_schema(), uncompressed_dir(), 1);
+    return test_using_working_sst(uncompressed_schema(), uncompressed_dir(), 1);
 }
 
 SEASTAR_TEST_CASE(compressed_data) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return working_sst(std::move(s), "tests/sstables/compressed", 1);
+    return test_using_working_sst(std::move(s), "tests/sstables/compressed", 1);
 }
 
 SEASTAR_TEST_CASE(composite_index) {
-    return working_sst(composite_schema(), "tests/sstables/composite", 1);
+    return test_using_working_sst(composite_schema(), "tests/sstables/composite", 1);
 }
 
 future<index_list> index_read(schema_ptr schema, sstring path) {
