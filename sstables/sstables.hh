@@ -809,8 +809,7 @@ public:
     future<foreign_sstable_open_info> get_open_info() &;
 
     // returns all info needed for a sstable to be shared with other shards.
-    static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f,
-        const io_priority_class& pc = default_priority_class());
+    future<sstable_open_info> load_shared_components();
 
     sstables_stats& get_stats() {
         return _stats;

@@ -1413,14 +1413,10 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) {
     });
 }
 
-future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f,
-        const io_priority_class& pc) {
-    auto sst = sstables::make_sstable(s, dir, generation, v, f);
-    return sst->load(pc).then([sst] () mutable {
-        auto info = sstable_open_info{make_lw_shared<shareable_components>(std::move(*sst->_components)),
-            std::move(sst->_shards), std::move(sst->_data_file), std::move(sst->_index_file)};
-        return make_ready_future<sstable_open_info>(std::move(info));
-    });
+future<sstable_open_info> sstable::load_shared_components() {
+    auto info = sstable_open_info{make_lw_shared<shareable_components>(std::move(*_components)),
+        std::move(_shards), std::move(_data_file), std::move(_index_file)};
+    return make_ready_future<sstable_open_info>(std::move(info));
 }
 
 future<foreign_sstable_open_info> sstable::get_open_info() & {
