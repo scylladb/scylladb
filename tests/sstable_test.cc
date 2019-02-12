@@ -162,8 +162,7 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
 }
 
 static future<sstable_ptr> do_write_sst(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
-    auto sst = sstables::make_sstable(std::move(schema), load_dir, generation, la, big);
-    return sst->load().then([sst, write_dir, generation] {
+    return reusable_sst(std::move(schema), load_dir, generation, la).then([write_dir, generation] (sstable_ptr sst) {
         sstables::test(sst).change_generation_number(generation + 1);
         sstables::test(sst).change_dir(write_dir);
         auto fut = sstables::test(sst).store();
@@ -944,12 +943,8 @@ static schema_ptr large_partition_schema() {
 
 static future<shared_sstable> load_large_partition_sst(const sstables::sstable::version_types version) {
     auto s = large_partition_schema();
-    auto sst = make_sstable(s, get_test_dir("large_partition", s), 3,
-                            version, big);
-    auto fut = sst->load();
-    return std::move(fut).then([sst = std::move(sst)] {
-        return std::move(sst);
-    });
+    auto dir = get_test_dir("large_partition", s);
+    return reusable_sst(std::move(s), std::move(dir), 3, version);
 }
 
 // This is a rudimentary test that reads an sstable exported from Cassandra
