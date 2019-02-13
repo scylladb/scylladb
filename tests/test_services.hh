@@ -23,6 +23,7 @@
 #pragma once
 
 #include <memory>
+#include <seastar/core/reactor.hh>
 
 #include "schema.hh"
 #include "schema_builder.hh"
@@ -64,3 +65,6 @@ struct column_family_for_tests {
     column_family& operator*() { return *_data->cf; }
     column_family* operator->() { return _data->cf.get(); }
 };
+
+dht::token create_token_from_key(sstring key);
+range<dht::token> create_token_range_from_keys(sstring start_key, sstring end_key);

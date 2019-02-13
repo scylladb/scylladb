@@ -1716,22 +1716,6 @@ SEASTAR_TEST_CASE(test_counter_write) {
 
 // Leveled compaction strategy tests
 
-static dht::token create_token_from_key(sstring key) {
-    sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
-    dht::token token = dht::global_partitioner().get_token(key_view);
-    assert(token == dht::global_partitioner().get_token(key_view));
-    return token;
-}
-
-static range<dht::token> create_token_range_from_keys(sstring start_key, sstring end_key) {
-    dht::token start = create_token_from_key(start_key);
-    assert(engine().cpu_id() == dht::global_partitioner().shard_of(start));
-    dht::token end = create_token_from_key(end_key);
-    assert(engine().cpu_id() == dht::global_partitioner().shard_of(end));
-    assert(end >= start);
-    return range<dht::token>::make(start, end);
-}
-
 static std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
         unsigned ignore_msb = 0, unsigned smp_count = smp::count) {
     unsigned tokens = 0;

@@ -20,6 +20,24 @@
  */
 
 #include "tests/test_services.hh"
+#include "dht/i_partitioner.hh"
+#include "dht/murmur3_partitioner.hh"
+
+dht::token create_token_from_key(sstring key) {
+    sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
+    dht::token token = dht::global_partitioner().get_token(key_view);
+    assert(token == dht::global_partitioner().get_token(key_view));
+    return token;
+}
+
+range<dht::token> create_token_range_from_keys(sstring start_key, sstring end_key) {
+    dht::token start = create_token_from_key(start_key);
+    assert(engine().cpu_id() == dht::global_partitioner().shard_of(start));
+    dht::token end = create_token_from_key(end_key);
+    assert(engine().cpu_id() == dht::global_partitioner().shard_of(end));
+    assert(end >= start);
+    return range<dht::token>::make(start, end);
+}
 
 static db::nop_large_data_handler nop_lp_handler;
 
