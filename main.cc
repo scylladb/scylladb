@@ -539,7 +539,11 @@ int main(int ac, char** av) {
                 //return db.stop();
                 // call stop on each db instance, but leave the shareded<database> pointers alive.
                 return db.invoke_on_all([](auto& db) {
-                    return db.stop();
+                    db.stop_large_data_handler();
+                }).then([&db]{
+                    return db.invoke_on_all([](auto& db) {
+                        return db.stop();
+                    });
                 }).then([] {
                         return sstables::await_background_jobs_on_all_shards();
                 }).then([&return_value] {

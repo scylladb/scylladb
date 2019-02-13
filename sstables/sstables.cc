@@ -2118,7 +2118,7 @@ stop_iteration components_writer::consume_end_of_partition() {
     // compute size of the current row.
     _sst._c_stats.partition_size = _out.offset() - _sst._c_stats.start_offset;
 
-    _large_data_handler->maybe_update_large_partitions(_sst, *_partition_key, _sst._c_stats.partition_size);
+    _large_data_handler->maybe_update_large_partitions(_sst, *_partition_key, _sst._c_stats.partition_size).get();
 
     // update is about merging column_stats with the data being stored by collector.
     _sst._collector.update(std::move(_sst._c_stats));

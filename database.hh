@@ -1353,6 +1353,7 @@ public:
                                      std::optional<sstring> index_name_root) const;
     schema_ptr find_indexed_table(const sstring& ks_name, const sstring& index_name) const;
     future<> stop();
+    void stop_large_data_handler();
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);

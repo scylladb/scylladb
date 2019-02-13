@@ -41,8 +41,15 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "db/config.hh"
 
 using namespace std::literals::chrono_literals;
+
+SEASTAR_TEST_CASE(test_large_partitions) {
+    db::config cfg{};
+    cfg.compaction_large_partition_warning_threshold_mb(0);
+    return do_with_cql_env([](cql_test_env& e) { return make_ready_future<>(); }, cfg);
+}
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env([] (cql_test_env& e) {

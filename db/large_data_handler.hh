@@ -38,6 +38,7 @@ public:
     };
 
 private:
+    bool _stopped = false;
     uint64_t _partition_threshold_bytes;
     uint64_t _row_threshold_bytes;
     mutable large_data_handler::stats _stats;
@@ -47,6 +48,14 @@ public:
         : _partition_threshold_bytes(partition_threshold_bytes)
         , _row_threshold_bytes(row_threshold_bytes) {}
     virtual ~large_data_handler() {}
+
+    // Once large_data_handler is stopped it will ignore requests to update system.large_partitions. Any futures already
+    // returned must be waited for by the caller.
+    bool stopped() const { return _stopped; }
+    void stop() {
+        assert(!stopped());
+        _stopped = true;
+    }
 
     void maybe_log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const {

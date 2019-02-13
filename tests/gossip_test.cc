@@ -62,6 +62,9 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
 
         db.start().get();
         auto stop_db = defer([&] { db.stop().get(); });
+        auto stop_large_data_handler = defer([&db] {
+            db.invoke_on_all([](database& db) { db.stop_large_data_handler(); }).get();
+        });
 
         gms::get_failure_detector().start().get();
         auto stop_failure_detector = defer([&] { gms::get_failure_detector().stop().get(); });

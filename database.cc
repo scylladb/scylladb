@@ -1635,8 +1635,12 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
     return nullptr;
 }
 
+void database::stop_large_data_handler() { _large_data_handler->stop(); }
+
 future<>
 database::stop() {
+    assert(_large_data_handler->stopped());
+
     return _compaction_manager->stop().then([this] {
         // try to ensure that CL has done disk flushing
         if (_commitlog != nullptr) {
