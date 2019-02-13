@@ -1211,7 +1211,7 @@ private:
             idx_opts = std::unordered_map<sstring, sstring>(def.index_options.begin(), def.index_options.end());
         }
         if (idx_name && idx_opts && idx_type) {
-            return index_metadata(idx_name.value(), idx_opts.value(), idx_type.value());
+            return index_metadata(idx_name.value(), idx_opts.value(), idx_type.value(), index_metadata::is_local_index::no);
         }
         return {};
     }

@@ -361,7 +361,7 @@ public:
                 }
                 if (index_kind) {
                     // Origin assumes index_name is always set, so let's do the same
-                    builder.with_index(index_metadata(index_name, options, *index_kind));
+                    builder.with_index(index_metadata(index_name, options, *index_kind, index_metadata::is_local_index::no));
                 }
 
                 data_type column_name_type = [&] {

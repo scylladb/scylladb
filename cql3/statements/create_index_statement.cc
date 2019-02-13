@@ -298,7 +298,7 @@ index_metadata create_index_statement::make_index_metadata(schema_ptr schema,
                 return target->as_string();
             }), ",");
     new_options.emplace(index_target::target_option_name, target_option);
-    return index_metadata{name, new_options, kind};
+    return index_metadata{name, new_options, kind, index_metadata::is_local_index::no};
 }
 
 }
