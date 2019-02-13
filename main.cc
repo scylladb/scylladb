@@ -667,6 +667,9 @@ int main(int ac, char** av) {
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
 
+            // truncation record migration
+            db::system_keyspace::migrate_truncation_records().get();
+
             supervisor::notify("loading sstables");
 
             distributed_loader::ensure_system_table_directories(db).get();

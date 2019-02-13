@@ -41,6 +41,9 @@ public:
     // Verifies that the result has the following rows and only those rows.
     rows_assertions with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows);
     rows_assertions with_serialized_columns_count(size_t columns_count);
+
+    rows_assertions is_null();
+    rows_assertions is_not_null();
 };
 
 class result_msg_assertions {

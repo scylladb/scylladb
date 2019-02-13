@@ -143,10 +143,14 @@ private:
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
+    std::set<sstring> _disabled_features;
 public:
-    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service);
+    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, /* only for tests */ std::set<sstring> disabled_features = {});
     void isolate_on_error();
     void isolate_on_commit_error();
+
+    // only for tests
+    void set_disabled_features(std::set<sstring> = {});
 
     // Needed by distributed<>
     future<> stop();
@@ -296,6 +300,7 @@ private:
     gms::feature _stream_with_rpc_stream_feature;
     gms::feature _mc_sstable_feature;
     gms::feature _row_level_repair_feature;
+    gms::feature _truncation_table;
 public:
     void enable_all_features();
 
@@ -2223,7 +2228,8 @@ private:
 public:
     utils::UUID get_local_id() { return _local_host_id; }
 
-    static sstring get_config_supported_features();
+    sstring get_config_supported_features();
+    std::set<sstring> get_config_supported_features_set();
 
     bool cluster_supports_range_tombstones() {
         return bool(_range_tombstones_feature);
@@ -2287,6 +2293,9 @@ public:
 
     bool cluster_supports_row_level_repair() const {
         return bool(_row_level_repair_feature);
+    }
+    const gms::feature& cluster_supports_truncation_table() const {
+        return _truncation_table;
     }
 private:
     future<> set_cql_ready(bool ready);

@@ -125,6 +125,7 @@ boost_tests = [
     'utf8_test',
     'small_vector_test',
     'data_listeners_test',
+    'truncation_migration_test',
 ]
 
 other_tests = [
