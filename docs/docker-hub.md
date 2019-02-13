@@ -43,6 +43,35 @@ cqlsh>
 $ docker run --name some-scylla2  --hostname some-scylla2 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
 ```
 
+### Make a cluster with Docker Compose
+
+First, create a `docker-compose.yml` file with the following contents:
+
+```yaml
+version: '3'
+
+services:
+  some-scylla:
+    image: scylladb/scylla
+    container_name: some-scylla
+
+  some-scylla2:
+    image: scylladb/scylla
+    container_name: some-scylla2
+    command: --seeds=some-scylla
+
+  some-scylla3:
+    image: scylladb/scylla
+    container_name: some-scylla3
+    command: --seeds=some-scylla
+```
+
+Then, launch the 3-node cluster as follows:
+
+```
+docker-compose up -d
+```
+
 ## Check `scylla` logs
 
 ```console
