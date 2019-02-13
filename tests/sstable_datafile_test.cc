@@ -1776,10 +1776,6 @@ static range<dht::token> create_token_range_from_keys(sstring start_key, sstring
     return range<dht::token>::make(start, end);
 }
 
-namespace dht {
-    extern std::unique_ptr<i_partitioner> default_partitioner;
-}
-
 static std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
         unsigned ignore_msb = 0, unsigned smp_count = smp::count) {
     unsigned tokens = 0;
