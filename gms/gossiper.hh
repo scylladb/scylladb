@@ -90,6 +90,7 @@ using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
 public:
     using clk = seastar::lowres_system_clock;
+    using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
 private:
     using messaging_verb = netw::messaging_verb;
     using messaging_service = netw::messaging_service;
@@ -576,12 +577,9 @@ private:
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
     // Get features supported by all the nodes this node knows about
-    std::set<sstring> get_supported_features() const;
-    // Get features supported by all the nodes listed in the address/feature map
-    static std::set<sstring> get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string);
+    std::set<sstring> get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const;
 public:
-    void check_knows_remote_features(sstring local_features_string) const;
-    void check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const;
+    void check_knows_remote_features(sstring local_features_string, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;
     void maybe_enable_features();
 private:
     seastar::metrics::metric_groups _metrics;
