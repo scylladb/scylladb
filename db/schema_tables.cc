@@ -1978,7 +1978,10 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
             auto i = exts.find(p.first);
             if (i != exts.end()) {
                 try {
-                    result.emplace(p.first, i->second(p.second));
+                    auto ep = i->second(p.second);
+                    if (ep) {
+                        result.emplace(p.first, std::move(ep));
+                    }
                     continue;
                 } catch (...) {
                     slogger.warn("Error parsing extension {}: {}", p.first, std::current_exception());

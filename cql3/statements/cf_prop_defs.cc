@@ -255,7 +255,12 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, const db::extension
     for (auto& p : exts.schema_extensions()) {
         auto i = _properties.find(p.first);
         if (i != _properties.end()) {
-            std::visit([&](auto& v) { er.emplace(p.first, p.second(v)); }, i->second);
+            std::visit([&](auto& v) {
+                auto ep = p.second(v);
+                if (ep) {
+                    er.emplace(p.first, std::move(ep));
+                }
+            }, i->second);
         }
     }
     builder.set_extensions(std::move(er));
