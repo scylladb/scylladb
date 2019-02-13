@@ -2,6 +2,7 @@
 #include <memory>
 #include <utility>
 
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
@@ -13,6 +14,7 @@
 #include "sstables/compaction_manager.hh"
 #include "mutation_reader.hh"
 #include "sstable_test.hh"
+#include "test_services.hh"
 #include "tmpdir.hh"
 #include "cell_locking.hh"
 #include "flat_mutation_reader_assertions.hh"
@@ -47,6 +49,10 @@ static inline std::vector<std::pair<sstring, dht::token>> token_generation_for_s
     });
 
     return key_and_token_pair;
+}
+
+static std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
+    return token_generation_for_shard(engine().cpu_id(), tokens_to_generate);
 }
 
 static schema_ptr get_schema() {
@@ -148,4 +154,39 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
     return seastar::async([] {
         run_sstable_resharding_test();
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_resharding_strategy_tests) {
+    for (const auto version : all_sstable_versions) {
+        auto s = make_lw_shared(schema({}, "ks", "cf", {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+        auto get_sstable = [&] (int64_t gen, sstring first_key, sstring last_key) mutable {
+            auto sst = make_sstable(s, "", gen, version, sstables::sstable::format_types::big);
+            stats_metadata stats = {};
+            stats.sstable_level = 1;
+            sstables::test(sst).set_values(std::move(first_key), std::move(last_key), std::move(stats));
+            return sst;
+        };
+
+        column_family_for_tests cf;
+
+        auto tokens = token_generation_for_current_shard(2);
+        auto stcs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
+        auto lcs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+
+        auto sst1 = get_sstable(1, tokens[0].first, tokens[1].first);
+        auto sst2 = get_sstable(2, tokens[1].first, tokens[1].first);
+
+        {
+            // TODO: sstable_test runs with smp::count == 1, thus we will not be able to stress it more
+            // until we move this test case to sstable_resharding_test.
+            auto descriptors = stcs.get_resharding_jobs(*cf, { sst1, sst2 });
+            BOOST_REQUIRE(descriptors.size() == 2);
+        }
+        {
+            auto ssts = std::vector<sstables::shared_sstable>{ sst1, sst2 };
+            auto descriptors = lcs.get_resharding_jobs(*cf, ssts);
+            auto expected_jobs = ssts.size()/smp::count + ssts.size()%smp::count;
+            BOOST_REQUIRE(descriptors.size() == expected_jobs);
+        }
+    }
 }
