@@ -71,7 +71,7 @@ bool is_datacenter_local(consistency_level l);
 bool is_local(gms::inet_address endpoint);
 
 template<typename Range>
-inline size_t count_local_endpoints(Range& live_endpoints) {
+inline size_t count_local_endpoints(const Range& live_endpoints) {
     return std::count_if(live_endpoints.begin(), live_endpoints.end(), is_local);
 }
 
@@ -98,7 +98,7 @@ struct dc_node_count {
 template <typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 inline std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
         keyspace& ks,
-        Range& live_endpoints,
+        const Range& live_endpoints,
         const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>()) {
     using namespace locator;
 
@@ -138,7 +138,7 @@ template<typename Range, typename PendingRange>
 inline bool assure_sufficient_live_nodes_each_quorum(
         consistency_level cl,
         keyspace& ks,
-        Range& live_endpoints,
+        const Range& live_endpoints,
         const PendingRange& pending_endpoints) {
     using namespace locator;
 
@@ -165,7 +165,7 @@ template<typename Range, typename PendingRange = std::array<gms::inet_address, 0
 inline void assure_sufficient_live_nodes(
         consistency_level cl,
         keyspace& ks,
-        Range& live_endpoints,
+        const Range& live_endpoints,
         const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>()) {
     size_t need = block_for(ks, cl);
 
