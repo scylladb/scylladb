@@ -157,8 +157,12 @@ std::vector<index> secondary_index_manager::list_indexes() const {
 }
 
 bool secondary_index_manager::is_index(view_ptr view) const {
-    return boost::algorithm::any_of(_indices | boost::adaptors::map_values, [&view] (const index& i) {
-        return view->cf_name() == index_table_name(i.metadata().name());
+    return is_index(*view);
+}
+
+bool secondary_index_manager::is_index(const schema& s) const {
+    return boost::algorithm::any_of(_indices | boost::adaptors::map_values, [&s] (const index& i) {
+        return s.cf_name() == index_table_name(i.metadata().name());
     });
 }
 
