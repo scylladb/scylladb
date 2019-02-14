@@ -1266,20 +1266,11 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
     clock_type::time_point timeout,
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, bool raw_counters) {
     warn(unimplemented::cause::TRIGGERS);
-#if 0
-        Collection<Mutation> augmented = TriggerExecutor.instance.execute(mutations);
-        if (augmented != null) {
-            return mutate_atomically(augmented, consistencyLevel);
-        } else {
-#endif
     if (should_mutate_atomically) {
         assert(!raw_counters);
         return mutate_atomically(std::move(mutations), cl, timeout, std::move(tr_state));
     }
     return mutate(std::move(mutations), cl, timeout, std::move(tr_state), raw_counters);
-#if 0
-    }
-#endif
 }
 
 /**
@@ -1607,139 +1598,6 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
         return 0;
     }
 }
-
-#if 0
-    /**
-     * Handle counter mutation on the coordinator host.
-     *
-     * A counter mutation needs to first be applied to a replica (that we'll call the leader for the mutation) before being
-     * replicated to the other endpoint. To achieve so, there is two case:
-     *   1) the coordinator host is a replica: we proceed to applying the update locally and replicate throug
-     *   applyCounterMutationOnCoordinator
-     *   2) the coordinator is not a replica: we forward the (counter)mutation to a chosen replica (that will proceed through
-     *   applyCounterMutationOnLeader upon receive) and wait for its acknowledgment.
-     *
-     * Implementation note: We check if we can fulfill the CL on the coordinator host even if he is not a replica to allow
-     * quicker response and because the WriteResponseHandlers don't make it easy to send back an error. We also always gather
-     * the write latencies at the coordinator node to make gathering point similar to the case of standard writes.
-     */
-    public static AbstractWriteResponseHandler mutateCounter(CounterMutation cm, String localDataCenter) throws UnavailableException, OverloadedException
-    {
-        InetAddress endpoint = findSuitableEndpoint(cm.getKeyspaceName(), cm.key(), localDataCenter, cm.consistency());
-
-        if (endpoint.equals(FBUtilities.getBroadcastAddress()))
-        {
-            return applyCounterMutationOnCoordinator(cm, localDataCenter);
-        }
-        else
-        {
-            // Exit now if we can't fulfill the CL here instead of forwarding to the leader replica
-            String keyspaceName = cm.getKeyspaceName();
-            AbstractReplicationStrategy rs = Keyspace.open(keyspaceName).getReplicationStrategy();
-            Token tk = StorageService.getPartitioner().getToken(cm.key());
-            List<InetAddress> naturalEndpoints = StorageService.instance.getNaturalEndpoints(keyspaceName, tk);
-            Collection<InetAddress> pendingEndpoints = StorageService.instance.getTokenMetadata().pendingEndpointsFor(tk, keyspaceName);
-
-            rs.getWriteResponseHandler(naturalEndpoints, pendingEndpoints, cm.consistency(), null, WriteType.COUNTER).assureSufficientLiveNodes();
-
-            // Forward the actual update to the chosen leader replica
-            AbstractWriteResponseHandler responseHandler = new WriteResponseHandler(endpoint, WriteType.COUNTER);
-
-            Tracing.trace("Enqueuing counter update to {}", endpoint);
-            MessagingService.instance().sendRR(cm.makeMutationMessage(), endpoint, responseHandler, false);
-            return responseHandler;
-        }
-    }
-
-    /**
-     * Find a suitable replica as leader for counter update.
-     * For now, we pick a random replica in the local DC (or ask the snitch if
-     * there is no replica alive in the local DC).
-     * TODO: if we track the latency of the counter writes (which makes sense
-     * contrarily to standard writes since there is a read involved), we could
-     * trust the dynamic snitch entirely, which may be a better solution. It
-     * is unclear we want to mix those latencies with read latencies, so this
-     * may be a bit involved.
-     */
-    private static InetAddress findSuitableEndpoint(String keyspaceName, ByteBuffer key, String localDataCenter, ConsistencyLevel cl) throws UnavailableException
-    {
-        Keyspace keyspace = Keyspace.open(keyspaceName);
-        IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-        List<InetAddress> endpoints = StorageService.instance.getLiveNaturalEndpoints(keyspace, key);
-        if (endpoints.isEmpty())
-            // TODO have a way to compute the consistency level
-            throw new UnavailableException(cl, cl.blockFor(keyspace), 0);
-
-        List<InetAddress> localEndpoints = new ArrayList<InetAddress>();
-        for (InetAddress endpoint : endpoints)
-        {
-            if (snitch.getDatacenter(endpoint).equals(localDataCenter))
-                localEndpoints.add(endpoint);
-        }
-        if (localEndpoints.isEmpty())
-        {
-            // No endpoint in local DC, pick the closest endpoint according to the snitch
-            snitch.sortByProximity(FBUtilities.getBroadcastAddress(), endpoints);
-            return endpoints.get(0);
-        }
-        else
-        {
-            return localEndpoints.get(ThreadLocalRandom.current().nextInt(localEndpoints.size()));
-        }
-    }
-
-    // Must be called on a replica of the mutation. This replica becomes the
-    // leader of this mutation.
-    public static AbstractWriteResponseHandler applyCounterMutationOnLeader(CounterMutation cm, String localDataCenter, Runnable callback)
-    throws UnavailableException, OverloadedException
-    {
-        return performWrite(cm, cm.consistency(), localDataCenter, counterWritePerformer, callback, WriteType.COUNTER);
-    }
-
-    // Same as applyCounterMutationOnLeader but must with the difference that it use the MUTATION stage to execute the write (while
-    // applyCounterMutationOnLeader assumes it is on the MUTATION stage already)
-    public static AbstractWriteResponseHandler applyCounterMutationOnCoordinator(CounterMutation cm, String localDataCenter)
-    throws UnavailableException, OverloadedException
-    {
-        return performWrite(cm, cm.consistency(), localDataCenter, counterWriteOnCoordinatorPerformer, null, WriteType.COUNTER);
-    }
-
-    private static Runnable counterWriteTask(final IMutation mutation,
-                                             final Iterable<InetAddress> targets,
-                                             final AbstractWriteResponseHandler responseHandler,
-                                             final String localDataCenter)
-    {
-        return new DroppableRunnable(MessagingService.Verb.COUNTER_MUTATION)
-        {
-            @Override
-            public void runMayThrow() throws OverloadedException, WriteTimeoutException
-            {
-                IMutation processed = SinkManager.processWriteRequest(mutation);
-                if (processed == null)
-                    return;
-
-                assert processed instanceof CounterMutation;
-                CounterMutation cm = (CounterMutation) processed;
-
-                Mutation result = cm.apply();
-                responseHandler.response(null);
-
-                Set<InetAddress> remotes = Sets.difference(ImmutableSet.copyOf(targets),
-                            ImmutableSet.of(FBUtilities.getBroadcastAddress()));
-                if (!remotes.isEmpty())
-                    sendToHintedEndpoints(result, remotes, responseHandler, localDataCenter);
-            }
-        };
-    }
-
-    private static boolean systemKeyspaceQuery(List<ReadCommand> cmds)
-    {
-        for (ReadCommand cmd : cmds)
-            if (!cmd.ksName.equals(SystemKeyspace.NAME))
-                return false;
-        return true;
-    }
-#endif
 
 future<> storage_proxy::schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
     if (diffs.empty()) {
@@ -2816,10 +2674,6 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
         _stats.read_repair_attempts++;
     }
 
-#if 0
-    ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.cfName);
-#endif
-
     size_t block_for = db::block_for(ks, cl);
     auto p = shared_from_this();
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
@@ -3135,19 +2989,8 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     // expensive in clusters with vnodes)
     query_ranges_to_vnodes_generator ranges_to_vnodes(schema, std::move(partition_ranges), ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local);
 
-    // estimate_result_rows_per_range() is currently broken, and this is not needed
-    // when paging is available in any case
-#if 0
-    // our estimate of how many result rows there will be per-range
-    float result_rows_per_range = estimate_result_rows_per_range(cmd, ks);
-    // underestimate how many rows we will get per-range in order to increase the likelihood that we'll
-    // fetch enough rows in the first round
-    result_rows_per_range -= result_rows_per_range * CONCURRENT_SUBREQUESTS_MARGIN;
-    int concurrency_factor = result_rows_per_range == 0.0 ? 1 : std::max(1, std::min(int(ranges.size()), int(std::ceil(cmd->row_limit / result_rows_per_range))));
-#else
     int result_rows_per_range = 0;
     int concurrency_factor = 1;
-#endif
 
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
 
@@ -3294,75 +3137,6 @@ std::vector<gms::inet_address> storage_proxy::intersection(const std::vector<gms
     return inter;
 }
 
-/**
- * Estimate the number of result rows (either cql3 rows or storage rows, as called for by the command) per
- * range in the ring based on our local data.  This assumes that ranges are uniformly distributed across the cluster
- * and that the queried data is also uniformly distributed.
- */
-float storage_proxy::estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks)
-{
-    return 1.0;
-#if 0
-    ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.columnFamily);
-    float resultRowsPerRange = Float.POSITIVE_INFINITY;
-    if (command.rowFilter != null && !command.rowFilter.isEmpty())
-    {
-        List<SecondaryIndexSearcher> searchers = cfs.indexManager.getIndexSearchersForQuery(command.rowFilter);
-        if (searchers.isEmpty())
-        {
-            resultRowsPerRange = calculateResultRowsUsingEstimatedKeys(cfs);
-        }
-        else
-        {
-            // Secondary index query (cql3 or otherwise).  Estimate result rows based on most selective 2ary index.
-            for (SecondaryIndexSearcher searcher : searchers)
-            {
-                // use our own mean column count as our estimate for how many matching rows each node will have
-                SecondaryIndex highestSelectivityIndex = searcher.highestSelectivityIndex(command.rowFilter);
-                resultRowsPerRange = Math.min(resultRowsPerRange, highestSelectivityIndex.estimateResultRows());
-            }
-        }
-    }
-    else if (!command.countCQL3Rows())
-    {
-        // non-cql3 query
-        resultRowsPerRange = cfs.estimateKeys();
-    }
-    else
-    {
-        resultRowsPerRange = calculateResultRowsUsingEstimatedKeys(cfs);
-    }
-
-    // adjust resultRowsPerRange by the number of tokens this node has and the replication factor for this ks
-    return (resultRowsPerRange / DatabaseDescriptor.getNumTokens()) / keyspace.getReplicationStrategy().getReplicationFactor();
-#endif
-}
-
-#if 0
-    private static float calculateResultRowsUsingEstimatedKeys(ColumnFamilyStore cfs)
-    {
-        if (cfs.metadata.comparator.isDense())
-        {
-            // one storage row per result row, so use key estimate directly
-            return cfs.estimateKeys();
-        }
-        else
-        {
-            float resultRowsPerStorageRow = ((float) cfs.getMeanColumns()) / cfs.metadata.regularColumns().size();
-            return resultRowsPerStorageRow * (cfs.estimateKeys());
-        }
-    }
-
-    private static List<Row> trim(AbstractRangeCommand command, List<Row> rows)
-    {
-        // When maxIsColumns, we let the caller trim the result.
-        if (command.countCQL3Rows())
-            return rows;
-        else
-            return rows.size() > command.limit() ? rows.subList(0, command.limit()) : rows;
-    }
-#endif
-
 query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(schema_ptr s, dht::partition_range_vector ranges, bool local) :
         query_ranges_to_vnodes_generator(get_local_storage_service().get_token_metadata(), std::move(s), std::move(ranges), local) {}
 query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local) :
@@ -3501,181 +3275,6 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
        }
     });
 }
-
-#if 0
-    public interface WritePerformer
-    {
-        public void apply(IMutation mutation,
-                          Iterable<InetAddress> targets,
-                          AbstractWriteResponseHandler responseHandler,
-                          String localDataCenter,
-                          ConsistencyLevel consistencyLevel) throws OverloadedException;
-    }
-
-    /**
-     * A Runnable that aborts if it doesn't start running before it times out
-     */
-    private static abstract class DroppableRunnable implements Runnable
-    {
-        private final long constructionTime = System.nanoTime();
-        private final MessagingService.Verb verb;
-
-        public DroppableRunnable(MessagingService.Verb verb)
-        {
-            this.verb = verb;
-        }
-
-        public final void run()
-        {
-
-            if (TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - constructionTime) > DatabaseDescriptor.getTimeout(verb))
-            {
-                MessagingService.instance().incrementDroppedMessages(verb);
-                return;
-            }
-            try
-            {
-                runMayThrow();
-            } catch (Exception e)
-            {
-                throw new RuntimeException(e);
-            }
-        }
-
-        abstract protected void runMayThrow() throws Exception;
-    }
-
-    /**
-     * Like DroppableRunnable, but if it aborts, it will rerun (on the mutation stage) after
-     * marking itself as a hint in progress so that the hint backpressure mechanism can function.
-     */
-    private static abstract class LocalMutationRunnable implements Runnable
-    {
-        private final long constructionTime = System.currentTimeMillis();
-
-        public final void run()
-        {
-            if (System.currentTimeMillis() > constructionTime + DatabaseDescriptor.getTimeout(MessagingService.Verb.MUTATION))
-            {
-                MessagingService.instance().incrementDroppedMessages(MessagingService.Verb.MUTATION);
-                HintRunnable runnable = new HintRunnable(FBUtilities.getBroadcastAddress())
-                {
-                    protected void runMayThrow() throws Exception
-                    {
-                        LocalMutationRunnable.this.runMayThrow();
-                    }
-                };
-                submitHint(runnable);
-                return;
-            }
-
-            try
-            {
-                runMayThrow();
-            }
-            catch (Exception e)
-            {
-                throw new RuntimeException(e);
-            }
-        }
-
-        abstract protected void runMayThrow() throws Exception;
-    }
-
-    /**
-     * HintRunnable will decrease totalHintsInProgress and targetHints when finished.
-     * It is the caller's responsibility to increment them initially.
-     */
-    private abstract static class HintRunnable implements Runnable
-    {
-        public final InetAddress target;
-
-        protected HintRunnable(InetAddress target)
-        {
-            this.target = target;
-        }
-
-        public void run()
-        {
-            try
-            {
-                runMayThrow();
-            }
-            catch (Exception e)
-            {
-                throw new RuntimeException(e);
-            }
-            finally
-            {
-                StorageMetrics.totalHintsInProgress.dec();
-                getHintsInProgressFor(target).decrementAndGet();
-            }
-        }
-
-        abstract protected void runMayThrow() throws Exception;
-    }
-
-    public long getTotalHints()
-    {
-        return StorageMetrics.totalHints.count();
-    }
-
-    public int getMaxHintsInProgress()
-    {
-        return maxHintsInProgress;
-    }
-
-    public void setMaxHintsInProgress(int qs)
-    {
-        maxHintsInProgress = qs;
-    }
-
-    public int getHintsInProgress()
-    {
-        return (int) StorageMetrics.totalHintsInProgress.count();
-    }
-
-    public void verifyNoHintsInProgress()
-    {
-        if (getHintsInProgress() > 0)
-            slogger.warn("Some hints were not written before shutdown.  This is not supposed to happen.  You should (a) run repair, and (b) file a bug report");
-    }
-
-    public Long getRpcTimeout() { return DatabaseDescriptor.getRpcTimeout(); }
-    public void setRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setRpcTimeout(timeoutInMillis); }
-
-    public Long getReadRpcTimeout() { return DatabaseDescriptor.getReadRpcTimeout(); }
-    public void setReadRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setReadRpcTimeout(timeoutInMillis); }
-
-    public Long getWriteRpcTimeout() { return DatabaseDescriptor.getWriteRpcTimeout(); }
-    public void setWriteRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setWriteRpcTimeout(timeoutInMillis); }
-
-    public Long getCounterWriteRpcTimeout() { return DatabaseDescriptor.getCounterWriteRpcTimeout(); }
-    public void setCounterWriteRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setCounterWriteRpcTimeout(timeoutInMillis); }
-
-    public Long getCasContentionTimeout() { return DatabaseDescriptor.getCasContentionTimeout(); }
-    public void setCasContentionTimeout(Long timeoutInMillis) { DatabaseDescriptor.setCasContentionTimeout(timeoutInMillis); }
-
-    public Long getRangeRpcTimeout() { return DatabaseDescriptor.getRangeRpcTimeout(); }
-    public void setRangeRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setRangeRpcTimeout(timeoutInMillis); }
-
-    public Long getTruncateRpcTimeout() { return DatabaseDescriptor.getTruncateRpcTimeout(); }
-    public void setTruncateRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setTruncateRpcTimeout(timeoutInMillis); }
-    public void reloadTriggerClasses() { TriggerExecutor.instance.reloadClasses(); }
-
-
-    public long getReadRepairAttempted() {
-        return ReadRepairMetrics.attempted.count();
-    }
-
-    public long getReadRepairRepairedBlocking() {
-        return ReadRepairMetrics.repairedBlocking.count();
-    }
-
-    public long getReadRepairRepairedBackground() {
-        return ReadRepairMetrics.repairedBackground.count();
-    }
-#endif
 
 void storage_proxy::init_messaging_service() {
     auto& ms = netw::get_local_messaging_service();
