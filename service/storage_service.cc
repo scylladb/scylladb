@@ -131,10 +131,11 @@ int get_generation_number() {
     return generation_number;
 }
 
-storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+storage_service::storage_service(distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, std::set<sstring> disabled_features)
         : _feature_service(feature_service)
         , _db(db)
+        , _gossiper(gossiper)
         , _auth_service(auth_service)
         , _disabled_features(std::move(disabled_features))
         , _range_tombstones_feature(_feature_service, RANGE_TOMBSTONES_FEATURE)
@@ -3330,9 +3331,9 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
     });
 }
 
-future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+future<> init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service) {
-    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service));
+    return service::get_storage_service().start(std::ref(db), std::ref(gossiper), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service));
 }
 
 future<> deinit_storage_service() {

@@ -37,9 +37,9 @@ logging::logger startlog("init");
 // duplicated in cql_test_env.cc
 // until proper shutdown is done.
 
-void init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+void init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service) {
-    service::init_storage_service(db, auth_service, sys_dist_ks, view_update_generator, feature_service).get();
+    service::init_storage_service(db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service).get();
     // #293 - do not stop anything
     //engine().at_exit([] { return service::deinit_storage_service(); });
 }
@@ -155,10 +155,7 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
                 to_string(seeds), listen_address_in, broadcast_address);
         throw std::runtime_error("Use broadcast_address for seeds list");
     }
-    gossiper.start(std::ref(features), std::ref(cfg)).get();
     gossiper.local().set_seeds(seeds);
-    // #293 - do not stop anything
-    //engine().at_exit([]{ return gms::get_gossiper().stop(); });
     gossiper.invoke_on_all([cluster_name](gms::gossiper& g) {
         g.set_cluster_name(cluster_name);
     });
