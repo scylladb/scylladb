@@ -81,6 +81,42 @@ SEASTAR_TEST_CASE(test_builder_with_large_partition) {
     });
 }
 
+// This test reproduces issue #4213. We have a large base partition with
+// many rows, and the view has the *same* partition key as the base, so all
+// the generated view rows will go to the same view partition. The view
+// builder used to batch up to 128 (view_builder::batch_size) of these view
+// rows into one view mutation, and if the individual rows are big (i.e.,
+// contain very long strings or blobs), this 128-row mutation can be too
+// large to be applied because of our limitation on commit-log segment size
+// (commitlog_segment_size_in_mb, by default 32 MB). When applying the
+// mutation fails, view building retries indefinitely and this test hung.
+SEASTAR_TEST_CASE(test_builder_with_large_partition_2) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const int nrows = 64; // meant to be lower than view_builder::batch_size
+        const int target_size = 33*1024*1024; // meant to be higher than commitlog_segment_size_in_mb
+        e.execute_cql("create table cf (p int, c int, s ascii, primary key (p, c))").get();
+        const sstring longstring = sstring(target_size / nrows, 'x');
+        for (auto i = 0; i < nrows; ++i) {
+            e.execute_cql(format("insert into cf (p, c, s) values (0, {:d}, '{}')", i, longstring)).get();
+        }
+
+        auto f = e.local_view_builder().wait_until_built("ks", "vcf");
+        e.execute_cql("create materialized view vcf as select * from cf "
+                      "where p is not null and c is not null "
+                      "primary key (p, c)").get();
+
+        f.get();
+        auto built = db::system_keyspace::load_built_views().get0();
+        BOOST_REQUIRE_EQUAL(built.size(), 1);
+        BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
+
+        auto msg = e.execute_cql("select count(*) from vcf").get0();
+        assert_that(msg).is_rows().with_size(1);
+        assert_that(msg).is_rows().with_rows({{{long_type->decompose(long(nrows))}}});
+    });
+}
+
+
 SEASTAR_TEST_CASE(test_builder_with_multiple_partitions) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table cf (p int, c int, v int, primary key (p, c))").get();
