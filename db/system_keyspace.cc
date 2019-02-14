@@ -518,6 +518,30 @@ static schema_ptr large_cells() {
     return large_cells;
 }
 
+/*static*/ schema_ptr scylla_local() {
+    static thread_local auto scylla_local = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, SCYLLA_LOCAL), NAME, SCYLLA_LOCAL,
+        // partition key
+        {{"key", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+                {"value", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Scylla specific information about the local node"
+       )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return scylla_local;
+}
+
 namespace v3 {
 
 schema_ptr batches() {
@@ -682,6 +706,11 @@ schema_ptr size_estimates() {
 schema_ptr large_partitions() {
     // identical
     return db::system_keyspace::large_partitions();
+}
+
+schema_ptr scylla_local() {
+    // identical
+    return db::system_keyspace::scylla_local();
 }
 
 schema_ptr available_ranges() {
@@ -1712,7 +1741,7 @@ std::vector<schema_ptr> all_tables() {
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
-                    v3::views_builds_in_progress(), v3::built_views(),
+                    scylla_local(), v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
     });
