@@ -194,8 +194,8 @@ if __name__ == "__main__":
                         help="Run only fast tests")
     parser.add_argument('--name', action="store",
                         help="Run only test whose name contains given string")
-    parser.add_argument('--mode', choices=all_modes,
-                        help="Run only tests for given build mode")
+    parser.add_argument('--mode', choices=all_modes, action="append", dest="modes",
+                        help="Run only tests for given build mode(s)")
     parser.add_argument('--timeout', action="store", default="3000", type=int,
                         help="timeout value for test execution")
     parser.add_argument('--jenkins', action="store",
@@ -216,7 +216,7 @@ if __name__ == "__main__":
     }
 
     test_to_run = []
-    modes_to_run = all_modes if not args.mode else [args.mode]
+    modes_to_run = all_modes if not args.modes else args.modes
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
         standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()

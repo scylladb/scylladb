@@ -408,7 +408,7 @@ arg_parser.add_argument('--pie', dest='pie', action='store_true',
                         help='Build position-independent executable (PIE)')
 arg_parser.add_argument('--so', dest='so', action='store_true',
                         help='Build shared object (SO) instead of executable')
-arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
+arg_parser.add_argument('--mode', action='append', choices=list(modes.keys()), dest='selected_modes')
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
 arg_parser.add_argument('--cflags', action='store', dest='user_cflags', default='',
                         help='Extra flags for the C++ compiler')
@@ -1019,7 +1019,8 @@ globals().update(vars(args))
 total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
 link_pool_depth = max(int(total_memory / 7e9), 1)
 
-build_modes = modes if args.mode == 'all' else [args.mode]
+selected_modes = args.selected_modes or modes.keys()
+build_modes =  {m: modes[m] for m in selected_modes}
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
 status = subprocess.call("./SCYLLA-VERSION-GEN")
