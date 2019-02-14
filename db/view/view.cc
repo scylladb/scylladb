@@ -251,6 +251,7 @@ private:
     row_marker compute_row_marker(const clustering_row& base_row) const;
     dht::token token_for(const partition_key& base_key);
     deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
+    bool can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const;
     void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
     void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
     void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
@@ -521,6 +522,54 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
     r.apply(update.tomb());
 }
 
+bool view_updates::can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const {
+    const row& existing_row = existing.cells();
+    const row& updated_row = update.cells();
+
+    const bool has_nonexpiring_marker = existing.marker().is_live() && !existing.marker().is_expiring();
+    return boost::algorithm::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, has_nonexpiring_marker] (const column_definition& cdef) {
+        const auto it = _view->columns_by_name().find(cdef.name());
+        const bool column_is_selected = it != _view->columns_by_name().end() && !it->second->is_view_virtual();
+
+        //TODO(sarna): Optimize collections case - currently they do not go under optimization
+        if (!cdef.is_atomic()) {
+            return false;
+        }
+
+        // We cannot skip if the value was created or deleted, unless we have a non-expiring marker
+        const auto* existing_cell = existing_row.find_cell(cdef.id);
+        const auto* updated_cell = updated_row.find_cell(cdef.id);
+        if (existing_cell == nullptr || updated_cell == nullptr) {
+            return existing_cell == updated_cell || (!column_is_selected && has_nonexpiring_marker);
+        }
+        atomic_cell_view existing_cell_view = existing_cell->as_atomic_cell(cdef);
+        atomic_cell_view updated_cell_view = updated_cell->as_atomic_cell(cdef);
+
+        // We cannot skip when a selected column is changed
+        if (column_is_selected) {
+            return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
+        }
+
+        // With non-expiring row marker, liveness checks below are not relevant
+        if (has_nonexpiring_marker) {
+            return true;
+        }
+
+        if (existing_cell_view.is_live() != updated_cell_view.is_live()) {
+            return false;
+        }
+
+        // We cannot skip if the change updates TTL
+        const bool existing_has_ttl = existing_cell_view.is_live_and_has_ttl();
+        const bool updated_has_ttl = updated_cell_view.is_live_and_has_ttl();
+        if (existing_has_ttl || updated_has_ttl) {
+            return existing_has_ttl == updated_has_ttl && existing_cell_view.expiry() == updated_cell_view.expiry();
+        }
+
+        return true;
+    });
+}
+
 /**
  * Creates the updates to apply to the existing view entry given the base table row before
  * and after the update, assuming that the update hasn't changed to which view entry the
@@ -538,6 +587,10 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
     }
     if (is_partition_key_empty(*_base, *_view, base_key, update) || !matches_view_filter(*_base, _view_info, base_key, update, now)) {
         do_delete_old_entry(base_key, existing, update, now);
+        return;
+    }
+
+    if (can_skip_view_updates(update, existing)) {
         return;
     }
 
