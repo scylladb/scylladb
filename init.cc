@@ -44,7 +44,8 @@ void init_storage_service(distributed<database>& db, sharded<auth::service>& aut
     //engine().at_exit([] { return service::deinit_storage_service(); });
 }
 
-void init_ms_fd_gossiper(sharded<gms::feature_service>& features
+void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
+                , sharded<gms::feature_service>& features
                 , sstring listen_address_in
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
@@ -157,12 +158,11 @@ void init_ms_fd_gossiper(sharded<gms::feature_service>& features
                 to_string(seeds), listen_address_in, broadcast_address);
         throw std::runtime_error("Use broadcast_address for seeds list");
     }
-    gms::get_gossiper().start(std::ref(features)).get();
-    auto& gossiper = gms::get_local_gossiper();
-    gossiper.set_seeds(seeds);
+    gossiper.start(std::ref(features)).get();
+    gossiper.local().set_seeds(seeds);
     // #293 - do not stop anything
     //engine().at_exit([]{ return gms::get_gossiper().stop(); });
-    gms::get_gossiper().invoke_on_all([cluster_name](gms::gossiper& g) {
+    gossiper.invoke_on_all([cluster_name](gms::gossiper& g) {
         g.set_cluster_name(cluster_name);
     });
 }

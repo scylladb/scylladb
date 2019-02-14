@@ -39,6 +39,7 @@ class view_update_generator;
 
 namespace gms {
 class feature_service;
+class gossiper;
 }
 
 extern logging::logger startlog;
@@ -54,7 +55,8 @@ struct init_scheduling_config {
     scheduling_group gossip;
 };
 
-void init_ms_fd_gossiper(sharded<gms::feature_service>& features
+void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
+                , sharded<gms::feature_service>& features
                 , sstring listen_address
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port

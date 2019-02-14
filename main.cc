@@ -622,7 +622,9 @@ int main(int ac, char** av) {
             scfg.statement = dbcfg.statement_scheduling_group;
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
-            init_ms_fd_gossiper(feature_service
+            auto& gossiper = gms::get_gossiper();
+            init_ms_fd_gossiper(gossiper
+                    , feature_service
                     , listen_address
                     , storage_port
                     , ssl_storage_port
