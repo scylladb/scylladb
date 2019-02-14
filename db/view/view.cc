@@ -1464,7 +1464,16 @@ private:
     built_views _built_views;
     std::vector<view_ptr> _views_to_build;
     std::deque<mutation_fragment> _fragments;
-
+    // The compact_for_query<> that feeds this consumer is already configured
+    // to feed us up to view_builder::batchsize (128) rows and not an entire
+    // partition. Still, if rows contain large blobs, saving 128 of them in
+    // _fragments may be too much. So we want to track _fragment's memory
+    // usage, and flush the _fragments if it has grown too large.
+    // Additionally, limiting _fragment's size also solves issue #4213:
+    // A single view mutation can be as large as the size of the base rows
+    // used to build it, and we cannot allow its serialized size to grow
+    // beyond our limit on mutation size (by default 32 MB).
+    size_t _fragments_memory_usage = 0;
 public:
     consumer(view_builder& builder, build_step& step)
             : _builder(builder)
@@ -1527,7 +1536,15 @@ public:
             return stop_iteration::yes;
         }
 
+        _fragments_memory_usage += cr.memory_usage(*_step.base->schema());
         _fragments.push_back(std::move(cr));
+        if (_fragments_memory_usage > 1024*1024) {
+            // Although we have not yet completed the batch of base rows that
+            // compact_for_query<> planned for us (view_builder::batchsize),
+            // we've still collected enough rows to reach sizeable memory use,
+            // so let's flush these rows now.
+            flush_fragments();
+        }
         return stop_iteration::no;
     }
 
@@ -1535,7 +1552,7 @@ public:
         return stop_iteration::no;
     }
 
-    stop_iteration consume_end_of_partition() {
+    void flush_fragments() {
         _builder._as.check();
         if (!_fragments.empty()) {
             _fragments.push_front(partition_start(_step.current_key, tombstone()));
@@ -1544,7 +1561,12 @@ public:
                     _step.current_token(),
                     make_flat_mutation_reader_from_fragments(_step.base->schema(), std::move(_fragments))).get();
             _fragments.clear();
+            _fragments_memory_usage = 0;
         }
+    }
+
+    stop_iteration consume_end_of_partition() {
+        flush_fragments();
         return stop_iteration(_step.build_status.empty());
     }
 
