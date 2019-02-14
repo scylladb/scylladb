@@ -172,6 +172,9 @@ future<> remove_endpoint(gms::inet_address ep);
 
 future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value);
 
+future<> set_scylla_local_param(const sstring& key, const sstring& value);
+future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
+
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable, bool volatile_testing_only = false);
 

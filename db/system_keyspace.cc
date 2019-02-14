@@ -1611,6 +1611,21 @@ future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int
     return execute_cql(req, time_period, value, ep.addr()).discard_result();
 }
 
+future<> set_scylla_local_param(const sstring& key, const sstring& value) {
+    sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", SCYLLA_LOCAL);
+    return execute_cql(req, value, key).discard_result();
+}
+
+future<std::optional<sstring>> get_scylla_local_param(const sstring& key){
+    sstring req = format("SELECT value FROM system.{} WHERE key = ?", SCYLLA_LOCAL);
+    return execute_cql(req, key).then([] (::shared_ptr<cql3::untyped_result_set> res) {
+        if (res->empty() || !res->one().has("value")) {
+            return std::optional<sstring>();
+        }
+        return std::optional<sstring>(res->one().get_as<sstring>("value"));
+    });
+}
+
 future<> update_schema_version(utils::UUID version) {
     sstring req = format("INSERT INTO system.{} (key, schema_version) VALUES (?, ?)", LOCAL);
     return execute_cql(req, sstring(LOCAL), version).discard_result();
