@@ -58,6 +58,7 @@
 namespace service {
 
 class storage_proxy;
+class storage_service;
 
 }
 
@@ -157,7 +158,9 @@ void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>
 
 future<> init_local_cache();
 future<> deinit_local_cache();
-future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
+future<> setup(distributed<database>& db,
+               distributed<cql3::query_processor>& qp,
+               distributed<service::storage_service>& ss);
 future<> update_schema_version(utils::UUID version);
 future<> update_tokens(std::unordered_set<dht::token> tokens);
 future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> tokens);
