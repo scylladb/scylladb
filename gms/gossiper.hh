@@ -73,7 +73,6 @@ class gossip_digest_ack2;
 class gossip_digest;
 class inet_address;
 class i_endpoint_state_change_subscriber;
-class i_failure_detector;
 
 class feature_service;
 

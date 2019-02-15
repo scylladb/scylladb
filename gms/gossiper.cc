@@ -49,7 +49,6 @@
 #include "gms/failure_detector.hh"
 #include "gms/i_failure_detection_event_listener.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
-#include "gms/i_failure_detector.hh"
 #include "service/storage_service.hh"
 #include "message/messaging_service.hh"
 #include "dht/i_partitioner.hh"

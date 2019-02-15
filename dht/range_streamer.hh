@@ -44,7 +44,6 @@
 #include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
-#include "gms/i_failure_detector.hh"
 #include "range.hh"
 #include <seastar/core/distributed.hh>
 #include <unordered_map>
@@ -62,7 +61,6 @@ public:
     using token_metadata = locator::token_metadata;
     using stream_plan = streaming::stream_plan;
     using stream_state = streaming::stream_state;
-    using i_failure_detector = gms::i_failure_detector;
     static bool use_strict_consistency();
 public:
     /**
