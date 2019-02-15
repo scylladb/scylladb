@@ -75,8 +75,8 @@ future<> await_background_jobs_on_all_shards();
 
 static const sstring testing_superuser = "tester";
 
-static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
-    return gms::get_failure_detector().start().then([seed_provider, cluster_name, &features] () mutable {
+static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, db::config& cfg, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
+    return gms::get_failure_detector().start().then([seed_provider, cluster_name, &features, &cfg] () mutable {
         // Init gossiper
         std::set<gms::inet_address> seeds;
         if (seed_provider.parameters.count("seeds") > 0) {
@@ -91,7 +91,7 @@ static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features,
         if (seeds.empty()) {
             seeds.emplace(gms::inet_address("127.0.0.1"));
         }
-        return gms::get_gossiper().start(std::ref(features)).then([seeds, cluster_name] {
+        return gms::get_gossiper().start(std::ref(features), std::ref(cfg)).then([seeds, cluster_name] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
             gossiper.set_cluster_name(cluster_name);
@@ -387,7 +387,7 @@ public:
             }).get();
 
             // FIXME: split
-            tst_init_ms_fd_gossiper(*feature_service, db::config::seed_provider_type()).get();
+            tst_init_ms_fd_gossiper(*feature_service, *cfg, db::config::seed_provider_type()).get();
             auto stop_ms_fd_gossiper = defer([] {
                 gms::get_gossiper().stop().get();
                 gms::get_failure_detector().stop().get();
@@ -504,6 +504,7 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
 class storage_service_for_tests::impl {
     sharded<gms::feature_service> _feature_service;
     distributed<database> _db;
+    db::config _cfg;
     sharded<auth::service> _auth_service;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
     sharded<db::view::view_update_generator> _view_update_generator;

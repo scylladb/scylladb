@@ -130,8 +130,9 @@ public:
     void on_restart(inet_address, endpoint_state) override {}
 };
 
-gossiper::gossiper(feature_service& features)
-        : _feature_service(features) {
+gossiper::gossiper(feature_service& features, db::config& cfg)
+        : _feature_service(features)
+        , _cfg(cfg) {
     // Gossiper's stuff below runs only on CPU0
     if (engine().cpu_id() != 0) {
         return;

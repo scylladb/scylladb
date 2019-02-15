@@ -57,6 +57,7 @@ struct init_scheduling_config {
 
 void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
                 , sharded<gms::feature_service>& features
+                , db::config& cfg
                 , sstring listen_address
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port

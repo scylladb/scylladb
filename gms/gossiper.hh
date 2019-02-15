@@ -60,6 +60,10 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/metrics_registration.hh>
 
+namespace db {
+class config;
+}
+
 namespace gms {
 
 class gossip_digest_syn;
@@ -239,7 +243,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(feature_service& features);
+    explicit gossiper(feature_service& features, db::config& cfg);
 
     void set_last_processed_message_at();
     void set_last_processed_message_at(clk::time_point tp);
@@ -574,6 +578,7 @@ private:
 private:
     condition_variable _features_condvar;
     feature_service& _feature_service;
+    db::config& _cfg;
     friend class feature;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;

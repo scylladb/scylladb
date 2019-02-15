@@ -625,6 +625,7 @@ int main(int ac, char** av) {
             auto& gossiper = gms::get_gossiper();
             init_ms_fd_gossiper(gossiper
                     , feature_service
+                    , *cfg
                     , listen_address
                     , storage_port
                     , ssl_storage_port

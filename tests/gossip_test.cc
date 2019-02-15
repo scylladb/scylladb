@@ -35,6 +35,7 @@
 #include <seastar/core/distributed.hh>
 #include "database.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/config.hh"
 
 namespace db::view {
 class view_update_generator;
@@ -43,6 +44,7 @@ class view_update_generator;
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
         distributed<database> db;
+        db::config cfg;
         sharded<auth::service> auth_service;
         sharded<db::system_distributed_keyspace> sys_dist_ks;
         sharded<db::view::view_update_generator> view_update_generator;
@@ -69,7 +71,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         gms::get_failure_detector().start().get();
         auto stop_failure_detector = defer([&] { gms::get_failure_detector().stop().get(); });
 
-        gms::get_gossiper().start(std::ref(feature_service)).get();
+        gms::get_gossiper().start(std::ref(feature_service), std::ref(cfg)).get();
         auto stop_gossiper = defer([&] { gms::get_gossiper().stop().get(); });
     });
 }
