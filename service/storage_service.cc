@@ -419,13 +419,9 @@ void storage_service::join_token_ring(int delay) {
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
         set_mode(mode::JOINING, "waiting for ring information", true);
-        // first sleep the delay to make sure we see all our peers
-        for (int i = 0; i < delay; i += 1000) {
-            // if we see schema, we can proceed to the next check directly
-            if (_db.local().get_version() != database::empty_version) {
-                slogger.debug("got schema: {}", _db.local().get_version());
-                break;
-            }
+        auto& gossiper = gms::get_gossiper().local();
+        // first sleep the delay to make sure we see *at least* one other node
+        for (int i = 0; i < delay && gossiper.get_live_members().size() < 2; i += 1000) {
             sleep(std::chrono::seconds(1)).get();
         }
         // if our schema hasn't matched yet, keep sleeping until it does
@@ -484,7 +480,6 @@ void storage_service::join_token_ring(int delay) {
                 for (auto token : _bootstrap_tokens) {
                     auto existing = _token_metadata.get_endpoint(token);
                     if (existing) {
-                        auto& gossiper = gms::get_local_gossiper();
                         auto* eps = gossiper.get_endpoint_state_for_endpoint_ptr(*existing);
                         if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - std::chrono::milliseconds(delay)) {
                             throw std::runtime_error("Cannot replace a live node...");
