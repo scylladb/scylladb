@@ -88,6 +88,12 @@ if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     fi
     echo -e "Configure example:\n\t./configure.py --enable-dpdk --mode=release --static-thrift --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7 --cflags=\"-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/\" --ldflags=\"-Wl,-rpath=/opt/scylladb/lib\""
 elif [ "$ID" = "fedora" ]; then
+    if rpm -q --quiet yum-utils; then
+        echo
+        echo "This script will install dnf-utils package, witch will conflict with currently installed package: yum-utils"
+        echo "Please remove the package and try to run this script again."
+        exit 1
+    fi
     yum install -y "${fedora_packages[@]}"
 elif [ "$ID" = "centos" ]; then
     yum install -y "${centos_packages[@]}"
