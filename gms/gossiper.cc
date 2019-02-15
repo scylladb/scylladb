@@ -107,10 +107,6 @@ std::chrono::milliseconds gossiper::quarantine_delay() {
     return ring_delay * 2;
 }
 
-auto& storage_service_value_factory() {
-    return service::get_local_storage_service().value_factory;
-}
-
 class feature_enabler : public i_endpoint_state_change_subscriber {
     gossiper& _g;
 public:
@@ -978,8 +974,8 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
         logger.info("Advertising removal for {}", endpoint);
         eps.update_timestamp(); // make sure we don't evict it too soon
         eps.get_heart_beat_state().force_newer_generation_unsafe();
-        eps.add_application_state(application_state::STATUS, storage_service_value_factory().removing_nonlocal(host_id));
-        eps.add_application_state(application_state::REMOVAL_COORDINATOR, storage_service_value_factory().removal_coordinator(local_host_id));
+        eps.add_application_state(application_state::STATUS, _value_factory.removing_nonlocal(host_id));
+        eps.add_application_state(application_state::REMOVAL_COORDINATOR, _value_factory.removal_coordinator(local_host_id));
         endpoint_state_map[endpoint] = eps;
         replicate(endpoint, eps).get();
     });
@@ -991,7 +987,7 @@ future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID ho
         eps.update_timestamp(); // make sure we don't evict it too soon
         eps.get_heart_beat_state().force_newer_generation_unsafe();
         auto expire_time = compute_expire_time();
-        eps.add_application_state(application_state::STATUS, storage_service_value_factory().removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
+        eps.add_application_state(application_state::STATUS, _value_factory.removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
         logger.info("Completing removal of {}", endpoint);
         add_expire_time_for_endpoint(endpoint, expire_time);
         endpoint_state_map[endpoint] = eps;
@@ -1051,7 +1047,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
             // do not pass go, do not collect 200 dollars, just gtfo
             std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
             auto expire_time = gossiper.compute_expire_time();
-            ep_state.add_application_state(application_state::STATUS, storage_service_value_factory().left(tokens_set, expire_time.time_since_epoch().count()));
+            ep_state.add_application_state(application_state::STATUS, gossiper._value_factory.left(tokens_set, expire_time.time_since_epoch().count()));
             gossiper.handle_major_state_change(endpoint, ep_state);
             sleep(INTERVAL * 4).get();
             logger.warn("Finished assassinating {}", endpoint);
@@ -1715,11 +1711,11 @@ void gossiper::add_saved_endpoint(inet_address ep) {
     auto tokens = service::get_local_storage_service().get_token_metadata().get_tokens(ep);
     if (!tokens.empty()) {
         std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
-        ep_state.add_application_state(gms::application_state::TOKENS, storage_service_value_factory().tokens(tokens_set));
+        ep_state.add_application_state(gms::application_state::TOKENS, _value_factory.tokens(tokens_set));
     }
     auto host_id = service::get_local_storage_service().get_token_metadata().get_host_id_if_known(ep);
     if (host_id) {
-        ep_state.add_application_state(gms::application_state::HOST_ID, storage_service_value_factory().host_id(host_id.value()));
+        ep_state.add_application_state(gms::application_state::HOST_ID, _value_factory.host_id(host_id.value()));
     }
     ep_state.mark_dead();
     endpoint_state_map[ep] = ep_state;
@@ -1794,7 +1790,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 // Notifications may have taken some time, so preventively raise the version
                 // of the new value, otherwise it could be ignored by the remote node
                 // if another value with a newer version was received in the meantime:
-                value = storage_service_value_factory().clone_with_higher_version(value);
+                value = gossiper._value_factory.clone_with_higher_version(value);
                 // Add to local application state
                 es->add_application_state(state, value);
             }
@@ -1826,7 +1822,7 @@ future<> gossiper::do_stop_gossiping() {
         }
         if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
             logger.info("Announcing shutdown");
-            add_local_application_state(application_state::STATUS, storage_service_value_factory().shutdown(true)).get();
+            add_local_application_state(application_state::STATUS, _value_factory.shutdown(true)).get();
             for (inet_address addr : _live_endpoints) {
                 msg_addr id = get_msg_addr(addr);
                 logger.trace("Sending a GossipShutdown to {}", id);
@@ -1958,7 +1954,7 @@ void gossiper::mark_as_shutdown(const inet_address& endpoint) {
     auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (es) {
         auto& ep_state = *es;
-        ep_state.add_application_state(application_state::STATUS, storage_service_value_factory().shutdown(true));
+        ep_state.add_application_state(application_state::STATUS, _value_factory.shutdown(true));
         ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
         replicate(endpoint, ep_state).get();
         mark_dead(endpoint, ep_state);
