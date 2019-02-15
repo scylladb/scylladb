@@ -164,7 +164,7 @@ public:
     static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
     std::chrono::milliseconds fat_client_timeout;
 
-    static std::chrono::milliseconds quarantine_delay();
+    std::chrono::milliseconds quarantine_delay();
 private:
 
     std::default_random_engine _random_engine{std::random_device{}()};

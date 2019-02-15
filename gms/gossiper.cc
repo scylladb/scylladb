@@ -103,8 +103,8 @@ void gossiper::set_seeds(std::set<inet_address> seeds) {
 }
 
 std::chrono::milliseconds gossiper::quarantine_delay() {
-    auto& ss = service::get_local_storage_service();
-    return ss.get_ring_delay() * 2;
+    auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
+    return ring_delay * 2;
 }
 
 auto& storage_service_value_factory() {
@@ -965,7 +965,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
         // remember this node's generation
         int generation = state.get_heart_beat_state().get_generation();
         logger.info("Removing host: {}", host_id);
-        auto ring_delay = service::get_local_storage_service().get_ring_delay();
+        auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
         logger.info("Sleeping for {}ms to ensure {} does not change", ring_delay.count(), endpoint);
         sleep(ring_delay).get();
         // make sure it did not change
@@ -1028,9 +1028,10 @@ future<> gossiper::assassinate_endpoint(sstring address) {
 
                 int generation = ep_state.get_heart_beat_state().get_generation();
                 int heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
-                logger.info("Sleeping for {} ms to ensure {} does not change", ss.get_ring_delay().count(), endpoint);
+                auto ring_delay = std::chrono::milliseconds(gossiper._cfg.ring_delay_ms());
+                logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
                 // make sure it did not change
-                sleep(ss.get_ring_delay()).get();
+                sleep(ring_delay).get();
 
                 es = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
                 if (!es) {
@@ -1654,7 +1655,6 @@ future<> gossiper::do_shadow_round() {
             g.init_messaging_service_handler();
         }).get();
 
-        auto& cfg = service::get_local_storage_service().db().local().get_config();
         while (this->_in_shadow_round) {
             // send a completely empty syn
             for (inet_address seed : _seeds) {
@@ -1668,7 +1668,7 @@ future<> gossiper::do_shadow_round() {
             }
             sleep(std::chrono::seconds(1)).get();
             if (this->_in_shadow_round) {
-                if (clk::now() > t + std::chrono::milliseconds(cfg.shadow_round_ms())) {
+                if (clk::now() > t + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
                     throw std::runtime_error(format("Unable to gossip with any seeds (ShadowRound)"));
                 }
                 logger.info("Connect seeds again ... ({} seconds passed)", std::chrono::duration_cast<std::chrono::seconds>(clk::now() - t).count());
@@ -1840,8 +1840,7 @@ future<> gossiper::do_stop_gossiping() {
                     return make_ready_future<>();
                 }).get();
             }
-            auto& cfg = service::get_local_storage_service().db().local().get_config();
-            sleep(std::chrono::milliseconds(cfg.shutdown_announce_in_ms())).get();
+            sleep(std::chrono::milliseconds(_cfg.shutdown_announce_in_ms())).get();
         } else {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
@@ -2037,8 +2036,7 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 
 future<> gossiper::wait_for_gossip_to_settle() {
     static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
-    auto& cfg = service::get_local_storage_service().db().local().get_config();
-    auto force_after = cfg.skip_wait_for_gossip_to_settle();
+    auto force_after = _cfg.skip_wait_for_gossip_to_settle();
     auto do_enable_features = [this] {
         return async([this] {
             if (!std::exchange(_gossip_settled, true)) {
@@ -2056,7 +2054,7 @@ future<> gossiper::wait_for_gossip_to_settle() {
 
 future<> gossiper::wait_for_range_setup() {
     logger.info("Waiting for pending range setup...");
-    auto ring_delay = service::get_local_storage_service().get_ring_delay();
+    auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
     return wait_for_gossip(ring_delay);
 }
 
