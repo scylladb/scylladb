@@ -54,7 +54,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
-        auto stop_snitch = defer([&] { gms::get_failure_detector().stop().get(); });
+        auto stop_snitch = defer([&] { locator::i_endpoint_snitch::stop_snitch().get(); });
 
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false /* don't bind */).get();
         auto stop_messaging_service = defer([&] { netw::get_messaging_service().stop().get(); });
