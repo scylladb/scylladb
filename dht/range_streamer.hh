@@ -80,10 +80,10 @@ public:
      */
     class failure_detector_source_filter : public i_source_filter {
     private:
-        gms::i_failure_detector& _fd;
+        std::set<gms::inet_address> _down_nodes;
     public:
-        failure_detector_source_filter(i_failure_detector& fd) : _fd(fd) { }
-        virtual bool should_include(inet_address endpoint) override { return _fd.is_alive(endpoint); }
+        failure_detector_source_filter(std::set<gms::inet_address> down_nodes) : _down_nodes(std::move(down_nodes)) { }
+        virtual bool should_include(inet_address endpoint) override { return !_down_nodes.count(endpoint); }
     };
 
     /**
