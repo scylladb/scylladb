@@ -111,82 +111,12 @@ std::ostream& operator<<(std::ostream& os, const arrival_window& w) {
     return os;
 }
 
-sstring failure_detector::get_all_endpoint_states() {
-    std::stringstream ss;
-    for (auto& entry : get_local_gossiper().endpoint_state_map) {
-        auto& ep = entry.first;
-        auto& state = entry.second;
-        ss << ep << "\n";
-        append_endpoint_state(ss, state);
-    }
-    return sstring(ss.str());
-}
-
-std::map<sstring, sstring> failure_detector::get_simple_states() {
-    std::map<sstring, sstring> nodes_status;
-    for (auto& entry : get_local_gossiper().endpoint_state_map) {
-        auto& ep = entry.first;
-        auto& state = entry.second;
-        std::stringstream ss;
-        ss << ep;
-
-        if (state.is_alive()) {
-            nodes_status.emplace(sstring(ss.str()), "UP");
-        } else {
-            nodes_status.emplace(sstring(ss.str()), "DOWN");
-        }
-    }
-    return nodes_status;
-}
-
-int failure_detector::get_down_endpoint_count() {
-    return get_local_gossiper().endpoint_state_map.size() - get_up_endpoint_count();
-}
-
-int failure_detector::get_up_endpoint_count() {
-    return boost::count_if(get_local_gossiper().endpoint_state_map | boost::adaptors::map_values, std::mem_fn(&endpoint_state::is_alive));
-}
-
-sstring failure_detector::get_endpoint_state(sstring address) {
-    std::stringstream ss;
-    auto* eps = get_local_gossiper().get_endpoint_state_for_endpoint_ptr(inet_address(address));
-    if (eps) {
-        append_endpoint_state(ss, *eps);
-        return sstring(ss.str());
-    } else {
-        return sstring("unknown endpoint ") + address;
-    }
-}
-
-void failure_detector::append_endpoint_state(std::stringstream& ss, const endpoint_state& state) {
-    ss << "  generation:" << state.get_heart_beat_state().get_generation() << "\n";
-    ss << "  heartbeat:" << state.get_heart_beat_state().get_heart_beat_version() << "\n";
-    for (const auto& entry : state.get_application_state_map()) {
-        auto& app_state = entry.first;
-        auto& versioned_val = entry.second;
-        if (app_state == application_state::TOKENS) {
-            continue;
-        }
-        ss << "  " << app_state << ":" << versioned_val.version << ":" << versioned_val.value << "\n";
-    }
-    const auto& app_state_map = state.get_application_state_map();
-    if (app_state_map.count(application_state::TOKENS)) {
-        ss << "  TOKENS:" << app_state_map.at(application_state::TOKENS).version << ":<hidden>\n";
-    } else {
-        ss << "  TOKENS: not present" << "\n";
-    }
-}
-
 void failure_detector::set_phi_convict_threshold(double phi) {
     _phi = phi;
 }
 
 double failure_detector::get_phi_convict_threshold() {
     return _phi;
-}
-
-bool failure_detector::is_alive(inet_address ep) {
-    return get_local_gossiper().is_alive(ep);
 }
 
 void failure_detector::report(inet_address ep) {
@@ -267,7 +197,5 @@ std::ostream& operator<<(std::ostream& os, const failure_detector& x) {
     }
     return os;
 }
-
-distributed<failure_detector> _the_failure_detector;
 
 } // namespace gms

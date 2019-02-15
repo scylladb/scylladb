@@ -46,7 +46,6 @@
 
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
-#include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "service/storage_service.hh"
@@ -76,7 +75,6 @@ future<> await_background_jobs_on_all_shards();
 static const sstring testing_superuser = "tester";
 
 static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, db::config& cfg, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
-    return gms::get_failure_detector().start().then([seed_provider, cluster_name, &features, &cfg] () mutable {
         // Init gossiper
         std::set<gms::inet_address> seeds;
         if (seed_provider.parameters.count("seeds") > 0) {
@@ -96,7 +94,6 @@ static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features,
             gossiper.set_seeds(seeds);
             gossiper.set_cluster_name(cluster_name);
         });
-    });
 }
 // END TODO
 
@@ -390,7 +387,6 @@ public:
             tst_init_ms_fd_gossiper(*feature_service, *cfg, db::config::seed_provider_type()).get();
             auto stop_ms_fd_gossiper = defer([] {
                 gms::get_gossiper().stop().get();
-                gms::get_failure_detector().stop().get();
             });
 
             ss.invoke_on_all([] (auto&& ss) {

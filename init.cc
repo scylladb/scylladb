@@ -129,10 +129,6 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
 
     // #293 - do not stop anything
     //engine().at_exit([] { return netw::get_messaging_service().stop(); });
-    // Init failure_detector
-    gms::get_failure_detector().start(std::move(phi)).get();
-    // #293 - do not stop anything
-    //engine().at_exit([]{ return gms::get_failure_detector().stop(); });
     // Init gossiper
     std::set<gms::inet_address> seeds;
     if (seed_provider.parameters.count("seeds") > 0) {

@@ -68,9 +68,6 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
             stop_database(db).get();
         });
 
-        gms::get_failure_detector().start().get();
-        auto stop_failure_detector = defer([&] { gms::get_failure_detector().stop().get(); });
-
         gms::get_gossiper().start(std::ref(feature_service), std::ref(cfg)).get();
         auto stop_gossiper = defer([&] { gms::get_gossiper().stop().get(); });
     });

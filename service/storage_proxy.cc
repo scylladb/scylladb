@@ -1038,7 +1038,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
     std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
-            std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector()));
+            std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper()));
 
     slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     tracing::trace(tr_state, "Creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
@@ -1447,7 +1447,7 @@ future<> storage_proxy::send_to_endpoint(
                 boost::range::join(pending_endpoints, target),
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
-                [] (gms::inet_address ep) { return gms::get_local_failure_detector().is_alive(ep); });
+                [] (gms::inet_address ep) { return gms::get_local_gossiper().is_alive(ep); });
         auto& ks = _db.local().find_keyspace(m->schema()->ks_name());
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, ks, targets, pending_endpoints);
@@ -3144,7 +3144,7 @@ storage_proxy::do_query(schema_ptr s,
 std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) {
     auto& rs = ks.get_replication_strategy();
     std::vector<gms::inet_address> eps = rs.get_natural_endpoints(token);
-    auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector())));
+    auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())));
     eps.erase(itend, eps.end());
     return std::move(eps);
 }

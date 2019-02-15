@@ -2384,10 +2384,10 @@ future<> storage_service::removenode(sstring host_id_string) {
                 // to take responsibility for new range)
                 std::unordered_multimap<dht::token_range, inet_address> changed_ranges =
                     ss.get_changed_ranges_for_leaving(keyspace_name, endpoint);
-                auto& fd = gms::get_local_failure_detector();
+                auto& gossiper = gms::get_local_gossiper();
                 for (auto& x: changed_ranges) {
                     auto ep = x.second;
-                    if (fd.is_alive(ep)) {
+                    if (gossiper.is_alive(ep)) {
                         ss._replicating_nodes.emplace(ep);
                     } else {
                         slogger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
@@ -2761,7 +2761,7 @@ future<> storage_service::send_replication_notification(inet_address remote) {
             // is_alive will be true. If the messaging_service is stopped,
             // REPLICATION_FINISHED can be sent infinitely here. To fix, limit
             // the number of retries.
-            return *done || !gms::get_local_failure_detector().is_alive(remote) || *sent >= 3;
+            return *done || !gms::get_local_gossiper().is_alive(remote) || *sent >= 3;
         },
         [done, sent, remote, local] {
             auto& ms = netw::get_local_messaging_service();
@@ -2986,7 +2986,7 @@ future<> storage_service::shutdown_client_servers() {
 std::unordered_multimap<inet_address, dht::token_range>
 storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::token_range_vector& ranges) {
     auto my_address = get_broadcast_address();
-    auto& fd = gms::get_local_failure_detector();
+    auto& gossiper = gms::get_local_gossiper();
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
     auto tm = _token_metadata.clone_only_token_map();
@@ -3012,7 +3012,7 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
 
 
         for (auto& source : sources) {
-            if (fd.is_alive(source)) {
+            if (gossiper.is_alive(source)) {
                 source_ranges.emplace(source, r);
                 break;
             }

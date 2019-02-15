@@ -38,7 +38,6 @@
 
 #pragma once
 
-#include "unimplemented.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
@@ -99,7 +98,7 @@ public:
  * "The Phi Accrual Failure Detector" by Hayashibara.
  * Check the paper and the <i>IFailureDetector</i> interface for details.
  */
-class failure_detector : public i_failure_detector, public seastar::async_sharded_service<failure_detector> {
+class failure_detector {
 private:
     static constexpr int SAMPLE_SIZE = 1000;
     // this is useless except to provide backwards compatibility in phi_convict_threshold,
@@ -137,26 +136,9 @@ public:
     failure_detector(double phi) : _phi(phi) {
     }
 
-    future<> stop() {
-        return make_ready_future<>();
-    }
-
-    sstring get_all_endpoint_states();
-
-    std::map<sstring, sstring> get_simple_states();
-
-    int get_down_endpoint_count();
-
-    int get_up_endpoint_count();
-
-    sstring get_endpoint_state(sstring address);
-
     std::map<inet_address, arrival_window> arrival_samples() const {
         return _arrival_samples;
     }
-
-private:
-    void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 
 public:
     /**
@@ -187,7 +169,6 @@ public:
 
     double get_phi_convict_threshold();
 
-
     bool is_alive(inet_address ep);
 
     void report(inet_address ep);
@@ -204,62 +185,5 @@ public:
 
     friend std::ostream& operator<<(std::ostream& os, const failure_detector& x);
 };
-
-extern distributed<failure_detector> _the_failure_detector;
-inline failure_detector& get_local_failure_detector() {
-    return _the_failure_detector.local();
-}
-inline distributed<failure_detector>& get_failure_detector() {
-    return _the_failure_detector;
-}
-
-inline future<> set_phi_convict_threshold(double phi) {
-    return smp::submit_to(0, [phi] {
-        get_local_failure_detector().set_phi_convict_threshold(phi);
-    });
-}
-
-inline future<double> get_phi_convict_threshold() {
-    return smp::submit_to(0, [] {
-        return get_local_failure_detector().get_phi_convict_threshold();
-    });
-}
-
-inline future<sstring> get_all_endpoint_states() {
-    return smp::submit_to(0, [] {
-        return get_local_failure_detector().get_all_endpoint_states();
-    });
-}
-
-inline future<sstring> get_endpoint_state(sstring address) {
-    return smp::submit_to(0, [address] {
-        return get_local_failure_detector().get_endpoint_state(address);
-    });
-}
-
-inline future<std::map<sstring, sstring>> get_simple_states() {
-    return smp::submit_to(0, [] {
-        return get_local_failure_detector().get_simple_states();
-    });
-}
-
-inline future<int> get_down_endpoint_count() {
-    return smp::submit_to(0, [] {
-        return get_local_failure_detector().get_down_endpoint_count();
-    });
-}
-
-
-inline future<int> get_up_endpoint_count() {
-    return smp::submit_to(0, [] {
-        return get_local_failure_detector().get_up_endpoint_count();
-    });
-}
-
-inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
-    return smp::submit_to(0, [] {
-        return get_local_failure_detector().arrival_samples();
-    });
-}
 
 } // namespace gms
