@@ -432,6 +432,9 @@ public:
                 return make_ready_future<std::optional<fragmented_temporary_buffer>>(fragmented_temporary_buffer(std::move(_fragments), length));
             }
             return in.read_up_to(_left).then([this] (temporary_buffer<char> buf) {
+                if (buf.empty()) {
+                    return std::make_optional(fragmented_temporary_buffer());
+                }
                 _left -= buf.size();
                 _fragments.emplace_back(std::move(buf));
                 return std::optional<fragmented_temporary_buffer>();

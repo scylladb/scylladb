@@ -336,7 +336,9 @@ public:
     { }
 
     virtual future<temporary_buffer<char>> get() override {
-        BOOST_CHECK(_position != _buffers.end());
+        if (_position == _buffers.end()) {
+            return make_ready_future<temporary_buffer<char>>();
+        }
         return make_ready_future<temporary_buffer<char>>(std::move(*_position++));
     }
 };
@@ -462,4 +464,21 @@ SEASTAR_THREAD_TEST_CASE(test_remove_suffix) {
     for (auto& frag_buffer : buffers) {
         test(value1, value2, frag_buffer);
     }
+}
+
+static void do_test_read_exactly_eof(size_t input_size) {
+    std::vector<temporary_buffer<char>> data;
+    if (input_size) {
+        data.push_back(temporary_buffer<char>(input_size));
+    }
+    auto ds = data_source(std::make_unique<memory_data_source>(std::move(data)));
+    auto is = input_stream<char>(std::move(ds));
+    auto reader = fragmented_temporary_buffer::reader();
+    auto result = reader.read_exactly(is, input_size + 1).get0();
+    BOOST_CHECK_EQUAL(result.size_bytes(), size_t(0));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_read_exactly_eof) {
+    do_test_read_exactly_eof(0);
+    do_test_read_exactly_eof(1);
 }
