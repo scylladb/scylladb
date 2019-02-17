@@ -425,10 +425,10 @@ void compaction_manager::postpone_compaction_for_column_family(column_family* cf
 }
 
 future<> compaction_manager::stop() {
-    cmlog.info("Asked to stop");
     if (_stopped) {
         return make_ready_future<>();
     }
+    cmlog.info("Asked to stop");
     _stopped = true;
     // Reset the metrics registry
     _metrics.clear();
