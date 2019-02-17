@@ -1546,7 +1546,7 @@ public:
 
         _fragments_memory_usage += cr.memory_usage(*_step.base->schema());
         _fragments.push_back(std::move(cr));
-        if (_fragments_memory_usage > 1024*1024) {
+        if (_fragments_memory_usage > batch_memory_max) {
             // Although we have not yet completed the batch of base rows that
             // compact_for_query<> planned for us (view_builder::batchsize),
             // we've still collected enough rows to reach sizeable memory use,
