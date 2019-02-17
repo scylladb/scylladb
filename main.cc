@@ -380,6 +380,8 @@ int main(int ac, char** av) {
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             logging::apply_settings(cfg->logging_settings(opts));
 
+            startlog.info("Scylla version {} starting.", scylla_version());
+
             verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());
             if (cfg->partitioner() != "org.apache.cassandra.dht.Murmur3Partitioner") {
@@ -547,6 +549,7 @@ int main(int ac, char** av) {
                 }).then([] {
                         return sstables::await_background_jobs_on_all_shards();
                 }).then([&return_value] {
+                        startlog.info("Scylla version {} shutdown complete.", scylla_version());
                         ::_exit(return_value);
                 });
             });
@@ -881,6 +884,7 @@ int main(int ac, char** av) {
         }).then_wrapped([&return_value] (auto && f) {
             try {
                 f.get();
+                startlog.info("Scylla version {} initialization completed.", scylla_version());
             } catch (...) {
                 return_value = 1;
                 engine_exit(std::current_exception());
