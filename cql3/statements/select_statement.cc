@@ -738,8 +738,10 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
 {
     if (_index.metadata().local()) {
         _get_partition_ranges_for_posting_list = [this] (const query_options& options) { return get_partition_ranges_for_local_index_posting_list(options); };
+        _get_partition_slice_for_posting_list = [this] (const query_options& options) { return get_partition_slice_for_local_index_posting_list(options); };
     } else {
         _get_partition_ranges_for_posting_list = [this] (const query_options& options) { return get_partition_ranges_for_global_index_posting_list(options); };
+        _get_partition_slice_for_posting_list = [this] (const query_options& options) { return get_partition_slice_for_global_index_posting_list(options); };
     }
 }
 
@@ -891,20 +893,7 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
     return partition_ranges;
 }
 
-// Utility function for reading from the index view (get_index_view()))
-// the posting-list for a particular value of the indexed column.
-// Remember a secondary index can only be created on a single column.
-future<::shared_ptr<cql_transport::messages::result_message::rows>>
-indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
-                  const query_options& options,
-                  int32_t limit,
-                  service::query_state& state,
-                  gc_clock::time_point now,
-                  db::timeout_clock::time_point timeout,
-                  bool include_base_clustering_key)
-{
-    dht::partition_range_vector partition_ranges = _get_partition_ranges_for_posting_list(options);
-
+query::partition_slice indexed_table_select_statement::get_partition_slice_for_global_index_posting_list(const query_options& options) const {
     partition_slice_builder partition_slice_builder{*_view_schema};
 
     if (!_restrictions->has_partition_key_unrestricted_components()) {
@@ -934,7 +923,56 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
         }
     }
 
-    auto partition_slice = partition_slice_builder.build();
+    return partition_slice_builder.build();
+}
+
+query::partition_slice indexed_table_select_statement::get_partition_slice_for_local_index_posting_list(const query_options& options) const {
+    partition_slice_builder partition_slice_builder{*_view_schema};
+
+    ::shared_ptr<restrictions::single_column_clustering_key_restrictions> clustering_restrictions;
+    // For local indexes, the first clustering key is the indexed column itself, followed by base clustering key
+    clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, true);
+    const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
+    for (const auto& index_restriction :_restrictions->index_restrictions()) {
+        bytes_opt value = index_restriction->value_for(*cdef, options);
+        if (value) {
+            const column_definition* view_cdef = _view_schema->get_column_definition(to_bytes(_index.target_column()));
+            auto index_eq_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(*view_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(*value)));
+            clustering_restrictions->merge_with(index_eq_restriction);
+        }
+    }
+
+    if (_restrictions->get_clustering_columns_restrictions()->prefix_size() > 0) {
+        auto single_ck_restrictions = dynamic_pointer_cast<restrictions::single_column_clustering_key_restrictions>(_restrictions->get_clustering_columns_restrictions());
+        if (single_ck_restrictions) {
+            auto prefix_restrictions = single_ck_restrictions->get_longest_prefix_restrictions();
+            auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, *prefix_restrictions);
+            for (auto restriction_it : clustering_restrictions_from_base->restrictions()) {
+                clustering_restrictions->merge_with(restriction_it.second);
+            }
+        }
+    }
+
+    partition_slice_builder.with_ranges(clustering_restrictions->bounds_ranges(options));
+
+    return partition_slice_builder.build();
+}
+
+// Utility function for reading from the index view (get_index_view()))
+// the posting-list for a particular value of the indexed column.
+// Remember a secondary index can only be created on a single column.
+future<::shared_ptr<cql_transport::messages::result_message::rows>>
+indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
+                  const query_options& options,
+                  int32_t limit,
+                  service::query_state& state,
+                  gc_clock::time_point now,
+                  db::timeout_clock::time_point timeout,
+                  bool include_base_clustering_key)
+{
+    dht::partition_range_vector partition_ranges = _get_partition_ranges_for_posting_list(options);
+    auto partition_slice = _get_partition_slice_for_posting_list(options);
+
     auto cmd = ::make_lw_shared<query::read_command>(
             _view_schema->id(),
             _view_schema->version(),
