@@ -320,6 +320,7 @@ private:
     gms::feature _row_level_repair_feature;
     gms::feature _truncation_table;
     gms::feature _correct_static_compact_in_mc;
+    gms::feature _unbounded_range_tombstones_feature;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
     seastar::semaphore _feature_listeners_sem = {1};
@@ -2256,6 +2257,8 @@ public:
 
     sstring get_config_supported_features();
     std::set<sstring> get_config_supported_features_set();
+    sstring get_known_features();
+    std::set<sstring> get_known_features_set();
 
     bool cluster_supports_range_tombstones() {
         return bool(_range_tombstones_feature);
@@ -2325,6 +2328,9 @@ public:
     }
     const gms::feature& cluster_supports_correct_static_compact_in_mc() const {
         return _correct_static_compact_in_mc;
+    }
+    bool cluster_supports_unbounded_range_tombstones() const {
+        return bool(_unbounded_range_tombstones_feature);
     }
 private:
     future<> set_cql_ready(bool ready);

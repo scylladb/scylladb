@@ -108,6 +108,7 @@ static const sstring MC_SSTABLE_FEATURE = "MC_SSTABLE_FORMAT";
 static const sstring ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
 static const sstring TRUNCATION_TABLE = "TRUNCATION_TABLE";
 static const sstring CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
+static const sstring UNBOUNDED_RANGE_TOMBSTONES_FEATURE = "UNBOUNDED_RANGE_TOMBSTONES";
 
 static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
@@ -158,6 +159,7 @@ storage_service::storage_service(distributed<database>& db, gms::gossiper& gossi
         , _row_level_repair_feature(_feature_service, ROW_LEVEL_REPAIR)
         , _truncation_table(_feature_service, TRUNCATION_TABLE)
         , _correct_static_compact_in_mc(_feature_service, CORRECT_STATIC_COMPACT_IN_MC)
+        , _unbounded_range_tombstones_feature(_feature_service, UNBOUNDED_RANGE_TOMBSTONES_FEATURE)
         , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
         , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
@@ -202,6 +204,7 @@ void storage_service::enable_all_features() {
         std::ref(_row_level_repair_feature),
         std::ref(_truncation_table),
         std::ref(_correct_static_compact_in_mc),
+        std::ref(_unbounded_range_tombstones_feature),
     })
     {
         if (features.count(f.name())) {
@@ -264,11 +267,24 @@ storage_service::isolate_on_commit_error() {
 bool storage_service::is_auto_bootstrap() {
     return _db.local().get_config().auto_bootstrap();
 }
+sstring storage_service::get_known_features() {
+    return join(",", get_known_features_set());
+}
+
+// The features this node supports
+std::set<sstring> storage_service::get_known_features_set() {
+    auto s = get_config_supported_features_set();
+    if (_disabled_features.count(UNBOUNDED_RANGE_TOMBSTONES_FEATURE) == 0) {
+        s.insert(UNBOUNDED_RANGE_TOMBSTONES_FEATURE);
+    }
+    return s;
+}
 
 sstring storage_service::get_config_supported_features() {
     return join(",", get_config_supported_features_set());
 }
 
+// The features this node supports and is allowed to advertise to other nodes
 std::set<sstring> storage_service::get_config_supported_features_set() {
     // Add features supported by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
@@ -304,6 +320,9 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
         if (config.experimental()) {
             // push additional experimental features
         }
+    }
+    if (!sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
+        features.insert(UNBOUNDED_RANGE_TOMBSTONES_FEATURE);
     }
     for (const sstring& s : _disabled_features) {
         features.erase(s);
@@ -401,7 +420,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     } else {
         auto seeds = _gossiper.get_seeds();
         auto my_ep = get_broadcast_address();
-        auto local_features = get_config_supported_features();
+        auto local_features = get_known_features();
 
         if (seeds.count(my_ep)) {
             // This node is a seed node
@@ -1627,7 +1646,7 @@ future<> storage_service::check_for_endpoint_collision(const std::unordered_map<
     return seastar::async([this, loaded_peer_features] {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
-        auto local_features = get_config_supported_features();
+        auto local_features = get_known_features();
         do {
             slogger.info("Checking remote features with gossip");
             _gossiper.do_shadow_round().get();
@@ -1699,7 +1718,7 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info(cons
     // make magic happen
     slogger.info("Checking remote features with gossip");
     return _gossiper.do_shadow_round().then([this, loaded_peer_features, replace_address] {
-        auto local_features = get_config_supported_features();
+        auto local_features = get_known_features();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         // now that we've gossiped at least once, we should be able to find the node we're replacing
         auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
