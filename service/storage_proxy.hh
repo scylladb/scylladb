@@ -90,6 +90,27 @@ struct view_update_backlog_timestamped {
 struct allow_hints_tag {};
 using allow_hints = bool_class<allow_hints_tag>;
 
+
+class query_ranges_to_vnodes_generator {
+    schema_ptr _s;
+    dht::partition_range_vector _ranges;
+    dht::partition_range_vector::iterator _i; // iterator to current range in _ranges
+    bool _local;
+    locator::token_metadata& _tm;
+    void process_one_range(size_t n, dht::partition_range_vector& ranges);
+public:
+    query_ranges_to_vnodes_generator(schema_ptr s, dht::partition_range_vector ranges, bool local = false);
+    query_ranges_to_vnodes_generator(locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
+    query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;
+    query_ranges_to_vnodes_generator(query_ranges_to_vnodes_generator&&) = default;
+    // generate next 'n' vnodes, may return less than requested number of ranges
+    // which means either that there are no more ranges
+    // (in which case empty() == true), or too many ranges
+    // are requested
+    dht::partition_range_vector operator()(size_t n);
+    bool empty() const;
+};
+
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
@@ -241,8 +262,7 @@ private:
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
             lw_shared_ptr<query::read_command> cmd,
             db::consistency_level cl,
-            dht::partition_range_vector::iterator&& i,
-            dht::partition_range_vector&& ranges,
+            query_ranges_to_vnodes_generator&& ranges_to_vnodes,
             int concurrency_factor,
             tracing::trace_state_ptr trace_state,
             uint32_t remaining_row_count,
@@ -322,8 +342,6 @@ public:
     future<> mutate_locally(std::vector<mutation> mutation, clock_type::time_point timeout = clock_type::time_point::max());
 
     future<> mutate_streaming_mutation(const schema_ptr&, utils::UUID plan_id, const frozen_mutation& m, bool fragmented);
-
-    dht::partition_range_vector get_restricted_ranges(const schema& s, dht::partition_range range);
 
     /**
     * Use this method to have these Mutations applied

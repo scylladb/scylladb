@@ -441,39 +441,31 @@ indexed_table_select_statement::execute_base_query(
         ::shared_ptr<const service::pager::paging_state> paging_state) {
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    dht::partition_range_vector per_vnode_ranges;
-    per_vnode_ranges.reserve(partition_ranges.size());
-    for (auto& pr : partition_ranges) {
-        auto restricted_ranges = proxy.get_restricted_ranges(*_schema, pr);
-        std::move(restricted_ranges.begin(), restricted_ranges.end(), std::back_inserter(per_vnode_ranges));
-    }
+    uint32_t queried_ranges_count = partition_ranges.size();
+    service::query_ranges_to_vnodes_generator ranges_to_vnodes(_schema, std::move(partition_ranges));
 
     struct base_query_state {
         query::result_merger merger;
-        dht::partition_range_vector per_vnode_ranges;
-        dht::partition_range_vector::iterator current_partition_range;
-        base_query_state(uint32_t row_limit, dht::partition_range_vector&& ranges)
-                : merger(row_limit * ranges.size(), query::max_partitions)
-                , per_vnode_ranges(std::move(ranges))
-                , current_partition_range(per_vnode_ranges.begin())
+        service::query_ranges_to_vnodes_generator ranges_to_vnodes;
+        size_t concurrency = 1;
+        base_query_state(uint32_t row_limit, service::query_ranges_to_vnodes_generator&& ranges_to_vnodes_)
+                : merger(row_limit, query::max_partitions)
+                , ranges_to_vnodes(std::move(ranges_to_vnodes_))
                 {}
         base_query_state(base_query_state&&) = default;
         base_query_state(const base_query_state&) = delete;
     };
 
-    base_query_state query_state{cmd->row_limit, std::move(per_vnode_ranges)};
+    base_query_state query_state{cmd->row_limit * queried_ranges_count, std::move(ranges_to_vnodes)};
     return do_with(std::move(query_state), [this, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
-        auto &merger = query_state.merger;
-        auto &ranges = query_state.per_vnode_ranges;
-        auto &range_it = query_state.current_partition_range;
-        return repeat([this, &ranges, &range_it, &merger, &proxy, &state, &options, cmd, timeout]() {
+        auto& [merger, ranges_to_vnodes, concurrency] = query_state;
+        return repeat([this, &ranges_to_vnodes, &merger, &proxy, &state, &options, &concurrency, cmd, timeout]() {
             // Starting with 1 range, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more ranges than before
-            auto range_it_end = std::min(range_it + std::distance(ranges.begin(), range_it) + 1, ranges.end());
-            dht::partition_range_vector prange(range_it, range_it_end);
+            dht::partition_range_vector prange = ranges_to_vnodes(concurrency);
             auto command = ::make_lw_shared<query::read_command>(*cmd);
             auto old_paging_state = options.get_paging_state();
-            if (old_paging_state && range_it == ranges.begin()) {
+            if (old_paging_state && concurrency == 1) {
                 auto base_pk = generate_base_key_from_index_pk<partition_key>(old_paging_state->get_partition_key(),
                         *old_paging_state->get_clustering_key(), *_schema, *_view_schema);
                 auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
@@ -481,12 +473,12 @@ indexed_table_select_statement::execute_base_query(
                 command->slice.set_range(*_schema, base_pk,
                         std::vector<query::clustering_range>{query::clustering_range::make_starting_with(range_bound<clustering_key>(base_ck, false))});
             }
+            concurrency *= 2;
             return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_trace_state()})
-            .then([&range_it, range_it_end = std::move(range_it_end), &ranges, &merger] (service::storage_proxy::coordinator_query_result qr) {
+            .then([&ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) {
                 bool is_short_read = qr.query_result->is_short_read();
                 merger(std::move(qr.query_result));
-                range_it = range_it_end;
-                return stop_iteration(is_short_read || range_it == ranges.end());
+                return stop_iteration(is_short_read || ranges_to_vnodes.empty());
             });
         }).then([&merger]() {
             return merger.get();

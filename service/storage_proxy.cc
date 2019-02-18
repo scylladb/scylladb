@@ -2966,8 +2966,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
         lw_shared_ptr<query::read_command> cmd,
         db::consistency_level cl,
-        dht::partition_range_vector::iterator&& i,
-        dht::partition_range_vector&& ranges,
+        query_ranges_to_vnodes_generator&& ranges_to_vnodes,
         int concurrency_factor,
         tracing::trace_state_ptr trace_state,
         uint32_t remaining_row_count,
@@ -2976,7 +2975,6 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     std::vector<::shared_ptr<abstract_read_executor>> exec;
-    auto concurrent_fetch_starting_index = i;
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
@@ -2988,7 +2986,10 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     };
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
-    while (i != ranges.end() && std::distance(concurrent_fetch_starting_index, i) < concurrency_factor) {
+    dht::partition_range_vector ranges = ranges_to_vnodes(concurrency_factor);
+    dht::partition_range_vector::iterator i = ranges.begin();
+
+    while (i != ranges.end()) {
         dht::partition_range& range = *i;
         std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
         std::vector<gms::inet_address> merged_preferred_replicas = preferred_replicas_for_range(*i);
@@ -3082,8 +3083,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     return f.then([p,
             exec = std::move(exec),
             results = std::move(results),
-            i = std::move(i),
-            ranges = std::move(ranges),
+            ranges_to_vnodes = std::move(ranges_to_vnodes),
             cl,
             cmd,
             concurrency_factor,
@@ -3097,7 +3097,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         remaining_row_count -= result->row_count().value();
         remaining_partition_count -= result->partition_count().value();
         results.emplace_back(std::move(result));
-        if (i == ranges.end() || !remaining_row_count || !remaining_partition_count) {
+        if (ranges_to_vnodes.empty() || !remaining_row_count || !remaining_partition_count) {
             auto used_replicas = replicas_per_token_range();
             for (auto& e : exec) {
                 // We add used replicas in separate per-vnode entries even if
@@ -3114,7 +3114,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         } else {
             cmd->row_limit = remaining_row_count;
             cmd->partition_limit = remaining_partition_count;
-            return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i), std::move(ranges),
+            return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(ranges_to_vnodes),
                     concurrency_factor * 2, std::move(trace_state), remaining_row_count, remaining_partition_count, std::move(preferred_replicas));
         }
     }).handle_exception([p] (std::exception_ptr eptr) {
@@ -3130,18 +3130,10 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         storage_proxy::coordinator_query_options query_options) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-    dht::partition_range_vector ranges;
 
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
     // expensive in clusters with vnodes)
-    if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
-        ranges = std::move(partition_ranges);
-    } else {
-        for (auto&& r : partition_ranges) {
-            auto restricted_ranges = get_restricted_ranges(*schema, std::move(r));
-            std::move(restricted_ranges.begin(), restricted_ranges.end(), std::back_inserter(ranges));
-        }
-    }
+    query_ranges_to_vnodes_generator ranges_to_vnodes(schema, std::move(partition_ranges), ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local);
 
     // estimate_result_rows_per_range() is currently broken, and this is not needed
     // when paging is available in any case
@@ -3158,9 +3150,9 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 #endif
 
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
-    results.reserve(ranges.size()/concurrency_factor + 1);
-    slogger.debug("Estimated result rows per range: {}; requested rows: {}, ranges.size(): {}; concurrent range requests: {}",
-            result_rows_per_range, cmd->row_limit, ranges.size(), concurrency_factor);
+
+    slogger.debug("Estimated result rows per range: {}; requested rows: {}, concurrent range requests: {}",
+            result_rows_per_range, cmd->row_limit, concurrency_factor);
 
     // The call to `query_partition_key_range_concurrent()` below
     // updates `cmd` directly when processing the results. Under
@@ -3179,8 +3171,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             std::move(results),
             cmd,
             cl,
-            ranges.begin(),
-            std::move(ranges),
+            std::move(ranges_to_vnodes),
             concurrency_factor,
             std::move(query_options.trace_state),
             cmd->row_limit,
@@ -3372,39 +3363,61 @@ float storage_proxy::estimate_result_rows_per_range(lw_shared_ptr<query::read_co
     }
 #endif
 
+query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(schema_ptr s, dht::partition_range_vector ranges, bool local) :
+        query_ranges_to_vnodes_generator(get_local_storage_service().get_token_metadata(), std::move(s), std::move(ranges), local) {}
+query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local) :
+        _s(s), _ranges(std::move(ranges)), _i(_ranges.begin()), _local(local), _tm(tm) {}
+
+dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t n) {
+    n = std::min(n, size_t(1024));
+
+    dht::partition_range_vector result;
+    result.reserve(n);
+    while (_i != _ranges.end() && result.size() != n) {
+        process_one_range(n, result);
+    }
+    return result;
+}
+
+bool query_ranges_to_vnodes_generator::empty() const {
+    return _ranges.end() == _i;
+}
+
 /**
  * Compute all ranges we're going to query, in sorted order. Nodes can be replica destinations for many ranges,
  * so we need to restrict each scan to the specific range we want, or else we'd get duplicate results.
  */
-dht::partition_range_vector
-storage_proxy::get_restricted_ranges(const schema& s, dht::partition_range range) {
-    locator::token_metadata& tm = get_local_storage_service().get_token_metadata();
-    return service::get_restricted_ranges(tm, s, std::move(range));
-}
+void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partition_range_vector& ranges) {
+    dht::ring_position_comparator cmp(*_s);
+    dht::partition_range& cr = *_i;
 
-dht::partition_range_vector
-get_restricted_ranges(locator::token_metadata& tm, const schema& s, dht::partition_range range) {
-    dht::ring_position_comparator cmp(s);
+    auto get_remainder = [this, &cr] {
+        _i++;
+       return std::move(cr);
+    };
 
-    // special case for bounds containing exactly 1 token
-    if (start_token(range) == end_token(range)) {
-        if (start_token(range).is_minimum()) {
-            return {};
-        }
-        return dht::partition_range_vector({std::move(range)});
-    }
-
-    dht::partition_range_vector ranges;
-
-    auto add_range = [&ranges, &cmp] (dht::partition_range&& r) {
+    auto add_range = [&ranges] (dht::partition_range&& r) {
         ranges.emplace_back(std::move(r));
     };
 
+    if (_local) { // if the range is local no need to divide to vnodes
+        add_range(get_remainder());
+        return;
+    }
+
+    // special case for bounds containing exactly 1 token
+    if (start_token(cr) == end_token(cr)) {
+        if (start_token(cr).is_minimum()) {
+            _i++; // empty range? Move to the next one
+            return;
+        }
+        add_range(get_remainder());
+        return;
+    }
+
     // divide the queryRange into pieces delimited by the ring
-    auto ring_iter = tm.ring_range(range.start(), false);
-    dht::partition_range remainder = std::move(range);
-    for (const dht::token& upper_bound_token : ring_iter)
-    {
+    auto ring_iter = _tm.ring_range(cr.start(), false);
+    for (const dht::token& upper_bound_token : ring_iter) {
         /*
          * remainder can be a range/bounds of token _or_ keys and we want to split it with a token:
          *   - if remainder is tokens, then we'll just split using the provided token.
@@ -3417,27 +3430,31 @@ get_restricted_ranges(locator::token_metadata& tm, const schema& s, dht::partiti
          */
 
         dht::ring_position split_point(upper_bound_token, dht::ring_position::token_bound::end);
-        if (!remainder.contains(split_point, cmp)) {
+        if (!cr.contains(split_point, cmp)) {
             break; // no more splits
         }
 
-        {
-            // We shouldn't attempt to split on upper bound, because it may result in
-            // an ambiguous range of the form (x; x]
-            if (end_token(remainder) == upper_bound_token) {
-                break;
-            }
 
-            std::pair<dht::partition_range, dht::partition_range> splits =
-                remainder.split(split_point, cmp);
+        // We shouldn't attempt to split on upper bound, because it may result in
+        // an ambiguous range of the form (x; x]
+        if (end_token(cr) == upper_bound_token) {
+            break;
+        }
 
-            add_range(std::move(splits.first));
-            remainder = std::move(splits.second);
+        std::pair<dht::partition_range, dht::partition_range> splits =
+                cr.split(split_point, cmp);
+
+        add_range(std::move(splits.first));
+        cr = std::move(splits.second);
+        if (ranges.size() == n) {
+            // we have enough ranges
+            break;
         }
     }
-    add_range(std::move(remainder));
 
-    return ranges;
+    if (ranges.size() < n) {
+        add_range(get_remainder());
+    }
 }
 
 bool storage_proxy::hints_enabled(db::write_type type) noexcept {
