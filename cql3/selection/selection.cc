@@ -346,7 +346,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                                                          const query::result_row_view& row) const {
     static logging::logger rlogger("restrictions_filter");
 
-    if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0) {
+    if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0 || _per_partition_remaining == 0) {
         return false;
     }
 
@@ -437,10 +437,30 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
     const bool accepted = do_filter(selection, partition_key, clustering_key, static_row, row);
     if (!accepted) {
         ++_rows_dropped;
-    } else if (_remaining > 0) {
-        --_remaining;
+    } else {
+        if (_remaining > 0) {
+            --_remaining;
+        }
+        if (_per_partition_remaining > 0) {
+            --_per_partition_remaining;
+        }
     }
     return accepted;
+}
+
+void result_set_builder::restrictions_filter::reset(const partition_key* key) {
+    _current_partition_key_does_not_match = false;
+    _current_static_row_does_not_match = false;
+    _rows_dropped = 0;
+    _per_partition_remaining = _per_partition_limit;
+    if (_is_first_partition_on_page && _per_partition_limit < std::numeric_limits<typeof(_per_partition_limit)>::max()) {
+        // If any rows related to this key were also present in the previous query,
+        // we need to take it into account as well.
+        if (key && _last_pkey && _last_pkey->equal(*_schema, *key)) {
+            _per_partition_remaining -= _rows_fetched_for_last_partition;
+        }
+        _is_first_partition_on_page = false;
+    }
 }
 
 api::timestamp_type result_set_builder::timestamp_of(size_t idx) {

@@ -686,6 +686,21 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
     });
 }
 
+static ::shared_ptr<service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+    auto paging_state = rows->rs().get_metadata().paging_state();
+    if (!paging_state) {
+        return nullptr;
+    }
+    return ::make_shared<service::pager::paging_state>(*paging_state);
+};
+
+static size_t count_rows_fetched(::shared_ptr<cql_transport::messages::result_message> res) {
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+    return rows->rs().result_set().size();
+};
+
+
 SEASTAR_TEST_CASE(test_allow_filtering_limit) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE timeline (user text, c int, liked boolean, PRIMARY KEY (user, c));").get();
@@ -701,12 +716,12 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         ).get();
 
         auto msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=true ALLOW FILTERING;").get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(3), boolean_type->decompose(true)},
         });
 
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false ALLOW FILTERING;").get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)},
             { int32_type->decompose(2), boolean_type->decompose(false)},
             { int32_type->decompose(4), boolean_type->decompose(false)},
@@ -717,14 +732,14 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=true LIMIT 1 ALLOW FILTERING;", std::move(qo)).get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(3), boolean_type->decompose(true)},
         });
 
         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 5 ALLOW FILTERING;", std::move(qo)).get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)},
             { int32_type->decompose(2), boolean_type->decompose(false)},
             { int32_type->decompose(4), boolean_type->decompose(false)},
@@ -735,7 +750,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 2 ALLOW FILTERING;", std::move(qo)).get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)},
             { int32_type->decompose(2), boolean_type->decompose(false)}
         });
@@ -743,31 +758,17 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 3 ALLOW FILTERING;", std::move(qo)).get0();
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)},
             { int32_type->decompose(2), boolean_type->decompose(false)},
             { int32_type->decompose(4), boolean_type->decompose(false)}
         });
 
-        auto extract_paging_state = [] (::shared_ptr<cql_transport::messages::result_message> res) -> ::shared_ptr<service::pager::paging_state> {
-            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
-            auto paging_state = rows->rs().get_metadata().paging_state();
-            if (!paging_state) {
-                return nullptr;
-            }
-            return ::make_shared<service::pager::paging_state>(*paging_state);
-        };
-
-        auto count_rows_fetched = [] (::shared_ptr<cql_transport::messages::result_message> res) {
-            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
-            return rows->rs().result_set().size();
-        };
-
         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
         msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false LIMIT 3 ALLOW FILTERING;", std::move(qo)).get0();
         auto paging_state = extract_paging_state(msg);
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), boolean_type->decompose(false)}
         });
 
@@ -780,7 +781,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
             rows_fetched = count_rows_fetched(msg);
             paging_state = extract_paging_state(msg);
         }
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(2), boolean_type->decompose(false)}
         });
 
@@ -794,7 +795,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
                 paging_state = extract_paging_state(msg);
             }
         }
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(4), boolean_type->decompose(false)}
         });
 
@@ -814,9 +815,108 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
             }
         }
         BOOST_REQUIRE_EQUAL(rows_fetched, 1U);
-        assert_that(msg).is_rows().with_rows_ignore_order({
+        assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(4), boolean_type->decompose(false)}
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_allow_filtering_per_partition_limit) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE timeline (user text, c int, liked boolean, PRIMARY KEY (user, c));").get();
+        e.execute_cql(
+                "BEGIN UNLOGGED BATCH \n"
+                "insert INTO timeline (user, c, liked) VALUES ('a',1,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('a',2,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('a',3,true);  \n"
+                "insert INTO timeline (user, c, liked) VALUES ('a',4,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('a',5,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('a',6,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('b',1,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('b',2,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('b',3,true);  \n"
+                "insert INTO timeline (user, c, liked) VALUES ('b',4,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('b',5,false); \n"
+                "insert INTO timeline (user, c, liked) VALUES ('b',6,false); \n"
+                "APPLY BATCH;"
+        ).get();
+
+        auto msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false PER PARTITION LIMIT 2 ALLOW FILTERING;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), boolean_type->decompose(false)},
+            { int32_type->decompose(2), boolean_type->decompose(false)},
+            { int32_type->decompose(1), boolean_type->decompose(false)},
+            { int32_type->decompose(2), boolean_type->decompose(false)},
+        });
+
+        msg = e.execute_cql("SELECT c, liked FROM timeline PER PARTITION LIMIT 2;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), boolean_type->decompose(false)},
+            { int32_type->decompose(2), boolean_type->decompose(false)},
+            { int32_type->decompose(1), boolean_type->decompose(false)},
+            { int32_type->decompose(2), boolean_type->decompose(false)},
+        });
+
+        msg = e.execute_cql("SELECT c, liked FROM timeline WHERE user='b' PER PARTITION LIMIT 2 LIMIT 1 ALLOW FILTERING;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), boolean_type->decompose(false)},
+        });
+
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
+        msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=true PER PARTITION LIMIT 1 ALLOW FILTERING;", std::move(qo)).get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(3), boolean_type->decompose(true)},
+            { int32_type->decompose(3), boolean_type->decompose(true)},
+        });
+
+        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            cql3::query_options::specific_options{3, nullptr, {}, api::new_timestamp()});
+        msg = e.execute_cql("SELECT c, liked FROM timeline PER PARTITION LIMIT 1;", std::move(qo)).get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), boolean_type->decompose(false)},
+        });
+
+        ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
+        // Some pages might be empty and in such case we should continue querying
+        size_t rows_fetched = 0;
+        while (rows_fetched == 0) {
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            msg = e.execute_cql("SELECT c, liked FROM timeline WHERE liked=false PER PARTITION LIMIT 1 ALLOW FILTERING;", std::move(qo)).get0();
+            rows_fetched = count_rows_fetched(msg);
+            paging_state = extract_paging_state(msg);
+        }
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), boolean_type->decompose(false)}
+        });
+
+        // Assert that with paging pg, PER PARTITION LIMIT ppl and 2 partitions we will not extract more than 2*X values
+        for (bool allow_filtering : {false, true}) {
+            for (int pg = 1; pg < 12; ++pg) {
+                for (unsigned ppl = 1; ppl < 3; ++ppl) {
+                    paging_state = nullptr;
+                    rows_fetched = 0;
+                    uint32_t remaining = 1;
+                    while (remaining > 0) {
+                        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                                cql3::query_options::specific_options{pg, paging_state, {}, api::new_timestamp()});
+                        sstring query = allow_filtering ?
+                                fmt::format("SELECT c, liked FROM timeline WHERE liked=false PER PARTITION LIMIT {} ALLOW FILTERING;", ppl) :
+                                fmt::format("SELECT c, liked FROM timeline PER PARTITION LIMIT {};", ppl);
+                        msg = e.execute_cql(query, std::move(qo)).get0();
+                        rows_fetched += count_rows_fetched(msg);
+                        paging_state = extract_paging_state(msg);
+                        if (!paging_state) {
+                            remaining = 0;
+                        } else if (remaining > 0) {
+                            remaining = paging_state->get_remaining();
+                        }
+                    }
+                    BOOST_REQUIRE_EQUAL(rows_fetched, 2 * ppl);
+                }
+            }
+        }
     });
 }
 

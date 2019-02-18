@@ -75,6 +75,7 @@ protected:
     const bool _has_clustering_keys;
     bool _exhausted = false;
     uint32_t _max;
+    uint32_t _per_partition_limit;
 
     std::optional<partition_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
@@ -87,6 +88,7 @@ protected:
     dht::partition_range_vector _ranges;
     paging_state::replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
+    uint32_t _rows_fetched_for_last_partition = 0;
 public:
     query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
@@ -155,6 +157,8 @@ protected:
     virtual uint32_t max_rows_to_fetch(uint32_t page_size) {
         return std::min(_max, page_size);
     }
+
+    virtual void maybe_adjust_per_partition_limit(uint32_t page_size) const { }
 };
 
 }

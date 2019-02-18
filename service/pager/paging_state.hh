@@ -64,6 +64,7 @@ private:
     utils::UUID _query_uuid;
     replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
+    uint32_t _rows_fetched_for_last_partition;
 
 public:
     paging_state(partition_key pk,
@@ -71,7 +72,8 @@ public:
             uint32_t rem,
             utils::UUID reader_recall_uuid,
             replicas_per_token_range last_replicas,
-            std::optional<db::read_repair_decision> query_read_repair_decision);
+            std::optional<db::read_repair_decision> query_read_repair_decision,
+            uint32_t rows_fetched_for_last_partition);
 
     void set_partition_key(partition_key pk) {
         _partition_key = std::move(pk);
@@ -103,6 +105,10 @@ public:
      */
     uint32_t get_remaining() const {
         return _remaining;
+    }
+
+    uint32_t get_rows_fetched_for_last_partition() const {
+        return _rows_fetched_for_last_partition;
     }
 
     /**

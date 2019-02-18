@@ -150,7 +150,7 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
         }
     }
     if (rs.size() != rows.size()) {
-        fail(format("Expected more rows ({:d}), got {:d}", rs.size(), rows.size()));
+        fail(format("Expected different number of rows ({:d}), got {:d}", rows.size(), rs.size()));
     }
     return {*this};
 }
