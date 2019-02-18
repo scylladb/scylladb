@@ -58,18 +58,22 @@ public:
             _conn.disconnect();
             on_enabled();
         }
+    protected:
+        bool _started = false;
     public:
         listener() : _slot(signal_type::slot_type(&listener::callback, this)) {}
         listener(const listener&) = delete;
         listener(listener&&) = delete;
         listener& operator=(const listener&) = delete;
         listener& operator=(listener&&) = delete;
+        // Has to run inside seastar::async context
         virtual void on_enabled() = 0;
     };
     explicit feature(feature_service& service, sstring name, bool enabled = false);
     feature() = default;
     ~feature();
     feature(const feature& other) = delete;
+    // Has to run inside seastar::async context
     void enable();
     feature& operator=(feature&& other);
     const sstring& name() const {

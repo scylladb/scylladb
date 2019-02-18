@@ -44,6 +44,7 @@ public:
     future<> stop();
     void register_feature(feature* f);
     void unregister_feature(feature* f);
+    // Has to run inside seastar::async context
     void enable(const sstring& name);
 };
 
