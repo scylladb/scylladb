@@ -59,7 +59,7 @@ def sh_command(*args):
 
 def get_json_from_url(path):
     data = sh_command("curl", "-s", "-X", "GET", path)
-    return json.loads(data)
+    return json.loads(data.decode('utf-8'))
 
 def get_api(path):
     return get_json_from_url("http://" + api_address + path)
