@@ -326,6 +326,7 @@ private:
     feature_enabled_listener _la_feature_listener;
     feature_enabled_listener _mc_feature_listener;
 public:
+    sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
 
     void finish_bootstrapping() {
