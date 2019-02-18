@@ -768,22 +768,35 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
-    //NOTICE(sarna): Executing indexed_table branch implies there was at least 1 index restriction present
-    bytes_opt index_pk_value = _restrictions->index_restrictions().front()->value_for(*cdef, options);
-    auto index_pk = partition_key::from_single_value(*_view_schema, *index_pk_value);
     auto result_view = query::result_view(*results);
     if (!results->row_count() || *results->row_count() == 0) {
         return std::move(paging_state);
     }
     auto [last_base_pk, last_base_ck] = result_view.get_last_partition_and_clustering_key();
 
+    //NOTICE(sarna): Executing indexed_table branch implies there was at least 1 index restriction present
+    bytes_opt indexed_column_value = _restrictions->index_restrictions().front()->value_for(*cdef, options);
+
+    auto index_pk = [&]() {
+        if (_index.metadata().local()) {
+            return last_base_pk;
+        } else {
+            return partition_key::from_single_value(*_view_schema, *indexed_column_value);
+        }
+    }();
+
     std::vector<bytes_view> exploded_index_ck;
     exploded_index_ck.reserve(_view_schema->clustering_key_size());
 
-    dht::i_partitioner& partitioner = dht::global_partitioner();
-    bytes token_bytes = partitioner.token_to_bytes(partitioner.get_token(*_schema, last_base_pk));
-    exploded_index_ck.push_back(bytes_view(token_bytes));
-    append_base_key_to_index_ck<partition_key>(exploded_index_ck, last_base_pk, *cdef);
+    bytes token_bytes;
+    if (_index.metadata().local()) {
+        exploded_index_ck.push_back(bytes_view(*indexed_column_value));
+    } else {
+        dht::i_partitioner& partitioner = dht::global_partitioner();
+        token_bytes = partitioner.token_to_bytes(partitioner.get_token(*_schema, last_base_pk));
+        exploded_index_ck.push_back(bytes_view(token_bytes));
+        append_base_key_to_index_ck<partition_key>(exploded_index_ck, last_base_pk, *cdef);
+    }
     if (last_base_ck) {
         append_base_key_to_index_ck<clustering_key>(exploded_index_ck, *last_base_ck, *cdef);
     }
