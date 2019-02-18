@@ -735,7 +735,13 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
     : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
     , _index{index}
     , _view_schema(view_schema)
-{}
+{
+    if (_index.metadata().local()) {
+        _get_partition_ranges_for_posting_list = [this] (const query_options& options) { return get_partition_ranges_for_local_index_posting_list(options); };
+    } else {
+        _get_partition_ranges_for_posting_list = [this] (const query_options& options) { return get_partition_ranges_for_global_index_posting_list(options); };
+    }
+}
 
 template<typename KeyType>
 GCC6_CONCEPT(
@@ -860,18 +866,11 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     }
 }
 
-// Utility function for reading from the index view (get_index_view()))
-// the posting-list for a particular value of the indexed column.
-// Remember a secondary index can only be created on a single column.
-future<::shared_ptr<cql_transport::messages::result_message::rows>>
-indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
-                  const query_options& options,
-                  int32_t limit,
-                  service::query_state& state,
-                  gc_clock::time_point now,
-                  db::timeout_clock::time_point timeout,
-                  bool include_base_clustering_key)
-{
+dht::partition_range_vector indexed_table_select_statement::get_partition_ranges_for_local_index_posting_list(const query_options& options) const {
+    return _restrictions->get_partition_key_restrictions()->bounds_ranges(options);
+}
+
+dht::partition_range_vector indexed_table_select_statement::get_partition_ranges_for_global_index_posting_list(const query_options& options) const {
     dht::partition_range_vector partition_ranges;
 
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
@@ -888,6 +887,23 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
             partition_ranges.emplace_back(range);
         }
     }
+
+    return partition_ranges;
+}
+
+// Utility function for reading from the index view (get_index_view()))
+// the posting-list for a particular value of the indexed column.
+// Remember a secondary index can only be created on a single column.
+future<::shared_ptr<cql_transport::messages::result_message::rows>>
+indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
+                  const query_options& options,
+                  int32_t limit,
+                  service::query_state& state,
+                  gc_clock::time_point now,
+                  db::timeout_clock::time_point timeout,
+                  bool include_base_clustering_key)
+{
+    dht::partition_range_vector partition_ranges = _get_partition_ranges_for_posting_list(options);
 
     partition_slice_builder partition_slice_builder{*_view_schema};
 

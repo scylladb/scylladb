@@ -171,6 +171,7 @@ public:
 class indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
     schema_ptr _view_schema;
+    noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
 public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,
                                                                     schema_ptr schema,
@@ -256,6 +257,10 @@ private:
             gc_clock::time_point now,
             db::timeout_clock::time_point timeout,
             bool include_base_clustering_key);
+
+    dht::partition_range_vector get_partition_ranges_for_local_index_posting_list(const query_options& options) const;
+    dht::partition_range_vector get_partition_ranges_for_global_index_posting_list(const query_options& options) const;
+
 };
 
 }
