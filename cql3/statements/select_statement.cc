@@ -881,16 +881,14 @@ read_posting_list(service::storage_proxy& proxy,
                   cql3::cql_stats& stats)
 {
     dht::partition_range_vector partition_ranges;
-    // FIXME: there should be only one index restriction for this index!
-    // Perhaps even one index restriction entirely (do we support
-    // intersection queries?).
-    for (const auto& restrictions : base_restrictions->index_restrictions()) {
-        const column_definition* cdef = base_schema->get_column_definition(to_bytes(index.target_column()));
-        if (!cdef) {
-            throw exceptions::invalid_request_exception("Indexed column not found in schema");
-        }
 
-        bytes_opt value = restrictions->value_for(*cdef, options);
+    const column_definition* cdef = base_schema->get_column_definition(to_bytes(index.target_column()));
+    if (!cdef) {
+        throw exceptions::invalid_request_exception("Indexed column not found in schema");
+    }
+
+    for (const auto& index_restriction : base_restrictions->index_restrictions()) {
+        bytes_opt value = index_restriction->value_for(*cdef, options);
         if (value) {
             auto pk = partition_key::from_single_value(*view_schema, *value);
             auto dk = dht::global_partitioner().decorate_key(*view_schema, pk);
