@@ -3361,13 +3361,19 @@ void feature_enabled_listener::on_enabled() {
     _started = true;
     with_semaphore(_sem, 1, [this] {
         if (!sstables::is_later(_format, _s._sstables_format)) {
-            return make_ready_future<>();
+            return make_ready_future<bool>(false);
         }
         return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(_format)).then([this] {
             return get_storage_service().invoke_on_all([this] (storage_service& s) {
                 s._sstables_format = _format;
             });
-        });
+        }).then([] { return true; });
+    }).then([this] (bool update_features) {
+        if (!update_features) {
+            return make_ready_future<>();
+        }
+        return gms::get_local_gossiper().add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
+                                                                     _s.value_factory.supported_features(_s.get_config_supported_features()));
     });
 }
 
