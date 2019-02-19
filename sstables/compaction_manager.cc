@@ -564,25 +564,25 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
     return false;
 }
 
-future<> compaction_manager::perform_cleanup(column_family* cf) {
-    if (check_for_cleanup(cf)) {
+future<> compaction_manager::rewrite_sstables(column_family* cf, bool is_cleanup, get_candidates_func get_func) {
+    if (is_cleanup && check_for_cleanup(cf)) {
         throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
             cf->schema()->ks_name(), cf->schema()->cf_name()));
     }
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
-    task->cleanup = true;
+    task->cleanup = is_cleanup;
     _tasks.push_back(task);
     _stats.pending_tasks++;
 
-    task->compaction_done = repeat([this, task] () mutable {
+    task->compaction_done = repeat([this, task, get_func = std::move(get_func)] () mutable {
         // FIXME: lock cf here
         if (!can_proceed(task)) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
         column_family& cf = *task->compacting_cf;
-        sstables::compaction_descriptor descriptor = sstables::compaction_descriptor(get_candidates(cf));
+        sstables::compaction_descriptor descriptor = sstables::compaction_descriptor(get_func(cf));
         auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
         // Releases reference to cleaned sstable such that respective used disk space can be freed.
         descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
@@ -593,9 +593,9 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
         _stats.active_tasks++;
         task->compaction_running = true;
         compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
-        return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
-            return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
-                return cf.cleanup_sstables(std::move(descriptor));
+        return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor), task] (compaction_backlog_tracker& bt) mutable {
+            return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor), task] () mutable {
+                return cf.cleanup_sstables(std::move(descriptor), task->cleanup);
             });
         }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             task->compaction_running = false;
@@ -620,6 +620,10 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
     });
 
     return task->compaction_done.get_future().then([task] {});
+}
+
+future<> compaction_manager::perform_cleanup(column_family* cf) {
+    return rewrite_sstables(cf, true, std::bind(&compaction_manager::get_candidates, this, std::placeholders::_1));
 }
 
 future<> compaction_manager::remove(column_family* cf) {
