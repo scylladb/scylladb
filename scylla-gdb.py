@@ -372,7 +372,13 @@ def cpus():
     return int(gdb.parse_and_eval('::seastar::smp::count'))
 
 
-def find_db(shard):
+def current_shard():
+    return int(gdb.parse_and_eval('\'seastar\'::local_engine->_id'))
+
+
+def find_db(shard=None):
+    if not shard:
+        shard = current_shard()
     return gdb.parse_and_eval('::debug::db')['_instances']['_M_impl']['_M_start'][shard]['service']['_p']
 
 
@@ -620,6 +626,44 @@ class scylla_active_sstables(gdb.Command):
         gdb.write('sstable_count=%d, total_index_lists_size=%d\n' % (len(sstables), total_index_lists_size))
 
 
+class seastar_shared_ptr():
+    def __init__(self, ref):
+        self.ref = ref
+
+    def get(self):
+        return self.ref['_p']
+
+
+class lsa_region():
+    def __init__(self, region):
+        impl_ptr_type = gdb.lookup_type('logalloc::region_impl').pointer()
+        self.region = seastar_shared_ptr(region['_impl']).get().cast(impl_ptr_type)
+        self.segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
+
+    def total(self):
+        size = int(self.region['_closed_occupancy']['_total_space'])
+        if int(self.region['_active_offset']) > 0:
+            size += self.segment_size
+        return size
+
+    def free(self):
+        return int(self.region['_closed_occupancy']['_free_space'])
+
+    def used(self):
+        return self.total() - self.free()
+
+
+class dirty_mem_mgr():
+    def __init__(self, ref):
+        self.ref = ref
+
+    def real_dirty(self):
+        return int(self.ref['_real_region_group']['_total_memory'])
+
+    def virt_dirty(self):
+        return int(self.ref['_virtual_region_group']['_total_memory'])
+
+
 class scylla_memory(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -631,6 +675,47 @@ class scylla_memory(gdb.Command):
         total_mem = int(cpu_mem['nr_pages']) * page_size
         gdb.write('Used memory: {used_mem:>13}\nFree memory: {free_mem:>13}\nTotal memory: {total_mem:>12}\n\n'
                   .format(used_mem=total_mem - free_mem, free_mem=free_mem, total_mem=total_mem))
+
+        lsa = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
+        segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
+        lsa_free = int(lsa['_free_segments']) * segment_size
+        non_lsa_mem = int(lsa['_non_lsa_memory_in_use'])
+        lsa_used = int(lsa['_segments_in_use']) * segment_size + non_lsa_mem
+        lsa_allocated = lsa_used + lsa_free
+
+        gdb.write('LSA:\n'
+                  '  allocated: {lsa:>13}\n'
+                  '  used:      {lsa_used:>13}\n'
+                  '  free:      {lsa_free:>13}\n\n'
+                  .format(lsa=lsa_allocated, lsa_used=lsa_used, lsa_free=lsa_free))
+
+        db = find_db()
+        cache_region = lsa_region(db['_row_cache_tracker']['_region'])
+
+        gdb.write('Cache:\n'
+                  '  total:     {cache_total:>13}\n'
+                  '  used:      {cache_used:>13}\n'
+                  '  free:      {cache_free:>13}\n\n'
+                  .format(cache_total=cache_region.total(), cache_used=cache_region.used(), cache_free=cache_region.free()))
+
+        gdb.write('Memtables:\n'
+                  ' total:       {total:>13}\n'
+                  ' Regular:\n'
+                  '  real dirty: {reg_real_dirty:>13}\n'
+                  '  virt dirty: {reg_virt_dirty:>13}\n'
+                  ' System:\n'
+                  '  real dirty: {sys_real_dirty:>13}\n'
+                  '  virt dirty: {sys_virt_dirty:>13}\n'
+                  ' Streaming:\n'
+                  '  real dirty: {str_real_dirty:>13}\n'
+                  '  virt dirty: {str_virt_dirty:>13}\n\n'
+                  .format(total=(lsa_allocated-cache_region.total()),
+                          reg_real_dirty=dirty_mem_mgr(db['_dirty_memory_manager']).real_dirty(),
+                          reg_virt_dirty=dirty_mem_mgr(db['_dirty_memory_manager']).virt_dirty(),
+                          sys_real_dirty=dirty_mem_mgr(db['_system_dirty_memory_manager']).real_dirty(),
+                          sys_virt_dirty=dirty_mem_mgr(db['_system_dirty_memory_manager']).virt_dirty(),
+                          str_real_dirty=dirty_mem_mgr(db['_streaming_dirty_memory_manager']).real_dirty(),
+                          str_virt_dirty=dirty_mem_mgr(db['_streaming_dirty_memory_manager']).virt_dirty()))
 
         gdb.write('Small pools:\n')
         small_pools = cpu_mem['small_pools']
