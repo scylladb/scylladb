@@ -808,6 +808,8 @@ public:
 
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits);
 
+extern std::unique_ptr<i_partitioner> default_partitioner;
+
 } // dht
 
 namespace std {

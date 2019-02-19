@@ -23,6 +23,14 @@
 #pragma once
 
 #include <memory>
+#include <seastar/core/reactor.hh>
+
+#include "schema.hh"
+#include "schema_builder.hh"
+#include "row_cache.hh"
+#include "database.hh"
+#include "cell_locking.hh"
+#include "sstables/compaction_manager.hh"
 
 // Includes: database, auth, storage_service
 class storage_service_for_tests {
@@ -32,3 +40,31 @@ public:
     storage_service_for_tests();
     ~storage_service_for_tests();
 };
+
+column_family::config column_family_test_config();
+
+struct column_family_for_tests {
+    struct data {
+        schema_ptr s;
+        cache_tracker tracker;
+        column_family::config cfg;
+        cell_locker_stats cl_stats;
+        compaction_manager cm;
+        lw_shared_ptr<column_family> cf;
+    };
+    lw_shared_ptr<data> _data;
+
+    column_family_for_tests();
+
+    explicit column_family_for_tests(schema_ptr s);
+
+    schema_ptr schema() { return _data->s; }
+
+    operator lw_shared_ptr<column_family>() { return _data->cf; }
+
+    column_family& operator*() { return *_data->cf; }
+    column_family* operator->() { return _data->cf.get(); }
+};
+
+dht::token create_token_from_key(sstring key);
+range<dht::token> create_token_range_from_keys(sstring start_key, sstring end_key);

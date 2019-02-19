@@ -35,6 +35,7 @@
 #include "canonical_mutation.hh"
 #include "sstable_utils.hh"
 #include "test_services.hh"
+#include "sstable_test_env.hh"
 
 class size_calculator {
     class nest {
@@ -187,7 +188,8 @@ static sizes calculate_sizes(const mutation& m) {
     result.query_result = m.query(partition_slice_builder(*s).build(), query::result_options::only_result()).buf().size();
 
     tmpdir sstable_dir;
-    auto sst = sstables::make_sstable(s,
+    sstables::test_env env;
+    auto sst = env.make_sstable(s,
         sstable_dir.path().string(),
         1 /* generation */,
         sstables::sstable::version_types::la,

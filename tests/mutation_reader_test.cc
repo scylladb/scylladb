@@ -35,6 +35,7 @@
 #include "tests/flat_mutation_reader_assertions.hh"
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
+#include "tests/sstable_test.hh"
 #include "tests/simple_schema.hh"
 #include "tests/test_services.hh"
 #include "tests/mutation_source_test.hh"
@@ -384,6 +385,7 @@ SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
 }
 
 struct sst_factory {
+    sstables::test_env env;
     schema_ptr s;
     sstring path;
     unsigned gen;
@@ -397,7 +399,7 @@ struct sst_factory {
     {}
 
     sstables::shared_sstable operator()() {
-        auto sst = sstables::make_sstable(s, path, gen, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, path, gen, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
         sst->set_unshared();
         //sst->set_sstable_level(level);
         sst->get_metadata_collector().sstable_level(level);
@@ -707,7 +709,7 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
 
 static const std::size_t new_reader_base_cost{16 * 1024};
 
-sstables::shared_sstable create_sstable(simple_schema& sschema, const sstring& path) {
+sstables::shared_sstable create_sstable(sstables::test_env& env, simple_schema& sschema, const sstring& path) {
     std::vector<mutation> mutations;
     mutations.reserve(1 << 14);
 
@@ -724,17 +726,17 @@ sstables::shared_sstable create_sstable(simple_schema& sschema, const sstring& p
     }
 
     return make_sstable_containing([&] {
-            return make_lw_shared<sstables::sstable>(sschema.schema(), path, 0, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+            return env.make_sstable(sschema.schema(), path, 0, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
         }
         , mutations);
 }
 
 static
-sstables::shared_sstable create_sstable(schema_ptr s, std::vector<mutation> mutations) {
+sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations) {
     static thread_local auto tmp = tmpdir();
     static int gen = 0;
     return make_sstable_containing([&] {
-        return make_lw_shared<sstables::sstable>(s, tmp.path().string(), gen++, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+        return env.make_sstable(s, tmp.path().string(), gen++, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
     }, mutations);
 }
 
@@ -973,14 +975,14 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 }
 
 SEASTAR_TEST_CASE(restricted_reader_reading) {
-    return async([&] {
+    return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
         reader_concurrency_semaphore semaphore(2, new_reader_base_cost);
 
         {
             simple_schema s;
             auto tmp = tmpdir();
-            auto sst = create_sstable(s, tmp.path().string());
+            auto sst = create_sstable(env, s, tmp.path().string());
 
             auto reader1 = reader_wrapper(semaphore, s.schema(), sst);
 
@@ -1044,14 +1046,14 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
 }
 
 SEASTAR_TEST_CASE(restricted_reader_timeout) {
-    return async([&] {
+    return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
         reader_concurrency_semaphore semaphore(2, new_reader_base_cost);
 
         {
             simple_schema s;
             auto tmp = tmpdir();
-            auto sst = create_sstable(s, tmp.path().string());
+            auto sst = create_sstable(env, s, tmp.path().string());
 
             auto timeout = std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{1});
 
@@ -1089,7 +1091,7 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
 }
 
 SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
-    return async([&] {
+    return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
 
         struct queue_overloaded_exception {};
@@ -1099,7 +1101,7 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
         {
             simple_schema s;
             auto tmp = tmpdir();
-            auto sst = create_sstable(s, tmp.path().string());
+            auto sst = create_sstable(env, s, tmp.path().string());
 
             auto reader1_ptr = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst);
             (*reader1_ptr)().get();
@@ -1128,14 +1130,14 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
 }
 
 SEASTAR_TEST_CASE(restricted_reader_create_reader) {
-    return async([&] {
+    return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
         reader_concurrency_semaphore semaphore(100, new_reader_base_cost);
 
         {
             simple_schema s;
             auto tmp = tmpdir();
-            auto sst = create_sstable(s, tmp.path().string());
+            auto sst = create_sstable(env, s, tmp.path().string());
 
             {
                 auto reader = reader_wrapper(semaphore, s.schema(), sst);
@@ -1196,7 +1198,7 @@ static mutation compacted(const mutation& m) {
 }
 
 SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicing) {
-    return async([&] {
+    return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
@@ -1219,7 +1221,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                     combined[j++].apply(m);
                 }
             }
-            mutation_source ds = create_sstable(s, muts)->as_mutation_source();
+            mutation_source ds = create_sstable(env, s, muts)->as_mutation_source();
             readers.push_back(ds.make_reader(s,
                 dht::partition_range::make({keys[0]}, {keys[0]}),
                 s->full_slice(), default_priority_class(), nullptr,
@@ -1271,7 +1273,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
 }
 
 SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones) {
-    return async([&] {
+    return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
         simple_schema ss;
         auto s = ss.schema();
@@ -1287,8 +1289,8 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
 
         std::vector<flat_mutation_reader> readers;
 
-        mutation_source ds1 = create_sstable(s, {m1})->as_mutation_source();
-        mutation_source ds2 = create_sstable(s, {m2})->as_mutation_source();
+        mutation_source ds1 = create_sstable(env, s, {m1})->as_mutation_source();
+        mutation_source ds2 = create_sstable(env, s, {m2})->as_mutation_source();
 
         // upper bound ends before the row in m2, so that the raw is fetched after next fast forward.
         auto range = ss.make_ckey_range(0, 3);
