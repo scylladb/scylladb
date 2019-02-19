@@ -72,3 +72,17 @@ builds can use it automatically.
 For master toolchains, the branch designation is omitted. In a branch, if
 there is a need to update a toolchain, the branch designation is added to
 the tag to avoid ambiguity.
+
+## Troubleshooting
+
+When running `sudo` inside the container fails like this:
+```
+$ tools/toolchain/dbuild /bin/bash
+bash-4.4$ sudo dnf install gdb
+sudo: unknown uid 1000: who are you?
+```
+
+You can work it around by disabling SELinux on the host before running `dbuild`:
+```
+$ sudo setenforce 0
+```
