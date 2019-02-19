@@ -667,6 +667,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
             return seg;
         }
         if (can_allocate_more_memory(segment::size)) {
+            memory::disable_abort_on_alloc_failure_temporarily dfg;
             auto p = aligned_alloc(segment::size, segment::size);
             if (!p) {
                 continue;
@@ -2286,7 +2287,15 @@ void allocating_section::on_alloc_failure(logalloc::region& r) {
         _std_reserve *= 2; // FIXME: decay?
         llogger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", this, _std_reserve);
     }
-    reserve();
+    try {
+        reserve();
+    } catch (const std::bad_alloc&) {
+        if (shard_tracker().should_abort_on_bad_alloc()) {
+            llogger.error("Aborting due to allocation failure");
+            abort();
+        }
+        throw;
+    }
 }
 
 #else

@@ -717,6 +717,7 @@ public:
         while (true) {
             try {
                 logalloc::reclaim_lock _(r);
+                memory::disable_abort_on_alloc_failure_temporarily dfg;
                 return fn();
             } catch (const std::bad_alloc&) {
                 on_alloc_failure(r);
