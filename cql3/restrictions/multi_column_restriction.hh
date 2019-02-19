@@ -101,6 +101,10 @@ public:
                          const row& cells,
                          const query_options& options,
                          gc_clock::time_point now) const override {
+        return is_satisfied_by(schema, ckey, options);
+    }
+
+    bool is_satisfied_by(const schema& schema, const clustering_key_prefix& ckey, const query_options& options) const {
         return boost::algorithm::any_of(bounds_ranges(options), [&ckey, &schema] (const bounds_range_type& range) {
             return range.contains(query::clustering_range(ckey), clustering_key_prefix::prefix_equal_tri_compare(schema));
         });
