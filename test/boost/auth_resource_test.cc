@@ -50,6 +50,13 @@ BOOST_AUTO_TEST_CASE(root_of) {
 
     const auto rv = auth::role_resource_view(rr);
     BOOST_REQUIRE(!rv.role());
+
+    //
+    // service_level
+    //
+
+    const auto slr = auth::resource(auth::resource_kind::service_level);
+    BOOST_REQUIRE_EQUAL(slr.kind(), auth::resource_kind::service_level);
 }
 
 BOOST_AUTO_TEST_CASE(data) {
@@ -74,6 +81,11 @@ BOOST_AUTO_TEST_CASE(role) {
 
     const auto v = auth::role_resource_view(r);
     BOOST_REQUIRE_EQUAL(*v.role(), "joe");
+}
+
+BOOST_AUTO_TEST_CASE(service_level) {
+    const auto r = auth::make_service_level_resource();
+    BOOST_REQUIRE_EQUAL(r.kind(), auth::resource_kind::service_level);
 }
 
 BOOST_AUTO_TEST_CASE(from_name) {
@@ -105,6 +117,15 @@ BOOST_AUTO_TEST_CASE(from_name) {
     BOOST_REQUIRE_THROW(auth::parse_resource("roles/joe/smith"), auth::invalid_resource_name);
 
     //
+    //service_level
+    //
+
+    const auto slr1 = auth::parse_resource("service_levels");
+    BOOST_REQUIRE_EQUAL(slr1, auth::root_service_level_resource());
+
+    BOOST_REQUIRE_THROW(auth::parse_resource("service_levels/low_priority"), auth::invalid_resource_name);
+
+    //
     // Generic errors.
     //
 
@@ -127,6 +148,12 @@ BOOST_AUTO_TEST_CASE(name) {
 
     BOOST_REQUIRE_EQUAL(auth::root_role_resource().name(), "roles");
     BOOST_REQUIRE_EQUAL(auth::make_role_resource("joe").name(), "roles/joe");
+
+    //
+    // service_level
+    //
+
+    BOOST_REQUIRE_EQUAL(auth::root_service_level_resource().name(), "service_levels");
 }
 
 BOOST_AUTO_TEST_CASE(parent) {
@@ -162,6 +189,12 @@ BOOST_AUTO_TEST_CASE(output) {
 
     BOOST_REQUIRE_EQUAL(format("{}", auth::root_role_resource()), "<all roles>");
     BOOST_REQUIRE_EQUAL(format("{}", auth::make_role_resource("joe")), "<role joe>");
+
+    //
+    // service_level
+    //
+
+    BOOST_REQUIRE_EQUAL(format("{}", auth::root_service_level_resource()), "<all service levels>");
 }
 
 BOOST_AUTO_TEST_CASE(expand) {

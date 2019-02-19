@@ -327,6 +327,8 @@ future<bool> service::exists(const resource& r) const {
 
             return make_ready_future<bool>(true);
         }
+        case resource_kind::service_level:
+            return make_ready_future<bool>(true);
     }
 
     return make_ready_future<bool>(false);
