@@ -47,6 +47,7 @@
 #include "cql3/statements/request_validations.hh"
 #include "cql3/restrictions/single_column_primary_key_restrictions.hh"
 #include "cql3/constants.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
 
@@ -100,12 +101,9 @@ public:
                          const row& cells,
                          const query_options& options,
                          gc_clock::time_point now) const override {
-        for (auto&& range : bounds_ranges(options)) {
-            if (range.contains(ckey, clustering_key_prefix::prefix_equal_tri_compare(schema))) {
-                return true;
-            }
-        }
-        return false;
+        return boost::algorithm::any_of(bounds_ranges(options), [&ckey, &schema] (const bounds_range_type& range) {
+            return range.contains(query::clustering_range(ckey), clustering_key_prefix::prefix_equal_tri_compare(schema));
+        });
     }
 
 protected:
