@@ -35,6 +35,10 @@
 #include "log.hh"
 #include "release.hh"
 #include "sstables/compaction_manager.hh"
+#include "sstables/sstables.hh"
+#include "database.hh"
+
+sstables::sstable::version_types get_highest_supported_format();
 
 namespace api {
 
@@ -322,14 +326,19 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::upgrade_sstables.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_family = req->get_query_param("cf");
-        auto exclude_current_version = req->get_query_param("exclude_current_version");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
+    ss::upgrade_sstables.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+        bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
+
+        return ctx.db.invoke_on_all([=] (database& db) {
+            return do_for_each(column_families, [=, &db](sstring cfname) {
+                auto& cm = db.get_compaction_manager();
+                auto& cf = db.find_column_family(keyspace, cfname);
+                return cm.perform_sstable_upgrade(&cf, exclude_current_version);
+            });
+        }).then([]{
+            return make_ready_future<json::json_return_type>(0);
+        });
+    }));
 
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
