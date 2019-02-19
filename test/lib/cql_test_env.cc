@@ -51,6 +51,7 @@
 #include "test/lib/reader_permit.hh"
 #include "db/query_context.hh"
 #include "test/lib/test_services.hh"
+#include "unit_test_service_levels_accessor.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/node_view_update_backlog.hh"
 #include "distributed_loader.hh"
@@ -123,6 +124,7 @@ private:
     sharded<db::view::view_update_generator>& _view_update_generator;
     sharded<service::migration_notifier>& _mnotifier;
     sharded<cdc::generation_service>& _cdc_generation_service;
+    sharded<qos::service_level_controller>& _sl_controller;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -143,7 +145,7 @@ private:
         if (_db.local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
         }
-        return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
+        return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit(), _sl_controller.local());
     }
 public:
     single_node_cql_env(
@@ -154,7 +156,8 @@ public:
             sharded<db::view::view_builder>& view_builder,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<service::migration_notifier>& mnotifier,
-            sharded<cdc::generation_service>& cdc_generation_service)
+            sharded<cdc::generation_service>& cdc_generation_service,
+            sharded<qos::service_level_controller> &sl_controller)
             : _feature_service(feature_service)
             , _db(db)
             , _qp(qp)
@@ -163,6 +166,7 @@ public:
             , _view_update_generator(view_update_generator)
             , _mnotifier(mnotifier)
             , _cdc_generation_service(cdc_generation_service)
+            , _sl_controller(sl_controller)
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
@@ -438,15 +442,27 @@ public:
             mm_notif.start().get();
             auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
 
+            sharded<auth::service> auth_service;
+
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
+            auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
+            auto sl_controller = sharded<qos::service_level_controller>();
+            sl_controller.start(std::ref(auth_service), qos::service_level_options{}).get();
+            auto stop_sl_controller = defer([&sl_controller] { sl_controller.stop().get(); });
+            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            sl_controller.invoke_on_all([&sys_dist_ks, &sl_controller] (qos::service_level_controller& service) {
+                qos::service_level_controller::service_level_distributed_data_accessor_ptr service_level_data_accessor =
+                        ::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
+                                make_shared<qos::unit_test_service_levels_accessor>(sl_controller,sys_dist_ks));
+                return service.set_distributed_data_accessor(std::move(service_level_data_accessor));
+            }).get();
 
             sharded<netw::messaging_service> ms;
             // don't start listening so tests can be run in parallel
             ms.start(listen, std::move(7000)).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
-            sharded<auth::service> auth_service;
             // Normally the auth server is already stopped in here,
             // but if there is an initialization failure we have to
             // make sure to stop it now or ~sharded will assert.
@@ -454,7 +470,6 @@ public:
                 auth_service.stop().get();
             });
 
-            auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
@@ -529,7 +544,7 @@ public:
 
             sharded<cql3::query_processor> qp;
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), qp_mcfg, std::ref(cql_config)).get();
+            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), std::ref(sl_controller)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             // In main.cc we call db::system_keyspace::setup which calls
@@ -643,7 +658,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(feature_service, db, qp, auth_service, view_builder, view_update_generator, mm_notif, cdc_generation_service);
+            single_node_cql_env env(feature_service, db, qp, auth_service, view_builder, view_update_generator, mm_notif, cdc_generation_service, std::ref(sl_controller));
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
