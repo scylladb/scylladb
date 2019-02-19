@@ -68,7 +68,7 @@ const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono
 class query_processor::internal_state {
     service::query_state _qs;
 public:
-    internal_state() : _qs(service::client_state::for_internal_calls(), empty_service_permit()) {
+    internal_state(qos::service_level_controller &sl_controller) : _qs(service::client_state::for_internal_calls(), empty_service_permit(), sl_controller) {
     }
     operator service::query_state&() {
         return _qs;
@@ -84,13 +84,13 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg, sharded<qos::service_level_controller>& sl_controller)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
         , _mnotifier(mn)
         , _cql_config(cql_cfg)
-        , _internal_state(new internal_state())
+        , _internal_state(new internal_state(sl_controller.local()))
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.get_config().permissions_validity_in_ms()),
                                               std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry)),

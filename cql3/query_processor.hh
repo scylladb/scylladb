@@ -149,7 +149,8 @@ public:
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg);
+    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg,
+            sharded<qos::service_level_controller> &sl_controller);
 
     ~query_processor();
 
