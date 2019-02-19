@@ -37,6 +37,7 @@ options {
 #include "cql3/statements/alter_keyspace_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/alter_view_statement.hh"
+#include "cql3/statements/alter_service_level_statement.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
@@ -44,6 +45,9 @@ options {
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
 #include "cql3/statements/create_function_statement.hh"
+#include "cql3/statements/create_service_level_statement.hh"
+#include "cql3/statements/sl_prop_defs.hh"
+#include "cql3/statements/attach_service_level_statement.hh"
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
@@ -51,6 +55,8 @@ options {
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/drop_view_statement.hh"
 #include "cql3/statements/drop_function_statement.hh"
+#include "cql3/statements/drop_service_level_statement.hh"
+#include "cql3/statements/detach_service_level_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
@@ -64,6 +70,8 @@ options {
 #include "cql3/statements/list_permissions_statement.hh"
 #include "cql3/statements/alter_role_statement.hh"
 #include "cql3/statements/list_roles_statement.hh"
+#include "cql3/statements/list_service_level_statement.hh"
+#include "cql3/statements/list_service_level_attachments_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/drop_role_statement.hh"
@@ -194,7 +202,7 @@ struct uninitialized {
         listener->syntax_error(*this, token_names, ex);
     }
 
-    void add_recognition_error(const sstring& msg) {
+	void add_recognition_error(const sstring& msg) {
         listener->syntax_error(*this, msg);
     }
 
@@ -370,6 +378,14 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st38=dropRoleStatement           { $stmt = std::move(st38); }
     | st39=createRoleStatement         { $stmt = std::move(st39); }
     | st40=alterRoleStatement          { $stmt = std::move(st40); }
+    | st41=createServiceLevelStatement { $stmt = std::move(st41); }
+    | st42=alterServiceLevelStatement  { $stmt = std::move(st42); }
+    | st43=dropServiceLevelStatement   { $stmt = std::move(st43); }
+    | st44=attachServiceLevelStatement { $stmt = std::move(st44); }
+    | st45=detachServiceLevelStatement { $stmt = std::move(st45); }
+    | st46=listServiceLevelStatement { $stmt = std::move(st46); }
+    | st47=listServiceLevelAttachStatement { $stmt = std::move(st47); }
+
     ;
 
 /*
@@ -1241,6 +1257,88 @@ roleOption[cql3::role_options& opts]
     | K_LOGIN '=' b=BOOLEAN { opts.can_login = convert_boolean_literal($b.text); }
     ;
 
+/**
+ * CREATE SERVICE_LEVEL [IF NOT EXISTS] <service_level_name> [WITH <param> = <value>]
+ */
+createServiceLevelStatement returns [std::unique_ptr<create_service_level_statement> stmt]
+    @init {
+        auto attrs = make_shared<cql3::statements::sl_prop_defs>();
+        bool if_not_exists = false;
+    }
+    : K_CREATE K_SERVICE_LEVEL (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=serviceLevelOrRoleName (K_WITH properties[*attrs])?
+      { $stmt = std::make_unique<create_service_level_statement>(name, attrs, if_not_exists); }
+    ;
+
+/**
+ * ALTER SERVICE_LEVEL <service_level_name> WITH <param> = <value>
+ */
+alterServiceLevelStatement returns [std::unique_ptr<alter_service_level_statement> stmt]
+    @init {
+        auto attrs = make_shared<cql3::statements::sl_prop_defs>();
+    }
+    : K_ALTER K_SERVICE_LEVEL name=serviceLevelOrRoleName K_WITH properties[*attrs]
+      { $stmt = std::make_unique<alter_service_level_statement>(name, attrs); }
+    ;
+
+/**
+ * DROP SERVICE_LEVEL [IF EXISTS] <service_level_name>
+ */
+dropServiceLevelStatement returns [std::unique_ptr<drop_service_level_statement> stmt]
+    @init {
+        bool if_exists = false;
+    }
+    : K_DROP K_SERVICE_LEVEL (K_IF K_EXISTS { if_exists = true; })? name=serviceLevelOrRoleName
+      { $stmt = std::make_unique<drop_service_level_statement>(name, if_exists); }
+    ;
+
+/**
+ * ATTACH SERVICE_LEVEL <service_level_name> TO <role_name>
+ */
+attachServiceLevelStatement returns [std::unique_ptr<attach_service_level_statement> stmt]
+    @init {
+    }
+    : K_ATTACH K_SERVICE_LEVEL service_level_name=serviceLevelOrRoleName K_TO role_name=serviceLevelOrRoleName
+      { $stmt = std::make_unique<attach_service_level_statement>(service_level_name, role_name); }
+    ;
+
+/**
+ * DETACH SERVICE_LEVEL FROM <role_name>
+ */
+detachServiceLevelStatement returns [std::unique_ptr<detach_service_level_statement> stmt]
+    @init {
+    }
+    : K_DETACH K_SERVICE_LEVEL K_FROM role_name=serviceLevelOrRoleName
+      { $stmt = std::make_unique<detach_service_level_statement>(role_name); }
+    ;
+
+
+/**
+ * LIST SERVICE_LEVEL <service_level_name>
+ * LIST ALL SERVICE_LEVELS
+ */
+listServiceLevelStatement returns [std::unique_ptr<list_service_level_statement> stmt]
+    @init {
+    }
+    : K_LIST K_SERVICE_LEVEL service_level_name=serviceLevelOrRoleName
+      { $stmt = std::make_unique<list_service_level_statement>(service_level_name, false); } |
+      K_LIST K_ALL K_SERVICE_LEVELS
+      { $stmt = std::make_unique<list_service_level_statement>("", true); }
+    ;
+
+/**
+ * LIST ATTACHED SERVICE_LEVEL OF <role_name>
+ * LIST ALL ATTACHED SERVICE_LEVELS
+ */
+listServiceLevelAttachStatement returns [std::unique_ptr<list_service_level_attachments_statement> stmt]
+    @init {
+        bool allow_nonexisting_roles = false;
+    }
+    : K_LIST K_ATTACHED K_SERVICE_LEVEL K_OF role_name=serviceLevelOrRoleName
+      { $stmt = std::make_unique<list_service_level_attachments_statement>(role_name); } |
+      K_LIST K_ALL K_ATTACHED K_SERVICE_LEVELS
+      { $stmt = std::make_unique<list_service_level_attachments_statement>(); }
+    ;
+
 /** DEFINITIONS **/
 
 // Column Identifiers.  These need to be treated differently from other
@@ -1286,6 +1384,16 @@ userOrRoleName returns [uninitialized<cql3::role_name> name]
     | k=unreserved_keyword { $name = cql3::role_name(k, cql3::preserve_role_case::no); }
     | QMARK {add_recognition_error("Bind variables cannot be used for role names");}
     ;
+    
+serviceLevelOrRoleName returns [sstring name]
+: t=IDENT              { $name = sstring($t.text);
+						 std::transform($name.begin(), $name.end(), $name.begin(), ::tolower); }
+| t=STRING_LITERAL     { $name = sstring($t.text); }
+| t=QUOTED_NAME        { $name = sstring($t.text); }
+| k=unreserved_keyword { $name = sstring($t.text); 
+						 std::transform($name.begin(), $name.end(), $name.begin(), ::tolower);}
+| QMARK {add_recognition_error("Bind variables cannot be used for service levels or role names");}
+;
 
 ksName[cql3::keyspace_element_name& name]
     : t=IDENT              { $name.set_keyspace($t.text, false);}
@@ -1767,6 +1875,12 @@ basic_unreserved_keyword returns [sstring str]
         | K_LIKE
         | K_PER
         | K_PARTITION
+        | K_SERVICE_LEVEL
+        | K_ATTACH
+        | K_DETACH
+        | K_SERVICE_LEVELS
+                | K_ATTACHED
+                | K_FOR
         | K_GROUP
         | K_TIMEOUT
         ) { $str = $k.text; }
@@ -1916,6 +2030,13 @@ K_CACHE:       C A C H E;
 
 K_PER:         P E R;
 K_PARTITION:   P A R T I T I O N;
+
+K_SERVICE_LEVEL: S E R V I C E '_' L E V E L;
+K_ATTACH: A T T A C H;
+K_DETACH: D E T A C H;
+K_SERVICE_LEVELS: S E R V I C E '_' L E V E L S;
+K_ATTACHED: A T T A C H E D;
+K_FOR: F O R;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
