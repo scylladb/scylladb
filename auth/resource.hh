@@ -67,7 +67,7 @@ public:
 };
 
 enum class resource_kind {
-    data, role
+    data, role, service_level
 };
 
 std::ostream& operator<<(std::ostream&, resource_kind);
@@ -81,6 +81,11 @@ struct data_resource_t final {};
 /// Type tag for constructing role resources.
 ///
 struct role_resource_t final {};
+
+///
+/// Type tag for constructing service_level resources.
+///
+struct service_level_resource_t final {};
 
 ///
 /// Resources are entities that users can be granted permissions on.
@@ -108,6 +113,7 @@ public:
     resource(data_resource_t, std::string_view keyspace);
     resource(data_resource_t, std::string_view keyspace, std::string_view table);
     resource(role_resource_t, std::string_view role);
+    resource(service_level_resource_t);
 
     resource_kind kind() const noexcept {
         return _kind;
@@ -128,6 +134,7 @@ private:
     friend class std::hash<resource>;
     friend class data_resource_view;
     friend class role_resource_view;
+    friend class service_level_resource_view;
 
     friend bool operator<(const resource&, const resource&);
     friend bool operator==(const resource&, const resource&);
@@ -193,6 +200,22 @@ public:
 std::ostream& operator<<(std::ostream&, const role_resource_view&);
 
 ///
+/// A "service_level" view of \ref resource.
+///
+class service_level_resource_view final {
+    const resource& _resource;
+
+public:
+    ///
+    /// \throws \ref resource_kind_mismatch if the argument is not a "service_level" resource.
+    ///
+    explicit service_level_resource_view(const resource&);
+
+};
+
+std::ostream& operator<<(std::ostream&, const service_level_resource_view&);
+
+///
 /// Parse a resource from its name.
 ///
 /// \throws \ref invalid_resource_name when the name is malformed.
@@ -214,6 +237,12 @@ inline resource make_role_resource(std::string_view role) {
     return resource(role_resource_t{}, role);
 }
 
+const resource& root_service_level_resource();
+
+inline resource make_service_level_resource() {
+    return resource(service_level_resource_t{});
+}
+
 }
 
 namespace std {
@@ -228,12 +257,17 @@ struct hash<auth::resource> {
         return utils::tuple_hash()(std::make_tuple(auth::resource_kind::role, rv.role()));
     }
 
+    static size_t hash_service_level(const auth::service_level_resource_view& rv) {
+            return utils::tuple_hash()(std::make_tuple(auth::resource_kind::service_level));
+    }
+
     size_t operator()(const auth::resource& r) const {
         std::size_t value;
 
         switch (r._kind) {
         case auth::resource_kind::data: value = hash_data(auth::data_resource_view(r)); break;
         case auth::resource_kind::role: value = hash_role(auth::role_resource_view(r)); break;
+        case auth::resource_kind::service_level: value = hash_service_level(auth::service_level_resource_view(r)); break;
         }
 
         return value;
