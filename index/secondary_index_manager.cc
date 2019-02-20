@@ -49,6 +49,7 @@
 #include "database.hh"
 
 #include <boost/range/adaptor/map.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace secondary_index {
 
@@ -156,12 +157,13 @@ std::vector<index> secondary_index_manager::list_indexes() const {
 }
 
 bool secondary_index_manager::is_index(view_ptr view) const {
-    for (auto& i : list_indexes()) {
-        if (view->cf_name() == index_table_name(i.metadata().name())) {
-            return true;
-        }
-    }
-    return false;
+    return is_index(*view);
+}
+
+bool secondary_index_manager::is_index(const schema& s) const {
+    return boost::algorithm::any_of(_indices | boost::adaptors::map_values, [&s] (const index& i) {
+        return s.cf_name() == index_table_name(i.metadata().name());
+    });
 }
 
 }

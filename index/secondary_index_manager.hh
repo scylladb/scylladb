@@ -76,6 +76,7 @@ public:
     std::vector<index_metadata> get_dependent_indices(const column_definition& cdef) const;
     std::vector<index> list_indexes() const;
     bool is_index(view_ptr) const;
+    bool is_index(const schema& s) const;
 private:
     void add_index(const index_metadata& im);
 };
