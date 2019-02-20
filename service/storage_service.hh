@@ -265,6 +265,7 @@ public:
 private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
+    friend future<> read_sstables_format(distributed<storage_service>&);
     friend class feature_enabled_listener;
 #if 0
     /* the probability for tracing any particular request, 0 disables tracing and 1 enables for all */
@@ -2337,5 +2338,7 @@ private:
 future<> init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service);
 future<> deinit_storage_service();
+
+future<> read_sstables_format(distributed<storage_service>& ss);
 
 }
