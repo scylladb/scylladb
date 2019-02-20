@@ -140,11 +140,11 @@ public:
     ::shared_ptr<restrictions::statement_restrictions> get_restrictions() const;
 
 protected:
-    int32_t do_get_limit(const query_options& options, ::shared_ptr<term> limit) const;
-    int32_t get_limit(const query_options& options) const {
+    uint32_t do_get_limit(const query_options& options, ::shared_ptr<term> limit) const;
+    uint32_t get_limit(const query_options& options) const {
         return do_get_limit(options, _limit);
     }
-    int32_t get_per_partition_limit(const query_options& options) const {
+    uint32_t get_per_partition_limit(const query_options& options) const {
         return do_get_limit(options, _per_partition_limit);
     }
     bool needs_post_query_ordering() const;

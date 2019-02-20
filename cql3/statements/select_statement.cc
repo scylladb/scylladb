@@ -230,9 +230,9 @@ select_statement::make_partition_slice(const query_options& options)
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, options.get_cql_serialization_format(), get_per_partition_limit(options));
 }
 
-int32_t select_statement::do_get_limit(const query_options& options, ::shared_ptr<term> limit) const {
+uint32_t select_statement::do_get_limit(const query_options& options, ::shared_ptr<term> limit) const {
     if (!limit || _selection->is_aggregate()) {
-        return std::numeric_limits<int32_t>::max();
+        return query::max_rows;
     }
 
     auto val = limit->bind_and_get(options);
@@ -240,7 +240,7 @@ int32_t select_statement::do_get_limit(const query_options& options, ::shared_pt
         throw exceptions::invalid_request_exception("Invalid null value of limit");
     }
     if (val.is_unset_value()) {
-        return std::numeric_limits<int32_t>::max();
+        return query::max_rows;
     }
   return with_linearized(*val, [&] (bytes_view bv) {
     try {
