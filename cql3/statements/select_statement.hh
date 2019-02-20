@@ -53,6 +53,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
 #include "validation.hh"
+#include "transport/messages/result_message.hh"
 
 namespace cql3 {
 
@@ -246,6 +247,15 @@ private:
         _stats.rows_read += rows_read;
         _stats.secondary_index_rows_read += rows_read;
     }
+
+    future<::shared_ptr<cql_transport::messages::result_message::rows>>read_posting_list(
+            service::storage_proxy& proxy,
+            const query_options& options,
+            int32_t limit,
+            service::query_state& state,
+            gc_clock::time_point now,
+            db::timeout_clock::time_point timeout,
+            bool include_base_clustering_key);
 };
 
 }
