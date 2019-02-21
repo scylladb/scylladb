@@ -176,6 +176,8 @@ public:
     static format_types format_from_sstring(sstring& s);
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                                       format_types format, component_type component);
+    static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                                      format_types format, sstring component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                             format_types format, component_type component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,

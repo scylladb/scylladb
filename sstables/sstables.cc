@@ -2550,19 +2550,25 @@ bool sstable::requires_view_building() const {
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                                    format_types format, sstring component) {
+    sstring v = _version_string.at(version);
+    sstring g = to_sstring(generation);
+    sstring f = _format_string.at(format);
+    switch (version) {
+    case sstable::version_types::ka:
+        return ks + "-" + cf + "-" + v + "-" + g + "-" + component;
+    case sstable::version_types::la:
+        return v + "-" + g + "-" + f + "-" + component;
+    case sstable::version_types::mc:
+        return v + "-" + g + "-" + f + "-" + component;
+    }
+    assert(0 && "invalid version");
+}
+
+sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                           format_types format, component_type component) {
-        switch (version) {
-        case sstable::version_types::ka:
-            return ks + "-" + cf + "-" + _version_string.at(version) + "-" + to_sstring(generation) + "-" +
-                   sstable_version_constants::get_component_map(version).at(component);
-        case sstable::version_types::la:
-            return _version_string.at(version) + "-" + to_sstring(generation) + "-" + _format_string.at(format) + "-" +
-                   sstable_version_constants::get_component_map(version).at(component);
-        case sstable::version_types::mc:
-            return _version_string.at(version) + "-" + to_sstring(generation) + "-" + _format_string.at(format) + "-" +
-                   sstable_version_constants::get_component_map(version).at(component);
-        }
-        assert(0 && "invalid version");
+    return component_basename(ks, cf, version, generation, format,
+            sstable_version_constants::get_component_map(version).at(component));
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
@@ -2572,13 +2578,7 @@ sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& 
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                           format_types format, sstring component) {
-    static std::unordered_map<version_types, const char*, enum_hash<version_types>> fmtmap = {
-        { sstable::version_types::ka, "{0}-{1}-{2}-{3}-{5}" },
-        { sstable::version_types::la, "{2}-{3}-{4}-{5}" },
-        { sstable::version_types::mc, "{2}-{3}-{4}-{5}" }
-    };
-
-    return dir + "/" + seastar::format(fmtmap[version], ks, cf, _version_string.at(version), to_sstring(generation), _format_string.at(format), component);
+    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
 }
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
