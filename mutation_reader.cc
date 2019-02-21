@@ -174,6 +174,9 @@ private:
     // We need a list because we need stable addresses across additions
     // and removals.
     std::list<flat_mutation_reader> _all_readers;
+    // We remove unneeded readers in batches. Until it is their time they
+    // are kept in _to_remove.
+    std::list<flat_mutation_reader> _to_remove;
     // Readers positioned at a partition, different from the one we are
     // reading from now. For these readers the attached fragment is
     // always partition_start. Used to pick the next partition.
@@ -321,7 +324,10 @@ future<> mutation_reader_merger::prepare_next(db::timeout_clock::time_point time
                 // end are out of data for good for the current range.
                 _halted_readers.push_back(rk);
             } else if (_fwd_mr == mutation_reader::forwarding::no) {
-                _all_readers.erase(rk.reader);
+                _to_remove.splice(_to_remove.end(), _all_readers, rk.reader);
+                if (_to_remove.size() >= 4) {
+                    _to_remove.clear();
+                }
             }
         });
     }).then([this] {
