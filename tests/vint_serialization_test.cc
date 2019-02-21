@@ -58,8 +58,7 @@ void check_bytes_and_roundtrip(typename Vint::value_type value, BytesInspector&&
     f(view);
 
     const auto deserialized = Vint::deserialize(view);
-    BOOST_REQUIRE_EQUAL(deserialized.value, value);
-    BOOST_REQUIRE_EQUAL(deserialized.size, size);
+    BOOST_REQUIRE_EQUAL(deserialized, value);
     test_serialized_size_from_first_byte<Vint>(size, view);
 };
 

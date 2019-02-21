@@ -36,16 +36,11 @@ static constexpr size_t max_vint_length = 9;
 struct unsigned_vint final {
     using value_type = uint64_t;
 
-    struct deserialized_type final {
-        value_type value;
-        vint_size_type size;
-    };
-
     static vint_size_type serialized_size(value_type) noexcept;
 
     static vint_size_type serialize(value_type, bytes::iterator out);
 
-    static deserialized_type deserialize(bytes_view v);
+    static value_type deserialize(bytes_view v);
 
     static vint_size_type serialized_size_from_first_byte(bytes::value_type first_byte);
 };
@@ -53,16 +48,11 @@ struct unsigned_vint final {
 struct signed_vint final {
     using value_type = int64_t;
 
-    struct deserialized_type final {
-        value_type value;
-        vint_size_type size;
-    };
-
     static vint_size_type serialized_size(value_type) noexcept;
 
     static vint_size_type serialize(value_type, bytes::iterator out);
 
-    static deserialized_type deserialize(bytes_view v);
+    static value_type deserialize(bytes_view v);
 
     static vint_size_type serialized_size_from_first_byte(bytes::value_type first_byte);
 };

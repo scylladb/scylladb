@@ -45,7 +45,7 @@ inline future<T> read_vint_impl(random_access_reader& in) {
             check_buf_size(buf, len - 1);
             std::copy_n(buf.begin(), len - 1, bytes.get_write() + 1);
             return vint_type::deserialize(
-                bytes_view(reinterpret_cast<bytes::value_type*>(bytes.get_write()), len)).value;
+                bytes_view(reinterpret_cast<bytes::value_type*>(bytes.get_write()), len));
         });
     });
 }
@@ -59,4 +59,3 @@ future<int64_t> read_signed_vint(random_access_reader& in) {
 }
 
 }  // namespace sstables
-
