@@ -2551,22 +2551,22 @@ bool sstable::requires_view_building() const {
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                           format_types format, component_type component) {
-    static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
-        { sstable::version_types::ka, [] (entry_descriptor d) {
-            return d.ks + "-" + d.cf + "-" + _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-"
-                   + sstable_version_constants::get_component_map(d.version).at(d.component); }
-        },
-        { sstable::version_types::la, [] (entry_descriptor d) {
-            return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-"
-                   + sstable_version_constants::get_component_map(d.version).at(d.component); }
-        },
-        { sstable::version_types::mc, [] (entry_descriptor d) {
-                return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-"
-                       + sstable_version_constants::get_component_map(d.version).at(d.component); }
-        },
-    };
+    sstring basename = [&] {
+        switch (version) {
+        case sstable::version_types::ka:
+            return ks + "-" + cf + "-" + _version_string.at(version) + "-" + to_sstring(generation) + "-" +
+                   sstable_version_constants::get_component_map(version).at(component);
+        case sstable::version_types::la:
+            return _version_string.at(version) + "-" + to_sstring(generation) + "-" + _format_string.at(format) + "-" +
+                   sstable_version_constants::get_component_map(version).at(component);
+        case sstable::version_types::mc:
+            return _version_string.at(version) + "-" + to_sstring(generation) + "-" + _format_string.at(format) + "-" +
+                   sstable_version_constants::get_component_map(version).at(component);
+        }
+        assert(0 && "invalid version");
+    }();
 
-    return dir + "/" + strmap[version](entry_descriptor(dir, ks, cf, version, generation, format, component));
+    return dir + "/" + basename;
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
