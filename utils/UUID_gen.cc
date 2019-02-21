@@ -40,60 +40,9 @@
 
 #include <stdlib.h>
 #include <atomic>
-
-#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
-#include <cryptopp/md5.h>
+#include "hashers.hh"
 
 namespace utils {
-
-
-#if 0
-private static byte[] hash(Collection<InetAddress> data)
-{
-    try
-    {
-        MessageDigest messageDigest = MessageDigest.getInstance("MD5");
-        for(InetAddress addr : data)
-            messageDigest.update(addr.getAddress());
-
-        return messageDigest.digest();
-    }
-    catch (NoSuchAlgorithmException nsae)
-    {
-        throw new RuntimeException("MD5 digest algorithm is not available", nsae);
-    }
-}
-
-
-static int64_t make_node()
-{
-   /*
-    * We don't have access to the MAC address but need to generate a node part
-    * that identify this host as uniquely as possible.
-    * The spec says that one option is to take as many source that identify
-    * this node as possible and hash them together. That's what we do here by
-    * gathering all the ip of this host.
-    * Note that FBUtilities.getBroadcastAddress() should be enough to uniquely
-    * identify the node *in the cluster* but it triggers DatabaseDescriptor
-    * instanciation and the UUID generator is used in Stress for instance,
-    * where we don't want to require the yaml.
-    */
-    Collection<InetAddress> localAddresses = FBUtilities.getAllLocalAddresses();
-    if (localAddresses.isEmpty())
-        throw new RuntimeException("Cannot generate the node component of the UUID because cannot retrieve any IP addresses.");
-
-    // ideally, we'd use the MAC address, but java doesn't expose that.
-    byte[] hash = hash(localAddresses);
-    long node = 0;
-    for (int i = 0; i < Math.min(6, hash.length); i++)
-        node |= (0x00000000000000ff & (long)hash[i]) << (5-i)*8;
-    assert (0xff00000000000000L & node) == 0;
-
-    // Since we don't use the mac address, the spec says that multicast
-    // bit (least significant bit of the first octet of the node ID) must be 1.
-    return node | 0x0000010000000000L;
-}
-#endif
 
 static int64_t make_node()
 {
@@ -134,12 +83,7 @@ UUID UUID_gen::get_name_UUID(sstring_view s) {
 }
 
 UUID UUID_gen::get_name_UUID(const unsigned char *s, size_t len) {
-    static_assert(CryptoPP::Weak1::MD5::DIGESTSIZE == 16, "MD5 digests should be 16 bytes long");
-    int8_t digest[16];
-
-    CryptoPP::Weak::MD5 hash;
-    static_assert(sizeof(char) == sizeof(int8_t), "Assumed that chars are bytes");
-    hash.CalculateDigest(reinterpret_cast<unsigned char*>(digest), s, len);
+    bytes digest = md5_hasher::calculate(std::string_view(reinterpret_cast<const char*>(s), len));
 
     // set version to 3
     digest[6] &= 0x0f;

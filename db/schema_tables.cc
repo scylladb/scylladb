@@ -63,7 +63,7 @@
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
-#include "md5_hasher.hh"
+#include "hashers.hh"
 
 #include <seastar/util/noncopyable_function.hh>
 

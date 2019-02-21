@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "md5_hasher.hh"
+#include "hashers.hh"
 #include "random_partitioner.hh"
 #include "utils/class_registrator.hh"
 #include "utils/div_ceil.hh"
