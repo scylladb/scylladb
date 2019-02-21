@@ -140,6 +140,9 @@ public:
             , _full_checksum(full_file_checksum)
             {}
 
+    virtual temporary_buffer<char> allocate_buffer(size_t size) override {
+        return _out.allocate_buffer(size); // preserve alignment requirements
+    }
     future<> put(net::packet data) { abort(); }
     virtual future<> put(temporary_buffer<char> buf) override {
         // bufs will usually be a multiple of chunk size, but this won't be the case for
