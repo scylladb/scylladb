@@ -832,6 +832,7 @@ static void delete_schema_version(mutation& m) {
 static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
 {
    return seastar::async([&proxy, mutations = std::move(mutations), do_flush] () mutable {
+       slogger.trace("do_merge_schema: {}", mutations);
        schema_ptr s = keyspaces();
        // compare before/after schemas of the affected keyspaces only
        std::set<sstring> keyspaces;
@@ -2039,6 +2040,8 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
 
 schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)
 {
+    slogger.trace("create_table_from_mutations: version={}, {}", version, sm);
+
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     query::result_set_row table_row = table_rs.row(0);
 
