@@ -80,11 +80,12 @@ if [ ! -f /usr/bin/pystache ]; then
 fi
 
 RELOC_PKG_BASENAME=$(basename "$RELOC_PKG")
+SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat SCYLLA-RELEASE-FILE)
 
 RPMBUILD=$(readlink -f ../)
 mkdir -p "$RPMBUILD"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
-PYVER=$(python3 -V | cut -d' ' -f2)
 ln -fv "$RELOC_PKG" "$RPMBUILD"/SOURCES/
-pystache dist/redhat/python3/python.spec.mustache "{ \"version\": \"${PYVER}\", \"reloc_pkg\": \"${RELOC_PKG_BASENAME}\", \"name\": \"scylla-python3\", \"target\": \"/opt/scylladb/python3\" }" > "$RPMBUILD"/SPECS/python.spec
+pystache dist/redhat/python3/python.spec.mustache "{ \"version\": \"${SCYLLA_VERSION}\", \"release\": \"${SCYLLA_RELEASE}\", \"reloc_pkg\": \"${RELOC_PKG_BASENAME}\", \"name\": \"scylla-python3\", \"target\": \"/opt/scylladb/python3\" }" > "$RPMBUILD"/SPECS/python.spec
 rpmbuild --nodebuginfo -ba --define "_build_id_links none" --define "_topdir ${RPMBUILD}" --define "dist .el7" "$RPMBUILD"/SPECS/python.spec
