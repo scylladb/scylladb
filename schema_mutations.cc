@@ -121,3 +121,14 @@ bool schema_mutations::live() const {
 bool schema_mutations::is_view() const {
     return _columnfamilies.schema() == db::schema_tables::views();
 }
+
+std::ostream& operator<<(std::ostream& out, const schema_mutations& sm) {
+    out << "schema_mutations{\n";
+    out << " tables=" << sm.columnfamilies_mutation() << ",\n";
+    out << " scylla_tables=" << sm.scylla_tables() << ",\n";
+    out << " columns=" << sm.columns_mutation() << ",\n";
+    out << " dropped_columns=" << sm.dropped_columns_mutation() << ",\n";
+    out << " indices=" << sm.indices_mutation() << "\n";
+    out << "}";
+    return out;
+}

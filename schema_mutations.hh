@@ -130,5 +130,7 @@ public:
 
     // Returns true iff any mutations contain any live cells
     bool live() const;
+
+    friend std::ostream& operator<<(std::ostream&, const schema_mutations&);
 };
 
