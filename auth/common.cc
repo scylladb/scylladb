@@ -50,7 +50,7 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
         return exponential_backoff_retry::do_until_value(1s, 1min, as, [func = std::move(func)] {
             return func().then_wrapped([] (auto&& f) -> std::optional<empty_state> {
                 if (f.failed()) {
-                    auth_log.info("Auth task failed with error, rescheduling: {}", f.get_exception());
+                    auth_log.debug("Auth task failed with error, rescheduling: {}", f.get_exception());
                     return { };
                 }
                 return { empty_state() };
