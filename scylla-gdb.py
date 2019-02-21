@@ -405,7 +405,6 @@ def list_unordered_map(map, cache=True):
         pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
         yield (pc['first'], pc['second'])
         p = p['_M_nxt']
-    raise StopIteration()
 
 
 def list_unordered_set(map, cache=True):
