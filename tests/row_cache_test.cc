@@ -789,7 +789,7 @@ SEASTAR_TEST_CASE(test_eviction) {
     });
 }
 
-#ifndef DEFAULT_ALLOCATOR // Depends on eviction, which is absent with the std allocator
+#ifndef SEASTAR_DEFAULT_ALLOCATOR // Depends on eviction, which is absent with the std allocator
 
 SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
     return seastar::async([] {
