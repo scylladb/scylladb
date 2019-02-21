@@ -25,7 +25,14 @@
 #include "mutation.hh"
 #include "types/map.hh"
 
+#include <fmt/format.h>
+
 namespace query {
+
+class deserialization_error : public std::runtime_error {
+public:
+    using runtime_error::runtime_error;
+};
 
 // Result set builder is passed as a visitor to query_result::consume()
 // function. You can call the build() method to obtain a result set that
@@ -164,7 +171,9 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
             return _schema->regular_column_at(id);
         }
     });
+    size_t index = 0;
     for (auto &&col : columns) {
+      try {
         if (col.is_atomic()) {
             auto cell = i.next_atomic_cell();
             if (cell) {
@@ -184,6 +193,11 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
                 });
             }
         }
+        index++;
+      } catch (...) {
+            throw deserialization_error(fmt::format(FMT_STRING("failed on column {}.{}#{} (version: {}, id: {}, index: {}, type: {}): {}"),
+                _schema->ks_name(), _schema->cf_name(), col.name_as_text(), _schema->version(), col.id, index, col.type->name(), std::current_exception()));
+      }
     }
     return cells;
 }
