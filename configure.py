@@ -375,6 +375,7 @@ scylla_tests = [
     'test/manual/partition_data_test',
     'test/manual/row_locker_test',
     'test/manual/streaming_histogram_test',
+    'test/manual/sstable_scan_footprint_test',
     'test/perf/perf_cache_eviction',
     'test/perf/perf_cql_parser',
     'test/perf/perf_fast_forward',
@@ -927,6 +928,7 @@ tests_not_using_seastar_test_framework = set([
     'test/unit/memory_footprint_test',
     'test/unit/row_cache_alloc_stress_test',
     'test/unit/row_cache_stress_test',
+    'test/manual/sstable_scan_footprint_test',
 ]) | pure_boost_tests
 
 for t in tests_not_using_seastar_test_framework:
