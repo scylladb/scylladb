@@ -240,7 +240,7 @@ modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
         'sanitize_libs': '-lasan -lubsan',
-        'opt': '-O0 -DDEBUG -DDEBUG_SHARED_PTR -DDEBUG_LSA_SANITIZER',
+        'opt': '-O0 -DDEBUG -DDEBUG_LSA_SANITIZER',
         'libs': '',
     },
     'release': {
