@@ -20,7 +20,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 print_usage() {
-    echo "${0} --reloc-pkg build/release/scylla-python3.tar.gz"
+    echo "${0} --reloc-pkg build/release/scylla-python3-package.tar.gz"
     echo "  --reloc-pkg specify relocatable package path"
     echo "  --rpmbuild specify directory to use for building rpms"
     exit 1

@@ -20,7 +20,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-TARGET=build/release/scylla-python3.tar.gz
+TARGET=build/release/scylla-python3-package.tar.gz
 
 if [ -f "$TARGET" ]; then
     rm "$TARGET"
