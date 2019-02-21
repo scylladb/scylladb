@@ -88,6 +88,7 @@ parse(const sstring& json_string, const std::vector<column_definition>& expected
             continue;
         } else if (value_it->second.isNull()) {
             json_map.emplace(std::move(cql_name), bytes_opt{});
+            prepared_map.erase(value_it);
         } else {
             json_map.emplace(std::move(cql_name), def.type->from_json_object(value_it->second, sf));
             prepared_map.erase(value_it);

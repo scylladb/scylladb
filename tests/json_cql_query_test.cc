@@ -477,3 +477,25 @@ SEASTAR_TEST_CASE(test_json_default_unset) {
         }});
     });
 }
+
+SEASTAR_TEST_CASE(test_json_insert_null) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql(
+                "CREATE TABLE mytable ("
+                "    myid text PRIMARY KEY,"
+                "    mytext text,"
+                "    mytext1 text,"
+                "    mytext2 text);"
+        ).get();
+
+       e.execute_cql("INSERT INTO mytable JSON '{\"myid\" : \"id2\", \"mytext\" : \"text234\", \"mytext1\" : \"text235\", \"mytext2\" : null}';").get();
+
+        auto msg = e.execute_cql("SELECT * FROM mytable;").get0();
+        assert_that(msg).is_rows().with_rows({{
+            {utf8_type->decompose(sstring("id2"))},
+            {utf8_type->decompose(sstring("text234"))},
+            {utf8_type->decompose(sstring("text235"))},
+            {}
+        }});
+    });
+}
