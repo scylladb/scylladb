@@ -228,6 +228,11 @@ packages= ["python3"] + args.modules
 
 file_list = generate_file_list(dependencies(packages))
 ar = tarfile.open(args.output, mode='w|gz')
+pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
+ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
+ar.add('dist/redhat/python3')
+ar.add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
+ar.add('build/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
 
 for f in file_list:
     copy_file_to_python_env(ar, f)
