@@ -343,17 +343,35 @@ const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_res
     return _index_restrictions;
 }
 
+// Current score table:
+// local and restrictions include full partition key: 2
+// global: 1
+// local and restrictions does not include full partition key: 0 (do not pick)
+int statement_restrictions::score(const secondary_index::index& index) const {
+    if (index.metadata().local()) {
+        const bool allow_local = !_partition_key_restrictions->has_unrestricted_components(*_schema) && _partition_key_restrictions->is_all_eq();
+        return  allow_local ? 2 : 0;
+    }
+    return 1;
+}
+
 std::optional<secondary_index::index> statement_restrictions::find_idx(secondary_index::secondary_index_manager& sim) const {
-    for (::shared_ptr<cql3::restrictions::restrictions> restriction : index_restrictions()) {
-        for (const auto& cdef : restriction->get_column_defs()) {
-            for (auto index : sim.list_indexes()) {
+    std::optional<secondary_index::index> chosen_index;
+    int chosen_index_score = 0;
+
+    for (const auto& index : sim.list_indexes()) {
+        for (::shared_ptr<cql3::restrictions::restrictions> restriction : index_restrictions()) {
+            for (const auto& cdef : restriction->get_column_defs()) {
                 if (index.depends_on(*cdef)) {
-                    return std::make_optional<secondary_index::index>(std::move(index));
+                    if (score(index) > chosen_index_score) {
+                        chosen_index = index;
+                        chosen_index_score = score(index);
+                    }
                 }
             }
         }
     }
-    return std::nullopt;
+    return chosen_index;
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(database& db) const {
