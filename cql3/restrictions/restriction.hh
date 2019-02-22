@@ -52,6 +52,9 @@ namespace cql3 {
 
 namespace restrictions {
 
+struct allow_local_index_tag {};
+using allow_local_index = bool_class<allow_local_index_tag>;
+
 /**
  * A restriction/clause on a column.
  * The goal of this class being to group all conditions for a column in a SELECT.
@@ -114,7 +117,7 @@ public:
      * @param indexManager the index manager
      * @return <code>true</code> if the restriction is on indexed columns, <code>false</code>
      */
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const = 0;
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const = 0;
 
 #if 0
     /**

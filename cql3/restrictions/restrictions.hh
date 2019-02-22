@@ -48,6 +48,7 @@
 #include "types.hh"
 #include "schema.hh"
 #include "index/secondary_index_manager.hh"
+#include "restriction.hh"
 
 namespace cql3 {
 
@@ -87,7 +88,7 @@ public:
      * @param index_manager the index manager
      * @return <code>true</code> if the restriction is on indexed columns, <code>false</code>
      */
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const = 0;
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const = 0;
 
 #if 0
     /**

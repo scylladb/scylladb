@@ -84,8 +84,11 @@ public:
     }
 #endif
 
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const override {
         for (const auto& index : index_manager.list_indexes()) {
+            if (!allow_local && index.metadata().local()) {
+                continue;
+            }
             if (is_supported_by(index))
                 return true;
         }
