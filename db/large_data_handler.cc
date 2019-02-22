@@ -37,19 +37,6 @@ future<> large_data_handler::maybe_update_large_partitions(const sstables::sstab
     return make_ready_future<>();
 }
 
-future<> large_data_handler::maybe_delete_large_partitions_entry(const sstables::sstable& sst) const {
-    try {
-        if (!_stopped && sst.data_size() > _partition_threshold_bytes) {
-            const schema& s = *sst.get_schema();
-            return delete_large_partitions_entry(s, sst.get_filename());
-        }
-    } catch (...) {
-        // no-op
-    }
-
-    return make_ready_future<>();
-}
-
 logging::logger cql_table_large_data_handler::large_data_logger("large_data");
 
 future<> cql_table_large_data_handler::update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& key, uint64_t partition_size) const {

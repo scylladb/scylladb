@@ -2549,35 +2549,36 @@ bool sstable::requires_view_building() const {
     return boost::algorithm::ends_with(_dir, "staging") || boost::algorithm::ends_with(_dir, "upload");
 }
 
+sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                                    format_types format, sstring component) {
+    sstring v = _version_string.at(version);
+    sstring g = to_sstring(generation);
+    sstring f = _format_string.at(format);
+    switch (version) {
+    case sstable::version_types::ka:
+        return ks + "-" + cf + "-" + v + "-" + g + "-" + component;
+    case sstable::version_types::la:
+        return v + "-" + g + "-" + f + "-" + component;
+    case sstable::version_types::mc:
+        return v + "-" + g + "-" + f + "-" + component;
+    }
+    assert(0 && "invalid version");
+}
+
+sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                          format_types format, component_type component) {
+    return component_basename(ks, cf, version, generation, format,
+            sstable_version_constants::get_component_map(version).at(component));
+}
+
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                           format_types format, component_type component) {
-    sstring basename = [&] {
-        switch (version) {
-        case sstable::version_types::ka:
-            return ks + "-" + cf + "-" + _version_string.at(version) + "-" + to_sstring(generation) + "-" +
-                   sstable_version_constants::get_component_map(version).at(component);
-        case sstable::version_types::la:
-            return _version_string.at(version) + "-" + to_sstring(generation) + "-" + _format_string.at(format) + "-" +
-                   sstable_version_constants::get_component_map(version).at(component);
-        case sstable::version_types::mc:
-            return _version_string.at(version) + "-" + to_sstring(generation) + "-" + _format_string.at(format) + "-" +
-                   sstable_version_constants::get_component_map(version).at(component);
-        }
-        assert(0 && "invalid version");
-    }();
-
-    return dir + "/" + basename;
+    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                           format_types format, sstring component) {
-    static std::unordered_map<version_types, const char*, enum_hash<version_types>> fmtmap = {
-        { sstable::version_types::ka, "{0}-{1}-{2}-{3}-{5}" },
-        { sstable::version_types::la, "{2}-{3}-{4}-{5}" },
-        { sstable::version_types::mc, "{2}-{3}-{4}-{5}" }
-    };
-
-    return dir + "/" + seastar::format(fmtmap[version], ks, cf, _version_string.at(version), to_sstring(generation), _format_string.at(format), component);
+    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
 }
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
@@ -2856,9 +2857,6 @@ int sstable::compare_by_max_timestamp(const sstable& other) const {
     return (ts1 > ts2 ? 1 : (ts1 == ts2 ? 0 : -1));
 }
 
-future<>
-delete_sstables(std::vector<sstring> tocs);
-
 sstable::~sstable() {
     if (_index_file) {
         _index_file.close().handle_exception([save = _index_file, op = background_jobs().start()] (auto ep) {
@@ -2881,7 +2879,12 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            delete_sstables({filename(component_type::TOC)}).handle_exception(
+            // FIXME: need to call large_data_handler.maybe_delete_large_partitions_entry
+            // - Short term fix plan is passing large_data_handler upon construction and
+            //   using it from this path to update large_data_handler.
+            // - Longer term fix is to hand off deletion of sstables to a manager that can
+            //   deal with sstable marked to be deleted after the corresponding object is destructed.
+            remove_by_toc_name(toc_filename()).handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
                             try {
                                 std::rethrow_exception(eptr);
@@ -2922,6 +2925,7 @@ remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handl
         auto new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
         sstring dir;
 
+        sstlog.debug("Removing by TOC name: {}", sstable_toc_name);
         if (sstable_io_check(error_handler, file_exists, sstable_toc_name).get0()) {
             dir = dirname(sstable_toc_name);
             sstable_io_check(error_handler, rename_file, sstable_toc_name, new_toc_name).get();
@@ -3113,24 +3117,150 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
     return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
 }
 
+// FIXME: although this is unused at the moment
+// keep it around to be used for replaying pending_delete logs
 future<>
 delete_sstables(std::vector<sstring> tocs) {
-    // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
     return parallel_for_each(tocs, [] (sstring name) {
         return remove_by_toc_name(name);
     });
 }
 
 future<>
-delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
-    future<> update = parallel_for_each(ssts, [&large_data_handler] (shared_sstable& sst) {
-        return large_data_handler.maybe_delete_large_partitions_entry(*sst);
+sstable::unlink()
+{
+    auto name = toc_filename();
+    return remove_by_toc_name(name).then_wrapped([name = std::move(name)] (future<> f) {
+        if (f.failed()) {
+            // Log and ignore the failure since there is nothing much we can do about it at this point.
+            // a. Compaction will retry deleting the sstable in the next pass, and
+            // b. in the future sstables_manager is planned to handle sstables deletion.
+            // c. Eventually we may want to record these failures in a system table
+            //    and notify the administrator about that for manual handling (rather than aborting).
+            sstlog.warn("Failed to delete {}: {}. Ignoring.", name, f.get_exception());
+        }
+        return make_ready_future<>();
     });
-    auto sstables_to_delete_atomically = boost::copy_range<std::vector<sstring>>(ssts
-            | boost::adaptors::transformed([] (auto&& sst) { return sst->toc_filename(); }));
+}
 
-    future<> del = delete_sstables(std::move(sstables_to_delete_atomically));
-    return when_all(std::move(del), std::move(update)).discard_result();
+static future<>
+maybe_delete_large_data_entry(shared_sstable sst, const db::large_data_handler& large_data_handler)
+{
+    auto name = sst->get_filename();
+    return large_data_handler.maybe_delete_large_partitions_entry(*sst->get_schema(), name, sst->data_size())
+            .then_wrapped([name = std::move(name)] (future<> f) {
+        if (f.failed()) {
+            // Just log and ignore failures to delete large data entries.
+            // They are not critical to the operation of the database.
+            sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", name, f.get_exception());
+        }
+        return make_ready_future<>();
+    });
+}
+
+static future<>
+delete_sstable_and_maybe_large_data_entries(shared_sstable sst, const db::large_data_handler& large_data_handler)
+{
+    return when_all(sst->unlink(), maybe_delete_large_data_entry(sst, large_data_handler)).discard_result();
+}
+
+future<>
+delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
+    return seastar::async([ssts = std::move(ssts), &large_data_handler] {
+        sstring sstdir;
+        min_max_tracker<int64_t> gen_tracker;
+
+        for (const auto& sst : ssts) {
+            gen_tracker.update(sst->generation());
+
+            if (sstdir.empty()) {
+                sstdir = sst->get_dir();
+            } else {
+                // All sstables are assumed to be in the same column_family, hence
+                // sharing their base directory.
+                assert (sstdir == sst->get_dir());
+            }
+        }
+
+        sstring pending_delete_dir = sstdir + "/" + sstable::pending_delete_dir_basename();
+        sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
+        sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
+        sstlog.trace("Writing {}", tmp_pending_delete_log);
+        try {
+            touch_directory(pending_delete_dir).get();
+            auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+            // Create temporary pending_delete log file.
+            auto f = open_file_dma(tmp_pending_delete_log, oflags).get0();
+            // Write all toc names into the log file.
+            file_output_stream_options options;
+            options.buffer_size = 4096;
+            auto w = file_writer(std::move(f), options);
+
+            for (const auto& sst : ssts) {
+                auto toc = sst->component_basename(component_type::TOC);
+                w.write(toc.c_str(), toc.size());
+                w.write("\n", 1);
+            }
+
+            w.flush();
+            w.close();
+
+            auto dir_f = open_directory(pending_delete_dir).get0();
+            // Once flushed and closed, the temporary log file can be renamed.
+            rename_file(tmp_pending_delete_log, pending_delete_log).get();
+
+            // Guarantee that the changes above reached the disk.
+            dir_f.flush().get();
+            dir_f.close().get();
+            sstlog.debug("{} written successfully.", pending_delete_log);
+        } catch (...) {
+            sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log), std::current_exception();
+        }
+
+        parallel_for_each(ssts, [&large_data_handler] (shared_sstable sst) {
+            return delete_sstable_and_maybe_large_data_entries(sst, large_data_handler);
+        }).get();
+
+        // Once all sstables are deleted, the log file can be removed.
+        // Note: the log file will be removed also if
+        //   delete_sstable_and_maybe_large_data_entries failed to remove
+        //   any sstable and ignored the error.
+        try {
+            remove_file(pending_delete_log).get();
+            sstlog.debug("{} removed.", pending_delete_log);
+        } catch (...) {
+            sstlog.warn("Error removing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
+        }
+    });
+}
+
+// FIXME: Go through maybe_delete_large_partitions_entry on recovery
+// since this is an indication we crashed in the middle of delete_atomically
+future<> replay_pending_delete_log(sstring pending_delete_log) {
+    sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
+    return seastar::async([pending_delete_log = std::move(pending_delete_log)] {
+        sstring pending_delete_dir = dirname(pending_delete_log);
+        assert(sstable::is_pending_delete_dir(fs::path(pending_delete_dir)));
+        try {
+            auto sstdir = dirname(pending_delete_dir);
+            auto f = open_file_dma(pending_delete_log, open_flags::ro).get0();
+            auto size = f.size().get0();
+            auto in = make_file_input_stream(f);
+            auto text = in.read_exactly(size).get0();
+            in.close().get();
+            f.close().get();
+
+            sstring all(text.begin(), text.end());
+            std::vector<sstring> basenames;
+            boost::split(basenames, all, boost::is_any_of("\n"), boost::token_compress_on);
+            auto tocs = boost::copy_range<std::vector<sstring>>(basenames
+                    | boost::adaptors::filtered([] (auto&& basename) { return !basename.empty(); })
+                    | boost::adaptors::transformed([&sstdir] (auto&& basename) { return sstdir + "/" + basename; }));
+            delete_sstables(tocs).get();
+        } catch (...) {
+            sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
+        }
+    });
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;

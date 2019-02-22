@@ -174,6 +174,10 @@ public:
     static component_type component_from_sstring(version_types version, sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
+    static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                                      format_types format, component_type component);
+    static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
+                                      format_types format, sstring component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                             format_types format, component_type component);
     static sstring filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, int64_t generation,
@@ -354,6 +358,10 @@ public:
     // Return values are those of a trichotomic comparison.
     int compare_by_max_timestamp(const sstable& other) const;
 
+    sstring component_basename(component_type f) const {
+        return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+    }
+
     sstring filename(const sstring& dir, component_type f) const {
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
@@ -387,6 +395,15 @@ public:
         return dirpath.extension().string() == ".sstable";
     }
 
+    static sstring pending_delete_dir_basename() {
+        return "pending_delete";
+    }
+
+    static bool is_pending_delete_dir(const fs::path& dirpath)
+    {
+        return dirpath.filename().string() == pending_delete_dir_basename().c_str();
+    }
+
     const sstring& get_dir() const {
         return _dir;
     }
@@ -408,6 +425,9 @@ public:
     future<> create_links(const sstring& dir) const {
         return create_links(dir, _generation);
     }
+
+    // Delete the sstable by unlinking all sstable files
+    future<> unlink();
 
     /**
      * Note. This is using the Origin definition of
@@ -824,6 +844,11 @@ struct entry_descriptor {
                      int64_t generation, sstable::format_types format,
                      component_type component)
         : sstdir(sstdir), ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
+
+    entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
+                     int64_t generation, sstable::format_types format,
+                     component_type component)
+        : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
 };
 
 // Waits for all prior tasks started on current shard related to sstable management to finish.
@@ -849,6 +874,7 @@ future<> await_background_jobs_on_all_shards();
 //
 // This function only solves the second problem for now.
 future<> delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler);
+future<> replay_pending_delete_log(sstring log_file);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;
