@@ -355,9 +355,10 @@ int statement_restrictions::score(const secondary_index::index& index) const {
     return 1;
 }
 
-std::optional<secondary_index::index> statement_restrictions::find_idx(secondary_index::secondary_index_manager& sim) const {
+std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> statement_restrictions::find_idx(secondary_index::secondary_index_manager& sim) const {
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
+    ::shared_ptr<cql3::restrictions::restrictions> chosen_index_restrictions;
 
     for (const auto& index : sim.list_indexes()) {
         for (::shared_ptr<cql3::restrictions::restrictions> restriction : index_restrictions()) {
@@ -366,19 +367,20 @@ std::optional<secondary_index::index> statement_restrictions::find_idx(secondary
                     if (score(index) > chosen_index_score) {
                         chosen_index = index;
                         chosen_index_score = score(index);
+                        chosen_index_restrictions = restriction;
                     }
                 }
             }
         }
     }
-    return chosen_index;
+    return {chosen_index, chosen_index_restrictions};
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(database& db) const {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         auto& sim = db.find_column_family(_schema).get_index_manager();
-        std::optional<secondary_index::index> opt_idx = find_idx(sim);
+        auto [opt_idx, _] = find_idx(sim);
         auto column_uses_indexing = [&opt_idx] (const column_definition* cdef) {
             return opt_idx && opt_idx->depends_on(*cdef);
         };

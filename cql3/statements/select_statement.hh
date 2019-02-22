@@ -170,6 +170,7 @@ public:
 
 class indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
+    ::shared_ptr<restrictions::restrictions> _used_index_restrictions;
     schema_ptr _view_schema;
     noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
     noncopyable_function<query::partition_slice(const query_options&)> _get_partition_slice_for_posting_list;
@@ -197,6 +198,7 @@ public:
                                    ::shared_ptr<term> per_partition_limit,
                                    cql_stats &stats,
                                    const secondary_index::index& index,
+                                   ::shared_ptr<restrictions::restrictions> used_index_restrictions,
                                    schema_ptr view_schema);
 
 private:

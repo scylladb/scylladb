@@ -696,7 +696,7 @@ indexed_table_select_statement::prepare(database& db,
                                          cql_stats &stats)
 {
     auto& sim = db.find_column_family(schema).get_index_manager();
-    auto index_opt = restrictions->find_idx(sim);
+    auto [index_opt, used_index_restrictions] = restrictions->find_idx(sim);
     if (!index_opt) {
         throw std::runtime_error("No index found.");
     }
@@ -717,6 +717,7 @@ indexed_table_select_statement::prepare(database& db,
             per_partition_limit,
             stats,
             *index_opt,
+            std::move(used_index_restrictions),
             view_schema);
 
 }
@@ -731,9 +732,11 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            ::shared_ptr<term> per_partition_limit,
                                                            cql_stats &stats,
                                                            const secondary_index::index& index,
+                                                           ::shared_ptr<restrictions::restrictions> used_index_restrictions,
                                                            schema_ptr view_schema)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
     , _index{index}
+    , _used_index_restrictions(used_index_restrictions)
     , _view_schema(view_schema)
 {
     if (_index.metadata().local()) {
@@ -774,8 +777,7 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
     }
     auto [last_base_pk, last_base_ck] = result_view.get_last_partition_and_clustering_key();
 
-    //NOTICE(sarna): Executing indexed_table branch implies there was at least 1 index restriction present
-    bytes_opt indexed_column_value = _restrictions->index_restrictions().front()->value_for(*cdef, options);
+    bytes_opt indexed_column_value = _used_index_restrictions->value_for(*cdef, options);
 
     auto index_pk = [&]() {
         if (_index.metadata().local()) {
@@ -893,14 +895,12 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
-    for (const auto& index_restriction : _restrictions->index_restrictions()) {
-        bytes_opt value = index_restriction->value_for(*cdef, options);
-        if (value) {
-            auto pk = partition_key::from_single_value(*_view_schema, *value);
-            auto dk = dht::global_partitioner().decorate_key(*_view_schema, pk);
-            auto range = dht::partition_range::make_singular(dk);
-            partition_ranges.emplace_back(range);
-        }
+    bytes_opt value = _used_index_restrictions->value_for(*cdef, options);
+    if (value) {
+        auto pk = partition_key::from_single_value(*_view_schema, *value);
+        auto dk = dht::global_partitioner().decorate_key(*_view_schema, pk);
+        auto range = dht::partition_range::make_singular(dk);
+        partition_ranges.emplace_back(range);
     }
 
     return partition_ranges;
@@ -946,13 +946,12 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_l
     // For local indexes, the first clustering key is the indexed column itself, followed by base clustering key
     clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, true);
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
-    for (const auto& index_restriction :_restrictions->index_restrictions()) {
-        bytes_opt value = index_restriction->value_for(*cdef, options);
-        if (value) {
-            const column_definition* view_cdef = _view_schema->get_column_definition(to_bytes(_index.target_column()));
-            auto index_eq_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(*view_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(*value)));
-            clustering_restrictions->merge_with(index_eq_restriction);
-        }
+
+    bytes_opt value = _used_index_restrictions->value_for(*cdef, options);
+    if (value) {
+        const column_definition* view_cdef = _view_schema->get_column_definition(to_bytes(_index.target_column()));
+        auto index_eq_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(*view_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(*value)));
+        clustering_restrictions->merge_with(index_eq_restriction);
     }
 
     if (_restrictions->get_clustering_columns_restrictions()->prefix_size() > 0) {
