@@ -386,6 +386,14 @@ def find_dbs():
     return [find_db(shard) for shard in range(cpus())]
 
 
+def for_each_table(db=None):
+    if not db:
+        db = find_db()
+    cfs = db['_column_families']
+    for (key, value) in list_unordered_map(cfs):
+        yield value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
+
+
 def list_unordered_map(map, cache=True):
     kt = map.type.template_argument(0)
     vt = map.type.template_argument(1)
@@ -1710,6 +1718,23 @@ class scylla_gms(gdb.Command):
                 gdb.write('  %s: {version=%d, value=%s}\n' % (app_state, value['version'], value['value']))
 
 
+class scylla_cache(gdb.Command):
+    """Prints contents of the cache on current shard"""
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla cache', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        schema_ptr_type = gdb.lookup_type('schema').pointer()
+        for table in for_each_table():
+            schema = table['_schema']['_p'].reinterpret_cast(schema_ptr_type)
+            name = '%s.%s' % (schema['_raw']['_ks_name'], schema['_raw']['_cf_name'])
+            gdb.write("%s:\n" % (name))
+            for e in intrusive_set(table['_cache']['_partitions']):
+                gdb.write('  (cache_entry*) 0x%x {_key=%s, _flags=%s, _pe=%s}\n' % (
+                    int(e.address), e['_key'], e['_flags'], e['_pe']))
+            gdb.write("\n")
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -1735,3 +1760,4 @@ scylla_task_histogram()
 scylla_active_sstables()
 scylla_netw()
 scylla_gms()
+scylla_cache()
