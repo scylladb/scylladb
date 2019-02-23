@@ -2170,6 +2170,7 @@ future<> storage_service::start_native_transport() {
         cql_transport::cql_server_config cql_server_config;
         cql_server_config.timeout_config = make_timeout_config(cfg);
         cql_server_config.max_request_size = ss._db.local().get_available_memory() / 10;
+        cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
         cql_transport::cql_load_balance lb = cql_transport::parse_load_balance(cfg.load_balance());
         return seastar::net::dns::resolve_name(addr).then([&ss, cserver, addr, &cfg, lb, keepalive, ceo = std::move(ceo), cql_server_config] (seastar::net::inet_address ip) {
                 return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb, std::ref(ss._auth_service), cql_server_config).then([cserver, &cfg, addr, ip, ceo, keepalive]() {

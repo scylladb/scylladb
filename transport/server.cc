@@ -1120,12 +1120,14 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "lz4"});
     opts.insert({"COMPRESSION", "snappy"});
-    auto& part = dht::global_partitioner();
-    opts.insert({"SCYLLA_SHARD", format("{:d}", engine().cpu_id())});
-    opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
-    opts.insert({"SCYLLA_SHARDING_ALGORITHM", part.cpu_sharding_algorithm_name()});
-    opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", part.sharding_ignore_msb())});
-    opts.insert({"SCYLLA_PARTITIONER", part.name()});
+    if (_server._config.allow_shard_aware_drivers) {
+        auto& part = dht::global_partitioner();
+        opts.insert({"SCYLLA_SHARD", format("{:d}", engine().cpu_id())});
+        opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
+        opts.insert({"SCYLLA_SHARDING_ALGORITHM", part.cpu_sharding_algorithm_name()});
+        opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", part.sharding_ignore_msb())});
+        opts.insert({"SCYLLA_PARTITIONER", part.name()});
+    }
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
     response->write_string_multimap(opts);
     return response;
