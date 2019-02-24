@@ -805,13 +805,14 @@ static test_result test_slicing_using_restrictions(column_family& cf, int_range 
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), pr, slice);
+    auto rd = cf.make_reader(cf.schema(), pr, slice, default_priority_class(), nullptr,
+                             streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     return test_reading_all(rd);
 }
 
 static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
 
     metrics_snapshot before;
     assert_partition_start(rd);
@@ -939,7 +940,7 @@ static test_result test_forwarding_with_restriction(column_family& cf, clustered
         slice,
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes);
+        streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
 
     uint64_t fragments = 0;
     metrics_snapshot before;
