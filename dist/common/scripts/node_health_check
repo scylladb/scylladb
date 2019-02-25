@@ -19,7 +19,7 @@
 
 
 ##Variables##
-REPORT="./`hostname -i`-health-check-report.txt"
+REPORT="./`hostname`-health-check-report.txt"
 OUTPUT_PATH="./output_files"
 OUTPUT_PATH1="$OUTPUT_PATH/system_checks"
 OUTPUT_PATH2="$OUTPUT_PATH/scylladb_checks"
@@ -301,7 +301,7 @@ echo "" > $REPORT
 date "+DATE: %m/%d/%y" >> $REPORT
 echo "" >> $REPORT
 echo "" >> $REPORT
-echo "              Health Check Report for node: `hostname -i`" >> $REPORT
+echo "              Health Check Report for node: `hostname`" >> $REPORT
 echo "" >> $REPORT
 echo "" >> $REPORT
 
