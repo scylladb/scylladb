@@ -36,6 +36,7 @@ PRINT_NET=NO
 PRINT_cfstats=NO
 SCYLLA_SERVICE="0"
 JMX_SERVICE="0"
+LISTEN_ADDR=$(grep -e '^listen_address' /etc/scylla/scylla.yaml|awk -F':' '{ print $NF }')
 
 while getopts ":hdncap:q:" opt; do
     case $opt in
@@ -75,6 +76,15 @@ while getopts ":hdncap:q:" opt; do
     esac
 done
 
+# Get the CQL_ADDR from whatever is currently listening on $CQL_PORT. If it's a wildcard, 
+# use the listen_address from scylla.yaml
+CQL_ADDR=`ss -l |grep ${CQL_PORT}|awk -F"${CQL_PORT}" '{print $1}'|awk '{print $NF}'`
+
+if [ "$CQL_ADDR" == '*:' -o "$CQL_ADDR" == '0.0.0.0:' ]; then
+    CQL_ADDR=`grep -e '^listen_address:' /etc/scylla/scylla.yaml|awk '{print $NF}'`
+else
+    CQL_ADDR=${CQL_ADDR/%:/}
+fi
 
 ##Check server release (Fedora/Oracle/Debian/Gentoo)##
 cat /etc/os-release | grep -i fedora &> /dev/null
@@ -244,12 +254,12 @@ if [ "$SCYLLA_SERVICE" == "1" ]; then
     echo "--------------------------------------------------"
 else
     # TODO: handle connecting with authentication
-    cqlsh `hostname -i` $CQL_PORT -e "HELP" &> /dev/null
+    cqlsh $CQL_ADDR $CQL_PORT -e "HELP" &> /dev/null
     if [ $? -eq 0 ]; then
         echo "Collecting Data Model Info (using port $CQL_PORT)"
         echo "--------------------------------------------------"
-        cqlsh `hostname -i` $CQL_PORT -e "DESCRIBE SCHEMA" > $OUTPUT_PATH4/describe-schema.txt
-        cqlsh `hostname -i` $CQL_PORT -e "DESCRIBE TABLES" > $OUTPUT_PATH4/describe-tables.txt
+        cqlsh $CQL_ADDR $CQL_PORT -e "DESCRIBE SCHEMA" > $OUTPUT_PATH4/describe-schema.txt
+        cqlsh $CQL_ADDR $CQL_PORT -e "DESCRIBE TABLES" > $OUTPUT_PATH4/describe-tables.txt
     else
         echo "ERROR: CQL is NOT Listening on Port $CQL_PORT"
         echo "Cannot Collect Data Model Info"
@@ -417,7 +427,7 @@ if [ $PRINT_DM == "YES" ]; then
     echo "===============" >> $REPORT
     echo "" >> $REPORT
 
-    cqlsh `hostname -i` $CQL_PORT -e "HELP" &> /dev/null
+    cqlsh $CQL_ADDR $CQL_PORT -e "HELP" &> /dev/null
     if [ $? -eq 0 ]; then
         echo "Printing Data Model Info to Report"
         echo "--------------------------------------------------"
