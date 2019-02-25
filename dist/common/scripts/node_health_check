@@ -189,6 +189,7 @@ echo "--------------------------------------------------"
 
 scylla --version > $OUTPUT_PATH2/scylla-version.txt
 cp -p /etc/scylla/* $OUTPUT_PATH2
+cp -p /etc/scylla.d/* $OUTPUT_PATH2
 ls -ltrh /var/lib/scylla/coredump/ > $OUTPUT_PATH2/coredump-folder.txt
 
 if [ "$IS_FEDORA" == "0" ]; then
