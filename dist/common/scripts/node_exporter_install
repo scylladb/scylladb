@@ -25,18 +25,26 @@ import sys
 import tempfile
 import tarfile
 from scylla_util import *
+import argparse
 
 VERSION='0.17.0'
 INSTALL_DIR='/usr/lib/scylla/Prometheus/node_exporter'
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Download and install prometheus node_exporter')
+    parser.add_argument('-F', '--force', action='store_true', default=False, help='Force re-installation when node_exporter is already installed')
+    args = parser.parse_args()
+    force = args.force
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
 
     if os.path.exists('/usr/bin/node_exporter') or os.path.exists('/usr/bin/prometheus-node_exporter'):
-        print('node_exporter already installed')
-        sys.exit(1)
+        if force:
+            print('node_exporter already installed, reinstalling')
+        else:
+            print('node_exporter already installed, you can use `--force` to force reinstallation')
+            sys.exit(1)
 
     if is_gentoo_variant():
         run('emerge -uq app-metrics/node_exporter')
@@ -53,6 +61,8 @@ if __name__ == '__main__':
         with tarfile.open('/var/tmp/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION)) as tf:
             tf.extractall(INSTALL_DIR)
         os.remove('/var/tmp/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION))
+        if os.path.exists('/usr/bin/node_exporter'):
+            os.remove('/usr/bin/node_exporter')
         os.symlink('{install_dir}/node_exporter-{version}.linux-amd64/node_exporter'.format(install_dir=INSTALL_DIR, version=VERSION), '/usr/bin/node_exporter')
         if is_systemd():
             node_exporter = systemd_unit('node-exporter.service')
