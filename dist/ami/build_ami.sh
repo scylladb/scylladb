@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+PRODUCT=scylla
+
 if [ ! -e dist/ami/build_ami.sh ]; then
     echo "run build_ami.sh in top of scylla dir"
     exit 1
@@ -67,59 +69,59 @@ if [ $LOCALRPM -eq 1 ]; then
         pkg_install git
     fi
 
-    if [ ! -f dist/ami/files/scylla.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-kernel-conf.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-conf.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-server.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-debuginfo.x86_64.rpm ]; then
+    if [ ! -f dist/ami/files/$PRODUCT.x86_64.rpm ] || [ ! -f dist/ami/files/$PRODUCT-kernel-conf.x86_64.rpm ] || [ ! -f dist/ami/files/$PRODUCT-conf.x86_64.rpm ] || [ ! -f dist/ami/files/$PRODUCT-server.x86_64.rpm ] || [ ! -f dist/ami/files/$PRODUCT-debuginfo.x86_64.rpm ]; then
         reloc/build_reloc.sh
         reloc/build_rpm.sh --dist --target centos7
-        cp build/redhat/RPMS/x86_64/scylla-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla.x86_64.rpm
-        cp build/redhat/RPMS/x86_64/scylla-kernel-conf-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla-kernel-conf.x86_64.rpm
-        cp build/redhat/RPMS/x86_64/scylla-conf-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla-conf.x86_64.rpm
-        cp build/redhat/RPMS/x86_64/scylla-server-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla-server.x86_64.rpm
-        cp build/redhat/RPMS/x86_64/scylla-debuginfo-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla-debuginfo.x86_64.rpm
+        cp build/redhat/RPMS/x86_64/$PRODUCT-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT.x86_64.rpm
+        cp build/redhat/RPMS/x86_64/$PRODUCT-kernel-conf-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT-kernel-conf.x86_64.rpm
+        cp build/redhat/RPMS/x86_64/$PRODUCT-conf-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT-conf.x86_64.rpm
+        cp build/redhat/RPMS/x86_64/$PRODUCT-server-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT-server.x86_64.rpm
+        cp build/redhat/RPMS/x86_64/$PRODUCT-debuginfo-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT-debuginfo.x86_64.rpm
     fi
-    if [ ! -f dist/ami/files/scylla-jmx.noarch.rpm ]; then
+    if [ ! -f dist/ami/files/$PRODUCT-jmx.noarch.rpm ]; then
         cd build
-        if [ ! -f scylla-jmx/reloc/build_reloc.sh ]; then
+        if [ ! -f $PRODUCT-jmx/reloc/build_reloc.sh ]; then
             # directory exists but file is missing, so need to try clone again
-            rm -rf scylla-jmx
-            git clone --depth 1 https://github.com/scylladb/scylla-jmx.git
+            rm -rf $PRODUCT-jmx
+            git clone --depth 1 https://github.com/scylladb/$PRODUCT-jmx.git
         else
             git pull
         fi
-        cd scylla-jmx
+        cd $PRODUCT-jmx
         reloc/build_reloc.sh
         reloc/build_rpm.sh
         cd ../..
-        cp build/scylla-jmx/build/redhat/RPMS/noarch/scylla-jmx-`cat build/scylla-jmx/build/SCYLLA-VERSION-FILE`-`cat build/scylla-jmx/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/scylla-jmx.noarch.rpm
+        cp build/$PRODUCT-jmx/build/redhat/RPMS/noarch/$PRODUCT-jmx-`cat build/$PRODUCT-jmx/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-jmx/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/$PRODUCT-jmx.noarch.rpm
     fi
-    if [ ! -f dist/ami/files/scylla-tools.noarch.rpm ] || [ ! -f dist/ami/files/scylla-tools-core.noarch.rpm ]; then
+    if [ ! -f dist/ami/files/$PRODUCT-tools.noarch.rpm ] || [ ! -f dist/ami/files/$PRODUCT-tools-core.noarch.rpm ]; then
         cd build
-        if [ ! -f scylla-tools-java/reloc/build_reloc.sh ]; then
+        if [ ! -f $PRODUCT-tools-java/reloc/build_reloc.sh ]; then
             # directory exists but file is missing, so need to try clone again
-            rm -rf scylla-tools-java
-            git clone --depth 1 https://github.com/scylladb/scylla-tools-java.git
+            rm -rf $PRODUCT-tools-java
+            git clone --depth 1 https://github.com/scylladb/$PRODUCT-tools-java.git
         else
             git pull
         fi
-        cd scylla-tools-java
+        cd $PRODUCT-tools-java
         reloc/build_reloc.sh
         reloc/build_rpm.sh
         cd ../..
-        cp build/scylla-tools-java/build/redhat/RPMS/noarch/scylla-tools-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/scylla-tools.noarch.rpm
-        cp build/scylla-tools-java/build/redhat/RPMS/noarch/scylla-tools-core-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/scylla-tools-core.noarch.rpm
+        cp build/$PRODUCT-tools-java/build/redhat/RPMS/noarch/$PRODUCT-tools-`cat build/$PRODUCT-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-tools-java/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/$PRODUCT-tools.noarch.rpm
+        cp build/$PRODUCT-tools-java/build/redhat/RPMS/noarch/$PRODUCT-tools-core-`cat build/$PRODUCT-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-tools-java/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/$PRODUCT-tools-core.noarch.rpm
     fi
-    if [ ! -f dist/ami/files/scylla-ami.noarch.rpm ]; then
+    if [ ! -f dist/ami/files/$PRODUCT-ami.noarch.rpm ]; then
         cd build
-        if [ ! -f scylla-ami/dist/redhat/build_rpm.sh ]; then
+        if [ ! -f $PRODUCT-ami/dist/redhat/build_rpm.sh ]; then
             # directory exists but file is missing, so need to try clone again
-            rm -rf scylla-ami
-            git clone --depth 1 https://github.com/scylladb/scylla-ami.git
+            rm -rf $PRODUCT-ami
+            git clone --depth 1 https://github.com/scylladb/$PRODUCT-ami.git
         else
             git pull
         fi
-        cd scylla-ami
+        cd $PRODUCT-ami
         dist/redhat/build_rpm.sh --target centos7
         cd ../..
-        cp build/scylla-ami/build/RPMS/noarch/scylla-ami-`cat build/scylla-ami/build/SCYLLA-VERSION-FILE`-`cat build/scylla-ami/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-ami.noarch.rpm
+        cp build/$PRODUCT-ami/build/RPMS/noarch/$PRODUCT-ami-`cat build/$PRODUCT-ami/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-ami/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/$PRODUCT-ami.noarch.rpm
     fi
 fi
 
