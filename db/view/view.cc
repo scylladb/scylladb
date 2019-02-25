@@ -522,14 +522,34 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
     r.apply(update.tomb());
 }
 
+/*
+ * Atomic cells have equal liveness if they're either both dead, or both non-expiring,
+ * or have exactly the same expiration. Comparing liveness is useful for view-virtual
+ * cells, as generating updates from them is not needed if their livenesses match.
+ */
+static bool atomic_cells_liveness_equal(atomic_cell_view left, atomic_cell_view right) {
+    if (left.is_live() != right.is_live()) {
+        return false;
+    }
+    if (left.is_live()) {
+        if (left.is_live_and_has_ttl() != right.is_live_and_has_ttl()) {
+            return false;
+        }
+        if (left.is_live_and_has_ttl() && left.expiry() != right.expiry()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool view_updates::can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const {
     const row& existing_row = existing.cells();
     const row& updated_row = update.cells();
 
-    const bool has_nonexpiring_marker = existing.marker().is_live() && !existing.marker().is_expiring();
-    return boost::algorithm::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, has_nonexpiring_marker] (const column_definition& cdef) {
-        const auto it = _view->columns_by_name().find(cdef.name());
-        const bool column_is_selected = it != _view->columns_by_name().end() && !it->second->is_view_virtual();
+    const bool base_has_nonexpiring_marker = update.marker().is_live() && !update.marker().is_expiring();
+    return boost::algorithm::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, base_has_nonexpiring_marker] (const column_definition& cdef) {
+        const auto view_it = _view->columns_by_name().find(cdef.name());
+        const bool column_is_selected = view_it != _view->columns_by_name().end();
 
         //TODO(sarna): Optimize collections case - currently they do not go under optimization
         if (!cdef.is_atomic()) {
@@ -540,18 +560,21 @@ bool view_updates::can_skip_view_updates(const clustering_row& update, const clu
         const auto* existing_cell = existing_row.find_cell(cdef.id);
         const auto* updated_cell = updated_row.find_cell(cdef.id);
         if (existing_cell == nullptr || updated_cell == nullptr) {
-            return existing_cell == updated_cell || (!column_is_selected && has_nonexpiring_marker);
+            return existing_cell == updated_cell || (!column_is_selected && base_has_nonexpiring_marker);
         }
         atomic_cell_view existing_cell_view = existing_cell->as_atomic_cell(cdef);
         atomic_cell_view updated_cell_view = updated_cell->as_atomic_cell(cdef);
 
         // We cannot skip when a selected column is changed
         if (column_is_selected) {
+            if (view_it->second->is_view_virtual()) {
+                return atomic_cells_liveness_equal(existing_cell_view, updated_cell_view);
+            }
             return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
         }
 
         // With non-expiring row marker, liveness checks below are not relevant
-        if (has_nonexpiring_marker) {
+        if (base_has_nonexpiring_marker) {
             return true;
         }
 
