@@ -323,6 +323,7 @@ echo "" >> $REPORT
 echo "Host Operating System" >> $REPORT
 echo "---------------------" >> $REPORT
 cat $OUTPUT_PATH1/os-release >> $REPORT
+if [ -f /etc/redhat-release ]; then cat /etc/redhat-release >> $REPORT; fi
 echo "" >> $REPORT
 echo "" >> $REPORT
 
