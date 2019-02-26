@@ -96,15 +96,15 @@ Start:
 - repair_range_start()
 
 Step A:
-- request_sync_boundary()
+- get_sync_boundary()
 
 Step B:
-- request_combined_row_hashes()
-- request_full_row_hashes()
-- request_row_diff()
+- get_combined_row_hashes()
+- get_full_row_hashes()
+- get_row_diff()
 
 Step C:
-- send_row_diff()
+- put_row_diff()
 
 Finish:
 - repair_range_stop()
