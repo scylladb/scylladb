@@ -37,7 +37,7 @@ namespace selection {
 shared_ptr<selector::factory>
 selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& def = s->get_column_definition(_id->name());
-    if (!def) {
+    if (!def || def->is_hidden_from_cql()) {
         throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _id));
     }
     if (def->is_primary_key()) {
