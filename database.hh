@@ -1472,6 +1472,8 @@ public:
 flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, dht::i_partitioner& partitioner, schema_ptr schema,
         std::function<std::optional<dht::partition_range>()> range_generator);
 
+future<utils::UUID> update_schema_version(distributed<service::storage_proxy>& proxy);
+future<> announce_schema_version(utils::UUID schema_version);
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy);
 
 bool is_internal_keyspace(const sstring& name);
