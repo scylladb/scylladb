@@ -2200,13 +2200,6 @@ void feature_service::register_feature(feature* f) {
     _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
 }
 
-void gossiper::register_feature(feature* f) {
-    _feature_service.register_feature(f);
-    if (check_features(get_local_gossiper().get_supported_features(), {f->name()})) {
-        f->enable();
-    }
-}
-
 void feature_service::unregister_feature(feature* f) {
     auto&& fsit = _registered_features.find(f->name());
     if (fsit == _registered_features.end()) {
@@ -2217,10 +2210,6 @@ void feature_service::unregister_feature(feature* f) {
     if (it != fs.end()) {
         fs.erase(it);
     }
-}
-
-void gossiper::unregister_feature(feature* f) {
-    _feature_service.unregister_feature(f);
 }
 
 
