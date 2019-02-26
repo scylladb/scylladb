@@ -579,10 +579,6 @@ private:
     std::set<sstring> get_supported_features() const;
     // Get features supported by all the nodes listed in the address/feature map
     static std::set<sstring> get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string);
-    // Wait for features are available on all nodes this node knows about
-    future<> wait_for_feature_on_all_node(std::set<sstring> features);
-    // Wait for features are available on a particular node
-    future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint);
 public:
     void check_knows_remote_features(sstring local_features_string) const;
     void check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const;
