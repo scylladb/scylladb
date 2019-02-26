@@ -2242,10 +2242,10 @@ feature& feature::operator=(feature&& other) {
 }
 
 void feature::enable() {
-    if (engine().cpu_id() == 0) {
-        logger.info("Feature {} is enabled", name());
-    }
     if (!_enabled) {
+        if (engine().cpu_id() == 0) {
+            logger.info("Feature {} is enabled", name());
+        }
         _enabled = true;
         _pr.set_value();
     }
