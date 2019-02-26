@@ -202,11 +202,10 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 
     auto write_file = [&require_exist] (const sstring& file_name, const sstring& text) {
         auto f = open_file_dma(file_name, open_flags::wo | open_flags::create | open_flags::truncate).get0();
-        auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), text.size());
-        ::memcpy(buf.get_write(), text.c_str(), text.size());
-        auto count = f.dma_write(0, buf.get(), text.size()).get0();
-        BOOST_REQUIRE(count == text.size());
-        f.close().get();
+        auto os = make_file_output_stream(f, file_output_stream_options{});
+        os.write(text).get();
+        os.flush().get();
+        os.close().get();
         require_exist(file_name, true);
     };
 
