@@ -382,7 +382,7 @@ public:
     std::chrono::microseconds calculate_delay(db::view::update_backlog backlog) {
         constexpr auto delay_limit_us = 1000000;
         auto adjust = [] (float x) { return x * x * x; };
-        auto budget = std::min(std::chrono::microseconds(0), std::chrono::microseconds(_expire_timer.get_timeout() - storage_proxy::clock_type::now()));
+        auto budget = std::max(std::chrono::microseconds(0), std::chrono::microseconds(_expire_timer.get_timeout() - storage_proxy::clock_type::now()));
         return std::min(
                 budget,
                 std::chrono::microseconds(uint32_t(adjust(backlog.relative_size()) * delay_limit_us)));
