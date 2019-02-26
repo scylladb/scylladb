@@ -461,6 +461,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     auto features = get_config_supported_features();
     _token_metadata.update_host_id(local_host_id, get_broadcast_address());
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
+    auto& proxy = service::get_storage_proxy();
+    // Ensure we know our own actual Schema UUID in preparation for updates
+    auto schema_version = update_schema_version(proxy).get0();
     app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
     app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
@@ -470,6 +473,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
     app_states.emplace(gms::application_state::RPC_READY, value_factory.cql_ready(false));
     app_states.emplace(gms::application_state::VIEW_BACKLOG, versioned_value(""));
+    app_states.emplace(gms::application_state::SCHEMA, value_factory.schema(schema_version));
     slogger.info("Starting up server gossip");
 
     auto& gossiper = gms::get_local_gossiper();
@@ -480,9 +484,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     // gossip snitch infos (local DC and rack)
     gossip_snitch_info().get();
 
-    auto& proxy = service::get_storage_proxy();
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
-    update_schema_version_and_announce(proxy).get();// Ensure we know our own actual Schema UUID in preparation for updates
 #if 0
     if (!MessagingService.instance().isListening())
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
