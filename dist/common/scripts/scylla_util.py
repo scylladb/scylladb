@@ -263,15 +263,19 @@ class scylla_cpuinfo:
             return len(self._cpu_data["system"])
 
 
+# When a CLI tool is not installed, use relocatable CLI tool provided by Scylla
+scylla_env = os.environ.copy()
+scylla_env['PATH'] =  scylla_env['PATH'] + ':/opt/scylladb/bin'
+
 def run(cmd, shell=False, silent=False, exception=True):
     stdout = subprocess.DEVNULL if silent else None
     stderr = subprocess.DEVNULL if silent else None
     if not shell:
         cmd = shlex.split(cmd)
     if exception:
-        return subprocess.check_call(cmd, shell=shell, stdout=stdout, stderr=stderr)
+        return subprocess.check_call(cmd, shell=shell, stdout=stdout, stderr=stderr, env=scylla_env)
     else:
-        p = subprocess.Popen(cmd, shell=shell, stdout=stdout, stderr=stderr)
+        p = subprocess.Popen(cmd, shell=shell, stdout=stdout, stderr=stderr, env=scylla_env)
         return p.wait()
 
 
@@ -279,9 +283,9 @@ def out(cmd, shell=False, exception=True):
     if not shell:
         cmd = shlex.split(cmd)
     if exception:
-        return subprocess.check_output(cmd, shell=shell).strip().decode('utf-8')
+        return subprocess.check_output(cmd, shell=shell, env=scylla_env).strip().decode('utf-8')
     else:
-        p = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE)
+        p = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE, env=scylla_env)
         return p.communicate()[0].strip().decode('utf-8')
 
 

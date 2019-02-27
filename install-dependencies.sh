@@ -61,6 +61,13 @@ fedora_packages=(
     python3-magic
     dnf-utils
     pigz
+    net-tools
+    tar
+    gzip
+    gawk
+    util-linux
+    ethtool
+    hwloc
 )
 
 centos_packages=(
