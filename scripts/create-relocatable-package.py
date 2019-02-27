@@ -70,6 +70,9 @@ for exe in executables:
 
 ld_so = libs['ld.so']
 
+have_gnutls = any([lib.startswith('libgnutls.so')
+                   for lib in libs.keys()])
+
 # Although tarfile.open() can write directly to a compressed tar by using
 # the "w|gz" mode, it does so using a slow Python implementation. It is as
 # much as 3 times faster (!) to output to a pipe running the external gzip
@@ -115,6 +118,7 @@ b="$(basename "$x")"
 d="$(dirname "$x")/.."
 ldso="$d/libexec/$b"
 realexe="$d/libexec/$b.bin"
+export GNUTLS_SYSTEM_PRIORITY_FILE="${GNUTLS_SYSTEM_PRIORITY_FILE-$d/libreloc/gnutls.config}"
 LD_LIBRARY_PATH="$d/libreloc" exec -a "$0" "$ldso" "$realexe" "$@"
 '''
 
@@ -133,6 +137,9 @@ for exe in executables:
     ar.addfile(ti)
 for lib, libfile in libs.items():
     ar.add(libfile, arcname='libreloc/' + lib)
+if have_gnutls:
+    gnutls_config_nolink = os.path.realpath('/etc/crypto-policies/back-ends/gnutls.config')
+    ar.add(gnutls_config_nolink, arcname='libreloc/gnutls.config')
 ar.add('conf')
 ar.add('dist')
 ar.add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
