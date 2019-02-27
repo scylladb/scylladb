@@ -59,6 +59,8 @@ struct target_parser {
     static target_info parse(schema_ptr schema, const sstring& target);
 
     static bool is_local(sstring target_string);
+
+    static sstring get_target_column_name_from_string(const sstring& targets);
 };
 
 }

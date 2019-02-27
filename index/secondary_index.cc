@@ -120,4 +120,23 @@ bool target_parser::is_local(sstring target_string) {
     return !pk.empty() && !ck.empty();
 }
 
+sstring target_parser::get_target_column_name_from_string(const sstring& targets) {
+    Json::Value json_value;
+    const bool is_json = json::to_json_value(targets, json_value);
+
+    if (!is_json) {
+        return targets;
+    }
+
+    Json::Value pk = json_value.get("pk", Json::Value(Json::arrayValue));
+    Json::Value ck = json_value.get("ck", Json::Value(Json::arrayValue));
+    if (ck.isArray() && !ck.empty()) {
+        return ck[0].asString();
+    }
+    if (pk.isArray() && !pk.empty()) {
+        return pk[0].asString();
+    }
+    return targets;
+}
+
 }
