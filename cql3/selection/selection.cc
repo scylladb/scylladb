@@ -216,7 +216,7 @@ protected:
     auto cds = boost::copy_range<std::vector<const column_definition*>>(
         columns |
         boost::adaptors::filtered([](const column_definition& c) {
-            return !c.is_view_virtual();
+            return !c.is_hidden_from_cql();
         }) |
         boost::adaptors::transformed([](const column_definition& c) {
             return &c;

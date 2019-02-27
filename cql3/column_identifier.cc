@@ -129,7 +129,7 @@ column_identifier::new_selector_factory(database& db, schema_ptr schema, std::ve
     }
     // Do not allow explicitly selecting hidden columns. We also skip them on
     // "SELECT *" (see selection::wildcard()).
-    if (def->is_view_virtual()) {
+    if (def->is_hidden_from_cql()) {
         throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _text));
     }
     return selection::simple_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), def->type);
