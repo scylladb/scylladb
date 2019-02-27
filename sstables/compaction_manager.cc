@@ -662,6 +662,12 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
     });
 }
 
+// Submit a column family to be scrubbed and wait for its termination.
+future<> compaction_manager::perform_sstable_scrub(column_family* cf) {
+    // TODO: "skip_corrupted"?
+    return perform_sstable_upgrade(cf, false);
+}
+
 future<> compaction_manager::remove(column_family* cf) {
     // FIXME: better way to iterate through compaction info for a given column family,
     // although this path isn't performance sensitive.
