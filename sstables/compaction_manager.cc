@@ -626,6 +626,42 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
     return rewrite_sstables(cf, true, std::bind(&compaction_manager::get_candidates, this, std::placeholders::_1));
 }
 
+sstables::sstable::version_types get_highest_supported_format();
+
+// Submit a column family to be upgraded and wait for its termination.
+future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exclude_current_version) {
+    using shared_sstables = std::vector<sstables::shared_sstable>;
+    return do_with(shared_sstables{}, [this, cf, exclude_current_version](shared_sstables& tables) {
+        // since we might potentially have ongoing compactions, and we
+        // must ensure that all sstables created before we run are included
+        // in the re-write, we need to barrier out any previously running
+        // compaction.
+        return cf->run_with_compaction_disabled([this, cf, &tables, exclude_current_version] {
+            auto last_version = get_highest_supported_format();
+
+            for (auto& sst : *(cf->get_sstables())) {
+                // if we are a "normal" upgrade, we only care about
+                // tables with older versions, but potentially
+                // we are to actually rewrite everything. (-a)
+                if (!exclude_current_version || sst->get_version() < last_version) {
+                    tables.emplace_back(sst);
+                }
+            }
+            return make_ready_future<>();
+        }).then([this, cf, &tables] {
+            // doing a "cleanup" is about as compacting as we need
+            // to be, provided we get to decide the tables to process,
+            // and ignoring any existing operations.
+            // Note that we potentially could be doing multiple
+            // upgrades here in parallel, but that is really the users
+            // problem.
+            return rewrite_sstables(cf, false, [&](auto&) {
+                return tables;
+            });
+        });
+    });
+}
+
 future<> compaction_manager::remove(column_family* cf) {
     // FIXME: better way to iterate through compaction info for a given column family,
     // although this path isn't performance sensitive.
