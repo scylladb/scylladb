@@ -396,6 +396,7 @@ public:
     void delay(Func&& on_resume) {
         auto backlog = max_backlog();
         auto delay = calculate_delay(backlog);
+        stats().last_mv_flow_control_delay = delay;
         if (delay.count() == 0) {
             on_resume(this);
         } else {
@@ -819,6 +820,9 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
 
         sm::make_queue_length("current_throttled_base_writes", [this] { return _stats.throttled_base_writes; },
                        sm::description("number of currently throttled base replica write requests")),
+
+        sm::make_gauge("last_mv_flow_control_delay", [this] { return std::chrono::duration<float>(_stats.last_mv_flow_control_delay).count(); },
+                                      sm::description("delay (in seconds) added for MV flow control in the last request")),
 
         sm::make_total_operations("throttled_writes", [this] { return _stats.throttled_writes; },
                                   sm::description("number of throttled write requests")),

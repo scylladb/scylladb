@@ -99,6 +99,7 @@ struct write_stats {
     uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
     uint64_t throttled_base_writes = 0; // current number of base writes delayed due to view update backlog
     uint64_t background_writes_failed = 0;
+    std::chrono::microseconds last_mv_flow_control_delay; // delay added for MV flow control in the last request
 public:
     write_stats();
     write_stats(const sstring& category, bool auto_register_stats);
