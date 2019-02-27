@@ -43,7 +43,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <random>
+#include <string_view>
+#include <optional>
 
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <seastar/core/reactor.hh>
@@ -310,10 +313,10 @@ const resource_set& password_authenticator::protected_resources() const {
 
 ::shared_ptr<authenticator::sasl_challenge> password_authenticator::new_sasl_challenge() const {
     class plain_text_password_challenge : public sasl_challenge {
-        const password_authenticator& _self;
-
     public:
-        plain_text_password_challenge(const password_authenticator& self) : _self(self) {
+        using completion_callback = std::function<future<authenticated_user>(std::string_view, std::string_view)>;
+
+        plain_text_password_challenge(completion_callback f) : _when_complete(std::move(f)) {
         }
 
         /**
@@ -359,24 +362,28 @@ const resource_set& password_authenticator::protected_resources() const {
                 throw exceptions::authentication_exception("Password must not be null");
             }
 
-            _credentials[USERNAME_KEY] = std::move(username);
-            _credentials[PASSWORD_KEY] = std::move(password);
-            _complete = true;
+            _username = std::move(username);
+            _password = std::move(password);
             return {};
         }
 
         bool is_complete() const override {
-            return _complete;
+            return _username && _password;
         }
 
         future<authenticated_user> get_authenticated_user() const override {
-            return _self.authenticate(_credentials);
+            return _when_complete(*_username, *_password);
         }
     private:
-        credentials_map _credentials;
-        bool _complete = false;
+        std::optional<sstring> _username, _password;
+        completion_callback _when_complete;
     };
-    return ::make_shared<plain_text_password_challenge>(*this);
+    return ::make_shared<plain_text_password_challenge>([this](std::string_view username, std::string_view password) {
+        credentials_map credentials{};
+        credentials[USERNAME_KEY] = sstring(username);
+        credentials[PASSWORD_KEY] = sstring(password);
+        return this->authenticate(credentials);
+    });
 }
 
 }
