@@ -43,6 +43,9 @@
 #include "index/target_parser.hh"
 
 #include <regex>
+#include <boost/range/algorithm/find_if.hpp>
+
+#include "json.hh"
 
 const sstring db::index::secondary_index::custom_index_option_name = "class_name";
 const sstring db::index::secondary_index::index_keys_option_name = "index_keys";
@@ -51,42 +54,59 @@ const sstring db::index::secondary_index::index_entries_option_name = "index_key
 
 namespace secondary_index {
 
+static constexpr auto PK_TARGET_KEY = "pk";
+static constexpr auto CK_TARGET_KEY = "ck";
+
 static const std::regex target_regex("^(keys|entries|values|full)\\((.+)\\)$");
 
-std::pair<const column_definition*, cql3::statements::index_target::target_type>
-target_parser::parse(schema_ptr schema, const index_metadata& im)
-{
+target_parser::target_info target_parser::parse(schema_ptr schema, const index_metadata& im) {
     sstring target = im.options().at(cql3::statements::index_target::target_option_name);
-    auto result = parse(schema, target);
-    if (!result) {
-        throw exceptions::configuration_exception(format("Unable to parse targets for index {} ({})", im.name(), target));
+    try {
+        return parse(schema, target);
+    } catch (...) {
+        throw exceptions::configuration_exception(format("Unable to parse targets for index {} ({}): {}", im.name(), target, std::current_exception()));
     }
-    return *result;
 }
 
-std::optional<std::pair<const column_definition*, cql3::statements::index_target::target_type>>
-target_parser::parse(schema_ptr schema, const sstring& target)
-{
+target_parser::target_info target_parser::parse(schema_ptr schema, const sstring& target) {
     using namespace cql3::statements;
-    // if the regex matches then the target is in the form "keys(foo)", "entries(bar)" etc
-    // if not, then it must be a simple column name and implictly its type is VALUES
-    sstring column_name;
-    index_target::target_type target_type;
+    target_info info;
+
+    auto get_column = [&schema] (const sstring& name) -> const column_definition* {
+        const column_definition* cdef = schema->get_column_definition(utf8_type->decompose(name));
+        if (!cdef) {
+            throw std::runtime_error(format("Column {} not found", name));
+        }
+        return cdef;
+    };
 
     std::cmatch match;
     if (std::regex_match(target.data(), match, target_regex)) {
-        target_type = index_target::from_sstring(match[1].str());
-        column_name = match[2].str();
-    } else {
-        column_name = target;
-        target_type = index_target::target_type::values;
+        info.type = index_target::from_sstring(match[1].str());
+        info.pk_columns.push_back(get_column(sstring(match[2].str())));
+        return info;
     }
 
-    auto column = schema->get_column_definition(utf8_type->decompose(column_name));
-    if (!column) {
-        return std::nullopt;
+    Json::Value json_value;
+    const bool is_json = json::to_json_value(target, json_value);
+    if (is_json && json_value.isObject()) {
+        Json::Value pk = json_value.get(PK_TARGET_KEY, Json::Value(Json::arrayValue));
+        Json::Value ck = json_value.get(CK_TARGET_KEY, Json::Value(Json::arrayValue));
+        if (!pk.isArray() || !ck.isArray()) {
+            throw std::runtime_error("pk and ck fields of JSON definition must be arrays");
+        }
+        for (auto it = pk.begin(); it != pk.end(); ++it) {
+            info.pk_columns.push_back(get_column(sstring(it->asString())));
+        }
+        for (auto it = ck.begin(); it != ck.end(); ++it) {
+            info.ck_columns.push_back(get_column(sstring(it->asString())));
+        }
+        info.type = index_target::target_type::values;
+        return info;
     }
-    return std::make_pair(column, target_type);
+
+    // Fallback and treat the whole string as a single target
+    return target_info{{get_column(target)}, {}, index_target::target_type::values};
 }
 
 }

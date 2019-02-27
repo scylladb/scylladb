@@ -113,9 +113,9 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
     auto schema = _cf.schema();
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
     schema_builder builder{schema->ks_name(), index_table_name(im.name())};
-    auto target = target_parser::parse(schema, im);
-    const auto* index_target = std::get<const column_definition*>(target);
-    auto target_type = std::get<cql3::statements::index_target::target_type>(target);
+    auto target_info = target_parser::parse(schema, im);
+    const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
+    auto target_type = target_info.type;
     if (target_type != cql3::statements::index_target::target_type::values) {
         throw std::runtime_error(format("Unsupported index target type: {}", to_sstring(target_type)));
     }
@@ -154,7 +154,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
             db::view::create_virtual_column(builder, def.name(), def.type);
         }
     }
-    const sstring where_clause = format("{} IS NOT NULL", cql3::util::maybe_quote(index_target_name));
+    const sstring where_clause = format("{} IS NOT NULL", index_target->name_as_cql_string());
     builder.with_view_info(*schema, false, where_clause);
     return view_ptr{builder.build()};
 }
