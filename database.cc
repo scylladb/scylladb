@@ -1683,9 +1683,8 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
 
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
     return cf.run_async([this, &ks, &cf, tsf = std::move(tsf), with_snapshot] {
-        const auto durable = ks.metadata()->durable_writes();
         const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
-        const auto should_flush = durable || auto_snapshot;
+        const auto should_flush = auto_snapshot;
 
         // Force mutations coming in to re-acquire higher rp:s
         // This creates a "soft" ordering, in that we will guarantee that
