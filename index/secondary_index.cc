@@ -109,4 +109,15 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
     return target_info{{get_column(target)}, {}, index_target::target_type::values};
 }
 
+bool target_parser::is_local(sstring target_string) {
+    Json::Value json_value;
+    const bool is_json = json::to_json_value(target_string, json_value);
+    if (!is_json) {
+        return false;
+    }
+    Json::Value pk = json_value.get(PK_TARGET_KEY, Json::Value(Json::arrayValue));
+    Json::Value ck = json_value.get(CK_TARGET_KEY, Json::Value(Json::arrayValue));
+    return !pk.empty() && !ck.empty();
+}
+
 }

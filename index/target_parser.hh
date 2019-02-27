@@ -57,6 +57,8 @@ struct target_parser {
     static target_info parse(schema_ptr schema, const index_metadata& im);
 
     static target_info parse(schema_ptr schema, const sstring& target);
+
+    static bool is_local(sstring target_string);
 };
 
 }
