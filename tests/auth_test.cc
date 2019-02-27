@@ -77,7 +77,7 @@ authenticate(cql_test_env& env, std::string_view username, std::string_view pass
             [&a, &c, username](const auto& credentials) {
         return a.authenticate(credentials).then([&c, username](auth::authenticated_user u) {
             c.set_login(::make_shared<auth::authenticated_user>(std::move(u)));
-            return c.check_user_exists().then([&c] { return *c.user(); });
+            return c.check_user_can_login().then([&c] { return *c.user(); });
         });
     });
 }
@@ -122,6 +122,21 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             });
         }).then([&env] {
             return require_throws<exceptions::authentication_exception>(authenticate(env, username, "hejkotte"));
+        }).then([&env] {
+            //
+            // A role must be explicitly marked as being allowed to log in.
+            //
+
+            return do_with(
+                    auth::role_config_update{},
+                    auth::authentication_options{},
+                    [&env](auto& config_update, const auto& options) {
+                config_update.can_login = false;
+
+                return auth::alter_role(env.local_auth_service(), username, config_update, options).then([&env] {
+                    return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
+                });
+            });
         }).then([&env] {
             // sasl
             auto& a = env.local_auth_service().underlying_authenticator();
