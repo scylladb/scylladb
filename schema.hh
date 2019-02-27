@@ -251,6 +251,9 @@ public:
     // These columns should be hidden from the user's SELECT queries.
     bool is_view_virtual() const { return _is_view_virtual == column_view_virtual::yes; }
     column_view_virtual view_virtual() const { return _is_view_virtual; }
+    // Columns hidden from CQL cannot be in any way retrieved by the user,
+    // either explicitly or via the '*' operator, or functions, aggregates, etc.
+    bool is_hidden_from_cql() const { return is_view_virtual(); }
     const sstring& name_as_text() const;
     const bytes& name() const;
     sstring name_as_cql_string() const;
