@@ -316,15 +316,30 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::scrub.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_family = req->get_query_param("cf");
-        auto disable_snapshot = req->get_query_param("disable_snapshot");
+    ss::scrub.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+        // TODO: respect this
         auto skip_corrupted = req->get_query_param("skip_corrupted");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
+
+        auto f = make_ready_future<>();
+        if (!req_param<bool>(*req, "disable_snapshot", false)) {
+            auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
+            f = parallel_for_each(column_families, [keyspace, tag](sstring cf) {
+                return service::get_local_storage_service().take_column_family_snapshot(keyspace, cf, tag);
+            });
+        }
+
+        return f.then([&ctx, keyspace, column_families] {
+            return ctx.db.invoke_on_all([=] (database& db) {
+                return do_for_each(column_families, [=, &db](sstring cfname) {
+                    auto& cm = db.get_compaction_manager();
+                    auto& cf = db.find_column_family(keyspace, cfname);
+                    return cm.perform_sstable_scrub(&cf);
+                });
+            });
+        }).then([]{
+            return make_ready_future<json::json_return_type>(0);
+        });
+    }));
 
     ss::upgrade_sstables.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
