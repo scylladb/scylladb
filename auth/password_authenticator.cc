@@ -311,7 +311,7 @@ const resource_set& password_authenticator::protected_resources() const {
 }
 
 ::shared_ptr<sasl_challenge> password_authenticator::new_sasl_challenge() const {
-    return ::make_shared<plain_text_password_challenge>([this](std::string_view username, std::string_view password) {
+    return ::make_shared<plain_sasl_challenge>([this](std::string_view username, std::string_view password) {
         credentials_map credentials{};
         credentials[USERNAME_KEY] = sstring(username);
         credentials[PASSWORD_KEY] = sstring(password);

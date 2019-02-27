@@ -58,7 +58,7 @@ namespace auth {
  * would expect
  * @throws javax.security.sasl.SaslException
  */
-bytes plain_text_password_challenge::evaluate_response(bytes_view client_response) {
+bytes plain_sasl_challenge::evaluate_response(bytes_view client_response) {
     sstring username, password;
 
     auto b = client_response.crbegin();
@@ -91,11 +91,11 @@ bytes plain_text_password_challenge::evaluate_response(bytes_view client_respons
     return {};
 }
 
-bool plain_text_password_challenge::is_complete() const {
+bool plain_sasl_challenge::is_complete() const {
     return _username && _password;
 }
 
-future<authenticated_user> plain_text_password_challenge::get_authenticated_user() const {
+future<authenticated_user> plain_sasl_challenge::get_authenticated_user() const {
     return _when_complete(*_username, *_password);
 }
 
