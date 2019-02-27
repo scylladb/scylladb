@@ -252,6 +252,8 @@ future<authenticated_user> password_authenticator::authenticate(
             std::throw_with_nested(exceptions::authentication_exception("Could not verify password"));
         } catch (exceptions::request_execution_exception& e) {
             std::throw_with_nested(exceptions::authentication_exception(e.what()));
+        } catch (exceptions::authentication_exception& e) {
+            std::throw_with_nested(e);
         } catch (...) {
             std::throw_with_nested(exceptions::authentication_exception("authentication failed"));
         }
