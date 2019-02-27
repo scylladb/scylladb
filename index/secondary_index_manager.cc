@@ -91,7 +91,8 @@ void secondary_index_manager::reload() {
 }
 
 void secondary_index_manager::add_index(const index_metadata& im) {
-    sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
+    sstring index_target = im.options().at(cql3::statements::index_target::target_option_name);
+    sstring index_target_name = target_parser::get_target_column_name_from_string(index_target);
     _indices.emplace(im.name(), index{index_target_name, im});
 }
 
