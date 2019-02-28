@@ -239,20 +239,15 @@ def find_headers(repodir, excluded_dirs):
 
 modes = {
     'debug': {
-        'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
-        'sanitize_libs': '-lasan -lubsan',
-        'opt': '-O0 -DDEBUG -DDEBUG_LSA_SANITIZER',
+        # Disable vptr because of https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88684
+        'opt': '-O0 -DDEBUG -DDEBUG_LSA_SANITIZER -fsanitize=address -fsanitize=leak -fsanitize=undefined -fno-sanitize=vptr',
         'libs': '',
     },
     'release': {
-        'sanitize': '',
-        'sanitize_libs': '',
         'opt': '-O3',
         'libs': '',
     },
     'dev': {
-        'sanitize': '',
-        'sanitize_libs': '',
         'opt': '-O1',
         'libs': '',
     },
@@ -1183,15 +1178,15 @@ with open(buildfile, 'w') as f:
             libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
             rule cxx.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {sanitize} {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx  $ld_flags_{mode} {sanitize} {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode}
+              command = $cxx  $ld_flags_{mode} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
-              command = $cxx  $ld_flags_{mode} -s {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode}
+              command = $cxx  $ld_flags_{mode} -s $ldflags -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
               pool = link_pool
             rule ar.{mode}
@@ -1214,7 +1209,7 @@ with open(buildfile, 'w') as f:
                         build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             rule checkhh.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {sanitize} {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -x c++ --include=$in -c -o $out /dev/null
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -x c++ --include=$in -c -o $out /dev/null
               description = CHECKHH $in
               depfile = $out.d
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, **modeval))
