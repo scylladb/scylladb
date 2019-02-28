@@ -771,3 +771,21 @@ SEASTAR_TEST_CASE(test_local_index_paging) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_malformed_local_index) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (p1 int, p2 int, c1 int, c2 int, v int, PRIMARY KEY ((p1, p2), c1, c2))").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p2),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2,p1),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,c1),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((c1,c2),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2),c1,v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2))").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2),p1)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2),p2)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2),(c1,c2))").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p2,p1),v)").get(), exceptions::invalid_request_exception);
+    });
+}
