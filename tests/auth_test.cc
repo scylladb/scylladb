@@ -94,8 +94,6 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         static const sstring username("fisk");
         static const sstring password("notter");
 
-        using namespace auth;
-
         auto& a = env.local_auth_service().underlying_authenticator();
 
         // check non-existing user
@@ -107,7 +105,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                 // ok
             }
         }).then([&env, &a] {
-            return do_with(role_config{}, authentication_options{}, [&env, &a](auto& config, auto& options) {
+            return do_with(auth::role_config{}, auth::authentication_options{}, [&env, &a](auto& config, auto& options) {
                 config.can_login = true;
                 options.password = password;
 
