@@ -218,7 +218,7 @@ struct integer_type_impl : simple_type_impl<T> {
         *reinterpret_cast<T*>(b.begin()) = (T)net::hton(v);
         return b;
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(T)) {
             throw marshal_exception(format("Validation failed for type {}: got {:d} bytes", this->name(), v.size()));
         }
@@ -262,7 +262,7 @@ struct byte_type_impl : integer_type_impl<int8_t> {
     byte_type_impl() : integer_type_impl{byte_type_name, {}}
     { }
 
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 1) {
             throw marshal_exception(format("Expected 1 byte for a tinyint ({:d})", v.size()));
         }
@@ -281,7 +281,7 @@ struct short_type_impl : integer_type_impl<int16_t> {
     short_type_impl() : integer_type_impl{short_type_name, { }}
     { }
 
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 2) {
             throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size()));
         }
@@ -358,7 +358,7 @@ struct string_type_impl : public concrete_type<sstring> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (as_cql3_type() == cql3::cql3_type::ascii) {
             if (!utils::ascii::validate(v)) {
                 throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
@@ -431,7 +431,7 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     virtual data_value deserialize(bytes_view v) const override {
         return make_value(std::make_unique<native_type>(v.begin(), v.end()));
     }
-    virtual void validate(const fragmented_temporary_buffer::view&) const override { }
+    virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
@@ -516,7 +516,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         }
         return make_value(*v.begin() != 0);
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 1) {
             throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size()));
         }
@@ -694,7 +694,7 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 16) {
             throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size()));
         }
@@ -790,7 +790,7 @@ public:
         return make_value(db_clock::time_point(db_clock::duration(v)));
     }
     // FIXME: isCompatibleWith(timestampuuid)
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(uint64_t)) {
             throw marshal_exception(format("Validation failed for timestamp - got {:d} bytes", v.size()));
         }
@@ -969,7 +969,7 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         auto v = read_simple_exactly<uint32_t>(in);
         return make_value(v);
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 4) {
             throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
         }
@@ -1066,7 +1066,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         auto v = read_simple_exactly<int64_t>(in);
         return make_value(v);
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 8) {
             throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size()));
         }
@@ -1197,7 +1197,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 16) {
             throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
         }
@@ -1304,7 +1304,7 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
             throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size()));
         }
@@ -1446,7 +1446,7 @@ struct floating_type_impl : public simple_type_impl<T> {
         }
         return a == b ? 0 : a < b ? -1 : 1;
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(T)) {
             throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
         }
@@ -1892,7 +1892,7 @@ public:
                signed_vint::serialized_size(d.days) +
                signed_vint::serialized_size(d.nanoseconds);
     }
-    virtual void validate(bytes_view v) const override {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() < 3) {
             throw marshal_exception(format("Expected at least 3 bytes for a duration, got {:d}", v.size()));
         }

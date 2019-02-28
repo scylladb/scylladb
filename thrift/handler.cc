@@ -1253,7 +1253,7 @@ private:
             auto column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
             for (const ColumnDef& col_def : cf_def.column_metadata) {
                 auto col_name = to_bytes(col_def.name);
-                column_name_type->validate(col_name);
+                column_name_type->validate(col_name, cql_serialization_format::latest());
                 builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
                                     column_kind::regular_column);
                 auto index = index_metadata_from_thrift(col_def);

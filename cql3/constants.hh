@@ -180,7 +180,7 @@ public:
             try {
                 auto value = options.get_value_at(_bind_index);
                 if (value) {
-                    _receiver->type->validate(*value);
+                    _receiver->type->validate(*value, options.get_cql_serialization_format());
                 }
                 return value;
             } catch (const marshal_exception& e) {

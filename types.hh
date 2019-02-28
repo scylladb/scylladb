@@ -490,16 +490,16 @@ public:
     data_value deserialize_value(bytes_view v) const {
         return deserialize(v);
     };
-    virtual void validate(bytes_view v) const {
+    virtual void validate(bytes_view v, cql_serialization_format sf) const {
         // FIXME
     }
-    virtual void validate(const fragmented_temporary_buffer::view& view) const {
-        with_linearized(view, [this] (bytes_view bv) {
-            validate(bv);
+    virtual void validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const {
+        with_linearized(view, [this, sf] (bytes_view bv) {
+            validate(bv, sf);
         });
     }
     virtual void validate_collection_member(bytes_view v, const bytes& collection_name) const {
-        validate(v);
+        validate(v, cql_serialization_format::latest());
     }
     virtual bool is_compatible_with(const abstract_type& previous) const {
         return equals(previous);
@@ -576,7 +576,7 @@ public:
         return is_byte_order_comparable();
     }
     virtual sstring get_string(const bytes& b) const {
-        validate(b);
+        validate(b, cql_serialization_format::latest());
         return to_string(b);
     }
     virtual sstring to_string(const bytes& b) const = 0;
@@ -897,8 +897,8 @@ public:
         return _underlying_type->equal(v1, v2);
     }
 
-    virtual void validate(bytes_view v) const override {
-        _underlying_type->validate(v);
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
+        _underlying_type->validate(v, sf);
     }
 
     virtual void validate_collection_member(bytes_view v, const bytes& collection_name) const  override {

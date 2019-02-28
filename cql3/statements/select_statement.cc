@@ -251,7 +251,7 @@ uint32_t select_statement::do_get_limit(const query_options& options, ::shared_p
     }
   return with_linearized(*val, [&] (bytes_view bv) {
     try {
-        int32_type->validate(bv);
+        int32_type->validate(bv, options.get_cql_serialization_format());
         auto l = value_cast<int32_t>(int32_type->deserialize(bv));
         if (l <= 0) {
             throw exceptions::invalid_request_exception("LIMIT must be strictly positive");

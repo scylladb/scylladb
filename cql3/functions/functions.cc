@@ -436,7 +436,7 @@ function_call::execute_internal(cql_serialization_format sf, scalar_function& fu
     try {
         // Check the method didn't lied on it's declared return type
         if (result) {
-            fun.return_type()->validate(*result);
+            fun.return_type()->validate(*result, sf);
         }
         return result;
     } catch (marshal_exception& e) {

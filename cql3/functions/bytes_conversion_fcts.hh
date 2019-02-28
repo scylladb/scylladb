@@ -74,7 +74,7 @@ make_from_blob_function(data_type to_type) {
             return val;
         }
         try {
-            to_type->validate(*val);
+            to_type->validate(*val, sf);
             return val;
         } catch (marshal_exception& e) {
             using namespace exceptions;
