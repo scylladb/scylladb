@@ -185,6 +185,26 @@ SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
     });
 }
 
+SEASTAR_TEST_CASE(test_list_elements_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl (a int, b list<date>, PRIMARY KEY (a))").get();
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("INSERT INTO tbl (a, b) VALUES(1, ['definietly not a date value'])").get(),
+            exceptions::invalid_request_exception);
+        e.execute_cql("CREATE TABLE tbl2 (a int, b list<text>, PRIMARY KEY (a))").get();
+        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
+        auto my_list_type = list_type_impl::get_instance(utf8_type, true);
+        std::vector<cql3::raw_value> raw_values;
+        raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+        auto values = my_list_type->decompose(make_list_value(my_list_type, {sstring(1, '\255')}));
+        raw_values.emplace_back(cql3::raw_value::make_value(values));
+        BOOST_REQUIRE_THROW(
+            e.execute_prepared(id, raw_values).get(),
+            exceptions::invalid_request_exception);
+    });
+}
+
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
