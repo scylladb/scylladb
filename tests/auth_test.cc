@@ -106,26 +106,25 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         static const sstring username("fisk");
         static const sstring password("notter");
 
-        auto& a = env.local_auth_service().underlying_authenticator();
-
         // check non-existing user
         return require_throws<exceptions::authentication_exception>(
-                authenticate(env, username, password)).then([&env, &a] {
-            return do_with(auth::role_config{}, auth::authentication_options{}, [&env, &a](auto& config, auto& options) {
+                authenticate(env, username, password)).then([&env] {
+            return do_with(auth::role_config{}, auth::authentication_options{}, [&env](auto& config, auto& options) {
                 config.can_login = true;
                 options.password = password;
 
-                return auth::create_role(env.local_auth_service(), username, config, options).then([&env, &a] {
+                return auth::create_role(env.local_auth_service(), username, config, options).then([&env] {
                     return authenticate(env, username, password).then([](auth::authenticated_user user) {
                         BOOST_REQUIRE(!auth::is_anonymous(user));
                         BOOST_REQUIRE_EQUAL(*user.name, username);
                     });
                 });
             });
-        }).then([&env, &a] {
+        }).then([&env] {
             return require_throws<exceptions::authentication_exception>(authenticate(env, username, "hejkotte"));
-        }).then([&a] {
+        }).then([&env] {
             // sasl
+            auto& a = env.local_auth_service().underlying_authenticator();
             auto sasl = a.new_sasl_challenge();
 
             BOOST_REQUIRE(!sasl->is_complete());
@@ -144,9 +143,9 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                 BOOST_REQUIRE(!auth::is_anonymous(user));
                 BOOST_REQUIRE_EQUAL(*user.name, username);
             });
-        }).then([&env, &a] {
+        }).then([&env] {
             // check deleted user
-            return auth::drop_role(env.local_auth_service(), username).then([&env, &a] {
+            return auth::drop_role(env.local_auth_service(), username).then([&env] {
                 return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
             });
         });
