@@ -241,15 +241,12 @@ modes = {
     'debug': {
         # Disable vptr because of https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88684
         'opt': '-O0 -DDEBUG -DDEBUG_LSA_SANITIZER -fsanitize=address -fsanitize=leak -fsanitize=undefined -fno-sanitize=vptr',
-        'libs': '',
     },
     'release': {
         'opt': '-O3',
-        'libs': '',
     },
     'dev': {
         'opt': '-O1',
-        'libs': '',
     },
 }
 
