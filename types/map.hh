@@ -60,6 +60,7 @@ public:
     static int32_t compare_maps(data_type keys_comparator, data_type values_comparator,
                         bytes_view o1, bytes_view o2);
     virtual bool is_byte_order_comparable() const override { return false; }
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override;
     virtual void serialize(const void* value, bytes::iterator& out) const override;
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     virtual size_t serialized_size(const void* value) const;

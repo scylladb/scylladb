@@ -2426,6 +2426,14 @@ map_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
     return make_value(std::move(m));
 }
 
+void map_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
+    auto size = read_collection_size(v, sf);
+    for (int i = 0; i < size; ++i) {
+        _keys->validate(read_collection_value(v, sf), sf);
+        _values->validate(read_collection_value(v, sf), sf);
+    }
+}
+
 sstring
 map_type_impl::to_string(const bytes& b) const {
     bool include_frozen_type = !is_multi_cell();
