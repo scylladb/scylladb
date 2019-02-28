@@ -431,7 +431,9 @@ arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', def
                         help='path to antlr3 executable')
 args = arg_parser.parse_args()
 
-defines = []
+defines = ['XXH_PRIVATE_API',
+           'SEASTAR_TESTING_MAIN',
+]
 
 extra_cxxflags = {}
 
@@ -1148,7 +1150,7 @@ with open(buildfile, 'w') as f:
         modeval = modes[mode]
         fmt_lib = 'libfmtd.a' if mode == 'debug' else 'libfmt.a'
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = {opt} -DXXH_PRIVATE_API -DSEASTAR_TESTING_MAIN -I. -I $builddir/{mode}/gen
+            cxxflags_{mode} = {opt} -I. -I $builddir/{mode}/gen
             libs_{mode} = seastar/build/{mode}/_cooking/installed/lib/{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
             rule cxx.{mode}
