@@ -854,6 +854,10 @@ void keyspace::update_from(::lw_shared_ptr<keyspace_metadata> ksm) {
    create_replication_strategy(_metadata->strategy_options());
 }
 
+static bool is_system_table(const schema& s) {
+    return s.ks_name() == db::system_keyspace::NAME || s.ks_name() == db::system_distributed_keyspace::NAME;
+}
+
 column_family::config
 keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
@@ -884,8 +888,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
 
     // avoid self-reporting
-    if (s.ks_name() == "system" &&
-            (s.cf_name() == db::system_keyspace::LARGE_PARTITIONS || s.cf_name() == db::system_keyspace::LARGE_ROWS)) {
+    if (is_system_table(s)) {
         cfg.large_data_handler = db.get_nop_large_data_handler();
     } else {
         cfg.large_data_handler = db.get_large_data_handler();
