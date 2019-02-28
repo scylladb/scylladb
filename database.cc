@@ -1639,9 +1639,30 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
     return nullptr;
 }
 
+future<> database::close_tables(table_kind kind_to_close) {
+    return parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) {
+        table_kind k = is_system_table(*val_pair.second->schema()) ? table_kind::system : table_kind::user;
+        if (k == kind_to_close) {
+            return val_pair.second->stop();
+        } else {
+            return make_ready_future<>();
+        }
+    });
+}
+
 future<> stop_database(sharded<database>& sdb) {
     return sdb.invoke_on_all([](database& db) {
         return db.get_compaction_manager().stop();
+    }).then([&sdb] {
+        // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
+        // system.large_partitions after the regular tables.
+        return sdb.invoke_on_all([](database& db) {
+            return db.close_tables(database::table_kind::user);
+        });
+    }).then([&sdb] {
+        return sdb.invoke_on_all([](database& db) {
+            return db.close_tables(database::table_kind::system);
+        });
     }).then([&sdb] {
         return sdb.invoke_on_all([](database& db) {
             db.stop_large_data_handler();
@@ -1659,10 +1680,6 @@ database::stop() {
     // try to ensure that CL has done disk flushing
     future<> maybe_shutdown_commitlog = _commitlog != nullptr ? _commitlog->shutdown() : make_ready_future<>();
     return maybe_shutdown_commitlog.then([this] {
-        return parallel_for_each(_column_families, [this] (auto& val_pair) {
-            return val_pair.second->stop();
-        });
-    }).then([this] {
         return _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
     }).then([this] {
         if (_commitlog != nullptr) {

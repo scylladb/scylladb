@@ -1171,6 +1171,12 @@ struct database_config {
 //   use shard_of() for data
 
 class database {
+public:
+    enum class table_kind {
+        system,
+        user,
+    };
+
 private:
     ::cf_stats _cf_stats;
     static const size_t max_count_concurrent_reads{100};
@@ -1357,6 +1363,8 @@ public:
                                      std::optional<sstring> index_name_root) const;
     schema_ptr find_indexed_table(const sstring& ks_name, const sstring& index_name) const;
     future<> stop();
+    future<> close_tables(table_kind kind_to_close);
+
     void stop_large_data_handler();
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
