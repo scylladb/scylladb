@@ -223,6 +223,38 @@ SEASTAR_TEST_CASE(test_set_elements_validation) {
     });
 }
 
+SEASTAR_TEST_CASE(test_map_elements_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl (a int, b map<date, date>, PRIMARY KEY (a))").get();
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("INSERT INTO tbl (a, b) VALUES(1, {'10-10-2010' : 'definietly not a date value'})").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("INSERT INTO tbl (a, b) VALUES(1, {'definietly not a date value' : '10-10-2010'})").get(),
+            exceptions::invalid_request_exception);
+        e.execute_cql("CREATE TABLE tbl2 (a int, b map<text, text>, PRIMARY KEY (a))").get();
+        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
+        auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
+        std::vector<cql3::raw_value> raw_values;
+        raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+        auto values =
+            my_map_type->decompose(make_map_value(my_map_type,
+                                                  {std::make_pair(sstring(1, '\255'), sstring("foo"))}));
+        raw_values.emplace_back(cql3::raw_value::make_value(values));
+        BOOST_REQUIRE_THROW(
+            e.execute_prepared(id, raw_values).get(),
+            exceptions::invalid_request_exception);
+        raw_values.pop_back();
+        values =
+            my_map_type->decompose(make_map_value(my_map_type,
+                                                  {std::make_pair(sstring("foo"), sstring(1, '\255'))}));
+        raw_values.emplace_back(cql3::raw_value::make_value(values));
+        BOOST_REQUIRE_THROW(
+            e.execute_prepared(id, raw_values).get(),
+            exceptions::invalid_request_exception);
+    });
+}
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
