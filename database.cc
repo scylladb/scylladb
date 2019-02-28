@@ -1639,6 +1639,12 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
     return nullptr;
 }
 
+future<> stop_database(sharded<database>& sdb) {
+    return sdb.invoke_on_all([](database& db) {
+        db.stop_large_data_handler();
+    });
+}
+
 void database::stop_large_data_handler() { _large_data_handler->stop(); }
 
 future<>

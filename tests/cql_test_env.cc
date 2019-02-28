@@ -435,8 +435,8 @@ public:
             // minimal_setup and init_local_cache
             db::system_keyspace::minimal_setup(*db, qp);
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
-            auto stop_large_data_handler = defer([db] {
-                db->invoke_on_all([](database& db) { db.stop_large_data_handler(); }).get();
+            auto stop_database_d = defer([db] {
+                stop_database(*db).get();
             });
 
             db::system_keyspace::init_local_cache().get();

@@ -1469,6 +1469,8 @@ public:
     }
 };
 
+future<> stop_database(sharded<database>& db);
+
 // Creates a streaming reader that reads from all shards.
 //
 // Shard readers are created via `table::make_streaming_reader()`.
