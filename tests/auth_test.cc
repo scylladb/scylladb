@@ -65,6 +65,23 @@ SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
     }, cfg);
 }
 
+static future<auth::authenticated_user>
+authenticate(cql_test_env& env, std::string_view username, std::string_view password) {
+    auto& c = env.local_client_state();
+    auto& a = env.local_auth_service().underlying_authenticator();
+
+    return do_with(
+            auth::authenticator::credentials_map{
+                    {auth::authenticator::USERNAME_KEY, sstring(username)},
+                    {auth::authenticator::PASSWORD_KEY, sstring(password)}},
+            [&a, &c, username](const auto& credentials) {
+        return a.authenticate(credentials).then([&c, username](auth::authenticated_user u) {
+            c.set_login(::make_shared<auth::authenticated_user>(std::move(u)));
+            return c.check_user_exists().then([&c] { return *c.user(); });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
     db::config cfg;
     cfg.authenticator(auth::password_authenticator_name());
@@ -82,7 +99,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         auto& a = env.local_auth_service().underlying_authenticator();
 
         // check non-existing user
-        return a.authenticate({ { authenticator::USERNAME_KEY, username }, { authenticator::PASSWORD_KEY, password } }).then_wrapped([&a](future<auth::authenticated_user>&& f) {
+        return authenticate(env, username, password).then_wrapped([&a](future<auth::authenticated_user>&& f) {
             try {
                 f.get();
                 BOOST_FAIL("should not reach");
@@ -94,16 +111,16 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                 config.can_login = true;
                 options.password = password;
 
-                return auth::create_role(env.local_auth_service(), username, config, options).then([&a] {
-                    return a.authenticate({ { authenticator::USERNAME_KEY, username }, { authenticator::PASSWORD_KEY, password } }).then([](auth::authenticated_user user) {
+                return auth::create_role(env.local_auth_service(), username, config, options).then([&env, &a] {
+                    return authenticate(env, username, password).then([](auth::authenticated_user user) {
                         BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
                         BOOST_REQUIRE_EQUAL(*user.name, username);
                     });
                 });
             });
-        }).then([&a] {
+        }).then([&env, &a] {
             // check wrong password
-            return a.authenticate( { {authenticator::USERNAME_KEY, username}, {authenticator::PASSWORD_KEY, "hejkotte"}}).then_wrapped([](future<auth::authenticated_user>&& f) {
+            return authenticate(env, username, "hejkotte").then_wrapped([](future<auth::authenticated_user>&& f) {
                 try {
                     f.get();
                     BOOST_FAIL("should not reach");
@@ -133,8 +150,8 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             });
         }).then([&env, &a] {
             // check deleted user
-            return auth::drop_role(env.local_auth_service(), username).then([&a] {
-                return a.authenticate({ { authenticator::USERNAME_KEY, username }, { authenticator::PASSWORD_KEY, password } }).then_wrapped([](future<auth::authenticated_user>&& f) {
+            return auth::drop_role(env.local_auth_service(), username).then([&env, &a] {
+                return authenticate(env, username, password).then_wrapped([](future<auth::authenticated_user>&& f) {
                     try {
                         f.get();
                         BOOST_FAIL("should not reach");
