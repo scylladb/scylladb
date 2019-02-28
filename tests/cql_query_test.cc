@@ -255,6 +255,26 @@ SEASTAR_TEST_CASE(test_map_elements_validation) {
     });
 }
 
+SEASTAR_TEST_CASE(test_in_clause_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl (p1 int, c1 int, r1 date, PRIMARY KEY (p1, c1,r1))").get();
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT r1 FROM tbl WHERE (c1,r1) IN ((1, 'definietly not a date value')) ALLOW FILTERING").get(),
+            exceptions::invalid_request_exception);
+        e.execute_cql("CREATE TABLE tbl2 (p1 int, c1 int, r1 text, PRIMARY KEY (p1, c1,r1))").get();
+        auto id = e.prepare("SELECT r1 FROM tbl2 WHERE (c1,r1) IN ? ALLOW FILTERING").get0();
+        auto my_tuple_type = tuple_type_impl::get_instance({int32_type, utf8_type});
+        auto my_list_type = list_type_impl::get_instance(my_tuple_type, true);
+        std::vector<cql3::raw_value> raw_values;
+        auto values = make_tuple_value(my_tuple_type, tuple_type_impl::native_type({int32_t{2}, sstring(1, '\255')}));
+        auto in_values_list = my_list_type->decompose(make_list_value(my_list_type, {values}));
+        raw_values.emplace_back(cql3::raw_value::make_value(in_values_list));
+        BOOST_REQUIRE_THROW(
+            e.execute_prepared(id, raw_values).get(),
+            exceptions::invalid_request_exception);
+    });
+}
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
