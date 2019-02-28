@@ -83,6 +83,7 @@ public:
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 private:
+    void validate_for_local_index(schema_ptr schema) const;
     void validate_for_frozen_collection(::shared_ptr<index_target> target) const;
     void validate_not_full_index(::shared_ptr<index_target> target) const;
     void validate_is_values_index_if_target_column_not_collection(const column_definition* cd,
