@@ -89,14 +89,16 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             } catch (exceptions::authentication_exception&) {
                 // ok
             }
-        }).then([&a] {
-            authentication_options options;
-            options.password = password;
+        }).then([&env, &a] {
+            return do_with(role_config{}, authentication_options{}, [&env, &a](auto& config, auto& options) {
+                config.can_login = true;
+                options.password = password;
 
-            return a.create(username, std::move(options)).then([&a] {
-                return a.authenticate({ { authenticator::USERNAME_KEY, username }, { authenticator::PASSWORD_KEY, password } }).then([](auth::authenticated_user user) {
-                    BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
-                    BOOST_REQUIRE_EQUAL(*user.name, username);
+                return auth::create_role(env.local_auth_service(), username, config, options).then([&a] {
+                    return a.authenticate({ { authenticator::USERNAME_KEY, username }, { authenticator::PASSWORD_KEY, password } }).then([](auth::authenticated_user user) {
+                        BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
+                        BOOST_REQUIRE_EQUAL(*user.name, username);
+                    });
                 });
             });
         }).then([&a] {
@@ -129,9 +131,9 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                 BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
                 BOOST_REQUIRE_EQUAL(*user.name, username);
             });
-        }).then([&a] {
+        }).then([&env, &a] {
             // check deleted user
-            return a.drop(username).then([&a] {
+            return auth::drop_role(env.local_auth_service(), username).then([&a] {
                 return a.authenticate({ { authenticator::USERNAME_KEY, username }, { authenticator::PASSWORD_KEY, password } }).then_wrapped([](future<auth::authenticated_user>&& f) {
                     try {
                         f.get();
