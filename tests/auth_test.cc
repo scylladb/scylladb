@@ -82,6 +82,18 @@ authenticate(cql_test_env& env, std::string_view username, std::string_view pass
     });
 }
 
+template <typename Exception, typename... Args>
+future<> require_throws(seastar::future<Args...> fut) {
+    return fut.then_wrapped([](auto completed_fut) {
+        try {
+            completed_fut.get();
+            BOOST_FAIL("Required an exception to be thrown");
+        } catch (const Exception&) {
+            // Ok.
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
     db::config cfg;
     cfg.authenticator(auth::password_authenticator_name());
@@ -97,14 +109,8 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         auto& a = env.local_auth_service().underlying_authenticator();
 
         // check non-existing user
-        return authenticate(env, username, password).then_wrapped([&a](future<auth::authenticated_user>&& f) {
-            try {
-                f.get();
-                BOOST_FAIL("should not reach");
-            } catch (exceptions::authentication_exception&) {
-                // ok
-            }
-        }).then([&env, &a] {
+        return require_throws<exceptions::authentication_exception>(
+                authenticate(env, username, password)).then([&env, &a] {
             return do_with(auth::role_config{}, auth::authentication_options{}, [&env, &a](auto& config, auto& options) {
                 config.can_login = true;
                 options.password = password;
@@ -117,15 +123,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                 });
             });
         }).then([&env, &a] {
-            // check wrong password
-            return authenticate(env, username, "hejkotte").then_wrapped([](future<auth::authenticated_user>&& f) {
-                try {
-                    f.get();
-                    BOOST_FAIL("should not reach");
-                } catch (exceptions::authentication_exception&) {
-                    // ok
-                }
-            });
+            return require_throws<exceptions::authentication_exception>(authenticate(env, username, "hejkotte"));
         }).then([&a] {
             // sasl
             auto sasl = a.new_sasl_challenge();
@@ -149,14 +147,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         }).then([&env, &a] {
             // check deleted user
             return auth::drop_role(env.local_auth_service(), username).then([&env, &a] {
-                return authenticate(env, username, password).then_wrapped([](future<auth::authenticated_user>&& f) {
-                    try {
-                        f.get();
-                        BOOST_FAIL("should not reach");
-                    } catch (exceptions::authentication_exception&) {
-                        // ok
-                    }
-                });
+                return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
             });
         });
     }, cfg);
