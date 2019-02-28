@@ -2966,6 +2966,13 @@ set_type_impl::less(bytes_view o1, bytes_view o2) const {
             [this] (bytes_view o1, bytes_view o2) { return _elements->less(o1, o2); });
 }
 
+void set_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
+    auto nr = read_collection_size(v, sf);
+    for (int i = 0; i != nr; ++i) {
+        _elements->validate(read_collection_value(v, sf), sf);
+    }
+}
+
 void
 set_type_impl::serialize(const void* value, bytes::iterator& out) const {
     return serialize(value, out, cql_serialization_format::internal());
