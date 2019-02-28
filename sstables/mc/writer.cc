@@ -668,17 +668,18 @@ private:
     };
 
     // Writes single atomic cell
-    void write_cell(bytes_ostream& writer, atomic_cell_view cell, const column_definition& cdef,
+    void write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, atomic_cell_view cell, const column_definition& cdef,
         const row_time_properties& properties, bytes_view cell_path = {});
 
     // Writes information about row liveness (formerly 'row marker')
     void write_liveness_info(bytes_ostream& writer, const row_marker& marker);
 
     // Writes a CQL collection (list, set or map)
-    void write_collection(bytes_ostream& writer, const column_definition& cdef, collection_mutation_view collection,
+    void write_collection(bytes_ostream& writer, const clustering_key_prefix* clustering_key, const column_definition& cdef, collection_mutation_view collection,
         const row_time_properties& properties, bool has_complex_deletion);
 
-    void write_cells(bytes_ostream& writer, column_kind kind, const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
+    void write_cells(bytes_ostream& writer, const clustering_key_prefix* clustering_key, column_kind kind,
+        const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
     void write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion);
     void write_static_row(const row& static_row);
     void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key) {
@@ -961,9 +962,10 @@ void writer::consume(tombstone t) {
     _tombstone_written = true;
 }
 
-void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const column_definition& cdef,
-    const row_time_properties& properties, bytes_view cell_path) {
+void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, atomic_cell_view cell,
+         const column_definition& cdef, const row_time_properties& properties, bytes_view cell_path) {
 
+    uint64_t current_pos = writer.size();
     bool is_deleted = !cell.is_live();
     bool has_value = !is_deleted && !cell.value().empty();
     bool use_row_timestamp = (properties.timestamp == cell.timestamp());
@@ -1022,6 +1024,12 @@ void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const colu
     }
 
     // Collect cell statistics
+    // We record collections in write_collection, so ignore them here
+    if (cdef.is_atomic()) {
+        uint64_t size = writer.size() - current_pos;
+        _cfg.large_data_handler->maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size);
+    }
+
     _c_stats.update_timestamp(cell.timestamp());
     if (is_deleted) {
         _c_stats.update_local_deletion_time_and_tombstone_histogram(cell.deletion_time());
@@ -1066,8 +1074,10 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
     }
 }
 
-void writer::write_collection(bytes_ostream& writer, const column_definition& cdef,
-    collection_mutation_view collection, const row_time_properties& properties, bool has_complex_deletion) {
+void writer::write_collection(bytes_ostream& writer, const clustering_key_prefix* clustering_key,
+        const column_definition& cdef, collection_mutation_view collection, const row_time_properties& properties,
+        bool has_complex_deletion) {
+    uint64_t current_pos = writer.size();
     auto& ctype = *static_pointer_cast<const collection_type_impl>(cdef.type);
     collection.data.with_linearized([&] (bytes_view collection_bv) {
         auto mview = ctype.deserialize_mutation_form(collection_bv);
@@ -1082,19 +1092,21 @@ void writer::write_collection(bytes_ostream& writer, const column_definition& cd
         }
         for (const auto& [cell_path, cell]: mview.cells) {
             ++_c_stats.cells_count;
-            write_cell(writer, cell, cdef, properties, cell_path);
+            write_cell(writer, clustering_key, cell, cdef, properties, cell_path);
         }
     });
+    uint64_t size = writer.size() - current_pos;
+    _cfg.large_data_handler->maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size);
 }
 
-void writer::write_cells(bytes_ostream& writer, column_kind kind, const row& row_body,
+void writer::write_cells(bytes_ostream& writer, const clustering_key_prefix* clustering_key, column_kind kind, const row& row_body,
     const row_time_properties& properties, bool has_complex_deletion) {
     // Note that missing columns are written based on the whole set of regular columns as defined by schema.
     // This differs from Origin where all updated columns are tracked and the set of filled columns of a row
     // is compared with the set of all columns filled in the memtable. So our encoding may be less optimal in some cases
     // but still valid.
     write_missing_columns(writer, kind == column_kind::static_column ? _static_columns : _regular_columns, row_body);
-    row_body.for_each_cell([this, &writer, kind, &properties, has_complex_deletion] (column_id id, const atomic_cell_or_collection& c) {
+    row_body.for_each_cell([this, &writer, kind, &properties, has_complex_deletion, clustering_key] (column_id id, const atomic_cell_or_collection& c) {
         auto&& column_definition = _schema.column_at(kind, id);
         if (!column_definition.is_atomic()) {
             _collections.push_back({&column_definition, c});
@@ -1103,11 +1115,11 @@ void writer::write_cells(bytes_ostream& writer, column_kind kind, const row& row
         atomic_cell_view cell = c.as_atomic_cell(column_definition);
         ++_c_stats.cells_count;
         ++_c_stats.column_count;
-        write_cell(writer, cell, column_definition, properties);
+        write_cell(writer, clustering_key, cell, column_definition, properties);
     });
 
     for (const auto& col: _collections) {
-        write_collection(writer, *col.cdef, col.collection.get().as_collection_mutation(), properties, has_complex_deletion);
+        write_collection(writer, clustering_key, *col.cdef, col.collection.get().as_collection_mutation(), properties, has_complex_deletion);
     }
     _collections.clear();
 }
@@ -1133,7 +1145,7 @@ void writer::write_row_body(bytes_ostream& writer, const clustering_row& row, bo
         }
     }
 
-    return write_cells(writer, column_kind::regular_column, row.cells(), properties, has_complex_deletion);
+    return write_cells(writer, &row.key(), column_kind::regular_column, row.cells(), properties, has_complex_deletion);
 }
 
 // Find if any collection in the row contains a collection-wide tombstone
@@ -1174,7 +1186,7 @@ void writer::write_static_row(const row& static_row) {
     write(_sst.get_version(), *_data_writer, row_extended_flags::is_static);
 
     write_vint(_tmp_bufs, 0); // as the static row always comes first, the previous row size is always zero
-    write_cells(_tmp_bufs, column_kind::static_column, static_row, row_time_properties{}, has_complex_deletion);
+    write_cells(_tmp_bufs, nullptr, column_kind::static_column, static_row, row_time_properties{}, has_complex_deletion);
     write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
 

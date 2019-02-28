@@ -62,12 +62,14 @@ private:
     bool _stopped = false;
     uint64_t _partition_threshold_bytes;
     uint64_t _row_threshold_bytes;
+    uint64_t _cell_threshold_bytes;
     mutable large_data_handler::stats _stats;
 
 public:
-    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes)
+    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes)
         : _partition_threshold_bytes(partition_threshold_bytes)
-        , _row_threshold_bytes(row_threshold_bytes) {}
+        , _row_threshold_bytes(row_threshold_bytes)
+        , _cell_threshold_bytes(cell_threshold_bytes) {}
     virtual ~large_data_handler() {}
 
     // Once large_data_handler is stopped no further updates will be accepted.
@@ -91,6 +93,17 @@ public:
 
     future<> maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size);
 
+    future<> maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) {
+        assert(!stopped());
+        if (__builtin_expect(cell_size > _cell_threshold_bytes, false)) {
+            return with_sem([&sst, &partition_key, clustering_key, &cdef, cell_size, this] {
+                return record_large_cells(sst, partition_key, clustering_key, cdef, cell_size);
+            });
+        }
+        return make_ready_future<>();
+    }
+
     future<> maybe_delete_large_data_entries(const schema& s, const sstring& filename, uint64_t data_size) {
         assert(!stopped());
         future<> large_partitions = make_ready_future<>();
@@ -105,12 +118,20 @@ public:
                 return delete_large_data_entries(s, filename, db::system_keyspace::LARGE_ROWS);
             });
         }
-        return when_all(std::move(large_partitions), std::move(large_rows)).discard_result();
+        future<> large_cells = make_ready_future<>();
+        if (__builtin_expect(data_size > _cell_threshold_bytes, false)) {
+            large_cells = with_sem([&s, &filename, this] {
+                return delete_large_data_entries(s, filename, db::system_keyspace::LARGE_CELLS);
+            });
+        }
+        return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
     }
 
     const large_data_handler::stats& stats() const { return _stats; }
 
 protected:
+    virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const = 0;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
     virtual future<> delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const = 0;
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const = 0;
@@ -118,24 +139,32 @@ protected:
 
 class cql_table_large_data_handler : public large_data_handler {
 public:
-    explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes)
-        : large_data_handler(partition_threshold_bytes, row_threshold_bytes) {}
+    explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes)
+        : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes) {}
 
 protected:
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const override;
     virtual future<> delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const override;
+    virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const override;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
 };
 
 class nop_large_data_handler : public large_data_handler {
 public:
     nop_large_data_handler()
-        : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {}
+        : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
+              std::numeric_limits<uint64_t>::max()) {}
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const override {
         return make_ready_future<>();
     }
 
     virtual future<> delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const override {
+        return make_ready_future<>();
+    }
+
+    virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const override {
         return make_ready_future<>();
     }
 

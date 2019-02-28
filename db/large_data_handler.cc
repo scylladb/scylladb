@@ -76,6 +76,20 @@ future<> cql_table_large_data_handler::record_large_partitions(const sstables::s
     return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {});
 }
 
+future<> cql_table_large_data_handler::record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const {
+    auto column_name = cdef.name_as_text();
+    std::string_view cell_type = cdef.is_atomic() ? "cell" : "collection";
+    static const std::vector<sstring> extra_fields{"clustering_key", "column_name"};
+    if (clustering_key) {
+        const schema &s = *sst.get_schema();
+        auto ck_str = key_to_str(*clustering_key, s);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, format("{} {}", ck_str, column_name), extra_fields, ck_str, column_name);
+    } else {
+        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, column_name, extra_fields, nullptr, column_name);
+    }
+}
+
 future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, uint64_t row_size) const {
     static const std::vector<sstring> extra_fields{"clustering_key"};

@@ -231,6 +231,9 @@ public:
     val(compaction_large_row_warning_threshold_mb, uint32_t, 10, Used, \
             "Log a warning when writing rows larger than this value"   \
     )                                               \
+    val(compaction_large_cell_warning_threshold_mb, uint32_t, 1, Used, \
+            "Log a warning when writing cells larger than this value"   \
+    )                                               \
     /* Common memtable settings */  \
     val(memtable_total_space_in_mb, uint32_t, 0, Invalid,     \
             "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb."  \

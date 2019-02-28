@@ -4977,13 +4977,18 @@ struct large_row_handler : public db::large_data_handler {
     callback_t callback;
 
     large_row_handler(uint64_t threshold, callback_t callback)
-        : large_data_handler(std::numeric_limits<uint64_t>::max(), threshold)
+        : large_data_handler(std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max())
         , callback(std::move(callback)) {}
 
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
         const schema_ptr s = sst.get_schema();
         callback(*s, partition_key, clustering_key, row_size);
+        return make_ready_future<>();
+    }
+
+    virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const override {
         return make_ready_future<>();
     }
 
