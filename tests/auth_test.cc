@@ -47,7 +47,7 @@
 SEASTAR_TEST_CASE(test_default_authenticator) {
     return do_with_cql_env([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
-        BOOST_REQUIRE_EQUAL(a.require_authentication(), false);
+        BOOST_REQUIRE(!a.require_authentication());
         BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::allow_all_authenticator_name());
         return make_ready_future();
     });
@@ -59,7 +59,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
 
     return do_with_cql_env([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
-        BOOST_REQUIRE_EQUAL(a.require_authentication(), true);
+        BOOST_REQUIRE(a.require_authentication());
         BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::password_authenticator_name());
         return make_ready_future();
     }, cfg);
@@ -117,7 +117,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
 
                 return auth::create_role(env.local_auth_service(), username, config, options).then([&env, &a] {
                     return authenticate(env, username, password).then([](auth::authenticated_user user) {
-                        BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
+                        BOOST_REQUIRE(!auth::is_anonymous(user));
                         BOOST_REQUIRE_EQUAL(*user.name, username);
                     });
                 });
@@ -128,7 +128,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             // sasl
             auto sasl = a.new_sasl_challenge();
 
-            BOOST_REQUIRE_EQUAL(sasl->is_complete(), false);
+            BOOST_REQUIRE(!sasl->is_complete());
 
             bytes b;
             int8_t i = 0;
@@ -138,10 +138,10 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             b.insert(b.end(), password.begin(), password.end());
 
             sasl->evaluate_response(b);
-            BOOST_REQUIRE_EQUAL(sasl->is_complete(), true);
+            BOOST_REQUIRE(sasl->is_complete());
 
             return sasl->get_authenticated_user().then([](auth::authenticated_user user) {
-                BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
+                BOOST_REQUIRE(!auth::is_anonymous(user));
                 BOOST_REQUIRE_EQUAL(*user.name, username);
             });
         }).then([&env, &a] {
