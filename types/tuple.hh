@@ -108,6 +108,7 @@ public:
     }
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override;
     virtual bool less(bytes_view v1, bytes_view v2) const override;
+    virtual void validate(bytes_view v, cql_serialization_format sf) const;
     virtual size_t serialized_size(const void* value) const override;
     virtual void serialize(const void* value, bytes::iterator& out) const override;
     virtual data_value deserialize(bytes_view v) const override;

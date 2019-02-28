@@ -3399,6 +3399,19 @@ tuple_type_impl::less(bytes_view v1, bytes_view v2) const {
     return tuple_type_impl::compare(v1, v2) < 0;
 }
 
+void tuple_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
+    auto ti = _types.begin();
+    auto vi = tuple_deserializing_iterator::start(v);
+    auto end = tuple_deserializing_iterator::finish(v);
+    while (ti != _types.end() && vi != end) {
+        if (*vi) {
+            (*ti)->validate(**vi, sf);
+        }
+        ++ti;
+        ++vi;
+    }
+}
+
 size_t
 tuple_type_impl::serialized_size(const void* value) const {
     size_t size = 0;
