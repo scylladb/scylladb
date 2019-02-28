@@ -240,13 +240,13 @@ def find_headers(repodir, excluded_dirs):
 modes = {
     'debug': {
         # Disable vptr because of https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88684
-        'opt': '-O0 -DDEBUG -DDEBUG_LSA_SANITIZER -fsanitize=address -fsanitize=leak -fsanitize=undefined -fno-sanitize=vptr',
+        'cxx_ld_flags': '-O0 -DDEBUG -DDEBUG_LSA_SANITIZER -fsanitize=address -fsanitize=leak -fsanitize=undefined -fno-sanitize=vptr',
     },
     'release': {
-        'opt': '-O3',
+        'cxx_ld_flags': '-O3',
     },
     'dev': {
-        'opt': '-O1',
+        'cxx_ld_flags': '-O1',
     },
 }
 
@@ -927,7 +927,7 @@ optimization_flags = [
 optimization_flags = [o
                       for o in optimization_flags
                       if flag_supported(flag=o, compiler=args.cxx)]
-modes['release']['opt'] += ' ' + ' '.join(optimization_flags)
+modes['release']['cxx_ld_flags'] += ' ' + ' '.join(optimization_flags)
 
 gold_linker_flag = gold_supported(compiler=args.cxx)
 
@@ -1051,8 +1051,8 @@ if args.split_dwarf:
     seastar_flags += ['--split-dwarf']
 
 debug_flags = ' -gz ' + dbgflag
-modes['debug']['opt'] += debug_flags
-modes['release']['opt'] += debug_flags
+modes['debug']['cxx_ld_flags'] += debug_flags
+modes['release']['cxx_ld_flags'] += debug_flags
 
 seastar_cflags = args.user_cflags
 seastar_cflags += ' -Wno-error'
@@ -1060,7 +1060,7 @@ if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' % (seastar_ldflags),
-                  '--c++-dialect=gnu++17', '--use-std-optional-variant-stringview=1', '--optflags=%s' % (modes['release']['opt']), ]
+                  '--c++-dialect=gnu++17', '--use-std-optional-variant-stringview=1', '--optflags=%s' % (modes['release']['cxx_ld_flags']), ]
 
 libdeflate_cflags = seastar_cflags
 
@@ -1169,7 +1169,7 @@ with open(buildfile, 'w') as f:
         modeval = modes[mode]
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
-            cxx_ld_flags_{mode} = {opt}
+            cxx_ld_flags_{mode} = {cxx_ld_flags}
             ld_flags_{mode} = $cxx_ld_flags_{mode}
             cxxflags_{mode} = $cxx_ld_flags_{mode} -I. -I $builddir/{mode}/gen
             libs_{mode} = -l{fmt_lib}
