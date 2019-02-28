@@ -55,6 +55,7 @@
 
 #include "auth/authentication_options.hh"
 #include "auth/resource.hh"
+#include "auth/sasl_challenge.hh"
 #include "bytes.hh"
 #include "enum_set.hh"
 #include "exceptions/exceptions.hh"
@@ -148,20 +149,6 @@ public:
     /// System resources used internally as part of the implementation. These are made inaccessible to users.
     ///
     virtual const resource_set& protected_resources() const = 0;
-
-    ///
-    /// A stateful SASL challenge which supports many authentication schemes (depending on the implementation).
-    ///
-    class sasl_challenge {
-    public:
-        virtual ~sasl_challenge() = default;
-
-        virtual bytes evaluate_response(bytes_view client_response) = 0;
-
-        virtual bool is_complete() const = 0;
-
-        virtual future<authenticated_user> get_authenticated_user() const = 0;
-    };
 
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const = 0;
 };
