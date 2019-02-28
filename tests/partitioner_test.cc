@@ -891,7 +891,7 @@ do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema
     dht::set_global_partitioner(part.name()); // so we can print tokens, also ring_position_comparator is not global_partitioner() clean
 
     for (auto shard : boost::irange(0u, part.shard_count())) {
-        auto ranges = dht::split_range_to_single_shard(part, s, pr, shard);
+        auto ranges = dht::split_range_to_single_shard(part, s, pr, shard).get0();
         auto sharder = dht::ring_position_range_sharder(part, pr);
         auto x = sharder.next(s);
         auto cmp = dht::ring_position_comparator(s);
