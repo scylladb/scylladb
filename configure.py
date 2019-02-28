@@ -1177,7 +1177,9 @@ with open(buildfile, 'w') as f:
         modeval = modes[mode]
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = {opt} -I. -I $builddir/{mode}/gen
+            cxx_ld_flags_{mode} = {opt}
+            ld_flags_{mode} = $cxx_ld_flags_{mode}
+            cxxflags_{mode} = $cxx_ld_flags_{mode} -I. -I $builddir/{mode}/gen
             libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
             rule cxx.{mode}
@@ -1185,11 +1187,11 @@ with open(buildfile, 'w') as f:
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx  $cxxflags_{mode} {sanitize} {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode}
+              command = $cxx  $ld_flags_{mode} {sanitize} {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
-              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode}
+              command = $cxx  $ld_flags_{mode} -s {sanitize_libs} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
               pool = link_pool
             rule ar.{mode}
