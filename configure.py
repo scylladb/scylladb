@@ -239,13 +239,16 @@ def find_headers(repodir, excluded_dirs):
 
 modes = {
     'debug': {
+        'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER',
         # Disable vptr because of https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88684
-        'cxx_ld_flags': '-O0 -DDEBUG -DDEBUG_LSA_SANITIZER -fsanitize=address -fsanitize=leak -fsanitize=undefined -fno-sanitize=vptr',
+        'cxx_ld_flags': '-O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined -fno-sanitize=vptr',
     },
     'release': {
+        'cxxflags': '',
         'cxx_ld_flags': '-O3',
     },
     'dev': {
+        'cxxflags': '',
         'cxx_ld_flags': '-O1',
     },
 }
@@ -1050,9 +1053,11 @@ if args.alloc_failure_injector:
 if args.split_dwarf:
     seastar_flags += ['--split-dwarf']
 
-debug_flags = ' -gz ' + dbgflag
-modes['debug']['cxx_ld_flags'] += debug_flags
-modes['release']['cxx_ld_flags'] += debug_flags
+modes['debug']['cxx_ld_flags'] += ' -gz'
+modes['release']['cxx_ld_flags'] += ' -gz'
+
+modes['debug']['cxxflags'] += ' ' + dbgflag
+modes['release']['cxxflags'] += ' ' + dbgflag
 
 seastar_cflags = args.user_cflags
 seastar_cflags += ' -Wno-error'
@@ -1171,7 +1176,7 @@ with open(buildfile, 'w') as f:
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
             ld_flags_{mode} = $cxx_ld_flags_{mode}
-            cxxflags_{mode} = $cxx_ld_flags_{mode} -I. -I $builddir/{mode}/gen
+            cxxflags_{mode} = $cxx_ld_flags_{mode} {cxxflags} -I. -I $builddir/{mode}/gen
             libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
             rule cxx.{mode}
