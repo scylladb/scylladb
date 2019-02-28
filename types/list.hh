@@ -54,6 +54,7 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual bool less(bytes_view o1, bytes_view o2) const override;
     // FIXME: origin doesn't override is_byte_order_comparable().  Why?
+    virtual void validate(bytes_view v, cql_serialization_format sf) const override;
     virtual void serialize(const void* value, bytes::iterator& out) const override;
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     virtual size_t serialized_size(const void* value) const override;
