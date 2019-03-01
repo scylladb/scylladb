@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include "schema.hh"
+#include "system_keyspace.hh"
 
 namespace sstables {
 class sstable;
@@ -71,11 +72,11 @@ public:
         assert(!_stopped);
         future<> large_partitions = make_ready_future<>();
         if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
-            large_partitions = delete_large_partitions_entry(s, filename);
+            large_partitions = delete_large_data_entries(s, filename, db::system_keyspace::LARGE_PARTITIONS);
         }
         future<> large_rows = make_ready_future<>();
         if (__builtin_expect(data_size > _row_threshold_bytes, false)) {
-            large_rows = delete_large_rows_entries(s, filename);
+            large_rows = delete_large_data_entries(s, filename, db::system_keyspace::LARGE_ROWS);
         }
         return when_all(std::move(large_partitions), std::move(large_rows)).discard_result();
     }
@@ -84,9 +85,8 @@ public:
 
 protected:
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
-    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const = 0;
+    virtual future<> delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const = 0;
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const = 0;
-    virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const = 0;
 };
 
 class cql_table_large_data_handler : public large_data_handler {
@@ -99,9 +99,8 @@ public:
 
 protected:
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override;
-    virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override;
+    virtual future<> delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const override;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
-    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const override;
 };
 
 class nop_large_data_handler : public large_data_handler {
@@ -112,15 +111,12 @@ public:
         return make_ready_future<>();
     }
 
-    virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override {
+    virtual future<> delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const override {
         return make_ready_future<>();
     }
 
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
-        return make_ready_future<>();
-    }
-    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const override {
         return make_ready_future<>();
     }
 };

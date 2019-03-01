@@ -64,13 +64,6 @@ future<> cql_table_large_data_handler::update_large_partitions(const schema& s, 
     });
 }
 
-future<> cql_table_large_data_handler::delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const {
-    static const sstring req = format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?", db::system_keyspace::LARGE_PARTITIONS);
-    return db::execute_cql(req, s.ks_name(), s.cf_name(), sstable_name).discard_result().handle_exception([](std::exception_ptr ep) {
-            large_data_logger.warn("Failed to drop entries from {}: {}", db::system_keyspace::LARGE_PARTITIONS, ep);
-        });
-}
-
 future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, uint64_t row_size) const {
     static const sstring req =
@@ -100,15 +93,15 @@ future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable
     });
 }
 
-future<> cql_table_large_data_handler::delete_large_rows_entries(const schema& s, const sstring& sstable_name) const {
+future<> cql_table_large_data_handler::delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const {
     static const sstring req =
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?",
-                    db::system_keyspace::LARGE_ROWS);
+                    large_table_name);
     return db::execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
             .discard_result()
-            .handle_exception([&s, sstable_name] (std::exception_ptr ep) {
+            .handle_exception([&s, sstable_name, large_table_name] (std::exception_ptr ep) {
                 large_data_logger.warn("Failed to drop entries from {}: ks = {}, table = {}, sst = {} exception = {}",
-                        db::system_keyspace::LARGE_ROWS, s.ks_name(), s.cf_name(), sstable_name, ep);
+                        large_table_name, s.ks_name(), s.cf_name(), sstable_name, ep);
             });
 }
 }
