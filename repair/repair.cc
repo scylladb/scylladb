@@ -1336,6 +1336,10 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         ranges = get_local_ranges(db.local(), keyspace);
     }
 
+    if (!options.data_centers.empty() && !options.hosts.empty()) {
+        throw std::runtime_error("Cannot combine data centers and hosts options.");
+    }
+
     if (!options.start_token.empty() || !options.end_token.empty()) {
         // Intersect the list of local ranges with the given token range,
         // dropping ranges with no intersection.
