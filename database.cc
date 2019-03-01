@@ -1641,7 +1641,11 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<> stop_database(sharded<database>& sdb) {
     return sdb.invoke_on_all([](database& db) {
-        db.stop_large_data_handler();
+        return db.get_compaction_manager().stop();
+    }).then([&sdb] {
+        return sdb.invoke_on_all([](database& db) {
+            db.stop_large_data_handler();
+        });
     });
 }
 
@@ -1650,14 +1654,11 @@ void database::stop_large_data_handler() { _large_data_handler->stop(); }
 future<>
 database::stop() {
     assert(_large_data_handler->stopped());
+    assert(_compaction_manager->stopped());
 
-    return _compaction_manager->stop().then([this] {
-        // try to ensure that CL has done disk flushing
-        if (_commitlog != nullptr) {
-            return _commitlog->shutdown();
-        }
-        return make_ready_future<>();
-    }).then([this] {
+    // try to ensure that CL has done disk flushing
+    future<> maybe_shutdown_commitlog = _commitlog != nullptr ? _commitlog->shutdown() : make_ready_future<>();
+    return maybe_shutdown_commitlog.then([this] {
         return parallel_for_each(_column_families, [this] (auto& val_pair) {
             return val_pair.second->stop();
         });
