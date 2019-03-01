@@ -446,7 +446,12 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, distri
                 // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
                 // atomically load all opened sstables into column family.
                 for (auto& sst : cf._sstables_opened_but_not_loaded) {
-                    cf.load_sstable(sst, true);
+                    try {
+                        cf.load_sstable(sst, true);
+                    } catch(...) {
+                        dblog.error("Failed to load {}: {}. Aborting.", sst->toc_filename(), std::current_exception());
+                        abort();
+                    }
                     if (sst->requires_view_building()) {
                         view_update_generator.local().register_staging_sstable(sst, cf.shared_from_this());
                     }

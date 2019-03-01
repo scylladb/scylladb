@@ -621,7 +621,7 @@ void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
         if (_config.enable_dangerous_direct_import_of_cassandra_counters) {
             tlogger.info("{} But trying to continue on user's request", error);
         } else {
-            throw std::runtime_error(fmt::format("{} Use sstableloader instead"));
+            throw std::runtime_error(fmt::format(FMT_STRING("{} Use sstableloader instead"), error));
         }
     }
     auto& shards = sst->get_shards_for_this_sstable();
