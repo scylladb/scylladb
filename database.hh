@@ -830,6 +830,10 @@ public:
         return _stats;
     }
 
+    const db::view::stats& get_view_stats() const {
+        return _view_stats;
+    }
+
     ::cf_stats* cf_stats() {
         return _config.cf_stats;
     }

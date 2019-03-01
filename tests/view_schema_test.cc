@@ -3749,3 +3749,475 @@ SEASTAR_TEST_CASE(hide_ttl_and_writetime_for_virtual_columns) {
         BOOST_REQUIRE_THROW(e.execute_cql("SELECT TTL(e) FROM mv2").get(), exceptions::invalid_request_exception);
     });
 }
+
+SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+
+        e.execute_cql("CREATE TABLE t (k int, c int, a int, b int, e int, f int, primary key(k, c))").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW mv AS SELECT k,c,a,b FROM t "
+                         "WHERE k IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, k)").get();
+
+        ::shared_ptr<cql_transport::messages::result_message> msg;
+
+        // update unselected, view row should be alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1), {} },
+            });
+
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+        });
+
+        // remove unselected, add selected column, view row should be alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=null, b=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, int32_type->decompose(1), {}, {} },
+            });
+
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, int32_type->decompose(1) },
+            });
+        });
+
+        // remove selected column, view row is removed
+        e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=null, b=null WHERE k=1 AND c=1;").get();
+            eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_size(0);
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        // update unselected with ts=3, view row should be alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 3 SET f=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {}, {}, int32_type->decompose(1) },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+        });
+
+        // insert livenesssInfo, view row should be alive
+        e.execute_cql("INSERT INTO t(k,c) VALUES(1,1) USING TIMESTAMP 3").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {}, {}, int32_type->decompose(1) },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+        });
+
+        // remove unselected, view row should be alive because of base livenessInfo alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 3 SET f=null WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {}, {}, {} },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+        });
+
+        // add selected column, view row should be alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 3 SET a=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, {} },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // update unselected, view row should be alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 4 SET f=1 WHERE k=1 AND c=1;").get();
+            eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // delete with ts=3, view row should be alive due to unselected@ts4
+        e.execute_cql("DELETE FROM t USING TIMESTAMP 3 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {}, {}, int32_type->decompose(1) },
+            });
+
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+        });
+
+        // remove unselected, view row should be removed
+        e.execute_cql("UPDATE t USING TIMESTAMP 4 SET f=null WHERE k=1 AND c=1;").get();
+            eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_size(0);
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        // add selected with ts=7, view row is alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 7 SET b=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, int32_type->decompose(1), {}, {} },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, int32_type->decompose(1) },
+            });
+        });
+
+        // remove selected with ts=7, view row is dead
+        e.execute_cql("UPDATE t USING TIMESTAMP 7 SET b=null WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_size(0);
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        // add selected with ts=5, view row is alive (selected column should not affects each other)
+        e.execute_cql("UPDATE t USING TIMESTAMP 5 SET a=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, {} },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // add selected with ttl=1
+        e.execute_cql("UPDATE t USING TTL 1 SET a=1 WHERE k=1 AND c=1;").get();
+            eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, {} },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        forward_jump_clocks(2s);
+
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        // update unselected with ttl=1, view row should be alive
+        e.execute_cql("UPDATE t USING TTL 1 SET f=1 WHERE k=1 AND c=1;").get();
+
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {}, {}, int32_type->decompose(1) },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+        });
+
+        forward_jump_clocks(2s);
+
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_size(0);
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+
+        e.execute_cql("CREATE TABLE t (k int, c int, a int, b int, e int, f int, primary key(k, c))").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW mv AS SELECT k, c, a, b FROM t "
+                         "WHERE k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (k, c, a)").get();
+        BOOST_TEST_PASSPOINT();
+        ::shared_ptr<cql_transport::messages::result_message> msg;
+
+        // update unselected, view row should not be here
+        e.execute_cql("UPDATE t USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        // Set selected, view row should appear
+        e.execute_cql("UPDATE t USING TIMESTAMP 1 SET a=1, e=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, int32_type->decompose(1), {} },
+            });
+
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // remove unselected, add selected column, view row should be alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=null, b=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1) },
+            });
+        });
+
+        // remove selected column, view row is removed
+        e.execute_cql("UPDATE t USING TIMESTAMP 2 SET a=null, e=null, b=null WHERE k=1 AND c=1;").get();
+            eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_size(0);
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        // update unselected with ts=3, view row should be alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 3 SET a=1, f=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // insert livenesssInfo, view row should be alive
+        e.execute_cql("INSERT INTO t(k,c,a) VALUES(1,1,1) USING TIMESTAMP 3").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // remove unselected, view row should be alive because of base livenessInfo alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 3 SET a=1, f=null WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, {} },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // update unselected, view row should be alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=1, f=1 WHERE k=1 AND c=1;").get();
+            eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // delete with ts=3, view row should be alive due to unselected@ts4
+        e.execute_cql("DELETE FROM t USING TIMESTAMP 3 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
+            });
+
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
+            });
+        });
+
+        // remove unselected, view row should be removed
+        e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=null, f=null WHERE k=1 AND c=1;").get();
+            eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_size(0);
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        // add selected with ts=7, view row is alive
+        e.execute_cql("UPDATE t USING TIMESTAMP 7 SET a=1, b=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1) },
+            });
+        });
+
+        // remove selected with ts=7, view row is dead
+        e.execute_cql("UPDATE t USING TIMESTAMP 7 SET a=null, b=null WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_size(0);
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        // add selected with ttl=1
+        e.execute_cql("UPDATE t USING TTL 1 SET a=1, b=1 WHERE k=1 AND c=1;").get();
+            eventually([&] {
+            msg = e.execute_cql("SELECT * FROM t").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {} },
+            });
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1) },
+            });
+        });
+
+        seastar::sleep(1s).get();
+
+        eventually([&] {
+            msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_size(0);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+
+        e.execute_cql("CREATE TABLE t (k int, c int, a int, b int, e int, f int, g int, primary key(k, c))").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW mv1 AS SELECT k,c,a,b FROM t "
+                         "WHERE k IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, k)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW mv2 AS SELECT k,c,a,b FROM t "
+                         "WHERE k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, k, a)").get();
+
+        auto total_t_view_updates = [&] {
+            return e.db().map_reduce0([] (database& local_db) {
+                const db::view::stats& local_stats = local_db.find_column_family("ks", "t").get_view_stats();
+                return local_stats.view_updates_pushed_local + local_stats.view_updates_pushed_remote;
+            }, 0, std::plus<int64_t>()).get0();
+        };
+
+        auto total_mv1_updates = [&] {
+            return e.db().map_reduce0([] (database& local_db) {
+                return local_db.find_column_family("ks", "mv1").get_stats().writes.hist.count;
+            }, 0, std::plus<int64_t>()).get0();
+        };
+
+        auto total_mv2_updates = [&] {
+            return e.db().map_reduce0([] (database& local_db) {
+                return local_db.find_column_family("ks", "mv2").get_stats().writes.hist.count;
+            }, 0, std::plus<int64_t>()).get0();
+        };
+
+        ::shared_ptr<cql_transport::messages::result_message> msg;
+
+        // Updating timestamp for unselected column will not be propagated,
+        // and its creation will be propagated for a virtual column only
+        e.execute_cql("UPDATE t USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1;").get();
+        e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT WRITETIME(e) FROM t").get0();
+            assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(2))});
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 1);
+            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 1);
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 0);
+        });
+
+        // Updating timestamp for a selected column will propagate for existing columns
+        e.execute_cql("UPDATE t USING TIMESTAMP 3 SET b=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT WRITETIME(b) FROM t").get0();
+            assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(3))});
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 2);
+            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 2);
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 0);
+        });
+        // After instantiating view row a, selected column's timestamp from previous example will propagate to mv2
+        e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT WRITETIME(b) FROM t").get0();
+            assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(3))});
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 4);
+            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 3);
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
+        });
+
+        // Updating column value without touching TTL will not propagate
+        // if it's either unselected or virtual
+        e.execute_cql("UPDATE t USING TIMESTAMP 5 SET f=40 WHERE k=1 AND c=1;").get();
+        e.execute_cql("UPDATE t USING TIMESTAMP 6 SET f=40 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT WRITETIME(f) FROM t").get0();
+            assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(6))});
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 6);
+            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 4); // only one update for creation, update does not generate one
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 2);
+        });
+
+        // Updating column value with TTL will propagate for virtual columns
+        e.execute_cql("UPDATE t USING TIMESTAMP 7 SET g=40 WHERE k=1 AND c=1;").get();
+        e.execute_cql("UPDATE t USING TTL 10 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get0();
+            assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(8))});
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 10);
+            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 6); // two updates - one for creation, one for updating the TTL
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 4);
+        });
+    });
+}
