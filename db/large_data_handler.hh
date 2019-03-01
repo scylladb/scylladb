@@ -90,9 +90,6 @@ protected:
 };
 
 class cql_table_large_data_handler : public large_data_handler {
-protected:
-    static logging::logger large_data_logger;
-
 public:
     explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes)
         : large_data_handler(partition_threshold_bytes, row_threshold_bytes) {}

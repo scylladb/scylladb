@@ -36,7 +36,7 @@ future<> large_data_handler::maybe_record_large_partitions(const sstables::sstab
     return make_ready_future<>();
 }
 
-logging::logger cql_table_large_data_handler::large_data_logger("large_data");
+static logging::logger large_data_logger("large_data");
 
 template <typename T> static std::string key_to_str(const T& key, const schema& s) {
     std::ostringstream oss;
@@ -44,53 +44,46 @@ template <typename T> static std::string key_to_str(const T& key, const schema& 
     return oss.str();
 }
 
-future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
-    static const sstring req = format("INSERT INTO system.{} (keyspace_name, table_name, sstable_name, partition_size, partition_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?) USING TTL 2592000",
-            db::system_keyspace::LARGE_PARTITIONS);
-    const schema& s = *sst.get_schema();
-    const auto sstable_name = sst.get_filename();
+template <typename... Args>
+static future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
+        std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) {
+    sstring extra_fields_str;
+    sstring extra_values;
+    for (std::string_view field : extra_fields) {
+        extra_fields_str += format(", {}", field);
+        extra_values += ", ?";
+    }
+    const sstring req = format("INSERT INTO system.large_{}s (keyspace_name, table_name, sstable_name, {}_size, partition_key, compaction_time{}) VALUES (?, ?, ?, ?, ?, ?{}) USING TTL 2592000",
+            large_table, large_table, extra_fields_str, extra_values);
+    const schema &s = *sst.get_schema();
     auto ks_name = s.ks_name();
     auto cf_name = s.cf_name();
+    const auto sstable_name = sst.get_filename();
+    std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
-    auto key_str = key_to_str(key.to_partition_key(s), s);
-    return db::execute_cql(req, ks_name, cf_name, sstable_name, int64_t(partition_size), key_str, timestamp)
-    .then_wrapped([ks_name, cf_name, key_str, partition_size](auto&& f) {
-        try {
-            f.get();
-            large_data_logger.warn("Writing large partition {}/{}:{} ({} bytes)", ks_name, cf_name, key_str, partition_size);
-        } catch (...) {
-            large_data_logger.warn("Failed to update {}: {}", db::system_keyspace::LARGE_PARTITIONS, std::current_exception());
-        }
-    });
+    large_data_logger.warn("Writing large {} {}/{}: {}{} ({} bytes)", desc, ks_name, cf_name, pk_str, extra_path, size);
+    return db::execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
+            .discard_result()
+            .handle_exception([ks_name, cf_name, large_table, sstable_name] (std::exception_ptr ep) {
+                large_data_logger.warn("Failed to add a record to system.large_{}s: ks = {}, table = {}, sst = {} exception = {}",
+                        large_table, ks_name, cf_name, sstable_name, ep);
+            });
+}
+
+future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
+    return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {});
 }
 
 future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, uint64_t row_size) const {
-    static const sstring req =
-            format("INSERT INTO system.{} (keyspace_name, table_name, sstable_name, row_size, partition_key, "
-                   "clustering_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?, ?) USING TTL 2592000",
-                    db::system_keyspace::LARGE_ROWS);
-    auto f = [clustering_key, &partition_key, &sst, row_size] {
+    static const std::vector<sstring> extra_fields{"clustering_key"};
+    if (clustering_key) {
         const schema &s = *sst.get_schema();
-        auto sstable_name = sst.get_filename();
-        auto ks_name = s.ks_name();
-        auto cf_name = s.cf_name();
-        auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
-        std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
-        if (clustering_key) {
-            std::string ck_str = key_to_str(*clustering_key, s);
-            large_data_logger.warn("Writing large row {}/{}: {} {} ({} bytes)", ks_name, cf_name, pk_str, ck_str, row_size);
-            return db::execute_cql(req, ks_name, cf_name, sstable_name, int64_t(row_size), pk_str, ck_str, timestamp);
-        } else {
-            large_data_logger.warn("Writing large static row {}/{}: {} ({} bytes)", ks_name, cf_name, pk_str, row_size);
-            return db::execute_cql(req, ks_name, cf_name, sstable_name, int64_t(row_size), pk_str, nullptr, timestamp);
-        }
-    };
-    return f().discard_result().handle_exception([&sst] (std::exception_ptr ep) {
-        const schema &s = *sst.get_schema();
-        large_data_logger.warn("Failed to add a record to {}: ks = {}, table = {}, sst = {} exception = {}",
-                db::system_keyspace::LARGE_ROWS, s.ks_name(), s.cf_name(), sst.get_filename(), ep);
-    });
+        std::string ck_str = key_to_str(*clustering_key, s);
+        return try_record("row", sst, partition_key, int64_t(row_size), "row", ck_str, extra_fields,  ck_str);
+    } else {
+        return try_record("row", sst, partition_key, int64_t(row_size), "static row", "", extra_fields, nullptr);
+    }
 }
 
 future<> cql_table_large_data_handler::delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const {
