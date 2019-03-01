@@ -782,7 +782,6 @@ deps = {
 }
 
 pure_boost_tests = set([
-    'tests/partitioner_test',
     'tests/map_difference_test',
     'tests/keys_test',
     'tests/compound_test',
