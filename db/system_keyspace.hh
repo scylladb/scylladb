@@ -89,6 +89,7 @@ static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 static constexpr auto SIZE_ESTIMATES = "size_estimates";
 static constexpr auto LARGE_PARTITIONS = "large_partitions";
 static constexpr auto LARGE_ROWS = "large_rows";
+static constexpr auto LARGE_CELLS = "large_cells";
 
 namespace v3 {
 static constexpr auto BATCHES = "batches";

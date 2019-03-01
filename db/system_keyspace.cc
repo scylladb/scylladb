@@ -498,6 +498,26 @@ static schema_ptr large_rows() {
     return large_rows;
 }
 
+static schema_ptr large_cells() {
+    static thread_local auto large_cells = [] {
+        auto id = generate_legacy_id(NAME, LARGE_CELLS);
+        return schema_builder(NAME, LARGE_CELLS, id)
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                .with_column("table_name", utf8_type, column_kind::partition_key)
+                .with_column("sstable_name", utf8_type, column_kind::clustering_key)
+                // We want the larger cells first, so use reversed_type_impl
+                .with_column("cell_size", reversed_type_impl::get_instance(long_type), column_kind::clustering_key)
+                .with_column("partition_key", utf8_type, column_kind::clustering_key)
+                .with_column("clustering_key", utf8_type, column_kind::clustering_key)
+                .with_column("column_name", utf8_type, column_kind::clustering_key)
+                .with_column("compaction_time", timestamp_type)
+                .set_comment("cells larger than specified threshold")
+                .with_version(generate_schema_version(id))
+                .build();
+    }();
+    return large_cells;
+}
+
 namespace v3 {
 
 schema_ptr batches() {
@@ -1691,7 +1711,7 @@ std::vector<schema_ptr> all_tables() {
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
-                    sstable_activity(), size_estimates(), large_partitions(), large_rows(),
+                    sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
