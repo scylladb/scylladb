@@ -786,6 +786,7 @@ int main(int ac, char** av) {
             });
 
             api::set_server_cache(ctx);
+            startlog.info("Waiting for gossip to settle before accepting client requests...");
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
 
