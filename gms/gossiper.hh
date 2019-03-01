@@ -568,6 +568,7 @@ private:
     uint64_t _msg_processing = 0;
     bool _ms_registered = false;
     bool _gossiped_to_seed = false;
+    bool _gossip_settled = false;
 
     class msg_proc_guard;
 private:

@@ -1631,10 +1631,6 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
         return replicate(get_broadcast_address(), local_state).then([] {
             //notify snitches that Gossiper is about to start
             return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
-        }).then([this] {
-            return async([this] {
-                maybe_enable_features();
-            });
         }).then([this, generation] {
             logger.trace("gossip started with generation {}", generation);
             _enabled = true;
@@ -2040,14 +2036,21 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 
 future<> gossiper::wait_for_gossip_to_settle() {
     static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
-
     auto& cfg = service::get_local_storage_service().db().local().get_config();
     auto force_after = cfg.skip_wait_for_gossip_to_settle();
+    auto do_enable_features = [this] {
+        return async([this] {
+            if (!std::exchange(_gossip_settled, true)) {
+               maybe_enable_features();
+            }
+        });
+    };
     if (force_after == 0) {
-        return make_ready_future<>();
+        return do_enable_features();
     }
-    logger.info("Waiting for gossip to settle before accepting client requests...");
-    return wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after);
+    return wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after).then([this, do_enable_features] {
+        return do_enable_features();
+    });
 }
 
 future<> gossiper::wait_for_range_setup() {
@@ -2193,6 +2196,9 @@ void feature_service::enable(const sstring& name) {
 
 // Runs inside seastar::async context
 void gossiper::maybe_enable_features() {
+    if (!_gossip_settled) {
+        return;
+    }
     auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
     auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
     container().invoke_on_all([&features] (gossiper& g) {
