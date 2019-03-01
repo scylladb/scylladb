@@ -4987,7 +4987,7 @@ struct large_row_handler : public db::large_data_handler {
         return make_ready_future<>();
     }
 
-    virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name,
+    virtual future<> record_large_partitions(const sstables::sstable& sst,
             const sstables::key& partition_key, uint64_t partition_size) const override {
         return make_ready_future<>();
     }

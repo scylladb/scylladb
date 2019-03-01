@@ -66,7 +66,7 @@ public:
         return make_ready_future<>();
     }
 
-    future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
+    future<> maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
 
     future<> maybe_delete_large_data_entries(const schema& s, const sstring& filename, uint64_t data_size) const {
         assert(!_stopped);
@@ -86,7 +86,7 @@ public:
 protected:
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
     virtual future<> delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const = 0;
-    virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const = 0;
+    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const = 0;
 };
 
 class cql_table_large_data_handler : public large_data_handler {
@@ -98,7 +98,7 @@ public:
         : large_data_handler(partition_threshold_bytes, row_threshold_bytes) {}
 
 protected:
-    virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override;
+    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const override;
     virtual future<> delete_large_data_entries(const schema& s, const sstring& sstable_name, std::string_view large_table_name) const override;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
 };
@@ -107,7 +107,7 @@ class nop_large_data_handler : public large_data_handler {
 public:
     nop_large_data_handler()
         : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {}
-    virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override {
+    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const override {
         return make_ready_future<>();
     }
 

@@ -27,13 +27,11 @@
 
 namespace db {
 
-future<> large_data_handler::maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
+future<> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
     assert(!_stopped);
     if (partition_size > _partition_threshold_bytes) {
         ++_stats.partitions_bigger_than_threshold;
-
-        const schema& s = *sst.get_schema();
-        return update_large_partitions(s, sst.get_filename(), key, partition_size);
+        return record_large_partitions(sst, key, partition_size);
     }
     return make_ready_future<>();
 }
@@ -46,9 +44,11 @@ template <typename T> static std::string key_to_str(const T& key, const schema& 
     return oss.str();
 }
 
-future<> cql_table_large_data_handler::update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& key, uint64_t partition_size) const {
+future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
     static const sstring req = format("INSERT INTO system.{} (keyspace_name, table_name, sstable_name, partition_size, partition_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?) USING TTL 2592000",
             db::system_keyspace::LARGE_PARTITIONS);
+    const schema& s = *sst.get_schema();
+    const auto sstable_name = sst.get_filename();
     auto ks_name = s.ks_name();
     auto cf_name = s.cf_name();
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
