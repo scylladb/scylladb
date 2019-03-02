@@ -52,9 +52,10 @@ SEASTAR_TEST_CASE(test_large_partitions) {
     return do_with_cql_env([](cql_test_env& e) { return make_ready_future<>(); }, cfg);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_large_rows) {
+SEASTAR_THREAD_TEST_CASE(test_large_data) {
     db::config cfg{};
     cfg.compaction_large_row_warning_threshold_mb(1);
+    cfg.compaction_large_cell_warning_threshold_mb(1);
     do_with_cql_env([](cql_test_env& e) {
         e.execute_cql("create table tbl (a int, b text, primary key (a))").get();
         sstring blob(1024*1024, 'x');
@@ -82,6 +83,13 @@ SEASTAR_THREAD_TEST_CASE(test_large_rows) {
         BOOST_REQUIRE_EQUAL(row_size_bytes.size(), 8);
         long row_size = read_be<long>(reinterpret_cast<const char*>(&row_size_bytes[0]));
         BOOST_REQUIRE(row_size > 1024*1024 && row_size < 1025*1024);
+
+        // Check that it was added to system.large_cells too
+        assert_that(e.execute_cql("select partition_key, column_name from system.large_cells where table_name = 'tbl' allow filtering;").get0())
+            .is_rows()
+            .with_size(1)
+            .with_row({"44", "b", "tbl"});
+
         return make_ready_future<>();
     }, cfg).get();
 }
