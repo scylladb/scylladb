@@ -298,10 +298,8 @@ public:
      */
     void set_login(::shared_ptr<auth::authenticated_user>);
 
-    /**
-     * Attempts to validate login for the set user.
-     */
-    future<> check_user_exists();
+    /// \brief A user can login if it's anonymous, or if it exists and the `LOGIN` option for the user is `true`.
+    future<> check_user_can_login();
 
     future<> has_all_keyspaces_access(auth::permission) const;
     future<> has_keyspace_access(const sstring&, auth::permission) const;

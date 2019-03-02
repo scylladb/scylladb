@@ -47,7 +47,7 @@
 SEASTAR_TEST_CASE(test_default_authenticator) {
     return do_with_cql_env([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
-        BOOST_REQUIRE_EQUAL(a.require_authentication(), false);
+        BOOST_REQUIRE(!a.require_authentication());
         BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::allow_all_authenticator_name());
         return make_ready_future();
     });
@@ -59,10 +59,39 @@ SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
 
     return do_with_cql_env([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
-        BOOST_REQUIRE_EQUAL(a.require_authentication(), true);
+        BOOST_REQUIRE(a.require_authentication());
         BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::password_authenticator_name());
         return make_ready_future();
     }, cfg);
+}
+
+static future<auth::authenticated_user>
+authenticate(cql_test_env& env, std::string_view username, std::string_view password) {
+    auto& c = env.local_client_state();
+    auto& a = env.local_auth_service().underlying_authenticator();
+
+    return do_with(
+            auth::authenticator::credentials_map{
+                    {auth::authenticator::USERNAME_KEY, sstring(username)},
+                    {auth::authenticator::PASSWORD_KEY, sstring(password)}},
+            [&a, &c, username](const auto& credentials) {
+        return a.authenticate(credentials).then([&c, username](auth::authenticated_user u) {
+            c.set_login(::make_shared<auth::authenticated_user>(std::move(u)));
+            return c.check_user_can_login().then([&c] { return *c.user(); });
+        });
+    });
+}
+
+template <typename Exception, typename... Args>
+future<> require_throws(seastar::future<Args...> fut) {
+    return fut.then_wrapped([](auto completed_fut) {
+        try {
+            completed_fut.get();
+            BOOST_FAIL("Required an exception to be thrown");
+        } catch (const Exception&) {
+            // Ok.
+        }
+    });
 }
 
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
@@ -74,49 +103,46 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
      * Enjoy the slightly less readable code.
      */
     return do_with_cql_env([](cql_test_env& env) {
-        sstring username("fisk");
-        sstring password("notter");
-
-        using namespace auth;
-
-        auto USERNAME_KEY = authenticator::USERNAME_KEY;
-        auto PASSWORD_KEY = authenticator::PASSWORD_KEY;
-
-        auto& a = env.local_auth_service().underlying_authenticator();
+        static const sstring username("fisk");
+        static const sstring password("notter");
 
         // check non-existing user
-        return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([&a](future<auth::authenticated_user>&& f) {
-            try {
-                f.get();
-                BOOST_FAIL("should not reach");
-            } catch (exceptions::authentication_exception&) {
-                // ok
-            }
-        }).then([=, &a] {
-            authentication_options options;
-            options.password = password;
+        return require_throws<exceptions::authentication_exception>(
+                authenticate(env, username, password)).then([&env] {
+            return do_with(auth::role_config{}, auth::authentication_options{}, [&env](auto& config, auto& options) {
+                config.can_login = true;
+                options.password = password;
 
-            return a.create(username, std::move(options)).then([=, &a] {
-                return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then([=](auth::authenticated_user user) {
-                    BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
-                    BOOST_REQUIRE_EQUAL(*user.name, username);
+                return auth::create_role(env.local_auth_service(), username, config, options).then([&env] {
+                    return authenticate(env, username, password).then([](auth::authenticated_user user) {
+                        BOOST_REQUIRE(!auth::is_anonymous(user));
+                        BOOST_REQUIRE_EQUAL(*user.name, username);
+                    });
                 });
             });
-        }).then([=, &a] {
-            // check wrong password
-            return a.authenticate( { {USERNAME_KEY, username}, {PASSWORD_KEY, "hejkotte"}}).then_wrapped([](future<auth::authenticated_user>&& f) {
-                try {
-                    f.get();
-                    BOOST_FAIL("should not reach");
-                } catch (exceptions::authentication_exception&) {
-                    // ok
-                }
+        }).then([&env] {
+            return require_throws<exceptions::authentication_exception>(authenticate(env, username, "hejkotte"));
+        }).then([&env] {
+            //
+            // A role must be explicitly marked as being allowed to log in.
+            //
+
+            return do_with(
+                    auth::role_config_update{},
+                    auth::authentication_options{},
+                    [&env](auto& config_update, const auto& options) {
+                config_update.can_login = false;
+
+                return auth::alter_role(env.local_auth_service(), username, config_update, options).then([&env] {
+                    return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
+                });
             });
-        }).then([=, &a] {
+        }).then([&env] {
             // sasl
+            auto& a = env.local_auth_service().underlying_authenticator();
             auto sasl = a.new_sasl_challenge();
 
-            BOOST_REQUIRE_EQUAL(sasl->is_complete(), false);
+            BOOST_REQUIRE(!sasl->is_complete());
 
             bytes b;
             int8_t i = 0;
@@ -126,75 +152,17 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             b.insert(b.end(), password.begin(), password.end());
 
             sasl->evaluate_response(b);
-            BOOST_REQUIRE_EQUAL(sasl->is_complete(), true);
+            BOOST_REQUIRE(sasl->is_complete());
 
-            return sasl->get_authenticated_user().then([=](auth::authenticated_user user) {
-                BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
+            return sasl->get_authenticated_user().then([](auth::authenticated_user user) {
+                BOOST_REQUIRE(!auth::is_anonymous(user));
                 BOOST_REQUIRE_EQUAL(*user.name, username);
             });
-        }).then([=, &a] {
+        }).then([&env] {
             // check deleted user
-            return a.drop(username).then([=, &a] {
-                return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<auth::authenticated_user>&& f) {
-                    try {
-                        f.get();
-                        BOOST_FAIL("should not reach");
-                    } catch (exceptions::authentication_exception&) {
-                        // ok
-                    }
-                });
+            return auth::drop_role(env.local_auth_service(), username).then([&env] {
+                return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
             });
         });
     }, cfg);
 }
-
-
-SEASTAR_TEST_CASE(test_cassandra_hash) {
-    db::config cfg;
-    cfg.authenticator(auth::password_authenticator_name());
-
-    return do_with_cql_env([](cql_test_env& env) {
-        /**
-         * Try to check password against hash from origin.
-         * Allow for specific failure if glibc cannot handle the
-         * hash algo (i.e. blowfish).
-         */
-
-        sstring username("fisk");
-        sstring password("cassandra");
-        sstring salted_hash("$2a$10$8cz4EZ5v8f/aTZFkNEQafe.z66ZvjOonOpHCApwx0ksWp3aKf.Roq");
-
-        // This is extremely whitebox. We'll just go right ahead and know
-        // what the tables etc are called. Oy wei...
-        auto f = env.local_qp().process("INSERT into system_auth.roles (role, salted_hash) values (?, ?)", db::consistency_level::ONE,
-                        infinite_timeout_config,
-                        { username, salted_hash }).discard_result();
-
-        return f.then([=, &env] {
-            auto& a = env.local_auth_service().underlying_authenticator();
-
-            auto USERNAME_KEY = auth::authenticator::USERNAME_KEY;
-            auto PASSWORD_KEY = auth::authenticator::PASSWORD_KEY;
-
-            // try to verify our user with a cassandra-originated salted_hash
-            return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<auth::authenticated_user> f) {
-                try {
-                    f.get();
-                } catch (exceptions::authentication_exception& e) {
-                    try {
-                        std::rethrow_if_nested(e);
-                        BOOST_FAIL(std::string("Unexcepted exception ") + e.what());
-                    } catch (std::system_error & e) {
-                        bool is_einval = e.code().category() == std::system_category() && e.code().value() == EINVAL;
-                        BOOST_WARN_MESSAGE(is_einval, "Could not verify cassandra password hash due to glibc limitation");
-                        if (!is_einval) {
-                            BOOST_FAIL(std::string("Unexcepted system error ") + e.what());
-                        }
-                    }
-                }
-            });
-        });
-    }, cfg);
-}
-
-
