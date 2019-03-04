@@ -833,12 +833,10 @@ static test_result slice_rows_single_key(column_family& cf, int offset = 0, int 
 }
 
 // cf is for ks.small_part
-static test_result slice_partitions(column_family& cf, int n, int offset = 0, int n_read = 1) {
-    auto keys = make_pkeys(cf.schema(), n);
-
+static test_result slice_partitions(column_family& cf, const std::vector<dht::decorated_key>& keys, int offset = 0, int n_read = 1) {
     auto pr = dht::partition_range(
         dht::partition_range::bound(keys[offset], true),
-        dht::partition_range::bound(keys[std::min(n, offset + n_read) - 1], true)
+        dht::partition_range::bound(keys[std::min<size_t>(keys.size(), offset + n_read) - 1], true)
     );
 
     auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
@@ -1484,9 +1482,10 @@ void test_small_partition_slicing(column_family& cf2, multipart_ds& ds) {
     auto n_parts = ds.n_partitions(cfg);
 
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
+    auto keys = make_pkeys(cf2.schema(), n_parts);
     auto test = [&] (int offset, int read) {
       run_test_case([&] {
-        auto r = slice_partitions(cf2, n_parts, offset, read);
+        auto r = slice_partitions(cf2, keys, offset, read);
         r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(n_parts - offset, read));
         return r;
