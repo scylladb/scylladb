@@ -1893,7 +1893,6 @@ class components_writer {
     std::optional<key> _partition_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
-    db::large_data_handler* _large_data_handler;
 private:
     void maybe_add_summary_entry(const dht::token& token, bytes_view key);
     uint64_t get_offset() const;
@@ -1913,8 +1912,7 @@ public:
     components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
         _index_needs_close(o._index_needs_close), _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
         _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
-        _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)),
-        _large_data_handler(o._large_data_handler) {
+        _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)) {
         o._index_needs_close = false;
     }
 
@@ -1996,7 +1994,6 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
     , _range_tombstones(s)
-    , _large_data_handler(cfg.large_data_handler)
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::k_l_format);
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
@@ -2126,7 +2123,7 @@ stop_iteration components_writer::consume_end_of_partition() {
     // compute size of the current row.
     _sst._c_stats.partition_size = _out.offset() - _sst._c_stats.start_offset;
 
-    _large_data_handler->maybe_record_large_partitions(_sst, *_partition_key, _sst._c_stats.partition_size).get();
+    _sst.get_large_data_handler().maybe_record_large_partitions(_sst, *_partition_key, _sst._c_stats.partition_size).get();
 
     // update is about merging column_stats with the data being stored by collector.
     _sst._collector.update(std::move(_sst._c_stats));
@@ -2887,12 +2884,10 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            // FIXME: need to call large_data_handler.maybe_delete_large_partitions_entry
-            // - Short term fix plan is passing large_data_handler upon construction and
-            //   using it from this path to update large_data_handler.
+            // FIXME:
             // - Longer term fix is to hand off deletion of sstables to a manager that can
             //   deal with sstable marked to be deleted after the corresponding object is destructed.
-            remove_by_toc_name(toc_filename()).handle_exception(
+            unlink().handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
                             try {
                                 std::rethrow_exception(eptr);
@@ -3138,7 +3133,7 @@ future<>
 sstable::unlink()
 {
     auto name = toc_filename();
-    return remove_by_toc_name(name).then_wrapped([name = std::move(name)] (future<> f) {
+    auto remove_fut = remove_by_toc_name(name).then_wrapped([name = std::move(name)] (future<> f) {
         if (f.failed()) {
             // Log and ignore the failure since there is nothing much we can do about it at this point.
             // a. Compaction will retry deleting the sstable in the next pass, and
@@ -3149,24 +3144,24 @@ sstable::unlink()
         }
         return make_ready_future<>();
     });
-}
 
-static future<>
-maybe_delete_large_data_entry(shared_sstable sst, db::large_data_handler& large_data_handler)
-{
-    auto name = sst->get_filename();
-    return large_data_handler.maybe_delete_large_data_entries(*sst->get_schema(), std::move(name), sst->data_size());
-}
+    name = get_filename();
+    auto update_large_data_fut = get_large_data_handler().maybe_delete_large_data_entries(*get_schema(), std::move(name), data_size())
+            .then_wrapped([name = std::move(name)] (future<> f) {
+        if (f.failed()) {
+            // Just log and ignore failures to delete large data entries.
+            // They are not critical to the operation of the database.
+            sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", name, f.get_exception());
+        }
+        return make_ready_future<>();
+    });
 
-static future<>
-delete_sstable_and_maybe_large_data_entries(shared_sstable sst, db::large_data_handler& large_data_handler)
-{
-    return when_all(sst->unlink(), maybe_delete_large_data_entry(sst, large_data_handler)).discard_result();
+    return when_all(std::move(remove_fut), std::move(update_large_data_fut)).discard_result();
 }
 
 future<>
-delete_atomically(std::vector<shared_sstable> ssts, db::large_data_handler& large_data_handler) {
-    return seastar::async([ssts = std::move(ssts), &large_data_handler] {
+delete_atomically(std::vector<shared_sstable> ssts) {
+    return seastar::async([ssts = std::move(ssts)] {
         sstring sstdir;
         min_max_tracker<int64_t> gen_tracker;
 
@@ -3217,14 +3212,13 @@ delete_atomically(std::vector<shared_sstable> ssts, db::large_data_handler& larg
             sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log), std::current_exception();
         }
 
-        parallel_for_each(ssts, [&large_data_handler] (shared_sstable sst) {
-            return delete_sstable_and_maybe_large_data_entries(sst, large_data_handler);
+        parallel_for_each(ssts, [] (shared_sstable sst) {
+            return sst->unlink();
         }).get();
 
         // Once all sstables are deleted, the log file can be removed.
-        // Note: the log file will be removed also if
-        //   delete_sstable_and_maybe_large_data_entries failed to remove
-        //   any sstable and ignored the error.
+        // Note: the log file will be removed also if unlink failed to remove
+        // any sstable and ignored the error.
         try {
             remove_file(pending_delete_log).get();
             sstlog.debug("{} removed.", pending_delete_log);

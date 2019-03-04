@@ -43,11 +43,10 @@ static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
 db::nop_large_data_handler nop_lp_handler;
-thread_local sstables::sstables_manager test_sstables_manager;
+thread_local sstables::sstables_manager test_sstables_manager(nop_lp_handler);
 
 column_family::config column_family_test_config() {
     column_family::config cfg;
-    cfg.large_data_handler = &nop_lp_handler;
     cfg.sstables_manager = &test_sstables_manager;
     return cfg;
 }

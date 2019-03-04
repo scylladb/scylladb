@@ -691,7 +691,7 @@ private:
     void write_static_row(const row&, column_kind);
     void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key) {
         ++_c_stats.rows_count;
-        _cfg.large_data_handler->maybe_record_large_rows(_sst, *_partition_key, clustering_key, row_size).get();
+        _sst.get_large_data_handler().maybe_record_large_rows(_sst, *_partition_key, clustering_key, row_size).get();
     }
 
     // Clustered is a term used to denote an entity that has a clustering key prefix
@@ -1034,7 +1034,7 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
     // We record collections in write_collection, so ignore them here
     if (cdef.is_atomic()) {
         uint64_t size = writer.size() - current_pos;
-        _cfg.large_data_handler->maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size).get();
+        _sst.get_large_data_handler().maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size).get();
     }
 
     _c_stats.update_timestamp(cell.timestamp());
@@ -1103,7 +1103,7 @@ void writer::write_collection(bytes_ostream& writer, const clustering_key_prefix
         }
     });
     uint64_t size = writer.size() - current_pos;
-    _cfg.large_data_handler->maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size).get();
+    _sst.get_large_data_handler().maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size).get();
 }
 
 void writer::write_cells(bytes_ostream& writer, const clustering_key_prefix* clustering_key, column_kind kind, const row& row_body,
@@ -1360,7 +1360,7 @@ stop_iteration writer::consume_end_of_partition() {
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
 
-    _cfg.large_data_handler->maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size).get();
+    _sst.get_large_data_handler().maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size).get();
 
     // update is about merging column_stats with the data being stored by collector.
     _sst.get_metadata_collector().update(std::move(_c_stats));

@@ -32,6 +32,12 @@
 #include "sstables/version.hh"
 #include "sstables/component_type.hh"
 
+namespace db {
+
+class large_data_handler;
+
+}   // namespace db
+
 namespace sstables {
 
 using schema_ptr = lw_shared_ptr<const schema>;
@@ -40,8 +46,12 @@ using shareable_components_ptr = lw_shared_ptr<shareable_components>;
 static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
 class sstables_manager {
+    db::large_data_handler& _large_data_handler;
+
 public:
-    sstables_manager() = default;
+    explicit sstables_manager(db::large_data_handler& large_data_handler)
+        : _large_data_handler(large_data_handler)
+    { }
 
     // Constructs a shared sstable
     shared_sstable make_sstable(schema_ptr schema,
@@ -52,6 +62,11 @@ public:
             gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
+
+private:
+    db::large_data_handler& get_large_data_handler() const {
+        return _large_data_handler;
+    }
 };
 
 }   // namespace sstables

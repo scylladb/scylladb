@@ -83,7 +83,7 @@
 #include "disk-error-handler.hh"
 
 #include "db/timeout_clock.hh"
-
+#include "db/large_data_handler.hh"
 #include "db/data_listeners.hh"
 #include "distributed_loader.hh"
 
@@ -225,7 +225,8 @@ database::database(const db::config& cfg, database_config dbcfg)
               _cfg->compaction_large_row_warning_threshold_mb()*1024*1024,
               _cfg->compaction_large_cell_warning_threshold_mb()*1024*1024))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
-    , _sstables_manager(std::make_unique<sstables::sstables_manager>())
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>(*this))
 {
@@ -904,12 +905,11 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 
     // avoid self-reporting
     if (is_system_table(s)) {
-        cfg.large_data_handler = db.get_nop_large_data_handler();
+        cfg.sstables_manager = &db.get_system_sstables_manager();
     } else {
-        cfg.large_data_handler = db.get_large_data_handler();
+        cfg.sstables_manager = &db.get_user_sstables_manager();
     }
 
-    cfg.sstables_manager = &db.get_sstables_manager();
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();

@@ -120,7 +120,6 @@ struct sstable_writer_config {
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
     bool correctly_serialize_static_compact_in_mc = supports_correct_static_compact_in_mc();
-    db::large_data_handler* large_data_handler;
     utils::UUID run_identifier = utils::make_random_uuid();
 };
 
@@ -130,8 +129,15 @@ public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
 public:
-    sstable(schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now,
-            io_error_handler_gen error_handler_gen, size_t buffer_size)
+    sstable(schema_ptr schema,
+            sstring dir,
+            int64_t generation,
+            version_types v,
+            format_types f,
+            db::large_data_handler& large_data_handler,
+            gc_clock::time_point now,
+            io_error_handler_gen error_handler_gen,
+            size_t buffer_size)
         : sstable_buffer_size(buffer_size)
         , _schema(std::move(schema))
         , _dir(std::move(dir))
@@ -141,6 +147,7 @@ public:
         , _now(now)
         , _read_error_handler(error_handler_gen(sstable_read_error))
         , _write_error_handler(error_handler_gen(sstable_write_error))
+        , _large_data_handler(large_data_handler)
     { }
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
@@ -424,6 +431,10 @@ public:
     // Delete the sstable by unlinking all sstable files
     future<> unlink();
 
+    db::large_data_handler& get_large_data_handler() {
+        return _large_data_handler;
+    }
+
     /**
      * Note. This is using the Origin definition of
      * max_data_age, which is load time. This could maybe
@@ -520,6 +531,8 @@ private:
 
     io_error_handler _read_error_handler;
     io_error_handler _write_error_handler;
+
+    db::large_data_handler& _large_data_handler;
 
     sstables_stats _stats;
 
@@ -861,7 +874,7 @@ future<> await_background_jobs_on_all_shards();
 // until all shards agree it can be deleted.
 //
 // This function only solves the second problem for now.
-future<> delete_atomically(std::vector<shared_sstable> ssts, db::large_data_handler& large_data_handler);
+future<> delete_atomically(std::vector<shared_sstable> ssts);
 future<> replay_pending_delete_log(sstring log_file);
 
 struct index_sampling_state {

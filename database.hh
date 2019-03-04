@@ -87,7 +87,6 @@
 #include "db/timeout_clock.hh"
 #include "querier.hh"
 #include "mutation_query.hh"
-#include "db/large_data_handler.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>
 #include "disk-error-handler.hh"
@@ -130,6 +129,7 @@ class config;
 class extensions;
 class rp_handle;
 class data_listeners;
+class large_data_handler;
 
 namespace system_keyspace {
 void make(database& db, bool durable, bool volatile_testing_only);
@@ -336,7 +336,6 @@ public:
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
-        db::large_data_handler* large_data_handler;
         sstables::sstables_manager* sstables_manager;
         db::timeout_semaphore* view_update_concurrency_semaphore;
         size_t view_update_concurrency_semaphore_limit;
@@ -916,11 +915,6 @@ public:
         return _index_manager;
     }
 
-    db::large_data_handler* get_large_data_handler() const {
-        assert(_config.large_data_handler);
-        return _config.large_data_handler;
-    }
-
     sstables::sstables_manager& get_sstables_manager() const {
         assert(_config.sstables_manager);
         return *_config.sstables_manager;
@@ -1293,7 +1287,8 @@ private:
     std::unique_ptr<db::large_data_handler> _large_data_handler;
     std::unique_ptr<db::large_data_handler> _nop_large_data_handler;
 
-    std::unique_ptr<sstables::sstables_manager> _sstables_manager;
+    std::unique_ptr<sstables::sstables_manager> _user_sstables_manager;
+    std::unique_ptr<sstables::sstables_manager> _system_sstables_manager;
 
     query::result_memory_limiter _result_memory_limiter;
 
@@ -1452,9 +1447,14 @@ public:
         return _nop_large_data_handler.get();
     }
 
-    sstables::sstables_manager& get_sstables_manager() const {
-        assert(_sstables_manager);
-        return *_sstables_manager;
+    sstables::sstables_manager& get_user_sstables_manager() const {
+        assert(_user_sstables_manager);
+        return *_user_sstables_manager;
+    }
+
+    sstables::sstables_manager& get_system_sstables_manager() const {
+        assert(_system_sstables_manager);
+        return *_system_sstables_manager;
     }
 
     future<> flush_all_memtables();

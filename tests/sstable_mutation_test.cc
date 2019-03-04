@@ -433,7 +433,6 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
             for (auto index_block_size : {1, 128, 64*1024}) {
                 sstable_writer_config cfg;
                 cfg.promoted_index_block_size = index_block_size;
-                cfg.large_data_handler = &nop_lp_handler;
                 test_mutation_source(env, cfg, version);
             }
         }
@@ -949,7 +948,6 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
                                 sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
         assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
@@ -1003,7 +1001,6 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
@@ -1064,7 +1061,6 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
@@ -1122,7 +1118,6 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
                                               sstables::sstable::format_types::big);
             sstable_writer_config cfg;
             cfg.promoted_index_block_size = 1;
-            cfg.large_data_handler = &nop_lp_handler;
             sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
             sst->load().get();
 
@@ -1168,9 +1163,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sstable_writer_config cfg;
-        cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
@@ -1211,7 +1204,6 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
@@ -1253,7 +1245,6 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.correctly_serialize_non_compound_range_tombstones = false;
-        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
@@ -1306,11 +1297,9 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sstable_writer_config cfg;
-        cfg.large_data_handler = &nop_lp_handler;
         sst->write_components(make_combined_reader(s,
             mt1->make_flat_reader(s),
-            mt2->make_flat_reader(s)), 1, s, cfg, encoding_stats{}).get();
+            mt2->make_flat_reader(s)), 1, s, sstable_writer_config{}, encoding_stats{}).get();
         sst->load().get();
 
         assert_that(sst->as_mutation_source().make_reader(s))
@@ -1342,12 +1331,9 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             ss.add_row(m2, ss.make_ckey(5), "v");
             ss.add_row(m2, ss.make_ckey(6), "v");
 
-            sstable_writer_config cfg;
-            cfg.large_data_handler = &nop_lp_handler;
-
             tmpdir dir;
             sstables::test_env env;
-            auto ms = make_sstable_mutation_source(env, s, dir.path().string(), {m1, m2}, cfg, version);
+            auto ms = make_sstable_mutation_source(env, s, dir.path().string(), {m1, m2}, sstable_writer_config{}, version);
 
             auto index_accesses = [] {
                 auto&& stats = sstables::shared_index_lists::shard_stats();
@@ -1430,9 +1416,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
                                       1 /* generation */,
                                       sstable_version_types::ka,
                                       sstables::sstable::format_types::big);
-    sstable_writer_config cfg;
-    cfg.large_data_handler = &nop_lp_handler;
-    sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+    sst->write_components(mt->make_flat_reader(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
     sst->load().get();
 
     auto pr = dht::partition_range::make_singular(small_keys[0]);
@@ -1474,9 +1458,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                     mt->apply(m);
                 }
                 created_with_base_schema = env.make_sstable(base, dir.path().string(), gen, version, sstables::sstable::format_types::big);
-                sstable_writer_config cfg;
-                cfg.large_data_handler = &nop_lp_handler;
-                created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, cfg, mt->get_encoding_stats()).get();
+                created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, sstable_writer_config{}, mt->get_encoding_stats()).get();
                 created_with_base_schema->load().get();
 
                 created_with_changed_schema = env.make_sstable(changed, dir.path().string(), gen, version, sstables::sstable::format_types::big);
@@ -1554,9 +1536,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
         auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
-        sstable_writer_config cfg;
-        cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 2, s, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader(s), 2, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
     }
 
     auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
@@ -1651,9 +1631,7 @@ SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
     sstables::test_env env;
     for (const auto version : all_sstable_versions) {
         auto sst = env.make_sstable(s, dir.path().string(), 1, version, sstables::sstable::format_types::big);
-        sstable_writer_config cfg;
-        cfg.large_data_handler = &nop_lp_handler;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
         sst->load().get();
 
         assert_that(sst->as_mutation_source().make_reader(s))
@@ -1692,7 +1670,6 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
 
                 tmpdir dir;
                 sstable_writer_config cfg;
-                cfg.large_data_handler = &nop_lp_handler;
                 cfg.correctly_serialize_static_compact_in_mc = correctly_serialize;
                 auto ms = make_sstable_mutation_source(env, s, dir.path().string(), muts, cfg, version);
 

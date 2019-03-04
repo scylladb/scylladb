@@ -394,10 +394,9 @@ public:
             return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, streaming::stream_reason::repair).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
                 sstables::shared_sstable sst = use_view_update_path ? t->make_streaming_staging_sstable() : t->make_streaming_sstable_for_write();
                 schema_ptr s = reader.schema();
-                sstables::sstable_writer_config sst_cfg;
-                sst_cfg.large_data_handler = t->get_large_data_handler();
                 auto& pc = service::get_local_streaming_write_priority();
-                return sst->write_components(std::move(reader), std::max(1ul, estimated_partitions), s, sst_cfg, {}, pc).then([sst] {
+                return sst->write_components(std::move(reader), std::max(1ul, estimated_partitions), s,
+                                             sstables::sstable_writer_config{}, encoding_stats{}, pc).then([sst] {
                     return sst->open_data();
                 }).then([t, sst] {
                     return t->add_sstable_and_update_cache(sst);

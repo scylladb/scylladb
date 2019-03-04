@@ -3676,7 +3676,6 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 100;
-        cfg.large_data_handler = &nop_lp_handler;
         auto mut = mutation(table.schema(), table.make_pkey("key"));
         for (auto&& mf : fragments) {
             mut.apply(mf);
@@ -3731,7 +3730,6 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
-        cfg.large_data_handler = &nop_lp_handler;
         auto sst = make_sstable_easy(env, dir.path(), flat_mutation_reader_from_mutations(partitions), cfg, version);
 
         auto ms = as_mutation_source(sst);
@@ -3850,7 +3848,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         BOOST_REQUIRE(!file_exists(tmp.path().string() +  "/la-1-big-UNKNOWN.txt").get0());
         BOOST_REQUIRE(file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
 
-        sstables::delete_atomically({sstp}, nop_lp_handler).get();
+        sstables::delete_atomically({sstp}).get();
         // assure unknown component is deleted
         BOOST_REQUIRE(!file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
     });
@@ -4714,7 +4712,6 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
         auto tmp = tmpdir();
         sstable_writer_config cfg;
         cfg.run_identifier = utils::make_random_uuid();
-        cfg.large_data_handler = &nop_lp_handler;
         auto sst = make_sstable_easy(env, tmp.path(),  flat_mutation_reader_from_mutations({ std::move(mut) }), cfg, la);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);

@@ -25,13 +25,16 @@
 
 #include "sstables/sstables.hh"
 #include "tests/tmpdir.hh"
+#include "tests/test_services.hh"
 
 namespace sstables {
 
 class test_env {
     sstables_manager _mgr;
 public:
-    test_env() = default;
+    explicit test_env(db::large_data_handler* large_data_handler = &nop_lp_handler)
+        : _mgr(*large_data_handler)
+    { }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types v, sstable::format_types f = sstable::format_types::big,
