@@ -736,6 +736,7 @@ public:
                             _segment_manager->totals.total_size_on_disk += bytes;
                             ++_segment_manager->totals.cycle_count;
                             if (bytes == view.size_bytes()) {
+                                clogger.debug("Final write of {} to {}: {}/{} bytes at {}", bytes, *this, size, size, off);
                                 return make_ready_future<stop_iteration>(stop_iteration::yes);
                             }
                             // gah, partial write. should always get here with dma chunk sized
@@ -743,7 +744,7 @@ public:
                             bytes = align_down(bytes, alignment);
                             off += bytes;
                             view.remove_prefix(bytes);
-                            clogger.debug("Partial write {}: {}/{} bytes", *this, size - view.size_bytes(), size);
+                            clogger.debug("Partial write of {} to {}: {}/{} bytes at at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                             // TODO: retry/ignore/fail/stop - optional behaviour in origin.
                             // we fast-fail the whole commit.
