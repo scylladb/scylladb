@@ -134,6 +134,39 @@ SEASTAR_THREAD_TEST_CASE(test_view) {
         test(frag_view);
 
         data_view = bytes_view(data);
+        frag_view = fragmented_temporary_buffer::view(frag_buffer);
+
+        frag_view.remove_suffix(sizeof(value2) - 1);
+        data_view.remove_suffix(sizeof(value2) - 1);
+        test(frag_view);
+
+        frag_view.remove_suffix(data_view.size());
+        data_view.remove_suffix(data_view.size());
+        test(frag_view);
+
+        data_view = bytes_view(data);
+        frag_view = fragmented_temporary_buffer::view(frag_buffer);
+
+        frag_view.remove_suffix(sizeof(value2) - 1);
+        data_view.remove_suffix(sizeof(value2) - 1);
+        test(frag_view);
+
+        frag_view.remove_prefix(data_view.size());
+        data_view.remove_prefix(data_view.size());
+        test(frag_view);
+
+        data_view = bytes_view(data);
+        frag_view = fragmented_temporary_buffer::view(frag_buffer);
+
+        frag_view.remove_prefix(sizeof(value2) - 1);
+        data_view.remove_prefix(sizeof(value2) - 1);
+        test(frag_view);
+
+        frag_view.remove_suffix(data_view.size());
+        data_view.remove_suffix(data_view.size());
+        test(frag_view);
+
+        data_view = bytes_view(data);
     }
 
     for (auto& frag_buffer : buffers) {

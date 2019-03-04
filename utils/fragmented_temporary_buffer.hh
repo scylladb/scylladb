@@ -166,19 +166,26 @@ public:
         if (!_total_size) {
             return;
         }
-        _total_size -= n;
         while (n > _current_size) {
+            _total_size -= _current_size;
             n -= _current_size;
             ++_current;
-            _current_size = _current->size();
+            _current_size = std::min(_current->size(), _total_size);
         }
+        _total_size -= n;
         _current_size -= n;
         _current_position = _current->get() + n;
         if (!_current_size && _total_size) {
             ++_current;
-            _current_size = _current->size();
+            _current_size = std::min(_current->size(), _total_size);
             _current_position = _current->get();
         }
+    }
+
+    // Invalidates iterators
+    void remove_suffix(size_t n) noexcept {
+        _total_size -= n;
+        _current_size = std::min(_current_size, _total_size);
     }
 
     bool operator==(const fragmented_temporary_buffer::view& other) const noexcept {

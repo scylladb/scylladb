@@ -689,6 +689,8 @@ public:
         // but all previous write/flush pairs.
         return _pending_ops.run_with_ordered_post_op(rp, [this, size, off, buf = std::move(buf)]() mutable { ///////////////////////////////////////////////////
             auto view = fragmented_temporary_buffer::view(buf);
+            view.remove_suffix(buf.size_bytes() - size);
+            assert(size == view.size_bytes());
             return do_with(off, view, [&] (uint64_t& off, fragmented_temporary_buffer::view& view) {
                 if (view.empty()) {
                     return make_ready_future<>();
