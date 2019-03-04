@@ -852,11 +852,6 @@ struct entry_descriptor {
                      int64_t generation, sstable::format_types format,
                      component_type component)
         : sstdir(sstdir), ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
-
-    entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
-                     int64_t generation, sstable::format_types format,
-                     component_type component)
-        : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
 };
 
 // Waits for all prior tasks started on current shard related to sstable management to finish.
