@@ -57,26 +57,36 @@ public:
         _stopped = true;
     }
 
-    void maybe_log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
+    future<> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const {
-        if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
-            log_large_row(sst, partition_key, clustering_key, row_size);
+        if (__builtin_expect(!_stopped && row_size > _row_threshold_bytes, false)) {
+            return record_large_rows(sst, partition_key, clustering_key, row_size);
         }
+        return make_ready_future<>();
     }
 
     future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
 
-    future<> maybe_delete_large_partitions_entry(const schema& s, const sstring& filename, uint64_t data_size) const {
-        if (!_stopped && __builtin_expect(data_size > _partition_threshold_bytes, false)) {
-            return delete_large_partitions_entry(s, filename);
+    future<> maybe_delete_large_data_entries(const schema& s, const sstring& filename, uint64_t data_size) const {
+        if (_stopped) {
+            return make_ready_future<>();
         }
-        return make_ready_future<>();
+        future<> large_partitions = make_ready_future<>();
+        if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
+            large_partitions = delete_large_partitions_entry(s, filename);
+        }
+        future<> large_rows = make_ready_future<>();
+        if (__builtin_expect(data_size > _row_threshold_bytes, false)) {
+            large_rows = delete_large_rows_entries(s, filename);
+        }
+        return when_all(std::move(large_partitions), std::move(large_rows)).discard_result();
     }
 
     const large_data_handler::stats& stats() const { return _stats; }
 
 protected:
-    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
+    virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
+    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const = 0;
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const = 0;
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const = 0;
 };
@@ -92,7 +102,8 @@ public:
 protected:
     virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override;
     virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override;
-    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
+    virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
+    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const override;
 };
 
 class nop_large_data_handler : public large_data_handler {
@@ -107,8 +118,13 @@ public:
         return make_ready_future<>();
     }
 
-    virtual void log_large_row(const sstables::sstable& sst, const sstables::key& partition_key,
-                               const clustering_key_prefix* clustering_key, uint64_t row_size) const override {}
+    virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
+        return make_ready_future<>();
+    }
+    virtual future<> delete_large_rows_entries(const schema& s, const sstring& sstable_name) const override {
+        return make_ready_future<>();
+    }
 };
 
 }

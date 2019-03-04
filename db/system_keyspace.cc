@@ -479,6 +479,25 @@ schema_ptr size_estimates() {
     return large_partitions;
 }
 
+static schema_ptr large_rows() {
+    static thread_local auto large_rows = [] {
+        auto id = generate_legacy_id(NAME, LARGE_ROWS);
+        return schema_builder(NAME, LARGE_ROWS, std::optional(id))
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                .with_column("table_name", utf8_type, column_kind::partition_key)
+                .with_column("sstable_name", utf8_type, column_kind::clustering_key)
+                // We want the large rows first, so use reversed_type_impl
+                .with_column("row_size", reversed_type_impl::get_instance(long_type), column_kind::clustering_key)
+                .with_column("partition_key", utf8_type, column_kind::clustering_key)
+                .with_column("clustering_key", utf8_type, column_kind::clustering_key)
+                .with_column("compaction_time", timestamp_type)
+                .set_comment("rows larger than specified threshold")
+                .with_version(generate_schema_version(id))
+                .build();
+    }();
+    return large_rows;
+}
+
 namespace v3 {
 
 schema_ptr batches() {
@@ -1672,7 +1691,8 @@ std::vector<schema_ptr> all_tables() {
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
-                    sstable_activity(), size_estimates(), large_partitions(), v3::views_builds_in_progress(), v3::built_views(),
+                    sstable_activity(), size_estimates(), large_partitions(), large_rows(),
+                    v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
     });

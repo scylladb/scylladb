@@ -683,7 +683,7 @@ private:
     void write_static_row(const row& static_row);
     void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key) {
         ++_c_stats.rows_count;
-        _cfg.large_data_handler->maybe_log_large_row(_sst, *_partition_key, clustering_key, row_size);
+        _cfg.large_data_handler->maybe_record_large_rows(_sst, *_partition_key, clustering_key, row_size).get();
     }
 
     // Clustered is a term used to denote an entity that has a clustering key prefix

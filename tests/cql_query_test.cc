@@ -30,6 +30,7 @@
 #include <seastar/core/metrics_api.hh>
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 
@@ -49,6 +50,40 @@ SEASTAR_TEST_CASE(test_large_partitions) {
     db::config cfg{};
     cfg.compaction_large_partition_warning_threshold_mb(0);
     return do_with_cql_env([](cql_test_env& e) { return make_ready_future<>(); }, cfg);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_rows) {
+    db::config cfg{};
+    cfg.compaction_large_row_warning_threshold_mb(1);
+    do_with_cql_env([](cql_test_env& e) {
+        e.execute_cql("create table tbl (a int, b text, primary key (a))").get();
+        sstring blob(1024*1024, 'x');
+        e.execute_cql("insert into tbl (a, b) values (42, 'foo');").get();
+        e.execute_cql("insert into tbl (a, b) values (44, '" + blob + "');").get();
+        e.db().invoke_on_all([] (database& dbi) {
+            return dbi.flush_all_memtables();
+        }).get();
+
+        shared_ptr<cql_transport::messages::result_message> msg = e.execute_cql("select partition_key, row_size from system.large_rows where table_name = 'tbl' allow filtering;").get0();
+        auto res = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        auto rows = res->rs().result_set().rows();
+
+        // Check the only the large row is added to system.large_rows.
+        BOOST_REQUIRE_EQUAL(rows.size(), 1);
+        auto row0 = rows[0];
+        BOOST_REQUIRE_EQUAL(row0.size(), 3);
+        BOOST_REQUIRE_EQUAL(*row0[0], "44");
+        BOOST_REQUIRE_EQUAL(*row0[2], "tbl");
+
+        // Unfortunately we cannot check the exact size, since it includes a timestemp written as a vint of the delta
+        // since start of the write. This means that the size of the row depends on the time it took to write the
+        // previous rows.
+        auto row_size_bytes = *row0[1];
+        BOOST_REQUIRE_EQUAL(row_size_bytes.size(), 8);
+        long row_size = read_be<long>(reinterpret_cast<const char*>(&row_size_bytes[0]));
+        BOOST_REQUIRE(row_size > 1024*1024 && row_size < 1025*1024);
+        return make_ready_future<>();
+    }, cfg).get();
 }
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
