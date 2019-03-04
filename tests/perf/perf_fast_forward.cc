@@ -179,6 +179,7 @@ std::unique_ptr<dataset_acceptor> make_test_fn(void (*fn)(column_family&, DataSe
 
 using stats_values = std::tuple<
     double, // time
+    unsigned, // iterations
     uint64_t, // frags
     double, // frags_per_second
     double, // frags_per_second mad
@@ -214,6 +215,7 @@ struct output_writer {
 std::array<sstring, std::tuple_size<stats_values>::value> stats_formats =
 {
     "{:.6f}",
+    "{}",
     "{}",
     "{:.0f}",
     "{:.0f}",
@@ -522,6 +524,7 @@ struct test_result {
     metrics_snapshot before;
     metrics_snapshot after;
 private:
+    unsigned _iterations = 1;
     double _fragment_rate_mad = 0;
     double _fragment_rate_max = 0;
     double _fragment_rate_min = 0;
@@ -539,6 +542,9 @@ public:
     double duration_in_seconds() const {
         return std::chrono::duration<double>(after.hr_clock - before.hr_clock).count();
     }
+
+    unsigned iteration_count() const { return _iterations; }
+    void set_iteration_count(unsigned count) { _iterations = count; }
 
     double fragment_rate() const { return double(fragments_read) / duration_in_seconds(); }
     double fragment_rate_mad() const { return _fragment_rate_mad; }
@@ -575,6 +581,7 @@ public:
     static output_items stats_names() {
         return {
             {"time (s)", "{:>10}"},
+            {"iterations", "{:>12}"},
             {"frags",    "{:>9}"},
             {"frag/s",   "{:>10}"},
             {"mad f/s",  "{:>10}"},
@@ -603,6 +610,7 @@ public:
     stats_values get_stats_values() const {
         return stats_values{
             duration_in_seconds(),
+            iteration_count(),
             fragments_read,
             fragment_rate(),
             fragment_rate_mad(),
@@ -1087,6 +1095,7 @@ public:
             std::sort(deviation.begin(), deviation.end());
             auto fragment_rate_mad = deviation[deviation.size() / 2];
             median.set_fragment_rate_stats(fragment_rate_mad, fragment_rate_max, fragment_rate_min);
+            median.set_iteration_count(result.size());
             print(median);
         }
     }
