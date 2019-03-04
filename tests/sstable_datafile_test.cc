@@ -71,8 +71,6 @@ using namespace sstables;
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
-static db::nop_large_data_handler nop_lp_handler;
-
 atomic_cell make_atomic_cell(data_type dt, bytes_view value, uint32_t ttl = 0, uint32_t expiration = 0) {
     if (ttl) {
         return atomic_cell::make_live(*dt, 0, value,
@@ -1042,11 +1040,10 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
     cm->start();
 
     auto tmp = tmpdir();
-    column_family::config cfg;
+    column_family::config cfg = column_family_test_config();
     cfg.datadir = tmp.path().string();
     cfg.enable_commitlog = false;
     cfg.enable_incremental_backups = false;
-    cfg.large_data_handler = &nop_lp_handler;
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
     auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);

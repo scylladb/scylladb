@@ -42,8 +42,6 @@
 
 using namespace sstables;
 
-static db::nop_large_data_handler nop_lp_handler;
-
 bytes as_bytes(const sstring& s) {
     return { reinterpret_cast<const int8_t*>(s.begin()), s.size() };
 }

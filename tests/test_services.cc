@@ -39,10 +39,10 @@ range<dht::token> create_token_range_from_keys(sstring start_key, sstring end_ke
     return range<dht::token>::make(start, end);
 }
 
-static db::nop_large_data_handler nop_lp_handler;
-
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
+
+db::nop_large_data_handler nop_lp_handler;
 
 column_family::config column_family_test_config() {
     column_family::config cfg;

@@ -30,10 +30,9 @@
 #include "tests/cql_assertions.hh"
 #include "schema_builder.hh"
 #include "service/priority_manager.hh"
+#include "test_services.hh"
 
 using namespace std::literals::chrono_literals;
-
-static db::nop_large_data_handler nop_lp_handler;
 
 schema_ptr test_table_schema() {
     static thread_local auto s = [] {

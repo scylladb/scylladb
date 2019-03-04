@@ -23,8 +23,6 @@
 
 using namespace sstables;
 
-static db::nop_large_data_handler nop_lp_handler;
-
 static inline std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(shard_id shard, unsigned tokens_to_generate) {
     unsigned tokens = 0;
     unsigned key_id = 0;

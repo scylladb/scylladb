@@ -792,13 +792,16 @@ idls = ['idl/gossip_digest.idl.hh',
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
 
-scylla_tests_dependencies = scylla_core + idls + [
+scylla_tests_generic_dependencies = [
     'tests/cql_test_env.cc',
+    'tests/test_services.cc',
+]
+
+scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependencies + [
     'tests/cql_assertions.cc',
     'tests/result_set_assertions.cc',
     'tests/mutation_source_test.cc',
     'tests/data_model.cc',
-    'tests/test_services.cc',
 ]
 
 deps = {
@@ -869,7 +872,7 @@ for t in scylla_tests:
     if t not in tests_not_using_seastar_test_framework:
         deps[t] += scylla_tests_dependencies
     else:
-        deps[t] += scylla_core + idls + ['tests/cql_test_env.cc']
+        deps[t] += scylla_core + idls + scylla_tests_generic_dependencies
 
 perf_tests_seastar_deps = [
     'seastar/tests/perf/perf_tests.cc'

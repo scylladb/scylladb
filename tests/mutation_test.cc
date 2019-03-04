@@ -65,8 +65,6 @@ using namespace std::chrono_literals;
 static sstring some_keyspace("ks");
 static sstring some_column_family("cf");
 
-static db::nop_large_data_handler nop_lp_handler;
-
 static atomic_cell make_atomic_cell(bytes value) {
     return atomic_cell::make_live(*bytes_type, 0, std::move(value));
 }
