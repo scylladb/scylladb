@@ -720,7 +720,7 @@ public:
 
         // The write will be allowed to start now, but flush (below) must wait for not only this,
         // but all previous write/flush pairs.
-        return _pending_ops.run_with_ordered_post_op(rp, [this, size, off, buf = std::move(buf)]() mutable { ///////////////////////////////////////////////////
+        return _pending_ops.run_with_ordered_post_op(rp, [this, size, off, buf = std::move(buf)]() mutable {
             auto view = fragmented_temporary_buffer::view(buf);
             view.remove_suffix(buf.size_bytes() - size);
             assert(size == view.size_bytes());
@@ -738,6 +738,7 @@ public:
                             _segment_manager->totals.total_size_on_disk += bytes;
                             ++_segment_manager->totals.cycle_count;
                             if (bytes == view.size_bytes()) {
+                                clogger.debug("Final write of {} to {}: {}/{} bytes at {}", bytes, *this, size, size, off);
                                 return make_ready_future<stop_iteration>(stop_iteration::yes);
                             }
                             // gah, partial write. should always get here with dma chunk sized
@@ -745,7 +746,7 @@ public:
                             bytes = align_down(bytes, alignment);
                             off += bytes;
                             view.remove_prefix(bytes);
-                            clogger.debug("Partial write {}: {}/{} bytes", *this, size - view.size_bytes(), size);
+                            clogger.debug("Partial write of {} to {}: {}/{} bytes at at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                             // TODO: retry/ignore/fail/stop - optional behaviour in origin.
                             // we fast-fail the whole commit.
@@ -1892,7 +1893,7 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
                 if (cs != checksum) {
                     // if a chunk header checksum is broken, we shall just assume that all
                     // remaining is as well. We cannot trust the "next" pointer, so...
-                    clogger.debug("Checksum error in segment chunk at {}.", pos);
+                    clogger.debug("Checksum error in segment chunk at {}.", start);
                     corrupt_size += (file_size - pos);
                     return stop();
                 }
