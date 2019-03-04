@@ -789,3 +789,35 @@ SEASTAR_TEST_CASE(test_malformed_local_index) {
         BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p2,p1),v)").get(), exceptions::invalid_request_exception);
     });
 }
+
+SEASTAR_TEST_CASE(test_local_index_multi_pk_columns) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (p1 int, p2 int, c1 int, c2 int, v int, PRIMARY KEY ((p1, p2), c1, c2))").get();
+        e.execute_cql("CREATE INDEX ON tab ((p1,p2),v)").get();
+        e.execute_cql("CREATE INDEX ON tab ((p1,p2),c2)").get();
+
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 2, 1, 2, 1)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 2, 1, 1, 1)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 3, 2, 2, 4)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 2, 3, 2, 4)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 2, 3, 7, 4)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (3, 3, 1, 2, 1)").get();
+
+        eventually([&] {
+            auto res = e.execute_cql("select * from tab where p1 = 1 and p2 = 2 and v = 4").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(4)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(4)}},
+            });
+        });
+
+        eventually([&] {
+            auto res = e.execute_cql("select * from tab where p1 = 1 and p2 = 2 and v = 5").get0();
+            assert_that(res).is_rows().with_size(0);
+        });
+
+        BOOST_REQUIRE_THROW(e.execute_cql("select * from tab where p1 = 1 and v = 3").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("select * from tab where p2 = 2 and v = 3").get(), exceptions::invalid_request_exception);
+    });
+}
+
