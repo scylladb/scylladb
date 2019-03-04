@@ -1891,7 +1891,7 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
                 if (cs != checksum) {
                     // if a chunk header checksum is broken, we shall just assume that all
                     // remaining is as well. We cannot trust the "next" pointer, so...
-                    clogger.debug("Checksum error in segment chunk at {}.", pos);
+                    clogger.debug("Checksum error in segment chunk at {}.", start);
                     corrupt_size += (file_size - pos);
                     return stop();
                 }
