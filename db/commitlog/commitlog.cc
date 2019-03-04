@@ -720,7 +720,7 @@ public:
 
         // The write will be allowed to start now, but flush (below) must wait for not only this,
         // but all previous write/flush pairs.
-        return _pending_ops.run_with_ordered_post_op(rp, [this, size, off, buf = std::move(buf)]() mutable { ///////////////////////////////////////////////////
+        return _pending_ops.run_with_ordered_post_op(rp, [this, size, off, buf = std::move(buf)]() mutable {
             auto view = fragmented_temporary_buffer::view(buf);
             return do_with(off, view, [&] (uint64_t& off, fragmented_temporary_buffer::view& view) {
                 if (view.empty()) {
