@@ -208,6 +208,9 @@ struct output_writer {
 
     virtual void write_test_static_param(sstring name, sstring description) = 0;
 
+    virtual void write_all_test_values(const sstring_vec& params, const std::vector<stats_values>& values,
+            const output_items& param_names, const output_items& stats_names) = 0;
+
     virtual void write_test_values(const sstring_vec& params, const stats_values& stats,
             const output_items& param_names, const output_items& stats_names) = 0;
 };
@@ -237,7 +240,6 @@ std::array<sstring, std::tuple_size<stats_values>::value> stats_formats =
 class text_output_writer final
     : public output_writer {
 private:
-
     template <std::size_t... Is>
     inline sstring_vec stats_values_to_strings_impl(const stats_values& values, std::index_sequence<Is...> seq) {
         static_assert(stats_formats.size() == seq.size());
@@ -274,6 +276,20 @@ public:
 
     void write_test_static_param(sstring name, sstring description) override {
         std::cout << description << std::endl;
+    }
+
+    void write_all_test_values(const sstring_vec& params, const std::vector<stats_values>& values,
+            const output_items& param_names, const output_items& stats_names) override {
+        for (auto& value : values) {
+            for (size_t i = 0; i < param_names.size(); ++i) {
+                std::cout << format(param_names.at(i).format.c_str(), params.at(i)) << " ";
+            }
+            auto stats_strings = stats_values_to_strings(value);
+            for (size_t i = 0; i < stats_names.size(); ++i) {
+                std::cout << format(stats_names.at(i).format.c_str(), stats_strings.at(i)) << " ";
+            }
+            std::cout << "\n";
+        }
     }
 
     void write_test_values(const sstring_vec& params, const stats_values& stats,
@@ -440,7 +456,10 @@ public:
         }
 
         // Increase the test run count before we append it to all_params_values
-        const auto test_run_count = ++_test_count[all_params_values];
+        const auto test_run_count = _test_count[all_params_values] + 1;
+        if (summary_result) {
+            ++_test_count[all_params_values];
+        }
 
         const std::string test_run_count_name = "test_run_count";
         params_value[test_run_count_name.c_str()] = test_run_count;
@@ -448,11 +467,21 @@ public:
             params_value[all_params_names + "," + test_run_count_name] = all_params_values + std::string(format(",{:d}", test_run_count));
         }
 
-        Json::Value stats_value{Json::objectValue};
+        Json::Value stats_value;
+      if (summary_result) {
         assert(values.size() == 1);
         for (size_t i = 0; i < stats_names.size(); ++i) {
             write_test_values_impl(stats_value, stats_names, values.front());
         }
+      } else {
+        for (auto& vs : values) {
+            Json::Value v{Json::objectValue};
+            for (size_t i = 0; i < stats_names.size(); ++i) {
+                write_test_values_impl(v, stats_names, vs);
+            }
+            stats_value.append(std::move(v));
+        }
+      }
         Json::Value result_value{Json::objectValue};
         result_value["parameters"] = params_value;
         result_value["stats"] = stats_value;
@@ -461,14 +490,19 @@ public:
         root["versions"] = get_json_metadata();
 
         std::string filename = boost::algorithm::replace_all_copy(all_params_values, ",", "-") +
-                "." + std::to_string(test_run_count) + ".json";
+                "." + std::to_string(test_run_count) + (summary_result ? ".json" : ".all.json");
 
         filename = sanitize_filename(filename);
         std::ofstream result_file{(_current_dir + filename).c_str()};
         result_file << root;
     }
 
-    void write_test_values(const sstring_vec& params, stats_values& values,
+    void write_all_test_values(const sstring_vec& params, const std::vector<stats_values>& values,
+            const output_items& param_names, const output_items& stats_names) override {
+        write_test_values_common(params, values, param_names, stats_names, false);
+    }
+
+    void write_test_values(const sstring_vec& params, const stats_values& values,
             const output_items& param_names, const output_items& stats_names) override {
         write_test_values_common(params, {values}, param_names, stats_names, true);
     }
@@ -509,6 +543,12 @@ public:
         _stats_names = std::move(stats_names);
         for (auto&& w : _writers) {
             w->write_test_names(_param_names, _stats_names);
+        }
+    }
+
+    void add_all_test_values(const sstring_vec& params, const std::vector<stats_values>& stats) {
+        for (auto&& w : _writers) {
+            w->write_all_test_values(params, stats, _param_names, _stats_names);
         }
     }
 
@@ -1030,6 +1070,7 @@ bool cache_enabled;
 bool new_test_case = false;
 double test_case_duration = 0.;
 table_config cfg;
+bool dump_all_results = false;
 
 std::unique_ptr<output_manager> output_mgr;
 
@@ -1063,6 +1104,18 @@ void print(const test_result& tr) {
     }
 }
 
+void print_all(const test_result_vector& results) {
+    if (!dump_all_results || results.empty()) {
+        return;
+    }
+    output_mgr->add_all_test_values(results.back().get_params(), boost::copy_range<std::vector<stats_values>>(
+        results
+        | boost::adaptors::transformed([] (const test_result& tr) {
+            return tr.get_stats_values();
+        })
+    ));
+}
+
 class result_collector {
     std::vector<std::vector<test_result>> results;
 public:
@@ -1085,6 +1138,7 @@ public:
     }
     void done() {
         for (auto&& result : results) {
+            print_all(result);
             boost::sort(result, [] (const test_result& a, const test_result& b) {
                 return a.fragment_rate() < b.fragment_rate();
             });
@@ -1700,6 +1754,7 @@ int main(int argc, char** argv) {
         ("data-directory", bpo::value<sstring>()->default_value("./perf_large_partition_data"), "Data directory")
         ("output-directory", bpo::value<sstring>()->default_value("./perf_fast_forward_output"), "Results output directory (for 'json')")
         ("sstable-format", bpo::value<std::string>()->default_value("mc"), "Sstable format version to use during population")
+        ("dump-all-results", "Write results of all iterations of all tests to text files in the output directory")
         ;
 
     return app.run(argc, argv, [] {
@@ -1761,6 +1816,7 @@ int main(int argc, char** argv) {
                 cql_env = &env;
                 sstring name = app.configuration()["name"].as<std::string>();
 
+                dump_all_results = app.configuration().count("dump-all-results");
                 output_mgr = std::make_unique<output_manager>(app.configuration()["output-format"].as<sstring>());
 
                 auto enabled_dataset_names = app.configuration()["datasets"].as<std::vector<std::string>>();
