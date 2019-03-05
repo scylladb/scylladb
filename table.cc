@@ -610,12 +610,6 @@ table::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64
     if (!belongs_to_other_shard(info.owners)) {
         sst->set_unshared();
     }
-    return sst->load(std::move(info)).then([sst] () mutable {
-        return make_ready_future<sstables::shared_sstable>(std::move(sst));
-    });
-}
-
-void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
     if (schema()->is_counter() && !sst->has_scylla_component()) {
         auto error = "Reading non-Scylla SSTables containing counters is not supported.";
         if (_config.enable_dangerous_direct_import_of_cassandra_counters) {
@@ -624,6 +618,12 @@ void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
             throw std::runtime_error(fmt::format(FMT_STRING("{} Use sstableloader instead"), error));
         }
     }
+    return sst->load(std::move(info)).then([sst] () mutable {
+        return make_ready_future<sstables::shared_sstable>(std::move(sst));
+    });
+}
+
+void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
     auto& shards = sst->get_shards_for_this_sstable();
     if (belongs_to_other_shard(shards)) {
         // If we're here, this sstable is shared by this and other
