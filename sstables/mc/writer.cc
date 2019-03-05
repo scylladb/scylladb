@@ -366,6 +366,7 @@ static sstring pk_type_to_string(const schema& s) {
     }
 }
 
+static
 serialization_header make_serialization_header(const schema& s, const encoding_stats& enc_stats) {
     serialization_header header;
     // mc serialization header minimum values are delta-encoded based on the default timestamp epoch times
@@ -1375,6 +1376,9 @@ void writer::consume_end_of_stream() {
     _index_writer->close();
     _index_writer.reset();
     _sst.set_first_and_last_keys();
+
+    auto header = make_serialization_header(_schema, _enc_stats);
+    _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(header));
     seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(),
         dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
