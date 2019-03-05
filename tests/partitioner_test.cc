@@ -19,10 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_MODULE core
-
-#include <boost/test/unit_test.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "dht/i_partitioner.hh"
 #include "dht/murmur3_partitioner.hh"
@@ -59,7 +57,7 @@ static int64_t long_from_token(dht::token token) {
     return net::ntoh(data);
 }
 
-BOOST_AUTO_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
+SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
@@ -75,7 +73,7 @@ BOOST_AUTO_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     BOOST_REQUIRE(dk._key.equal(*s, key));
 }
 
-BOOST_AUTO_TEST_CASE(test_token_wraparound_1) {
+SEASTAR_THREAD_TEST_CASE(test_token_wraparound_1) {
     auto t1 = token_from_long(0x7000'0000'0000'0000);
     auto t2 = token_from_long(0xa000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
@@ -88,7 +86,7 @@ BOOST_AUTO_TEST_CASE(test_token_wraparound_1) {
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x8800'0000'0000'0000));
 }
 
-BOOST_AUTO_TEST_CASE(test_token_wraparound_2) {
+SEASTAR_THREAD_TEST_CASE(test_token_wraparound_2) {
     auto t1 = token_from_long(0x6000'0000'0000'0000);
     auto t2 = token_from_long(0x9000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
@@ -98,7 +96,7 @@ BOOST_AUTO_TEST_CASE(test_token_wraparound_2) {
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x7800'0000'0000'0000));
 }
 
-BOOST_AUTO_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
+SEASTAR_THREAD_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
     auto s = schema_builder("ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", int32_type)
@@ -131,7 +129,7 @@ BOOST_AUTO_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
     BOOST_REQUIRE(k2.tri_compare(*s, dht::ring_position(k1)) > 0);
 }
 
-BOOST_AUTO_TEST_CASE(test_ring_position_ordering) {
+SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
     simple_schema table;
     auto cmp = dht::ring_position_comparator(*table.schema());
 
@@ -201,7 +199,7 @@ BOOST_AUTO_TEST_CASE(test_ring_position_ordering) {
       .check();
 }
 
-BOOST_AUTO_TEST_CASE(test_token_no_wraparound_1) {
+SEASTAR_THREAD_TEST_CASE(test_token_no_wraparound_1) {
     auto t1 = token_from_long(0x5000'0000'0000'0000);
     auto t2 = token_from_long(0x7000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
@@ -211,7 +209,7 @@ BOOST_AUTO_TEST_CASE(test_token_no_wraparound_1) {
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x6000'0000'0000'0000));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_1) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("03");
@@ -224,7 +222,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_1) {
 }
 
 
-BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_2) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("20000000000000000000000000000003");
@@ -236,7 +234,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_3) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_3) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("2000000000000000000000000000000320000000000000000000000000000003");
@@ -248,7 +246,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_3) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_4) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_4) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("");
@@ -260,7 +258,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_4) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_5) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_5) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("00");
@@ -272,7 +270,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_5) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_6) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_6) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring(sstring());
@@ -284,7 +282,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_nowraparound_6) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_wraparound_1) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_wraparound_1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("00000000000000000000000000000009");
@@ -296,7 +294,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_wraparound_1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_wraparound_2) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_wraparound_2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("A0000000000000000000000000000009");
@@ -308,7 +306,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_wraparound_2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_wraparound_3) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_wraparound_3) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("A000000000000000000000000000000900000000000000000000000000000009");
@@ -320,7 +318,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_wraparound_3) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_describe_ownership) {
+SEASTAR_THREAD_TEST_CASE(test_bop_describe_ownership) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("10000000000000000000000000000000");
@@ -336,7 +334,7 @@ BOOST_AUTO_TEST_CASE(test_bop_describe_ownership) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_order) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_order) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("123456");
@@ -359,7 +357,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_order) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_midpoint1) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_midpoint1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("010000");
@@ -376,7 +374,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_midpoint1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_midpoint2) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_midpoint2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("020001");
@@ -391,7 +389,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_midpoint2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_bop_token_midpoint3) {
+SEASTAR_THREAD_TEST_CASE(test_bop_token_midpoint3) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
     dht::byte_ordered_partitioner partitioner;
     auto t1 = partitioner.from_sstring("20");
@@ -405,7 +403,7 @@ BOOST_AUTO_TEST_CASE(test_bop_token_midpoint3) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_rp_token1) {
+SEASTAR_THREAD_TEST_CASE(test_rp_token1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.RandomPartitioner"));
     dht::random_partitioner partitioner;
     auto str1 = sstring("123456");
@@ -416,7 +414,7 @@ BOOST_AUTO_TEST_CASE(test_rp_token1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_rp_token2) {
+SEASTAR_THREAD_TEST_CASE(test_rp_token2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.RandomPartitioner"));
     dht::random_partitioner partitioner;
     auto min = dht::minimum_token();
@@ -428,7 +426,7 @@ BOOST_AUTO_TEST_CASE(test_rp_token2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_rp_token3) {
+SEASTAR_THREAD_TEST_CASE(test_rp_token3) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.RandomPartitioner"));
     dht::random_partitioner partitioner;
 
@@ -469,7 +467,7 @@ BOOST_AUTO_TEST_CASE(test_rp_token3) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_rp_token4) {
+SEASTAR_THREAD_TEST_CASE(test_rp_token4) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.RandomPartitioner"));
     dht::random_partitioner partitioner;
 
@@ -506,7 +504,7 @@ BOOST_AUTO_TEST_CASE(test_rp_token4) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_rp_token_midpoint1) {
+SEASTAR_THREAD_TEST_CASE(test_rp_token_midpoint1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.RandomPartitioner"));
     dht::random_partitioner partitioner;
     auto t1 = partitioner.from_sstring("1000");
@@ -520,7 +518,7 @@ BOOST_AUTO_TEST_CASE(test_rp_token_midpoint1) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_rp_token_midpoint2) {
+SEASTAR_THREAD_TEST_CASE(test_rp_token_midpoint2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.RandomPartitioner"));
     dht::random_partitioner partitioner;
     auto t1 = partitioner.from_sstring("5000");
@@ -534,7 +532,7 @@ BOOST_AUTO_TEST_CASE(test_rp_token_midpoint2) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
-BOOST_AUTO_TEST_CASE(test_rp_describe_ownership) {
+SEASTAR_THREAD_TEST_CASE(test_rp_describe_ownership) {
     dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.RandomPartitioner"));
     dht::random_partitioner partitioner;
     auto t1 = partitioner.from_sstring("34028236692093846346337460743176821144");
@@ -571,7 +569,7 @@ void test_partitioner_sharding(const dht::i_partitioner& part, unsigned shards, 
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_murmur3_sharding) {
+SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
     auto prev_token = [] (const dht::i_partitioner&, dht::token token) {
         return token_from_long(long_from_token(token) - 1);
     };
@@ -598,7 +596,7 @@ BOOST_AUTO_TEST_CASE(test_murmur3_sharding) {
     test_partitioner_sharding(mm3p1s, 1, mm3p1s_shard_limits, prev_token);
 }
 
-BOOST_AUTO_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
+SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
     auto prev_token = [] (const dht::i_partitioner&, dht::token token) {
         return token_from_long(long_from_token(token) - 1);
     };
@@ -633,7 +631,7 @@ BOOST_AUTO_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
     test_partitioner_sharding(mm3p2s4i, 2, mm3p2s_shard_limits, prev_token, 4);
 }
 
-BOOST_AUTO_TEST_CASE(test_random_partitioner) {
+SEASTAR_THREAD_TEST_CASE(test_random_partitioner) {
     using int128 = boost::multiprecision::int128_t;
     auto prev_token = [] (const dht::i_partitioner& part, dht::token token) {
         return part.from_sstring(std::string((int128(std::string(part.to_sstring(token))) - 1).str()));
@@ -666,7 +664,7 @@ BOOST_AUTO_TEST_CASE(test_random_partitioner) {
     test_partitioner_sharding(rp1s, 1, rp1s_shard_limits, prev_token);
 }
 
-BOOST_AUTO_TEST_CASE(test_byte_ordered_partitioner) {
+SEASTAR_THREAD_TEST_CASE(test_byte_ordered_partitioner) {
     auto prev_token = [] (const dht::i_partitioner& part, dht::token token) {
         auto& bytes = token._data;
         for (auto i = 0u; i < bytes.size(); ++i) {
@@ -883,7 +881,7 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_exponential_sharders) {
+SEASTAR_THREAD_TEST_CASE(test_exponential_sharders) {
     return test_something_with_some_interesting_ranges_and_partitioners(test_exponential_sharder);
 }
 
@@ -893,7 +891,7 @@ do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema
     dht::set_global_partitioner(part.name()); // so we can print tokens, also ring_position_comparator is not global_partitioner() clean
 
     for (auto shard : boost::irange(0u, part.shard_count())) {
-        auto ranges = dht::split_range_to_single_shard(part, s, pr, shard);
+        auto ranges = dht::split_range_to_single_shard(part, s, pr, shard).get0();
         auto sharder = dht::ring_position_range_sharder(part, pr);
         auto x = sharder.next(s);
         auto cmp = dht::ring_position_comparator(s);
@@ -914,7 +912,7 @@ do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_split_range_single_shard) {
+SEASTAR_THREAD_TEST_CASE(test_split_range_single_shard) {
     return test_something_with_some_interesting_ranges_and_partitioners(do_test_split_range_to_single_shard);
 }
 
@@ -944,7 +942,7 @@ static int test_split(int N, int K) {
     return c;
 }
 
-BOOST_AUTO_TEST_CASE(test_split_1) {
+SEASTAR_THREAD_TEST_CASE(test_split_1) {
     BOOST_REQUIRE(test_split(128, 16) == 8);
     // will make 7 binary splits: 500, 250, 125.5, 62.5, 31.25, 15.625,
     // 7.8125, so expect 2^7 = 128 ranges:
@@ -1036,6 +1034,6 @@ do_test_selective_token_range_sharder(const dht::i_partitioner& part, const sche
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_selective_token_range_sharder) {
+SEASTAR_THREAD_TEST_CASE(test_selective_token_range_sharder) {
     return test_something_with_some_interesting_ranges_and_partitioners_with_token_range(do_test_selective_token_range_sharder);
 }
