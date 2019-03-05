@@ -2268,7 +2268,7 @@ SEASTAR_TEST_CASE(test_in_restriction) {
         }).then([&e] {
             return e.execute_cql("select r1 from tir2 where (c1,r1) in ((0, 1),(1,2),(0,1),(1,2),(3,3)) ALLOW FILTERING;");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows_ignore_order({
+            assert_that(msg).is_rows().with_rows({
                 {int32_type->decompose(1)},
                 {int32_type->decompose(2)},
             });
@@ -2294,7 +2294,7 @@ SEASTAR_TEST_CASE(test_in_restriction) {
             raw_values.emplace_back(cql3::raw_value::make_value(in_values_list));
             return e.execute_prepared(prepared_id,raw_values);
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows_ignore_order({
+            assert_that(msg).is_rows().with_rows({
                 {int32_type->decompose(1)},
                 {int32_type->decompose(2)},
             });
@@ -3061,6 +3061,11 @@ private:
     std::vector<int> _lt_range;
     bool _lt_inclusive;
 public:
+    enum class column_ordering_for_results {
+        ASC,
+        DESC,
+    };
+    using ordering_spec = column_ordering_for_results[Digits];
     /**
      *  The mapping of tuples is to integers between 0 and this value.
      */
@@ -3090,9 +3095,9 @@ public:
      * none clustering column.
      * @return
      */
-    auto genrate_results_for_validation() {
+    auto genrate_results_for_validation(ordering_spec& orderings) {
         std::vector<std::vector<bytes_opt>> vals;
-        for(auto val : generate_results()){
+        for (auto val : generate_results(orderings)) {
             vals.emplace_back(std::vector<bytes_opt>{ int32_type->decompose(val) });
         }
         return vals;
@@ -3189,7 +3194,7 @@ private:
      * select only the none clustering column.
      * @return a vector of integers representing the expected results.
      */
-    std::vector<int> generate_results() {
+    std::vector<int> generate_results(ordering_spec& orderings) {
         std::vector<int> vals;
         int start_val = 0;
         int end_val =  total_num_of_values -1;
@@ -3210,6 +3215,23 @@ private:
         for (int i=start_val; i<=end_val; i++) {
             vals.emplace_back(i);
         }
+        auto comparator_lt = [&orderings] (int lhs, int rhs){
+            auto lhs_t = bound_val_to_tuple(lhs);
+            auto rhs_t = bound_val_to_tuple(rhs);
+            for (int i=0; i < Digits; i++) {
+                if (lhs_t[i] == rhs_t[i]) {
+                    continue ;
+                }
+                bool lt = (lhs_t[i] < rhs_t[i]);
+                // the reason this is correct is because at that point we know that:
+                // lhs_t[i] is not less and not equal to  rhs_t[i])
+                bool gt = !lt;
+                bool reverse = orderings[i] == column_ordering_for_results::DESC;
+                return (lt && !reverse) || (gt && reverse);
+            }
+            return false;
+        };
+        std::sort(vals.begin(), vals.end(), comparator_lt);
         return vals;
     }
 };
@@ -3246,7 +3268,12 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
             }
         };
 
-
+        slice_test_type::ordering_spec ordering = {
+            slice_test_type::column_ordering_for_results::DESC,
+            slice_test_type::column_ordering_for_results::ASC,
+            slice_test_type::column_ordering_for_results::DESC,
+            slice_test_type::column_ordering_for_results::ASC,
+        };
         // no overlap in componnents equal num of componnents - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (1,2,3,4)
         generate_with_inclusiveness_permutations({0,1,2,3},{1,2,3,4});
         // overlap in  componnents equal num of componnents - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,2,2,2)
@@ -3282,7 +3309,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
 
         for (auto&& test_case  : test_cases) {
             auto msg = e.execute_cql(sprint(select_query_template,test_case.generate_cql_slice_expresion(column_names))).get0();
-            assert_that(msg).is_rows().with_rows_ignore_order(test_case.genrate_results_for_validation());
+            assert_that(msg).is_rows().with_rows(test_case.genrate_results_for_validation(ordering));
         }
     });
 }
