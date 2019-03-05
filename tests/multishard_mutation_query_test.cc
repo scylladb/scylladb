@@ -814,7 +814,10 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
             BOOST_CHECK_EQUAL(wrapper(res_it->key()), wrapper(*exp_live_it++));
         } else {
             // FIXME: Only a fraction of the dead rows is present in the result.
-            BOOST_WARN_EQUAL(wrapper(res_it->key()), wrapper(*exp_dead_it));
+            if (!res_it->key().equal(schema, *exp_dead_it)) {
+                tlog.trace("[scan#{}]: validating {}/{}: dead row in the result is not the expected one: {} != {}", i, expected_part.dkey,
+                        res_it->key(), res_it->key(), *exp_dead_it);
+            }
 
             // The dead row is not the one we expected it to be. Check that at
             // least that it *is* among the expected dead rows.
@@ -851,7 +854,6 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
     }
 
     // FIXME: see note about dead rows above.
-    BOOST_WARN(exp_dead_it == exp_dead_end);
     if (exp_dead_it != exp_dead_end) {
         tlog.trace("[scan#{}]: validating {}: {} expected dead rows missing from result", i, expected_part.dkey,
                 std::distance(exp_dead_it, exp_dead_end));
