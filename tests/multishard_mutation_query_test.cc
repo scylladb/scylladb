@@ -75,7 +75,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (database& db) {
-            db.set_querier_cache_entry_ttl(2s);
+            db.set_querier_cache_entry_ttl(1s);
         }).get();
 
         auto [s, _] = test::create_test_table(env, KEYSPACE_NAME, "test_abandoned_read");
