@@ -301,6 +301,7 @@ private:
     gms::feature _mc_sstable_feature;
     gms::feature _row_level_repair_feature;
     gms::feature _truncation_table;
+    gms::feature _correct_static_compact_in_mc;
 public:
     void enable_all_features();
 
@@ -2296,6 +2297,9 @@ public:
     }
     const gms::feature& cluster_supports_truncation_table() const {
         return _truncation_table;
+    }
+    const gms::feature& cluster_supports_correct_static_compact_in_mc() const {
+        return _correct_static_compact_in_mc;
     }
 private:
     future<> set_cql_ready(bool ready);
