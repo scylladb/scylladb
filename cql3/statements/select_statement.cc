@@ -220,7 +220,14 @@ select_statement::make_partition_slice(const query_options& options)
             std::move(static_columns), {}, _opts, nullptr, options.get_cql_serialization_format());
     }
 
-    auto bounds = _restrictions->get_clustering_bounds(options);
+    auto bounds =_restrictions->get_clustering_bounds(options);
+    if (bounds.size() > 1) {
+        auto comparer = position_in_partition::less_compare(*_schema);
+        auto bounds_sorter = [&comparer] (const query::clustering_range& lhs, const query::clustering_range& rhs) {
+            return comparer(position_in_partition_view::for_range_start(lhs), position_in_partition_view::for_range_start(rhs));
+        };
+        std::sort(bounds.begin(), bounds.end(), bounds_sorter);
+    }
     if (_is_reversed) {
         _opts.set(query::partition_slice::option::reversed);
         std::reverse(bounds.begin(), bounds.end());
