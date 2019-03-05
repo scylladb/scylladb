@@ -384,20 +384,19 @@ serialization_header make_serialization_header(const schema& s, const encoding_s
         header.clustering_key_types_names.elements.push_back(std::move(ck_type_name));
     }
 
-    header.static_columns.elements.reserve(s.static_columns_count());
-    for (const auto& static_column : s.static_columns()) {
+    auto add_column = [&] (const column_definition& column) {
         serialization_header::column_desc cd;
-        cd.name = to_bytes_array_vint_size(static_column.name());
-        cd.type_name = to_bytes_array_vint_size(static_column.type->name());
-        header.static_columns.elements.push_back(std::move(cd));
-    }
+        cd.name = to_bytes_array_vint_size(column.name());
+        cd.type_name = to_bytes_array_vint_size(column.type->name());
+        if (column.is_static()) {
+            header.static_columns.elements.push_back(std::move(cd));
+        } else if (column.is_regular()) {
+            header.regular_columns.elements.push_back(std::move(cd));
+        }
+    };
 
-    header.regular_columns.elements.reserve(s.regular_columns_count());
-    for (const auto& regular_column : s.regular_columns()) {
-        serialization_header::column_desc cd;
-        cd.name = to_bytes_array_vint_size(regular_column.name());
-        cd.type_name = to_bytes_array_vint_size(regular_column.type->name());
-        header.regular_columns.elements.push_back(std::move(cd));
+    for (const auto& column : s.all_columns()) {
+        add_column(column);
     }
 
     return header;
