@@ -3465,6 +3465,62 @@ bytes tuple_type_impl::from_json_object(const Json::Value& value, cql_serializat
     return build_value(std::move(raw_tuple));
 }
 
+sstring user_type_impl::to_json_string(const bytes& b) const {
+    std::ostringstream out;
+    out << '{';
+
+    auto ti = _types.begin();
+    auto ni = _string_field_names.begin();
+    auto v = bytes_view(b);
+    auto vi = tuple_deserializing_iterator::start(v);
+    while (ti != _types.end() && vi != tuple_deserializing_iterator::finish(v)) {
+        if (ti != _types.begin()) {
+            out << ", ";
+        }
+        out << quote_json_string(*ni) << ": ";
+        if (*vi) {
+            //TODO(sarna): We can avoid copying if to_json_string accepted bytes_view
+            out << (*ti)->to_json_string(bytes(**vi));
+        } else {
+            out << "null";
+        }
+        ++ti;
+        ++ni;
+        ++vi;
+    }
+
+    out << '}';
+    return out.str();
+}
+
+bytes user_type_impl::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
+    if (!value.isObject()) {
+        throw marshal_exception("user_type must be represented as JSON Object");
+    }
+
+    std::unordered_set<sstring> remaining_names;
+    for (auto vi = value.begin(); vi != value.end(); ++vi) {
+        remaining_names.insert(vi.name());
+    }
+
+    std::vector<bytes_opt> raw_tuple;
+    for (unsigned i = 0; i < _field_names.size(); ++i) {
+        auto t = _types[i];
+        auto v = value.get(_string_field_names[i], Json::Value());
+        if (v.isNull()) {
+            raw_tuple.push_back(bytes_opt{});
+        } else {
+            raw_tuple.push_back(t->from_json_object(v, sf));
+        }
+        remaining_names.erase(_string_field_names[i]);
+    }
+
+    if (!remaining_names.empty()) {
+        throw marshal_exception(format("Extraneous field definition for user type {}: {}", get_name_as_string(), *remaining_names.begin()));
+    }
+    return build_value(std::move(raw_tuple));
+}
+
 bool
 tuple_type_impl::equals(const abstract_type& other) const {
     auto x = dynamic_cast<const tuple_type_impl*>(&other);
