@@ -1147,10 +1147,10 @@ with open(buildfile, 'w') as f:
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
-        fmt_lib = 'libfmtd.a' if mode == 'debug' else 'libfmt.a'
+        fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
             cxxflags_{mode} = {opt} -I. -I $builddir/{mode}/gen
-            libs_{mode} = seastar/build/{mode}/_cooking/installed/lib/{fmt_lib}
+            libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {sanitize} {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
