@@ -36,6 +36,7 @@
 #include <seastar/core/sleep.hh>
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
+#include "types/tuple.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -497,5 +498,32 @@ SEASTAR_TEST_CASE(test_json_insert_null) {
             {utf8_type->decompose(sstring("text235"))},
             {}
         }});
+    });
+}
+
+SEASTAR_TEST_CASE(test_json_tuple) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t(id int PRIMARY KEY, v tuple<int, text, float>);").get();
+
+        e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5]}';").get();
+
+        auto tt = tuple_type_impl::get_instance({int32_type, utf8_type, float_type});
+
+        auto msg = e.execute_cql("SELECT * FROM t;").get0();
+        assert_that(msg).is_rows().with_rows({{
+            {int32_type->decompose(7)},
+            {tt->decompose(make_tuple_value(tt, tuple_type_impl::native_type({int32_t(5), sstring("test123"), float(2.5)})))},
+        }});
+
+        e.execute_cql("INSERT INTO t (id, v) VALUES (3, (5, 'test543', 4.5));").get();
+
+        msg = e.execute_cql("SELECT JSON * FROM t WHERE id = 3;").get0();
+        assert_that(msg).is_rows().with_rows({{
+            utf8_type->decompose(sstring("{\"id\": 3, \"v\": [5, \"test543\", 4.5]}"))
+        }});
+
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5, 3]}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [\"test123\", 5, 2.5]}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"1\": 5}}';").get(), marshal_exception);
     });
 }
