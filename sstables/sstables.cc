@@ -3347,6 +3347,10 @@ bool supports_correct_non_compound_range_tombstones() {
     return service::get_local_storage_service().cluster_supports_reading_correctly_serialized_range_tombstones();
 }
 
+bool supports_correct_static_compact_in_mc() {
+    return bool(service::get_local_storage_service().cluster_supports_correct_static_compact_in_mc());
+}
+
 }
 
 std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp_type) {

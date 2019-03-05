@@ -457,6 +457,7 @@ enum sstable_feature : uint8_t {
     NonCompoundPIEntries = 0,       // See #2993
     NonCompoundRangeTombstones = 1, // See #2986
     ShadowableTombstones = 2, // See #3885
+    CorrectStaticCompact = 3, // See #4139
     End = 4,
 };
 
