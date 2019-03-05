@@ -235,7 +235,6 @@ future<> stream_transfer_task::execute() {
         });
     }).then([this, id, plan_id, cf_id] {
         sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
-        session->start_keep_alive_timer();
     }).handle_exception([this, plan_id, id] (auto ep){
         sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
         std::rethrow_exception(ep);

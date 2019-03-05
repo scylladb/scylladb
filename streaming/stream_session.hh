@@ -180,14 +180,6 @@ private:
     bool _complete_sent = false;
     bool _received_failed_complete_message = false;
 
-    // If the session is idle for 10 minutes, close the session
-    std::chrono::seconds _keep_alive_timeout{60 * 10};
-    // Check every 1 minutes
-    std::chrono::seconds _keep_alive_interval{60};
-    timer<lowres_clock> _keep_alive;
-    stream_bytes _last_stream_bytes;
-    lowres_clock::time_point _last_stream_progress;
-
     session_info _session_info;
 
     stream_reason _reason = stream_reason::unspecified;
@@ -197,9 +189,6 @@ public:
     }
     void set_reason(stream_reason reason) {
         _reason = reason;
-    }
-    void start_keep_alive_timer() {
-        _keep_alive.rearm(lowres_clock::now() + _keep_alive_interval);
     }
 
     void add_bytes_sent(int64_t bytes) {
