@@ -366,9 +366,16 @@ static sstring pk_type_to_string(const schema& s) {
     }
 }
 
-static
-serialization_header make_serialization_header(const schema& s, const encoding_stats& enc_stats) {
+struct sstable_schema {
     serialization_header header;
+    indexed_columns regular_columns;
+    indexed_columns static_columns;
+};
+
+static
+sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats) {
+    sstable_schema sst_sch;
+    serialization_header& header = sst_sch.header;
     // mc serialization header minimum values are delta-encoded based on the default timestamp epoch times
     // Note: We rely on implicit conversion to uint64_t when subtracting the signed epoch values below
     // for preventing signed integer overflow.
@@ -390,8 +397,10 @@ serialization_header make_serialization_header(const schema& s, const encoding_s
         cd.type_name = to_bytes_array_vint_size(column.type->name());
         if (column.is_static()) {
             header.static_columns.elements.push_back(std::move(cd));
+            sst_sch.static_columns.push_back(column);
         } else if (column.is_regular()) {
             header.regular_columns.elements.push_back(std::move(cd));
+            sst_sch.regular_columns.push_back(column);
         }
     };
 
@@ -399,7 +408,13 @@ serialization_header make_serialization_header(const schema& s, const encoding_s
         add_column(column);
     }
 
-    return header;
+    // For static and regular columns, we write all simple columns first followed by collections
+    // These containers have columns partitioned by atomicity
+    auto pred = [] (const std::reference_wrapper<const column_definition>& column) { return column.get().is_atomic(); };
+    boost::range::stable_partition(sst_sch.regular_columns, pred);
+    boost::range::stable_partition(sst_sch.static_columns, pred);
+
+    return sst_sch;
 }
 
 enum class cell_flags : uint8_t {
@@ -505,18 +520,6 @@ concept bool Clustered = requires(T t) {
 };
 )
 
-static indexed_columns get_indexed_columns_partitioned_by_atomicity(schema::const_iterator_range_type columns) {
-    indexed_columns result;
-    result.reserve(columns.size());
-    for (const auto& col: columns) {
-        result.emplace_back(col);
-    }
-    boost::range::stable_partition(
-        result,
-        [](const std::reference_wrapper<const column_definition>& column) { return column.get().is_atomic();});
-    return result;
-}
-
 // Used for writing SSTables in 'mc' format.
 class writer : public sstable_writer::writer_impl {
 private:
@@ -538,10 +541,7 @@ private:
     range_tombstone_stream _range_tombstones;
     bytes_ostream _tmp_bufs;
 
-    // For static and regular columns, we write all simple columns first followed by collections
-    // These containers have columns partitioned by atomicity
-    const indexed_columns _static_columns;
-    const indexed_columns _regular_columns;
+    const sstable_schema _sst_schema;
 
     struct cdef_and_collection {
         const column_definition* cdef;
@@ -593,7 +593,7 @@ private:
     }
 
     void ensure_static_row_is_written_if_needed() {
-        if (!_static_columns.empty() && !_static_row_written) {
+        if (!_sst_schema.static_columns.empty() && !_static_row_written) {
             consume(static_row{});
         }
     }
@@ -729,8 +729,7 @@ public:
         , _shard(shard)
         , _range_tombstones(_schema)
         , _tmp_bufs(_sst.sstable_buffer_size)
-        , _static_columns(get_indexed_columns_partitioned_by_atomicity(s.static_columns()))
-        , _regular_columns(get_indexed_columns_partitioned_by_atomicity(s.regular_columns()))
+        , _sst_schema(make_sstable_schema(s, _enc_stats))
         , _run_identifier(cfg.run_identifier)
     {
         _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
@@ -1105,7 +1104,7 @@ void writer::write_cells(bytes_ostream& writer, const clustering_key_prefix* clu
     // This differs from Origin where all updated columns are tracked and the set of filled columns of a row
     // is compared with the set of all columns filled in the memtable. So our encoding may be less optimal in some cases
     // but still valid.
-    write_missing_columns(writer, kind == column_kind::static_column ? _static_columns : _regular_columns, row_body);
+    write_missing_columns(writer, kind == column_kind::static_column ? _sst_schema.static_columns : _sst_schema.regular_columns, row_body);
     row_body.for_each_cell([this, &writer, kind, &properties, has_complex_deletion, clustering_key] (column_id id, const atomic_cell_or_collection& c) {
         auto&& column_definition = _schema.column_at(kind, id);
         if (!column_definition.is_atomic()) {
@@ -1175,7 +1174,7 @@ void writer::write_static_row(const row& static_row) {
     uint64_t current_pos = _data_writer->offset();
     // Static row flag is stored in extended flags so extension_flag is always set for static rows
     row_flags flags = row_flags::extension_flag;
-    if (static_row.size() == _static_columns.size()) {
+    if (static_row.size() == _sst_schema.static_columns.size()) {
         flags |= row_flags::has_all_columns;
     }
     bool has_complex_deletion = row_has_complex_deletion(_schema, static_row, column_kind::static_column);
@@ -1222,7 +1221,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
         ext_flags = row_extended_flags::has_shadowable_deletion_scylla;
     }
 
-    if (clustered_row.cells().size() == _regular_columns.size()) {
+    if (clustered_row.cells().size() == _sst_schema.regular_columns.size()) {
         flags |= row_flags::has_all_columns;
     }
     bool has_complex_deletion = row_has_complex_deletion(_schema, clustered_row.cells(), column_kind::regular_column);
@@ -1376,8 +1375,7 @@ void writer::consume_end_of_stream() {
     _index_writer.reset();
     _sst.set_first_and_last_keys();
 
-    auto header = make_serialization_header(_schema, _enc_stats);
-    _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(header));
+    _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
     seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(),
         dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
