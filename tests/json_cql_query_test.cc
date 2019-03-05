@@ -482,10 +482,10 @@ SEASTAR_TEST_CASE(test_json_insert_null) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql(
                 "CREATE TABLE mytable ("
-                "    myid text PRIMARY KEY,"
+                "    myid text,"
                 "    mytext text,"
                 "    mytext1 text,"
-                "    mytext2 text);"
+                "    mytext2 text, PRIMARY KEY (myid, mytext));"
         ).get();
 
        e.execute_cql("INSERT INTO mytable JSON '{\"myid\" : \"id2\", \"mytext\" : \"text234\", \"mytext1\" : \"text235\", \"mytext2\" : null}';").get();
@@ -497,5 +497,10 @@ SEASTAR_TEST_CASE(test_json_insert_null) {
             {utf8_type->decompose(sstring("text235"))},
             {}
         }});
+
+        // Primary keys must be present
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO mytable JSON '{}';").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO mytable JSON '{\"mytext\" : \"text234\", \"mytext1\" : \"text235\", \"mytext2\" : null}';").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO mytable JSON '{\"myid\" : \"id2\", \"mytext1\" : \"text235\", \"mytext2\" : null}';").get(), exceptions::invalid_request_exception);
     });
 }
