@@ -681,7 +681,7 @@ private:
     void write_cells(bytes_ostream& writer, const clustering_key_prefix* clustering_key, column_kind kind,
         const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
     void write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion);
-    void write_static_row(const row& static_row);
+    void write_static_row(const row&, column_kind);
     void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key) {
         ++_c_stats.rows_count;
         _cfg.large_data_handler->maybe_record_large_rows(_sst, *_partition_key, clustering_key, row_size).get();
@@ -1168,16 +1168,14 @@ static bool row_has_complex_deletion(const schema& s, const row& r, column_kind 
     return result;
 }
 
-void writer::write_static_row(const row& static_row) {
-    assert(_schema.is_compound());
-
+void writer::write_static_row(const row& static_row, column_kind kind) {
     uint64_t current_pos = _data_writer->offset();
     // Static row flag is stored in extended flags so extension_flag is always set for static rows
     row_flags flags = row_flags::extension_flag;
     if (static_row.size() == _sst_schema.static_columns.size()) {
         flags |= row_flags::has_all_columns;
     }
-    bool has_complex_deletion = row_has_complex_deletion(_schema, static_row, column_kind::static_column);
+    bool has_complex_deletion = row_has_complex_deletion(_schema, static_row, kind);
     if (has_complex_deletion) {
         flags |= row_flags::has_complex_deletion;
     }
@@ -1196,7 +1194,7 @@ void writer::write_static_row(const row& static_row) {
 
 stop_iteration writer::consume(static_row&& sr) {
     ensure_tombstone_is_written();
-    write_static_row(sr.cells());
+    write_static_row(sr.cells(), column_kind::static_column);
     _static_row_written = true;
     return stop_iteration::no;
 }
