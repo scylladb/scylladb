@@ -108,7 +108,7 @@ rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
 
 // Verifies that the result has the following rows and only that rows, in that order.
 rows_assertions
-rows_assertions::with_rows(std::initializer_list<std::initializer_list<bytes_opt>> rows) {
+rows_assertions::with_rows(std::vector<std::vector<bytes_opt>> rows) {
     auto rs = _rows->rs().result_set();
     auto actual_i = rs.rows().begin();
     auto actual_end = rs.rows().end();

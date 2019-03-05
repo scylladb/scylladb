@@ -2233,7 +2233,7 @@ SEASTAR_TEST_CASE(test_in_restriction) {
         }).then([&e] {
             return e.execute_cql("select r1 from tir2 where (c1,r1) in ((0, 1),(1,2),(0,1),(1,2),(3,3)) ALLOW FILTERING;");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows_ignore_order({
+            assert_that(msg).is_rows().with_rows({
                 {int32_type->decompose(1)},
                 {int32_type->decompose(2)},
             });
@@ -2259,7 +2259,7 @@ SEASTAR_TEST_CASE(test_in_restriction) {
             raw_values.emplace_back(cql3::raw_value::make_value(in_values_list));
             return e.execute_prepared(prepared_id,raw_values);
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows_ignore_order({
+            assert_that(msg).is_rows().with_rows({
                 {int32_type->decompose(1)},
                 {int32_type->decompose(2)},
             });
