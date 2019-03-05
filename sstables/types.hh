@@ -517,9 +517,15 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::RunIdentifier, run_identifier>
             > data;
 
-    bool has_feature(sstable_feature f) const {
+    sstable_enabled_features get_features() const {
         auto features = data.get<scylla_metadata_type::Features, sstable_enabled_features>();
-        return features && features->is_enabled(f);
+        if (!features) {
+            return sstable_enabled_features{};
+        }
+        return *features;
+    }
+    bool has_feature(sstable_feature f) const {
+        return get_features().is_enabled(f);
     }
     const extension_attributes* get_extension_attributes() const {
         return data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();

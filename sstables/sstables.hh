@@ -688,6 +688,13 @@ public:
         return has_scylla_component() && _components->scylla_metadata->has_feature(sstable_feature::ShadowableTombstones);
     }
 
+    sstable_enabled_features features() const {
+        if (!has_scylla_component()) {
+            return {};
+        }
+        return _components->scylla_metadata->get_features();
+    }
+
     utils::UUID run_identifier() const {
         return _run_identifier;
     }
