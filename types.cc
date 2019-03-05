@@ -3425,11 +3425,44 @@ tuple_type_impl::to_string(const bytes& b) const {
 }
 
 sstring tuple_type_impl::to_json_string(const bytes &b) const {
-    throw std::runtime_error(format("{} not implemented", __PRETTY_FUNCTION__));
+    std::ostringstream out;
+    out << '[';
+
+    auto ti = _types.begin();
+    auto v = bytes_view(b);
+    auto vi = tuple_deserializing_iterator::start(v);
+    while (ti != _types.end() && vi != tuple_deserializing_iterator::finish(v)) {
+        if (ti != _types.begin()) {
+            out << ", ";
+        }
+        if (*vi) {
+            //TODO(sarna): We can avoid copying if to_json_string accepted bytes_view
+            out << (*ti)->to_json_string(bytes(**vi));
+        } else {
+            out << "null";
+        }
+        ++ti;
+        ++vi;
+    }
+
+    out << ']';
+    return out.str();
 }
 
 bytes tuple_type_impl::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
-    throw std::runtime_error(format("{} not implemented", __PRETTY_FUNCTION__));
+    if (!value.isArray()) {
+        throw marshal_exception("tuple_type must be represented as JSON Array");
+    }
+    if (value.size() > _types.size()) {
+        throw marshal_exception(format("Too many values ({}) for tuple with size {}", value.size(), _types.size()));
+    }
+    std::vector<bytes_opt> raw_tuple;
+    raw_tuple.reserve(value.size());
+    auto ti = _types.begin();
+    for (auto vi = value.begin(); vi != value.end(); ++vi, ++ti) {
+        raw_tuple.emplace_back((*ti)->from_json_object(*vi, sf));
+    }
+    return build_value(std::move(raw_tuple));
 }
 
 bool
