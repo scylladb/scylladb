@@ -37,6 +37,7 @@
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
 #include "types/tuple.hh"
+#include "types/user.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -525,5 +526,49 @@ SEASTAR_TEST_CASE(test_json_tuple) {
         BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5, 3]}';").get(), marshal_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [\"test123\", 5, 2.5]}';").get(), marshal_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"1\": 5}}';").get(), marshal_exception);
+    });
+}
+
+SEASTAR_TEST_CASE(test_json_udt) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TYPE utype (first int, second text, third float);").get();
+        e.execute_cql("CREATE TABLE t(id int PRIMARY KEY, v frozen<utype>);").get();
+
+        e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"first\": 5, \"third\": 2.5, \"second\": \"test123\"}}';").get();
+
+        auto ut = user_type_impl::get_instance("ks", "utype", std::vector{bytes("first"), bytes("second"), bytes("third")}, {int32_type, utf8_type, float_type});
+
+        auto msg = e.execute_cql("SELECT * FROM t;").get0();
+        assert_that(msg).is_rows().with_rows({{
+            {int32_type->decompose(7)},
+            {ut->decompose(make_user_value(ut, user_type_impl::native_type({int32_t(5), sstring("test123"), float(2.5)})))},
+        }});
+
+        e.execute_cql("INSERT INTO t (id, v) VALUES (3, (5, 'test543', 4.5));").get();
+
+        msg = e.execute_cql("SELECT JSON * FROM t WHERE id = 3;").get0();
+        assert_that(msg).is_rows().with_rows({{
+            utf8_type->decompose(sstring("{\"id\": 3, \"v\": {\"first\": 5, \"second\": \"test543\", \"third\": 4.5}}"))
+        }});
+
+        e.execute_cql("INSERT INTO t (id, v) VALUES (3, {\"first\": 3, \"third\": 4.5});").get();
+
+        msg = e.execute_cql("SELECT JSON * FROM t WHERE id = 3;").get0();
+        assert_that(msg).is_rows().with_rows({{
+            utf8_type->decompose(sstring("{\"id\": 3, \"v\": {\"first\": 3, \"second\": null, \"third\": 4.5}}"))
+        }});
+
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5, 3, 3]}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"wrong\": 5, \"third\": 2.5, \"second\": \"test123\"}}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"first\": \"hi\", \"third\": 2.5, \"second\": \"test123\"}}';").get(), marshal_exception);
+
+        e.execute_cql("CREATE TYPE utype2 (\"WeirdNameThatNeedsEscaping\\n,)\" int);").get();
+        e.execute_cql("CREATE TABLE t2(id int PRIMARY KEY, v frozen<utype2>);").get();
+
+        e.execute_cql("INSERT INTO t2 (id, v) VALUES (1, (7));").get();
+        msg = e.execute_cql("SELECT JSON * FROM t2 WHERE id = 1;").get0();
+        assert_that(msg).is_rows().with_rows({{
+            utf8_type->decompose(sstring("{\"id\": 1, \"v\": {\"WeirdNameThatNeedsEscaping\\\\n,)\": 7}}"))
+        }});
     });
 }
