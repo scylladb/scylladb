@@ -68,9 +68,7 @@ public:
     future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
 
     future<> maybe_delete_large_data_entries(const schema& s, const sstring& filename, uint64_t data_size) const {
-        if (_stopped) {
-            return make_ready_future<>();
-        }
+        assert(!_stopped);
         future<> large_partitions = make_ready_future<>();
         if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
             large_partitions = delete_large_partitions_entry(s, filename);
