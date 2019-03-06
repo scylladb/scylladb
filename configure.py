@@ -424,6 +424,8 @@ arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', def
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
                         help='Enable(1)/disable(0)compiler debug information generation')
+arg_parser.add_argument('--compress-exec-debuginfo', action='store', dest='compress_exec_debuginfo', type=int, default=1,
+                        help='Enable(1)/disable(0) debug information compression in executables')
 arg_parser.add_argument('--static-stdc++', dest='staticcxx', action='store_true',
                         help='Link libgcc and libstdc++ statically')
 arg_parser.add_argument('--static-thrift', dest='staticthrift', action='store_true',
@@ -1053,8 +1055,11 @@ if args.alloc_failure_injector:
 if args.split_dwarf:
     seastar_flags += ['--split-dwarf']
 
-modes['debug']['cxx_ld_flags'] += ' -gz'
-modes['release']['cxx_ld_flags'] += ' -gz'
+# We never compress debug info in debug mode
+modes['debug']['cxxflags'] += ' -gz'
+# We compress it by default in release mode
+flag_dest = 'cxx_ld_flags' if args.compress_exec_debuginfo else 'cxxflags'
+modes['release'][flag_dest] += ' -gz'
 
 modes['debug']['cxxflags'] += ' ' + dbgflag
 modes['release']['cxxflags'] += ' ' + dbgflag
