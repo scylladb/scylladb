@@ -429,7 +429,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
 
 future<> distributed_loader::load_new_sstables(distributed<database>& db, distributed<db::view::view_update_generator>& view_update_generator,
         sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables) {
-    return parallel_for_each(new_tables, [&db] (auto comps) {
+    return parallel_for_each(new_tables, [&] (auto comps) {
         auto cf_sstable_open = [comps] (column_family& cf, sstables::foreign_sstable_open_info info) {
             auto f = cf.open_sstable(std::move(info), comps.sstdir, comps.generation, comps.version, comps.format);
             return f.then([&cf] (sstables::shared_sstable sst) mutable {
@@ -439,7 +439,12 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, distri
                 return make_ready_future<>();
             });
         };
-        return distributed_loader::open_sstable(db, comps, cf_sstable_open, service::get_local_compaction_priority());
+        return distributed_loader::open_sstable(db, comps, cf_sstable_open, service::get_local_compaction_priority())
+            .handle_exception([comps, ks, cf] (std::exception_ptr ep) {
+                auto name = sstables::sstable::filename(comps.sstdir, ks, cf, comps.version, comps.generation, comps.format, sstables::component_type::TOC);
+                dblog.error("Failed to open {}: {}", name, ep);
+                return make_exception_future<>(ep);
+            });
     }).then([&db, &view_update_generator, ks, cf] {
         return db.invoke_on_all([&view_update_generator, ks = std::move(ks), cfname = std::move(cf)] (database& db) {
             auto& cf = db.find_column_family(ks, cfname);
@@ -460,10 +465,17 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, distri
                 cf._sstables_opened_but_not_loaded.clear();
                 cf.trigger_compaction();
             });
+        }).then([&db, ks, cf] () mutable {
+            return smp::submit_to(0, [&db, ks = std::move(ks), cf = std::move(cf)] () mutable {
+                distributed_loader::reshard(db, std::move(ks), std::move(cf));
+            });
         });
-    }).then([&db, ks, cf] () mutable {
-        return smp::submit_to(0, [&db, ks = std::move(ks), cf = std::move(cf)] () mutable {
-            distributed_loader::reshard(db, std::move(ks), std::move(cf));
+    }).handle_exception([&db, ks, cf] (std::exception_ptr ep) {
+        return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
+            auto& cf = db.find_column_family(ks, cfname);
+            cf._sstables_opened_but_not_loaded.clear();
+        }).then([ep] {
+            return make_exception_future<>(ep);
         });
     });
 }
