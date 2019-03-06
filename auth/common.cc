@@ -64,12 +64,10 @@ future<> create_metadata_table_if_missing(
         cql3::query_processor& qp,
         std::string_view cql,
         ::service::migration_manager& mm) {
+    static auto ignore_existing = [] (seastar::noncopyable_function<future<>()> func) {
+        return futurize_apply(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
+    };
     auto& db = qp.db();
-
-    if (db.has_schema(meta::AUTH_KS, sstring(table_name))) {
-        return make_ready_future<>();
-    }
-
     auto parsed_statement = static_pointer_cast<cql3::statements::raw::cf_statement>(
             cql3::query_processor::parse_statement(cql));
 
@@ -83,8 +81,11 @@ future<> create_metadata_table_if_missing(
 
     schema_builder b(schema);
     b.set_uuid(uuid);
+    schema_ptr table = b.build();
+    return ignore_existing([&mm, table = std::move(table)] () {
+        return mm.announce_new_column_family(table, false);
+    });
 
-    return mm.announce_new_column_family(b.build(), false);
 }
 
 future<> wait_for_schema_agreement(::service::migration_manager& mm, const database& db, seastar::abort_source& as) {
