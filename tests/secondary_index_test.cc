@@ -821,3 +821,57 @@ SEASTAR_TEST_CASE(test_local_index_multi_pk_columns) {
     });
 }
 
+SEASTAR_TEST_CASE(test_local_index_case_sensitive) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE \"FooBar\" (a int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON \"FooBar\" ((a),b)").get();
+        e.execute_cql("INSERT INTO \"FooBar\" (a, b, c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from \"FooBar\" WHERE a = 1 AND b = 1").get();
+
+        e.execute_cql("CREATE TABLE tab (a int PRIMARY KEY, \"FooBar\" int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab ((a),\"FooBar\")").get();
+
+        e.execute_cql("INSERT INTO tab (a, \"FooBar\", c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab WHERE a = 1 and \"FooBar\" = 2").get();
+
+        e.execute_cql("CREATE TABLE tab2 (\"FooBar\" int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab2 ((\"FooBar\"),b)").get();
+        e.execute_cql("INSERT INTO tab2 (\"FooBar\", b, c) VALUES (1, 2, 3)").get();
+
+        e.execute_cql("SELECT * from tab2 WHERE \"FooBar\" = 1 AND b = 2").get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_local_index_unorthodox_name) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (a int PRIMARY KEY, \"Comma\\,,\" int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab ((a),\"Comma\\,,\")").get();
+        e.execute_cql("INSERT INTO tab (a, \"Comma\\,,\", c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab WHERE a = 1 and \"Comma\\,,\" = 2").get();
+
+        e.execute_cql("CREATE TABLE tab2 (\"CommaWithParentheses,abc)\" int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab2 ((\"CommaWithParentheses,abc)\"),b)").get();
+        e.execute_cql("INSERT INTO tab2 (\"CommaWithParentheses,abc)\", b, c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab2 WHERE \"CommaWithParentheses,abc)\" = 1 AND b = 2").get();
+
+        e.execute_cql("CREATE TABLE tab3 (\"YetAnotherComma\\,ff,a\" int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab3 ((\"YetAnotherComma\\,ff,a\"),b)").get();
+        e.execute_cql("INSERT INTO tab3 (\"YetAnotherComma\\,ff,a\", b, c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab3 WHERE \"YetAnotherComma\\,ff,a\" = 1 AND b = 2").get();
+
+        e.execute_cql("CREATE TABLE tab4 (\"escapedcomma\\,inthemiddle\" int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab4 ((\"escapedcomma\\,inthemiddle\"),b)").get();
+        e.execute_cql("INSERT INTO tab4 (\"escapedcomma\\,inthemiddle\", b, c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab4 WHERE \"escapedcomma\\,inthemiddle\" = 1 AND b = 2").get();
+
+        e.execute_cql("CREATE TABLE tab5 (a int PRIMARY KEY, \"(b)\" int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab5 (\"(b)\")").get();
+        e.execute_cql("INSERT INTO tab5 (a, \"(b)\", c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab5 WHERE \"(b)\" = 1").get();
+
+        e.execute_cql("CREATE TABLE tab6 (\"trailingbacklash\\\" int, b int, c int, d int, primary key ((\"trailingbacklash\\\", b)))").get();
+        e.execute_cql("CREATE INDEX ON tab6((\"trailingbacklash\\\", b),c)").get();
+        e.execute_cql("INSERT INTO tab6 (\"trailingbacklash\\\", b, c, d) VALUES (1, 2, 3, 4)").get();
+        e.execute_cql("SELECT * FROM tab6 WHERE c = 3 and \"trailingbacklash\\\" = 1 and b = 2").get();
+    });
+}
