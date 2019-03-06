@@ -875,3 +875,32 @@ SEASTAR_TEST_CASE(test_local_index_unorthodox_name) {
         e.execute_cql("SELECT * FROM tab6 WHERE c = 3 and \"trailingbacklash\\\" = 1 and b = 2").get();
     });
 }
+
+SEASTAR_TEST_CASE(test_local_index_operations) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE t (p1 int, p2 int, c int, v1 int, v2 int, PRIMARY KEY ((p1,p2),c))").get();
+        // Both global and local indexes can be created
+        e.execute_cql("CREATE INDEX ON t (v1)").get();
+        e.execute_cql("CREATE INDEX ON t ((p1,p2),v1)").get();
+
+        // Duplicate index cannot be created, even if it's named
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON t ((p1,p2),v1)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX named_idx ON t ((p1,p2),v1)").get(), exceptions::invalid_request_exception);
+        e.execute_cql("CREATE INDEX IF NOT EXISTS named_idx ON t ((p1,p2),v1)").get();
+
+        // Even with global index dropped, duplicated local index cannot be created
+        e.execute_cql("DROP INDEX t_v1_idx").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX named_idx ON t ((p1,p2),v1)").get(), exceptions::invalid_request_exception);
+
+        e.execute_cql("DROP INDEX t_v1_idx_1").get();
+        e.execute_cql("CREATE INDEX named_idx ON t ((p1,p2),v1)").get();
+        e.execute_cql("DROP INDEX named_idx").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("DROP INDEX named_idx").get(), exceptions::invalid_request_exception);
+        e.execute_cql("DROP INDEX IF EXISTS named_idx").get();
+
+        // Even if a default name is taken, it's possible to create a local index
+        e.execute_cql("CREATE INDEX t_v1_idx ON t(v2)").get();
+        e.execute_cql("CREATE INDEX ON t(v1)").get();
+    });
+}
