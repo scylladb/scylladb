@@ -201,6 +201,14 @@ public:
         return bool(_seal_immediate_fn);
     }
 
+    bool empty() const {
+        for (auto& m : _memtables) {
+           if (!m->empty()) {
+               return false;
+            }
+        }
+        return true;
+    }
     shared_memtable back() {
         return _memtables.back();
     }
