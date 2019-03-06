@@ -61,6 +61,8 @@ struct target_parser {
     static bool is_local(sstring target_string);
 
     static sstring get_target_column_name_from_string(const sstring& targets);
+
+    static sstring serialize_targets(const std::vector<::shared_ptr<cql3::statements::index_target>>& targets);
 };
 
 }
