@@ -49,6 +49,7 @@
 #include "schema_builder.hh"
 #include "request_validations.hh"
 #include "database.hh"
+#include "index/target_parser.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string/join.hpp>
@@ -339,10 +340,7 @@ index_metadata create_index_statement::make_index_metadata(schema_ptr schema,
                                                            const index_options_map& options)
 {
     index_options_map new_options = options;
-    auto target_option = boost::algorithm::join(targets | boost::adaptors::transformed(
-            [schema](const auto &target) -> sstring {
-                return target->as_string();
-            }), ",");
+    auto target_option = secondary_index::target_parser::serialize_targets(targets);
     new_options.emplace(index_target::target_option_name, target_option);
 
     const auto& first_target = targets.front()->value;
