@@ -408,8 +408,8 @@ public:
         write_test_values_impl(stats_value, stats_names, values, std::index_sequence_for<Ts...>{});
     }
 
-    void write_test_values(const sstring_vec& params, const stats_values& values,
-            const output_items& param_names, const output_items& stats_names) override {
+    void write_test_values_common(const sstring_vec& params, const std::vector<stats_values>& values,
+            const output_items& param_names, const output_items& stats_names, bool summary_result) {
         Json::Value root{Json::objectValue};
         root["test_group_properties"] = _tg_properties;
         Json::Value params_value{Json::objectValue};
@@ -449,8 +449,9 @@ public:
         }
 
         Json::Value stats_value{Json::objectValue};
+        assert(values.size() == 1);
         for (size_t i = 0; i < stats_names.size(); ++i) {
-            write_test_values_impl(stats_value, stats_names, values);
+            write_test_values_impl(stats_value, stats_names, values.front());
         }
         Json::Value result_value{Json::objectValue};
         result_value["parameters"] = params_value;
@@ -465,6 +466,11 @@ public:
         filename = sanitize_filename(filename);
         std::ofstream result_file{(_current_dir + filename).c_str()};
         result_file << root;
+    }
+
+    void write_test_values(const sstring_vec& params, stats_values& values,
+            const output_items& param_names, const output_items& stats_names) override {
+        write_test_values_common(params, {values}, param_names, stats_names, true);
     }
 };
 
