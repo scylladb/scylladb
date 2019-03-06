@@ -35,6 +35,10 @@
 #include "log.hh"
 #include "release.hh"
 #include "sstables/compaction_manager.hh"
+#include "sstables/sstables.hh"
+#include "database.hh"
+
+sstables::sstable::version_types get_highest_supported_format();
 
 namespace api {
 
@@ -72,6 +76,19 @@ static std::vector<ss::token_range> describe_ring(const sstring& keyspace) {
 }
 
 void set_storage_service(http_context& ctx, routes& r) {
+    using ks_cf_func = std::function<future<json::json_return_type>(std::unique_ptr<request>, sstring, std::vector<sstring>)>;
+
+    auto wrap_ks_cf = [&ctx](ks_cf_func f) {
+        return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
+            auto keyspace = validate_keyspace(ctx, req->param);
+            auto column_families = split_cf(req->get_query_param("cf"));
+            if (column_families.empty()) {
+                column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+            }
+            return f(std::move(req), std::move(keyspace), std::move(column_families));
+        };
+    };
+
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
             return make_ready_future<json::json_return_type>(id.to_sstring());
@@ -299,24 +316,44 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::scrub.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_family = req->get_query_param("cf");
-        auto disable_snapshot = req->get_query_param("disable_snapshot");
+    ss::scrub.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+        // TODO: respect this
         auto skip_corrupted = req->get_query_param("skip_corrupted");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
 
-    ss::upgrade_sstables.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_family = req->get_query_param("cf");
-        auto exclude_current_version = req->get_query_param("exclude_current_version");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
+        auto f = make_ready_future<>();
+        if (!req_param<bool>(*req, "disable_snapshot", false)) {
+            auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
+            f = parallel_for_each(column_families, [keyspace, tag](sstring cf) {
+                return service::get_local_storage_service().take_column_family_snapshot(keyspace, cf, tag);
+            });
+        }
+
+        return f.then([&ctx, keyspace, column_families] {
+            return ctx.db.invoke_on_all([=] (database& db) {
+                return do_for_each(column_families, [=, &db](sstring cfname) {
+                    auto& cm = db.get_compaction_manager();
+                    auto& cf = db.find_column_family(keyspace, cfname);
+                    return cm.perform_sstable_scrub(&cf);
+                });
+            });
+        }).then([]{
+            return make_ready_future<json::json_return_type>(0);
+        });
+    }));
+
+    ss::upgrade_sstables.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+        bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
+
+        return ctx.db.invoke_on_all([=] (database& db) {
+            return do_for_each(column_families, [=, &db](sstring cfname) {
+                auto& cm = db.get_compaction_manager();
+                auto& cf = db.find_column_family(keyspace, cfname);
+                return cm.perform_sstable_upgrade(&cf, exclude_current_version);
+            });
+        }).then([]{
+            return make_ready_future<json::json_return_type>(0);
+        });
+    }));
 
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);

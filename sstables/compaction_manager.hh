@@ -144,6 +144,10 @@ private:
     compaction_backlog_manager _backlog_manager;
     seastar::scheduling_group _scheduling_group;
     size_t _available_memory;
+
+    using get_candidates_func = std::function<std::vector<sstables::shared_sstable>(const column_family&)>;
+
+    future<> rewrite_sstables(column_family* cf, bool is_cleanup, get_candidates_func);
 public:
     compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory);
     compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares);
@@ -165,6 +169,12 @@ public:
 
     // Submit a column family to be cleaned up and wait for its termination.
     future<> perform_cleanup(column_family* cf);
+
+    // Submit a column family to be upgraded and wait for its termination.
+    future<> perform_sstable_upgrade(column_family* cf, bool exclude_current_version);
+
+    // Submit a column family to be scrubbed and wait for its termination.
+    future<> perform_sstable_scrub(column_family* cf);
 
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);
