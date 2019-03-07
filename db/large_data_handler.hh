@@ -60,7 +60,8 @@ public:
 
     future<> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const {
-        if (__builtin_expect(!_stopped && row_size > _row_threshold_bytes, false)) {
+        assert(!stopped());
+        if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
             return record_large_rows(sst, partition_key, clustering_key, row_size);
         }
         return make_ready_future<>();
