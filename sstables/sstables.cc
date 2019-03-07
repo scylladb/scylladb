@@ -3144,20 +3144,20 @@ sstable::unlink()
 }
 
 static future<>
-maybe_delete_large_data_entry(shared_sstable sst, const db::large_data_handler& large_data_handler)
+maybe_delete_large_data_entry(shared_sstable sst, db::large_data_handler& large_data_handler)
 {
     auto name = sst->get_filename();
     return large_data_handler.maybe_delete_large_data_entries(*sst->get_schema(), name, sst->data_size());
 }
 
 static future<>
-delete_sstable_and_maybe_large_data_entries(shared_sstable sst, const db::large_data_handler& large_data_handler)
+delete_sstable_and_maybe_large_data_entries(shared_sstable sst, db::large_data_handler& large_data_handler)
 {
     return when_all(sst->unlink(), maybe_delete_large_data_entry(sst, large_data_handler)).discard_result();
 }
 
 future<>
-delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
+delete_atomically(std::vector<shared_sstable> ssts, db::large_data_handler& large_data_handler) {
     return seastar::async([ssts = std::move(ssts), &large_data_handler] {
         sstring sstdir;
         min_max_tracker<int64_t> gen_tracker;

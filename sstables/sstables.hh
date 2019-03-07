@@ -873,7 +873,7 @@ future<> await_background_jobs_on_all_shards();
 // until all shards agree it can be deleted.
 //
 // This function only solves the second problem for now.
-future<> delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler);
+future<> delete_atomically(std::vector<shared_sstable> ssts, db::large_data_handler& large_data_handler);
 future<> replay_pending_delete_log(sstring log_file);
 
 struct index_sampling_state {
