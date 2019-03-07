@@ -103,6 +103,18 @@ void set_messaging_service(http_context& ctx, routes& r) {
         return 0;
     }));
 
+    get_dropped_messages_verb.set(r, [](std::unique_ptr<request> req) {
+        ns_get_dropped_messages_verb::verb v = ns_get_dropped_messages_verb::str2verb(req->param["verb"]);
+        verb_counter::verb_wrapper vw(v); //safe enum translation using the verb_wrapper
+        netw::messaging_verb verb = vw;
+
+        return netw::get_messaging_service().map_reduce0([verb](const messaging_service& m) {
+            return m.get_dropped_messages_ma(verb).rate();
+        }, utils::rate_moving_average(), std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& res) {
+            return make_ready_future<json::json_return_type>(meter_to_json(res));
+        });
+    });
+
     get_exception_messages.set(r, get_client_getter([](const shard_info& c) {
         return c.get_stats().exception_received;
     }));
