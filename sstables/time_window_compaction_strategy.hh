@@ -59,7 +59,7 @@ class time_window_backlog_tracker;
 
 class time_window_compaction_strategy_options {
 public:
-    static constexpr std::chrono::seconds DEFAULT_COMPACTION_WINDOW_UNIT(int window_size) { return window_size * 86400s; }
+    static constexpr std::chrono::seconds DEFAULT_COMPACTION_WINDOW_UNIT = 86400s;
     static constexpr int DEFAULT_COMPACTION_WINDOW_SIZE = 1;
     static constexpr std::chrono::seconds DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS() { return 600s; }
 
@@ -79,12 +79,13 @@ private:
         { "MILLISECONDS", timestamp_resolutions::millisecond },
     };
 
-    std::chrono::seconds sstable_window_size = DEFAULT_COMPACTION_WINDOW_UNIT(DEFAULT_COMPACTION_WINDOW_SIZE);
+    std::chrono::seconds sstable_window_size = DEFAULT_COMPACTION_WINDOW_UNIT * DEFAULT_COMPACTION_WINDOW_SIZE;
     db_clock::duration expired_sstable_check_frequency = DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS();
     timestamp_resolutions timestamp_resolution = timestamp_resolutions::microsecond;
 public:
     time_window_compaction_strategy_options(const std::map<sstring, sstring>& options) {
-        std::chrono::seconds window_unit;
+        std::chrono::seconds window_unit = DEFAULT_COMPACTION_WINDOW_UNIT;
+        int window_size = DEFAULT_COMPACTION_WINDOW_SIZE;
 
         auto it = options.find(COMPACTION_WINDOW_UNIT_KEY);
         if (it != options.end()) {
@@ -98,11 +99,13 @@ public:
         it = options.find(COMPACTION_WINDOW_SIZE_KEY);
         if (it != options.end()) {
             try {
-                sstable_window_size = std::stoi(it->second) * window_unit;
+                window_size = std::stoi(it->second);
             } catch (const std::exception& e) {
                 throw exceptions::syntax_exception(sstring("Invalid integer value ") + it->second + " for " + COMPACTION_WINDOW_SIZE_KEY);
             }
         }
+
+        sstable_window_size = window_size * window_unit;
 
         it = options.find(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
         if (it != options.end()) {
