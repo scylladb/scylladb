@@ -28,7 +28,7 @@
 namespace db {
 
 future<> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
-    assert(!_stopped);
+    assert(!stopped());
     if (partition_size > _partition_threshold_bytes) {
         ++_stats.partitions_bigger_than_threshold;
         return record_large_partitions(sst, key, partition_size);
