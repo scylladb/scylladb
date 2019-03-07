@@ -31,7 +31,9 @@ future<> large_data_handler::maybe_record_large_partitions(const sstables::sstab
     assert(!stopped());
     if (partition_size > _partition_threshold_bytes) {
         ++_stats.partitions_bigger_than_threshold;
-        return record_large_partitions(sst, key, partition_size);
+        return with_sem([&sst, &key, partition_size, this] {
+            return record_large_partitions(sst, key, partition_size);
+        });
     }
     return make_ready_future<>();
 }

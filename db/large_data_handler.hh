@@ -39,6 +39,26 @@ public:
     };
 
 private:
+    // Assuming:
+    // * there is at most one log entry every 1MB
+    // * the average latency of the log is 4ms (depends on the load)
+    // * we aim to sustain 1GB/s of write bandwidth
+    // We need a concurrency of:
+    //  C = (1GB/s / 1MB) * 4ms = 1k/s * 4ms = 4
+    // 16 should be enough for everybody.
+    static const size_t max_concurrency = 16;
+    semaphore _sem{max_concurrency};
+
+    // A convenience function for using the above semaphore. Unlike the global with_semaphore, this will not wait on the
+    // future returned by func. The objective is for the future returned by func to run in parallel with whatever the
+    // caller is doing, but limit how far behind we can get.
+    template<typename Func>
+    future<> with_sem(Func&& func) {
+        return get_units(_sem, 1).then([func = std::forward<Func>(func)] (auto units) mutable {
+            func().finally([units = std::move(units)] {});
+        });
+    }
+
     bool _stopped = false;
     uint64_t _partition_threshold_bytes;
     uint64_t _row_threshold_bytes;
@@ -50,20 +70,21 @@ public:
         , _row_threshold_bytes(row_threshold_bytes) {}
     virtual ~large_data_handler() {}
 
-    // Once large_data_handler is stopped it will ignore requests to update system.large_partitions. Any futures already
-    // returned must be waited for by the caller.
+    // Once large_data_handler is stopped no further updates will be accepted.
     bool stopped() const { return _stopped; }
     future<> stop() {
         assert(!stopped());
         _stopped = true;
-        return make_ready_future<>();
+        return _sem.wait(max_concurrency);
     }
 
     future<> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) {
         assert(!stopped());
         if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
-            return record_large_rows(sst, partition_key, clustering_key, row_size);
+            return with_sem([&sst, &partition_key, clustering_key, row_size, this] {
+                return record_large_rows(sst, partition_key, clustering_key, row_size);
+            });
         }
         return make_ready_future<>();
     }
@@ -74,11 +95,15 @@ public:
         assert(!stopped());
         future<> large_partitions = make_ready_future<>();
         if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
-            large_partitions = delete_large_data_entries(s, filename, db::system_keyspace::LARGE_PARTITIONS);
+            large_partitions = with_sem([&s, &filename, this] {
+                return delete_large_data_entries(s, filename, db::system_keyspace::LARGE_PARTITIONS);
+            });
         }
         future<> large_rows = make_ready_future<>();
         if (__builtin_expect(data_size > _row_threshold_bytes, false)) {
-            large_rows = delete_large_data_entries(s, filename, db::system_keyspace::LARGE_ROWS);
+            large_rows = with_sem([&s, &filename, this] {
+                return delete_large_data_entries(s, filename, db::system_keyspace::LARGE_ROWS);
+            });
         }
         return when_all(std::move(large_partitions), std::move(large_rows)).discard_result();
     }
