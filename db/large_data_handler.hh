@@ -53,9 +53,10 @@ public:
     // Once large_data_handler is stopped it will ignore requests to update system.large_partitions. Any futures already
     // returned must be waited for by the caller.
     bool stopped() const { return _stopped; }
-    void stop() {
+    future<> stop() {
         assert(!stopped());
         _stopped = true;
+        return make_ready_future<>();
     }
 
     future<> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,

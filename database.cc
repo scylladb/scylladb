@@ -1665,12 +1665,14 @@ future<> stop_database(sharded<database>& sdb) {
         });
     }).then([&sdb] {
         return sdb.invoke_on_all([](database& db) {
-            db.stop_large_data_handler();
+            return db.stop_large_data_handler();
         });
     });
 }
 
-void database::stop_large_data_handler() { _large_data_handler->stop(); }
+future<> database::stop_large_data_handler() {
+    return _large_data_handler->stop();
+}
 
 future<>
 database::stop() {
