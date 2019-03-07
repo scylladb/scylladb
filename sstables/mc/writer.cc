@@ -1190,12 +1190,12 @@ void writer::write_static_row(const row& static_row, column_kind kind) {
     _partition_header_length += (_data_writer->offset() - current_pos);
 
     collect_row_stats(_data_writer->offset() - current_pos, nullptr);
+    _static_row_written = true;
 }
 
 stop_iteration writer::consume(static_row&& sr) {
     ensure_tombstone_is_written();
     write_static_row(sr.cells(), column_kind::static_column);
-    _static_row_written = true;
     return stop_iteration::no;
 }
 
