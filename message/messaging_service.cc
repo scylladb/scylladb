@@ -225,10 +225,15 @@ void messaging_service::foreach_server_connection_stats(std::function<void(const
 
 void messaging_service::increment_dropped_messages(messaging_verb verb) {
     _dropped_messages[static_cast<int32_t>(verb)]++;
+    _dropped_messages_ma[static_cast<int32_t>(verb)].mark();
 }
 
 uint64_t messaging_service::get_dropped_messages(messaging_verb verb) const {
     return _dropped_messages[static_cast<int32_t>(verb)];
+}
+
+const utils::timed_rate_moving_average& messaging_service::get_dropped_messages_ma(messaging_verb verb) const {
+    return _dropped_messages_ma[static_cast<int32_t>(verb)];
 }
 
 const uint64_t* messaging_service::get_dropped_messages() const {

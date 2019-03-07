@@ -161,6 +161,10 @@ public:
     void increment_dropped_messages(messaging_verb verb);
 
     uint64_t get_dropped_messages(messaging_verb verb) const;
+    /**
+     * \brief return a moving average of dropped messages by verb type
+     */
+    const utils::timed_rate_moving_average& get_dropped_messages_ma(messaging_verb verb) const;
 
     const uint64_t* get_dropped_messages() const;
 
@@ -212,6 +216,7 @@ private:
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::array<clients_map, 4> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
+    utils::timed_rate_moving_average _dropped_messages_ma[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _stopping = false;
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
     memory_config _mcfg;
