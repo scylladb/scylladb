@@ -48,14 +48,9 @@
 #include <vector>
 
 #include <seastar/core/sstring.hh>
-#include <seastar/core/shared_ptr.hh>
 
 #include "bytes.hh"
-
-class schema_extension;
-class schema;
-
-using schema_ptr = lw_shared_ptr<const schema>;
+#include "schema_fwd.hh"
 
 namespace sstables {
 class file_io_extension;
