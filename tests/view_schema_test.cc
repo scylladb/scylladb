@@ -3789,7 +3789,7 @@ SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
 
         // remove selected column, view row is removed
         e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=null, b=null WHERE k=1 AND c=1;").get();
-            eventually([&] {
+        eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
             assert_that(msg).is_rows().with_size(0);
             msg = e.execute_cql("SELECT * FROM mv").get0();
@@ -3850,7 +3850,7 @@ SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
 
         // update unselected, view row should be alive
         e.execute_cql("UPDATE t USING TIMESTAMP 4 SET f=1 WHERE k=1 AND c=1;").get();
-            eventually([&] {
+        eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
             assert_that(msg).is_rows().with_rows({
                 { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
@@ -3877,7 +3877,7 @@ SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
 
         // remove unselected, view row should be removed
         e.execute_cql("UPDATE t USING TIMESTAMP 4 SET f=null WHERE k=1 AND c=1;").get();
-            eventually([&] {
+        eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
             assert_that(msg).is_rows().with_size(0);
             msg = e.execute_cql("SELECT * FROM mv").get0();
@@ -3920,8 +3920,8 @@ SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
         });
 
         // add selected with ttl=1
-        e.execute_cql("UPDATE t USING TTL 1 SET a=1 WHERE k=1 AND c=1;").get();
-            eventually([&] {
+        e.execute_cql("UPDATE t USING TTL 30 SET a=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
             assert_that(msg).is_rows().with_rows({
                 { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, {} },
@@ -3932,7 +3932,7 @@ SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
             });
         });
 
-        forward_jump_clocks(2s);
+        forward_jump_clocks(31s);
 
         eventually([&] {
             msg = e.execute_cql("SELECT * FROM mv").get0();
@@ -3940,7 +3940,7 @@ SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
         });
 
         // update unselected with ttl=1, view row should be alive
-        e.execute_cql("UPDATE t USING TTL 1 SET f=1 WHERE k=1 AND c=1;").get();
+        e.execute_cql("UPDATE t USING TTL 30 SET f=1 WHERE k=1 AND c=1;").get();
 
         eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
@@ -3953,7 +3953,7 @@ SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
             });
         });
 
-        forward_jump_clocks(2s);
+        forward_jump_clocks(31s);
 
         eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
@@ -4010,7 +4010,7 @@ SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp) {
 
         // remove selected column, view row is removed
         e.execute_cql("UPDATE t USING TIMESTAMP 2 SET a=null, e=null, b=null WHERE k=1 AND c=1;").get();
-            eventually([&] {
+        eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
             assert_that(msg).is_rows().with_size(0);
             msg = e.execute_cql("SELECT * FROM mv").get0();
@@ -4058,7 +4058,7 @@ SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp) {
 
         // update unselected, view row should be alive
         e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=1, f=1 WHERE k=1 AND c=1;").get();
-            eventually([&] {
+        eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
             assert_that(msg).is_rows().with_rows({
                 { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
@@ -4085,7 +4085,7 @@ SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp) {
 
         // remove unselected, view row should be removed
         e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=null, f=null WHERE k=1 AND c=1;").get();
-            eventually([&] {
+        eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
             assert_that(msg).is_rows().with_size(0);
             msg = e.execute_cql("SELECT * FROM mv").get0();
@@ -4115,8 +4115,8 @@ SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp) {
         });
 
         // add selected with ttl=1
-        e.execute_cql("UPDATE t USING TTL 1 SET a=1, b=1 WHERE k=1 AND c=1;").get();
-            eventually([&] {
+        e.execute_cql("UPDATE t USING TTL 30 SET a=1, b=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
             msg = e.execute_cql("SELECT * FROM t").get0();
             assert_that(msg).is_rows().with_rows({
                 { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {} },
@@ -4127,7 +4127,7 @@ SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp) {
             });
         });
 
-        seastar::sleep(1s).get();
+        forward_jump_clocks(31s);
 
         eventually([&] {
             msg = e.execute_cql("SELECT * FROM mv").get0();
