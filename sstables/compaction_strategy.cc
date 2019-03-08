@@ -420,6 +420,24 @@ std::unique_ptr<sstable_set_impl> make_partitioned_sstable_set(schema_ptr schema
     return std::make_unique<partitioned_sstable_set>(std::move(schema), use_level_metadata);
 }
 
+compaction_descriptor compaction_strategy_impl::get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
+    return compaction_descriptor(std::move(candidates));
+}
+
+bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before) {
+    if (_disable_tombstone_compaction) {
+        return false;
+    }
+    // ignore sstables that were created just recently because there's a chance
+    // that expired tombstones still cover old data and thus cannot be removed.
+    // We want to avoid a compaction loop here on the same data by considering
+    // only old enough sstables.
+    if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
+        return false;
+    }
+    return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
+}
+
 std::vector<resharding_descriptor>
 compaction_strategy_impl::get_resharding_jobs(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
     std::vector<resharding_descriptor> jobs;
