@@ -35,8 +35,22 @@
 #include "types/user.hh"
 #include "concrete_types.hh"
 
+namespace std {
+std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_types) {
+    for (size_t i = 0; i < arg_types.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << arg_types[i]->as_cql3_type().to_string();
+    }
+    return os;
+}
+}
+
 namespace cql3 {
 namespace functions {
+
+static logging::logger log("cql3_fuctions");
 
 thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
 
@@ -164,6 +178,33 @@ functions::init() {
     MigrationManager.instance.register(new FunctionsMigrationListener());
 #endif
     return ret;
+}
+
+void functions::add_function(shared_ptr<function> func) {
+    if (find(func->name(), func->arg_types())) {
+        throw std::logic_error(format("duplicated function {}", func));
+    }
+    _declared.emplace(func->name(), func);
+}
+
+template <typename F>
+void functions::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f) {
+    auto i = find_iter(name, arg_types);
+    if (i == _declared.end() || i->second->is_native()) {
+        log.error("attempted to remove or alter non existent user defined function {}({})", name, arg_types);
+        return;
+    }
+    f(i);
+}
+
+void functions::replace_function(shared_ptr<function> func) {
+    with_udf_iter(func->name(), func->arg_types(), [func] (functions::declared_t::iterator i) {
+        i->second = std::move(func);
+    });
+}
+
+void functions::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
+    with_udf_iter(name, arg_types, [] (functions::declared_t::iterator i) { _declared.erase(i); });
 }
 
 shared_ptr<column_specification>

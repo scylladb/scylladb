@@ -90,7 +90,13 @@ public:
     static boost::iterator_range<declared_t::iterator> find(const function_name& name);
     static declared_t::iterator find_iter(const function_name& name, const std::vector<data_type>& arg_types);
     static shared_ptr<function> find(const function_name& name, const std::vector<data_type>& arg_types);
+    static void add_function(shared_ptr<function>);
+    static void replace_function(shared_ptr<function>);
+    static void remove_function(const function_name& name, const std::vector<data_type>& arg_types);
 private:
+    template <typename F>
+    static void with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f);
+
     // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common
     // case where there is no override for a given function. This is thus probably worth the minor code duplication.
     static void validate_types(database& db,
@@ -104,50 +110,6 @@ private:
             const std::vector<shared_ptr<assignment_testable>>& provided_args,
             const sstring& receiver_ks,
             const sstring& receiver_cf);
-#if 0
-    // This is *not* thread safe but is only called in SchemaTables that is synchronized.
-    public static void addFunction(AbstractFunction fun)
-    {
-        // We shouldn't get there unless that function don't exist
-        assert find(fun.name(), fun.argTypes()) == null;
-        declare(fun);
-    }
-
-    // Same remarks than for addFunction
-    public static void removeFunction(FunctionName name, List<AbstractType<?>> argsTypes)
-    {
-        Function old = find(name, argsTypes);
-        assert old != null && !old.isNative();
-        declared.remove(old.name(), old);
-    }
-
-    // Same remarks than for addFunction
-    public static void replaceFunction(AbstractFunction fun)
-    {
-        removeFunction(fun.name(), fun.argTypes());
-        addFunction(fun);
-    }
-
-    public static List<Function> getReferencesTo(Function old)
-    {
-        List<Function> references = new ArrayList<>();
-        for (Function function : declared.values())
-            if (function.hasReferenceTo(old))
-                references.add(function);
-        return references;
-    }
-
-    public static Collection<Function> all()
-    {
-        return declared.values();
-    }
-
-    public static boolean typeEquals(AbstractType<?> t1, AbstractType<?> t2)
-    {
-        return t1.asCQL3Type().toString().equals(t2.asCQL3Type().toString());
-    }
-
-#endif
 
     static bool type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2);
 
