@@ -59,13 +59,6 @@ namespace cql3 {
 
 namespace functions {
 
-#if 0
-    // We special case the token function because that's the only function whose argument types actually
-    // depend on the table on which the function is called. Because it's the sole exception, it's easier
-    // to handle it as a special case.
-    private static final FunctionName TOKEN_FUNCTION_NAME = FunctionName.nativeFunction("token");
-#endif
-
 class functions {
     static thread_local std::unordered_multimap<function_name, shared_ptr<function>> _declared;
 private:
