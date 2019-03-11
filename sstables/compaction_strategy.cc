@@ -473,6 +473,14 @@ compaction_strategy_impl::get_resharding_jobs(column_family& cf, std::vector<sst
     return jobs;
 }
 
+uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
+    return partition_estimate;
+}
+
+reader_consumer compaction_strategy_impl::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) {
+    return end_consumer;
+}
+
 // The backlog for TWCS is just the sum of the individual backlogs in each time window.
 // We'll keep various SizeTiered backlog tracker objects-- one per window for the static SSTables.
 // We then scan the current compacting and in-progress writes and matching them to existing time
@@ -801,6 +809,14 @@ compaction_strategy::make_sstable_set(schema_ptr schema) const {
 
 compaction_backlog_tracker& compaction_strategy::get_backlog_tracker() {
     return _compaction_strategy_impl->get_backlog_tracker();
+}
+
+uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
+    return _compaction_strategy_impl->adjust_partition_estimate(ms_meta, partition_estimate);
+}
+
+reader_consumer compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) {
+    return _compaction_strategy_impl->make_interposer_consumer(ms_meta, std::move(end_consumer));
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {

@@ -21,6 +21,9 @@
 
 #pragma once
 
+#include <seastar/core/future.hh>
+#include <seastar/util/noncopyable_function.hh>
+
 #include "schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"
@@ -28,6 +31,9 @@
 
 class table;
 using column_family = table;
+
+class flat_mutation_reader;
+struct mutation_source_metadata;
 
 namespace sstables {
 
@@ -45,6 +51,8 @@ class sstable;
 class sstable_set;
 struct compaction_descriptor;
 struct resharding_descriptor;
+
+using reader_consumer = noncopyable_function<future<> (flat_mutation_reader)>;
 
 class compaction_strategy {
     ::shared_ptr<compaction_strategy_impl> _compaction_strategy_impl;
@@ -128,6 +136,10 @@ public:
     sstable_set make_sstable_set(schema_ptr schema) const;
 
     compaction_backlog_tracker& get_backlog_tracker();
+
+    uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate);
+
+    reader_consumer make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer);
 };
 
 // Creates a compaction_strategy object from one of the strategies available.
