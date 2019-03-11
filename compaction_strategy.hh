@@ -21,14 +21,13 @@
 
 #pragma once
 
+#include "schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"
 #include "sstables/compaction_backlog_manager.hh"
 
 class table;
 using column_family = table;
-class schema;
-using schema_ptr = lw_shared_ptr<const schema>;
 
 namespace sstables {
 
