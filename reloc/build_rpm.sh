@@ -47,6 +47,6 @@ if [[ ! $OPTS =~ --reloc-pkg ]]; then
     OPTS="$OPTS --reloc-pkg $RELOC_PKG"
 fi
 mkdir -p build/redhat/scylla-package
-tar -C build/redhat/scylla-package -xpf $RELOC_PKG SCYLLA-*-FILE dist/redhat
+tar -C build/redhat/scylla-package -xpf $RELOC_PKG SCYLLA-RELOCATABLE-FILE SCYLLA-RELEASE-FILE SCYLLA-VERSION-FILE dist/redhat
 cd build/redhat/scylla-package
 exec ./dist/redhat/build_rpm.sh $OPTS
