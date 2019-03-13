@@ -58,8 +58,6 @@ public:
         return _raw.where_clause();
     }
 
-    bool is_index() const;
-
     cql3::statements::select_statement& select_statement() const;
     const query::partition_slice& partition_slice() const;
     const dht::partition_range_vector& partition_ranges() const;
