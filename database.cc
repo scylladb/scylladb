@@ -221,7 +221,8 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _enable_incremental_backups(cfg.incremental_backups())
     , _querier_cache(_read_concurrency_sem, dbcfg.available_memory * 0.04)
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024,
-              _cfg->compaction_large_row_warning_threshold_mb()*1024*1024))
+              _cfg->compaction_large_row_warning_threshold_mb()*1024*1024,
+              _cfg->compaction_large_cell_warning_threshold_mb()*1024*1024))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>(*this))
@@ -1665,12 +1666,14 @@ future<> stop_database(sharded<database>& sdb) {
         });
     }).then([&sdb] {
         return sdb.invoke_on_all([](database& db) {
-            db.stop_large_data_handler();
+            return db.stop_large_data_handler();
         });
     });
 }
 
-void database::stop_large_data_handler() { _large_data_handler->stop(); }
+future<> database::stop_large_data_handler() {
+    return _large_data_handler->stop();
+}
 
 future<>
 database::stop() {

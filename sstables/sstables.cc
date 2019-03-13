@@ -2118,7 +2118,7 @@ stop_iteration components_writer::consume_end_of_partition() {
     // compute size of the current row.
     _sst._c_stats.partition_size = _out.offset() - _sst._c_stats.start_offset;
 
-    _large_data_handler->maybe_update_large_partitions(_sst, *_partition_key, _sst._c_stats.partition_size).get();
+    _large_data_handler->maybe_record_large_partitions(_sst, *_partition_key, _sst._c_stats.partition_size).get();
 
     // update is about merging column_stats with the data being stored by collector.
     _sst._collector.update(std::move(_sst._c_stats));
@@ -3144,28 +3144,20 @@ sstable::unlink()
 }
 
 static future<>
-maybe_delete_large_data_entry(shared_sstable sst, const db::large_data_handler& large_data_handler)
+maybe_delete_large_data_entry(shared_sstable sst, db::large_data_handler& large_data_handler)
 {
     auto name = sst->get_filename();
-    return large_data_handler.maybe_delete_large_data_entries(*sst->get_schema(), name, sst->data_size())
-            .then_wrapped([name = std::move(name)] (future<> f) {
-        if (f.failed()) {
-            // Just log and ignore failures to delete large data entries.
-            // They are not critical to the operation of the database.
-            sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", name, f.get_exception());
-        }
-        return make_ready_future<>();
-    });
+    return large_data_handler.maybe_delete_large_data_entries(*sst->get_schema(), name, sst->data_size());
 }
 
 static future<>
-delete_sstable_and_maybe_large_data_entries(shared_sstable sst, const db::large_data_handler& large_data_handler)
+delete_sstable_and_maybe_large_data_entries(shared_sstable sst, db::large_data_handler& large_data_handler)
 {
     return when_all(sst->unlink(), maybe_delete_large_data_entry(sst, large_data_handler)).discard_result();
 }
 
 future<>
-delete_atomically(std::vector<shared_sstable> ssts, const db::large_data_handler& large_data_handler) {
+delete_atomically(std::vector<shared_sstable> ssts, db::large_data_handler& large_data_handler) {
     return seastar::async([ssts = std::move(ssts), &large_data_handler] {
         sstring sstdir;
         min_max_tracker<int64_t> gen_tracker;
