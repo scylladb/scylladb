@@ -3610,6 +3610,7 @@ void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint) {};
 void storage_proxy::on_up(const gms::inet_address& endpoint) {};
 
 void storage_proxy::on_down(const gms::inet_address& endpoint) {
+    assert(thread::running_in_thread());
     for (auto it = _view_update_handlers_list->begin(); it != _view_update_handlers_list->end(); ++it) {
         auto guard = it->shared_from_this();
         if (it->get_targets().count(endpoint) > 0) {
