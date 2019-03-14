@@ -513,6 +513,18 @@ database::setup_metrics() {
         sm::make_counter("large_partition_exceeding_threshold", [this] { return _large_data_handler->stats().partitions_bigger_than_threshold; },
             sm::description("Number of large partitions exceeding compaction_large_partition_warning_threshold_mb. "
                 "Large partitions have performance impact and should be avoided, check the documentation for details.")),
+
+        sm::make_total_operations("total_view_updates_pushed_local", _cf_stats.total_view_updates_pushed_local,
+                sm::description("Total number of view updates generated for tables and applied locally.")),
+
+        sm::make_total_operations("total_view_updates_pushed_remote", _cf_stats.total_view_updates_pushed_remote,
+                sm::description("Total number of view updates generated for tables and sent to remote replicas.")),
+
+        sm::make_total_operations("total_view_updates_failed_local", _cf_stats.total_view_updates_failed_local,
+                sm::description("Total number of view updates generated for tables and failed to be applied locally.")),
+
+        sm::make_total_operations("total_view_updates_failed_remote", _cf_stats.total_view_updates_failed_remote,
+                sm::description("Total number of view updates generated for tables and failed to be sent to remote replicas.")),
     });
 }
 

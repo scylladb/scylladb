@@ -297,6 +297,12 @@ struct cf_stats {
 
     // How many times view building was paused (e.g. due to node unavailability)
     int64_t view_building_paused = 0;
+
+    // How many view updates were processed for all tables
+    uint64_t total_view_updates_pushed_local = 0;
+    uint64_t total_view_updates_pushed_remote = 0;
+    uint64_t total_view_updates_failed_local = 0;
+    uint64_t total_view_updates_failed_remote = 0;
 };
 
 class table;

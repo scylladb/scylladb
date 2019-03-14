@@ -1010,6 +1010,7 @@ future<> mutate_MV(
         const dht::token& base_token,
         std::vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
+        cf_stats& cf_stats,
         db::timeout_semaphore_units pending_view_updates,
         service::allow_hints allow_hints)
 {
@@ -1021,7 +1022,7 @@ future<> mutate_MV(
         auto& keyspace_name = mut.s->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
-        auto maybe_account_failure = [&stats, units = pending_view_updates.split(mut.fm.representation().size())] (
+        auto maybe_account_failure = [&stats, &cf_stats, units = pending_view_updates.split(mut.fm.representation().size())] (
                 future<>&& f,
                 gms::inet_address target,
                 bool is_local,
@@ -1029,6 +1030,8 @@ future<> mutate_MV(
             if (f.failed()) {
                 stats.view_updates_failed_local += is_local;
                 stats.view_updates_failed_remote += remotes;
+                cf_stats.total_view_updates_failed_local += is_local;
+                cf_stats.total_view_updates_failed_remote += remotes;
                 auto ep = f.get_exception();
                 vlogger.error("Error applying view update to {}: {}", target, ep);
                 return make_exception_future<>(std::move(ep));
@@ -1047,6 +1050,8 @@ future<> mutate_MV(
 
             stats.view_updates_pushed_local += is_endpoint_local;
             stats.view_updates_pushed_remote += updates_pushed_remote;
+            cf_stats.total_view_updates_pushed_local += is_endpoint_local;
+            cf_stats.total_view_updates_pushed_remote += updates_pushed_remote;
 
             if (is_endpoint_local && pending_endpoints.empty()) {
                 // Note that we start here an asynchronous apply operation, and
@@ -1099,6 +1104,7 @@ future<> mutate_MV(
             // send to any pending view endpoints though.
             auto updates_pushed_remote = pending_endpoints.size();
             stats.view_updates_pushed_remote += updates_pushed_remote;
+            cf_stats.total_view_updates_pushed_remote += updates_pushed_remote;
             auto target = pending_endpoints.back();
             pending_endpoints.pop_back();
             fs->push_back(service::get_local_storage_proxy().send_to_endpoint(
