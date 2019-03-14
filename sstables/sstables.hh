@@ -595,6 +595,7 @@ private:
     // sstable that doesn't contain scylla component may contain wrong metadata,
     // and so max_local_deletion_time should be discarded for those.
     void validate_max_local_deletion_time();
+    void validate_partitioner();
 
     void set_first_and_last_keys();
 

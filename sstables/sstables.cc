@@ -1091,6 +1091,27 @@ void sstable::write_compression(const io_priority_class& pc) {
     write_simple<component_type::CompressionInfo>(_components->compression, pc);
 }
 
+void sstable::validate_partitioner() {
+    auto entry = _components->statistics.contents.find(metadata_type::Validation);
+    if (entry == _components->statistics.contents.end()) {
+        throw std::runtime_error("Validation metadata not available");
+    }
+    auto& p = entry->second;
+    if (!p) {
+        throw std::runtime_error("Validation is malformed");
+    }
+
+    validation_metadata& v = *static_cast<validation_metadata *>(p.get());
+    if (v.partitioner.value != to_bytes(dht::global_partitioner().name())) {
+        throw std::runtime_error(
+                fmt::format(FMT_STRING("SSTable {} uses {} partitioner which is different than {} partitioner used by the database"),
+                            get_filename(),
+                            sstring(reinterpret_cast<char*>(v.partitioner.value.data()), v.partitioner.value.size()),
+                            dht::global_partitioner().name()));
+    }
+
+}
+
 void sstable::validate_min_max_metadata() {
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
@@ -1372,6 +1393,7 @@ future<> sstable::load(const io_priority_class& pc) {
                     read_summary(pc)).then([this] {
                 validate_min_max_metadata();
                 validate_max_local_deletion_time();
+                validate_partitioner();
                 return open_data();
             });
         });
@@ -1386,6 +1408,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) {
         _shards = std::move(info.owners);
         validate_min_max_metadata();
         validate_max_local_deletion_time();
+        validate_partitioner();
         return update_info_for_opened_data();
     });
 }
