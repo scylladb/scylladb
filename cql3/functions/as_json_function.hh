@@ -106,7 +106,7 @@ public:
         return _selector_types;
     }
 
-    virtual data_type return_type() const override {
+    virtual const data_type& return_type() const override {
         return utf8_type;
     }
 

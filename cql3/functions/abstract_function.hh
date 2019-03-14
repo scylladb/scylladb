@@ -73,7 +73,7 @@ public:
         return _arg_types;
     }
 
-    virtual data_type return_type() const {
+    virtual const data_type& return_type() const {
         return _return_type;
     }
 
