@@ -667,11 +667,10 @@ rpc::sink<int32_t> messaging_service::make_sink_for_stream_mutation_fragments(rp
 
 future<rpc::sink<frozen_mutation_fragment>, rpc::source<int32_t>>
 messaging_service::make_sink_and_source_for_stream_mutation_fragments(utils::UUID schema_id, utils::UUID plan_id, utils::UUID cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, msg_addr id) {
-    auto wrapper = get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, id);
-    rpc_protocol::client& rpc_client = *wrapper;
-    return wrapper->make_stream_sink<netw::serializer, frozen_mutation_fragment>().then([this, plan_id, schema_id, cf_id, estimated_partitions, reason, &rpc_client] (rpc::sink<frozen_mutation_fragment> sink) mutable {
+    auto rpc_client = get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, id);
+    return rpc_client->make_stream_sink<netw::serializer, frozen_mutation_fragment>().then([this, plan_id, schema_id, cf_id, estimated_partitions, reason, rpc_client] (rpc::sink<frozen_mutation_fragment> sink) mutable {
         auto rpc_handler = rpc()->make_client<rpc::source<int32_t> (utils::UUID, utils::UUID, utils::UUID, uint64_t, streaming::stream_reason, rpc::sink<frozen_mutation_fragment>)>(messaging_verb::STREAM_MUTATION_FRAGMENTS);
-        return rpc_handler(rpc_client , plan_id, schema_id, cf_id, estimated_partitions, reason, sink).then_wrapped([sink] (future<rpc::source<int32_t>> source) mutable {
+        return rpc_handler(*rpc_client , plan_id, schema_id, cf_id, estimated_partitions, reason, sink).then_wrapped([sink, rpc_client] (future<rpc::source<int32_t>> source) mutable {
             return (source.failed() ? sink.close() : make_ready_future<>()).then([sink = std::move(sink), source = std::move(source)] () mutable {
                 return make_ready_future<rpc::sink<frozen_mutation_fragment>, rpc::source<int32_t>>(std::move(sink), std::move(source.get0()));
             });
