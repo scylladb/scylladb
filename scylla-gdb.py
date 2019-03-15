@@ -1741,6 +1741,169 @@ class scylla_tasks(gdb.Command):
             gdb.write('(task*) 0x%x  %s\n' % (ptr, resolve(vptr)))
 
 
+
+class scylla_fiber(gdb.Command):
+    """ Walk the continuation chain starting from the given task
+
+    Example (cropped for brevity):
+    (gdb) scylla fiber this
+    #0  (task*) 0x0000600000550360 0x000000000468ac40 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
+    #1  (task*) 0x0000600000550300 0x00000000046c3778 vtable for seastar::continuation<seastar::future<seastar::optimized_optional<mutation_fragment> >::then_impl<>()::{lambda(auto:2)#1}, seastar::optimized_optional<mutation_fragment> > + 16
+    #2  (task*) 0x00006000018af600 0x00000000046c37a0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
+    #3  (task*) 0x00006000005502a0 0x00000000046c37f0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
+    #4  (task*) 0x0000600001a65e10 0x00000000046c6b10 vtable for seastar::continuation<seastar::future<boost::iterator_range<mutation_fragment*> >::then_impl<...>(...)::{lambda(auto:1)#1}, boost::iterator_range<mutation_fragment*> > + 16
+     ^          ^                ^                    ^
+    (1)        (2)              (3)                  (4)
+
+    1) Task index (0 is the task passed to the command).
+    2) Pointer to the task object.
+    3) Pointer to the task's vtable.
+    4) Symbol name of the task's vtable.
+
+    Invoke `scylla fiber --help` for more information on usage.
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla fiber', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+        self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        # List of whitelisted symbol names. Each symbol is a tuple, where each
+        # element is a component of the name, the last element being the class
+        # name itself.
+        # We can't just merge them as `info symbol` might return mangled names too.
+        self._whitelist = scylla_fiber._make_symbol_matchers([
+                ("seastar", "continuation"),
+                ("seastar", "future", "thread_wake_task"),
+                ("seastar", "internal", "do_until_state"),
+                ("seastar", "internal", "do_with_state"),
+                ("seastar", "internal", "repeat_until_value_state"),
+                ("seastar", "internal", "repeater"),
+                ("seastar", "internal", "when_all_state_component"),
+                ("seastar", "lambda_task"),
+        ])
+
+
+    @staticmethod
+    def _make_symbol_matchers(symbol_specs):
+        return list(map(scylla_fiber._make_symbol_matcher, symbol_specs))
+
+    @staticmethod
+    def _make_symbol_matcher(symbol_spec):
+        unmangled_prefix = 'vtable for {}'.format('::'.join(symbol_spec))
+        def matches_symbol(name):
+            if name.startswith(unmangled_prefix):
+                return True
+
+            try:
+                positions = [name.index(part) for part in symbol_spec]
+                return sorted(positions) == positions
+            except ValueError:
+                return False
+
+        return matches_symbol
+
+    def _name_is_on_whitelist(self, name):
+        for matcher in self._whitelist:
+            if matcher(name):
+                return True
+        return False
+
+    def _maybe_log(self, msg, verbose):
+        if verbose:
+            gdb.write(msg)
+
+    def _probe_pointer(self, ptr, verbose):
+        """ Check if the pointer is a task pointer
+
+        The pattern we are looking for is:
+        ptr -> vtable ptr for a symbol that matches our whitelist
+
+        In addition, ptr has to point to a the beginning of an allocation
+        block, managed by seastar, that contains a live object.
+        """
+        try:
+            maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(self._vptr_type).dereference())
+            self._maybe_log(" -> 0x{:016x}".format(maybe_vptr), verbose)
+        except gdb.MemoryError:
+            self._maybe_log(" Not a pointer\n", verbose)
+            return
+
+        resolved_symbol = resolve(maybe_vptr, False)
+        if resolved_symbol is None:
+            self._maybe_log(" Not a vtable ptr\n", verbose)
+            return
+
+        self._maybe_log(" => {}".format(resolved_symbol), verbose)
+
+        if not self._name_is_on_whitelist(resolved_symbol):
+            self._maybe_log(" Symbol name doesn't match whitelisted symbols\n", verbose)
+            return
+
+        ptr_meta = scylla_ptr.analyze(ptr)
+        if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live or ptr_meta.offset_in_object != 0:
+            self._maybe_log(" Not the start of an allocation block or not a live object\n", verbose)
+            return
+
+        self._maybe_log(" Task found\n", verbose)
+
+        return ptr_meta, maybe_vptr, resolved_symbol
+
+    def _do_walk(self, ptr_meta, i, max_depth, verbose):
+        if max_depth > -1 and i >= max_depth:
+            return []
+
+        ptr = ptr_meta.ptr
+        region_start = ptr + self._vptr_type.sizeof # ignore our own vtable
+        region_end = region_start + (ptr_meta.size - ptr_meta.size % self._vptr_type.sizeof)
+        self._maybe_log("Scanning task #{} @ 0x{:016x}: {}\n".format(i, ptr, str(ptr_meta)), verbose)
+
+        for it in range(region_start, region_end, self._vptr_type.sizeof):
+            maybe_tptr = int(gdb.Value(it).reinterpret_cast(self._vptr_type).dereference())
+            self._maybe_log("0x{:016x}+0x{:04x} -> 0x{:016x}".format(ptr, it - ptr, maybe_tptr), verbose)
+
+            res = self._probe_pointer(maybe_tptr, verbose)
+
+            if res is None:
+                continue
+
+            tptr_meta, vptr, name = res
+
+            fiber = self._do_walk(tptr_meta, i + 1, max_depth, verbose)
+            fiber.append((maybe_tptr, vptr, name))
+            return fiber
+
+        return []
+
+    def _walk(self, ptr, max_depth, verbose):
+        ptr_meta = scylla_ptr.analyze(int(ptr))
+
+        if not ptr_meta.is_managed_by_seastar():
+            gdb.write("Task pointer 0x{:016x} is not an object managed by seastar\n")
+            return []
+
+        return reversed(self._do_walk(ptr_meta, 0, max_depth, verbose))
+
+    def invoke(self, arg, for_tty):
+        parser = argparse.ArgumentParser(description="scylla fiber")
+        parser.add_argument("-v", "--verbose", action="store_true", default=False,
+                help="Make the command more verbose about what it is doing")
+        parser.add_argument("-d", "--max-depth", action="store", type=int, default=-1,
+                help="Maximum depth to traverse on the continuation chain")
+        parser.add_argument("task", action="store", help="An expression that evaluates to a valid `seastar::task*` value. Cannot contain white-space.")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        try:
+            fiber = self._walk(gdb.parse_and_eval(args.task), args.max_depth, args.verbose)
+
+            for i, (tptr, vptr, name) in enumerate(fiber):
+                gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
+        except KeyboardInterrupt:
+            return
+
+
 def find_in_live(mem_start, mem_size, value, size_selector='g'):
     for line in gdb.execute("find/%s 0x%x, +0x%x, 0x%x" % (size_selector, mem_start, mem_size, value), to_string=True).split('\n'):
         if line.startswith('0x'):
@@ -1981,6 +2144,7 @@ scylla_unthread()
 scylla_threads()
 scylla_task_stats()
 scylla_tasks()
+scylla_fiber()
 scylla_find()
 scylla_task_histogram()
 scylla_active_sstables()
