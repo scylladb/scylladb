@@ -1597,6 +1597,16 @@ class small_vector(object):
             return 0
         return int(self.ref['_capacity_end']) - int(self.ref['_begin'])
 
+
+class chunked_vector(object):
+    def __init__(self, ref):
+        self.ref = ref
+
+    def external_memory_footprint(self):
+        return int(self.ref['_capacity']) * self.ref.type.template_argument(0).sizeof \
+               + small_vector(self.ref['_chunks']).external_memory_footprint()
+
+
 # Prints histogram of task types in reactor's pending task queue.
 #
 # Example:
