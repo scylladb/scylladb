@@ -1722,8 +1722,11 @@ class std_unique_ptr:
     def __init__(self, obj):
         self.obj = obj
 
+    def get(self):
+        return self.obj['_M_t']['_M_t']['_M_head_impl']
+
     def dereference(self):
-        return self.obj['_M_t']['_M_t']['_M_head_impl'].dereference()
+        return self.get().dereference()
 
     def __getitem__(self, item):
         return self.dereference()[item]
