@@ -1587,6 +1587,16 @@ class circular_buffer(object):
         impl = self.ref['_impl']
         return int(impl['capacity']) * self.ref.type.template_argument(0).sizeof
 
+
+class small_vector(object):
+    def __init__(self, ref):
+        self.ref = ref
+
+    def external_memory_footprint(self):
+        if self.ref['_begin'] == self.ref['_internal']['storage'].address:
+            return 0
+        return int(self.ref['_capacity_end']) - int(self.ref['_begin'])
+
 # Prints histogram of task types in reactor's pending task queue.
 #
 # Example:
