@@ -70,6 +70,20 @@ class intrusive_list:
         return self.__nonzero__()
 
 
+class std_optional:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def get(self):
+        return self.ref['_M_payload']['_M_payload']
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+    def __nonzero__(self):
+        return bool(self.ref['_M_payload']['_M_engaged'])
+
+
 class intrusive_set:
     size_t = gdb.lookup_type('size_t')
 
