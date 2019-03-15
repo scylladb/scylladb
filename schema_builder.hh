@@ -246,6 +246,7 @@ public:
     schema_builder& without_column(sstring name, data_type, api::timestamp_type timestamp);
     schema_builder& rename_column(bytes from, bytes to);
     schema_builder& alter_column_type(bytes name, data_type new_type);
+    schema_builder& mark_column_computed(bytes name, column_computation_ptr computation);
 
     // Adds information about collection that existed in the past but the column
     // has since been removed. For adding colllections that are still alive
