@@ -2730,6 +2730,39 @@ std::vector<sstring> all_table_names(schema_features features) {
            boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
 }
 
+future<> maybe_update_legacy_secondary_index_mv_schema(database& db, view_ptr v) {
+    // TODO(sarna): Remove once computed columns are guaranteed to be featured in the whole cluster.
+    // Legacy format for a secondary index used a hardcoded "token" column, which ensured a proper
+    // order for indexed queries. This "token" column is now implemented as a computed column,
+    // but for the sake of compatibility we assume that there might be indexes created in the legacy
+    // format, where "token" is not marked as computed. Once we're sure that all indexes have their
+    // columns marked as computed (because they were either created on a node that supports computed
+    // columns or were fixed by this utility function), it's safe to remove this function altogether.
+    if (!service::get_local_storage_service().cluster_supports_computed_columns()) {
+        return make_ready_future<>();
+    }
+
+    if (v->clustering_key_size() == 0) {
+        return make_ready_future<>();
+    }
+    const column_definition& first_view_ck = v->clustering_key_columns().front();
+    if (first_view_ck.is_computed()) {
+        return make_ready_future<>();
+    }
+
+    table& base = db.find_column_family(v->view_info()->base_id());
+    schema_ptr base_schema = base.schema();
+    // If the first clustering key part of a view is a column with name not found in base schema,
+    // it implies it might be backing an index created before computed columns were introduced,
+    // and as such it must be recreated properly.
+    if (base_schema->columns_by_name().count(first_view_ck.name()) == 0) {
+        schema_builder builder{schema_ptr(v)};
+        builder.mark_column_computed(first_view_ck.name(), std::make_unique<token_column_computation>());
+        return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build()), true);
+    }
+    return make_ready_future<>();
+}
+
 namespace legacy {
 
 table_schema_version schema_mutations::digest() const {

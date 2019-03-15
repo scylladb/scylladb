@@ -90,6 +90,8 @@
 #include "user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
 
+#include "schema_builder.hh"
+
 using namespace std::chrono_literals;
 using namespace db;
 
@@ -600,7 +602,9 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
             return create_views_from_schema_partition(proxy, v.second).then([this] (std::vector<view_ptr> views) {
                 return parallel_for_each(views.begin(), views.end(), [this] (auto&& v) {
-                    return this->add_column_family_and_make_directory(v);
+                    return this->add_column_family_and_make_directory(v).then([this, v] {
+                        return maybe_update_legacy_secondary_index_mv_schema(*this, v);
+                    });
                 });
             });
         });
