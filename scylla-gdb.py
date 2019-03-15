@@ -1619,6 +1619,14 @@ class chunked_vector(object):
                + small_vector(self.ref['_chunks']).external_memory_footprint()
 
 
+def get_local_tasks():
+    """ Return a list of task pointers for the local reactor. """
+    for tq_ptr in static_vector(gdb.parse_and_eval('\'seastar\'::local_engine._task_queues')):
+        tq = std_unique_ptr(tq_ptr).dereference()
+        for t in circular_buffer(tq['_q']):
+            yield std_unique_ptr(t).get()
+
+
 class scylla_task_stats(gdb.Command):
     """ Prints histogram of task types in reactor's pending task queue.
 
@@ -1641,8 +1649,8 @@ class scylla_task_stats(gdb.Command):
     def invoke(self, arg, for_tty):
         vptr_count = defaultdict(int)
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        for t in circular_buffer(gdb.parse_and_eval('\'seastar\'::local_engine._pending_tasks')):
-            vptr = int(t['_M_t']['_M_head_impl'].reinterpret_cast(vptr_type).dereference())
+        for ptr in get_local_tasks():
+            vptr = int(ptr.reinterpret_cast(vptr_type).dereference())
             vptr_count[vptr] += 1
         for vptr, count in sorted(vptr_count.items(), key=lambda e: -e[1]):
             gdb.write('%10d: 0x%x %s\n' % (count, vptr, resolve(vptr)))
@@ -1674,8 +1682,7 @@ class scylla_tasks(gdb.Command):
 
     def invoke(self, arg, for_tty):
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        for t in circular_buffer(gdb.parse_and_eval('\'seastar\'::local_engine._pending_tasks')):
-            ptr = t['_M_t']['_M_head_impl']
+        for ptr in get_local_tasks():
             vptr = int(ptr.reinterpret_cast(vptr_type).dereference())
             gdb.write('(task*) 0x%x  %s\n' % (ptr, resolve(vptr)))
 
