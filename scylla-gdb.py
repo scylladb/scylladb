@@ -1579,6 +1579,14 @@ class circular_buffer(object):
             yield st[i % cap]
             i += 1
 
+    def size(self):
+        impl = self.ref['_impl']
+        return int(impl['end']) - int(impl['begin'])
+
+    def external_memory_footprint(self):
+        impl = self.ref['_impl']
+        return int(impl['capacity']) * self.ref.type.template_argument(0).sizeof
+
 # Prints histogram of task types in reactor's pending task queue.
 #
 # Example:
