@@ -1207,7 +1207,7 @@ class scylla_lsa(gdb.Command):
 names = {}  # addr (int) -> name (str)
 
 
-def resolve(addr):
+def resolve(addr, cache=True):
     if addr in names:
         return names[addr]
 
@@ -1216,7 +1216,8 @@ def resolve(addr):
         name = None
     else:
         name = infosym[:infosym.find('in section')]
-    names[addr] = name
+    if cache:
+        names[addr] = name
     return name
 
 
