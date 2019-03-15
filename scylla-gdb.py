@@ -112,6 +112,20 @@ class intrusive_set:
             yield n
 
 
+class boost_variant:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def which(self):
+        return self.ref['which_']
+
+    def type(self):
+        return self.ref.type.template_argument(self.ref['which_'])
+
+    def get(self):
+        return self.ref['storage_'].address.cast(self.type().pointer())
+
+
 class std_map:
     size_t = gdb.lookup_type('size_t')
 
