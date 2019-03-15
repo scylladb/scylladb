@@ -604,10 +604,8 @@ def find_single_sstable_readers():
         if name and name.startswith(vtable_name):
             yield obj_addr.reinterpret_cast(ptr_type)
 
-# Yields sstable* once for each active sstable reader
-
-
 def find_active_sstables():
+    """ Yields sstable* once for each active sstable reader. """
     sstable_ptr_type = gdb.lookup_type('sstables::sstable').pointer()
     for reader in find_single_sstable_readers():
         sstable_ptr = reader['_sst']['_p']
@@ -1621,23 +1619,22 @@ class chunked_vector(object):
                + small_vector(self.ref['_chunks']).external_memory_footprint()
 
 
-# Prints histogram of task types in reactor's pending task queue.
-#
-# Example:
-# (gdb) scylla task-stats
-#    16243: 0x18904f0 vtable for lambda_task<later()::{lambda()#1}> + 16
-#    16091: 0x197fc60 _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_exception...
-#    16090: 0x19bab50 _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZN7s...
-#    14280: 0x1b36940 _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queue15...
-#
-#    ^      ^         ^
-#    |      |         '-- symbol name for vtable pointer
-#    |      '------------ vtable pointer for the object pointed to by task*
-#    '------------------- task count
-#
-
-
 class scylla_task_stats(gdb.Command):
+    """ Prints histogram of task types in reactor's pending task queue.
+
+    Example:
+    (gdb) scylla task-stats
+       16243: 0x18904f0 vtable for lambda_task<later()::{lambda()#1}> + 16
+       16091: 0x197fc60 _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_exception...
+       16090: 0x19bab50 _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZN7s...
+       14280: 0x1b36940 _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queue15...
+
+       ^      ^         ^
+       |      |         '-- symbol name for vtable pointer
+       |      '------------ vtable pointer for the object pointed to by task*
+       '------------------- task count
+    """
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla task-stats', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
@@ -1651,26 +1648,27 @@ class scylla_task_stats(gdb.Command):
             gdb.write('%10d: 0x%x %s\n' % (count, vptr, resolve(vptr)))
 
 
-# Prints contents of reactor pending tasks queue.
-#
-# Example:
-# (gdb) scylla tasks
-# (task*) 0x60017d8c7f88  _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queu...
-# (task*) 0x60019a391730  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
-# (task*) 0x60018fac2208  vtable for lambda_task<later()::{lambda()#1}> + 16
-# (task*) 0x60016e8b7428  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
-# (task*) 0x60017e5bece8  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
-# (task*) 0x60017e7f8aa0  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
-# (task*) 0x60018fac21e0  vtable for lambda_task<later()::{lambda()#1}> + 16
-# (task*) 0x60016e8b7540  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
-# (task*) 0x600174c34d58  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
-#
-#         ^               ^
-#         |               |
-#         |               '------------ symbol name for task's vtable pointer
-#         '---------------------------- task pointer
-#
 class scylla_tasks(gdb.Command):
+    """ Prints contents of reactor pending tasks queue.
+
+    Example:
+    (gdb) scylla tasks
+    (task*) 0x60017d8c7f88  _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queu...
+    (task*) 0x60019a391730  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
+    (task*) 0x60018fac2208  vtable for lambda_task<later()::{lambda()#1}> + 16
+    (task*) 0x60016e8b7428  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+    (task*) 0x60017e5bece8  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+    (task*) 0x60017e7f8aa0  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
+    (task*) 0x60018fac21e0  vtable for lambda_task<later()::{lambda()#1}> + 16
+    (task*) 0x60016e8b7540  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+    (task*) 0x600174c34d58  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+
+            ^               ^
+            |               |
+            |               '------------ symbol name for task's vtable pointer
+            '---------------------------- task pointer
+    """
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla tasks', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
@@ -1694,18 +1692,17 @@ def find_in_live(mem_start, mem_size, value, size_selector='g'):
                     offset = addr - obj_start
                     yield obj_start, offset
 
-# Finds live objects on seastar heap of current shard which contain given value.
-# Prints results in 'scylla ptr' format.
-#
-# Example:
-#
-#   (gdb) scylla find 0x600005321900
-#   thread 1, small (size <= 512), live (0x6000000f3800 +48)
-#   thread 1, small (size <= 56), live (0x6000008a1230 +32)
-#
-
-
 class scylla_find(gdb.Command):
+    """ Finds live objects on seastar heap of current shard which contain given value.
+    Prints results in 'scylla ptr' format.
+
+    Example:
+
+      (gdb) scylla find 0x600005321900
+      thread 1, small (size <= 512), live (0x6000000f3800 +48)
+      thread 1, small (size <= 56), live (0x6000008a1230 +32)
+    """
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla find', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
