@@ -672,6 +672,26 @@ class seastar_shared_ptr():
         return self.ref['_p']
 
 
+def has_enable_lw_shared_from_this(type):
+    for f in type.fields():
+        if f.is_base_class and 'enable_lw_shared_from_this' in f.name:
+            return True
+    return False
+
+
+class seastar_lw_shared_ptr():
+    def __init__(self, ref):
+        self.ref = ref
+        self.elem_type = ref.type.template_argument(0)
+
+    def get(self):
+        if has_enable_lw_shared_from_this(self.elem_type):
+            return self.ref['_p'].cast(self.elem_type.pointer())
+        else:
+            type = gdb.lookup_type('seastar::shared_ptr_no_esft<%s>' % str(self.elem_type.unqualified())).pointer()
+            return self.ref['_p'].cast(type)['_value'].address
+
+
 class lsa_region():
     def __init__(self, region):
         impl_ptr_type = gdb.lookup_type('logalloc::region_impl').pointer()
