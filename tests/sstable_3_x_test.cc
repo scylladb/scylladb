@@ -1247,6 +1247,40 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_static_row_read) {
         .produces_end_of_stream();
 }
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/random_partitioner
+// They were created using following CQL statements:
+//
+// Partitioner: org.apache.cassandra.dht.RandomPartitioner
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, ck INT, v INT, PRIMARY KEY(pk, ck))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, ck, v) VALUES(1, 10, 100);
+// INSERT INTO test_ks.test_table(pk, ck, v) VALUES(2, 20, 200);
+// INSERT INTO test_ks.test_table(pk, ck, v) VALUES(3, 30, 300);
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_random_partitioner) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    const sstring uncompressed_random_partitioner_path =
+            "tests/sstables/3.x/uncompressed/random_partitioner";
+    const schema_ptr uncompressed_random_partitioner_schema =
+            schema_builder("test_ks", "test_table")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .set_compressor_params(compression_parameters::no_compression())
+                .build();
+
+    sstable_assertions sst(uncompressed_random_partitioner_schema,
+                           uncompressed_random_partitioner_path);
+    auto check = [] (const std::runtime_error& e) {
+        using namespace std::string_literals;
+        return e.what() == "SSTable tests/sstables/3.x/uncompressed/random_partitioner/mc-1-big-Data.db uses org.apache.cassandra.dht.RandomPartitioner partitioner which is different than org.apache.cassandra.dht.Murmur3Partitioner partitioner used by the database"s;
+    };
+    BOOST_REQUIRE_EXCEPTION(sst.load(), std::runtime_error, check);
+}
 // Following tests run on files in tests/sstables/3.x/uncompressed/compound_static_row
 // They were created using following CQL statements:
 //
