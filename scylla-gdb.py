@@ -237,7 +237,7 @@ class static_vector:
     def __iter__(self):
         t = self.ref.type.strip_typedefs()
         value_type = t.template_argument(0)
-        data = self.ref['m_holder']['storage']['dummy'].cast(value_type.pointer())
+        data = self.ref['m_holder']['storage']['dummy']['dummy'].cast(value_type.pointer())
         for i in range(self.__len__()):
             yield data[i]
 
