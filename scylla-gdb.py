@@ -223,6 +223,9 @@ class std_vector:
     def __bool__(self):
         return self.__nonzero__()
 
+    def external_memory_footprint(self):
+        return int(self.ref['_M_impl']['_M_end_of_storage']) - int(self.ref['_M_impl']['_M_start'])
+
 
 class static_vector:
     def __init__(self, ref):
