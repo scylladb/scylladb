@@ -722,6 +722,20 @@ class dirty_mem_mgr():
         return int(self.ref['_virtual_region_group']['_total_memory'])
 
 
+def find_instances(type_name):
+    """
+    A generator for pointers to live objects of virtual type 'type_name'.
+    Only objects located at the beginning of allocation block are returned.
+    This is true, for instance, for all objects allocated using std::make_unique().
+    """
+    ptr_type = gdb.lookup_type(type_name).pointer()
+    vtable_name = 'vtable for %s ' % type_name
+    for obj_addr, vtable_addr in find_vptrs():
+        name = resolve(vtable_addr)
+        if name and name.startswith(vtable_name):
+            yield gdb.Value(obj_addr).cast(ptr_type)
+
+
 class scylla_memory(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
