@@ -1746,10 +1746,10 @@ class std_unique_ptr:
         return self.dereference()[item]
 
     def address(self):
-        return self.dereference().address
+        return self.get()
 
     def __nonzero__(self):
-        return bool(self.obj['_M_t']['_M_t']['_M_head_impl'])
+        return bool(self.get())
 
     def __bool__(self):
         return self.__nonzero__()
