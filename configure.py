@@ -215,6 +215,28 @@ class Antlr3Grammar(object):
         return self.source.endswith(end)
 
 
+def find_headers(repodir, excluded_dirs):
+    walker = os.walk(repodir)
+
+    _, dirs, files = next(walker)
+    for excl_dir in excluded_dirs:
+        try:
+            dirs.remove(excl_dir)
+        except ValueError:
+            # Ignore complaints about excl_dir not being in dirs
+            pass
+
+    is_hh = lambda f: f.endswith('.hh')
+    headers = list(filter(is_hh, files))
+
+    for dirpath, _, files in walker:
+        if dirpath.startswith('./'):
+            dirpath = dirpath[2:]
+        headers += [os.path.join(dirpath, hh) for hh in filter(is_hh, files)]
+
+    return headers
+
+
 modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
@@ -768,6 +790,8 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/view.idl.hh',
         ]
 
+headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
+
 scylla_tests_dependencies = scylla_core + idls + [
     'tests/cql_test_env.cc',
     'tests/cql_assertions.cc',
@@ -1187,6 +1211,10 @@ with open(buildfile, 'w') as f:
                             s/exceptions::syntax_exception e/exceptions::syntax_exception\& e/' $
                         build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
+            rule checkhh.{mode}
+              command = $cxx -MD -MT $out -MF $out.d {sanitize} {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -x c++ --include=$in -c -o $out /dev/null
+              description = CHECKHH $in
+              depfile = $out.d
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, **modeval))
         f.write(
             'build {mode}: phony {artifacts}\n'.format(
@@ -1273,16 +1301,19 @@ with open(buildfile, 'w') as f:
             )
         )
 
+
+        gen_headers = []
+        for th in thrifts:
+            gen_headers += th.headers('$builddir/{}/gen'.format(mode))
+        for g in antlr3_grammars:
+            gen_headers += g.headers('$builddir/{}/gen'.format(mode))
+        gen_headers += list(swaggers.keys())
+        gen_headers += list(serializers.keys())
+        gen_headers_dep = ' '.join(gen_headers)
+
         for obj in compiles:
             src = compiles[obj]
-            gen_headers = []
-            for th in thrifts:
-                gen_headers += th.headers('$builddir/{}/gen'.format(mode))
-            for g in antlr3_grammars:
-                gen_headers += g.headers('$builddir/{}/gen'.format(mode))
-            gen_headers += list(swaggers.keys())
-            gen_headers += list(serializers.keys())
-            f.write('build {}: cxx.{} {} || {} {}\n'.format(obj, mode, src, seastar_dep, ' '.join(gen_headers)))
+            f.write('build {}: cxx.{} {} || {} {}\n'.format(obj, mode, src, seastar_dep, gen_headers_dep))
             if src in extra_cxxflags:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[src], **modeval))
         for hh in swaggers:
@@ -1307,6 +1338,10 @@ with open(buildfile, 'w') as f:
                 if cc.endswith('Parser.cpp') and has_sanitize_address_use_after_scope:
                     # Parsers end up using huge amounts of stack space and overflowing their stack
                     f.write('  obj_cxxflags = -fno-sanitize-address-use-after-scope\n')
+        for hh in headers:
+            f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} || {gen_headers_dep}\n'.format(
+                    mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
+
         f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune: ninja | always\n'
                 .format(**locals()))
         f.write('  pool = seastar_pool\n')
@@ -1320,6 +1355,9 @@ with open(buildfile, 'w') as f:
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
         f.write('    command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../build/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
         f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
+
+    mode = 'dev' if 'dev' in modes else modes[0]
+    f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(mode, hh) for hh in headers])))
 
     f.write(textwrap.dedent('''\
         rule configure
