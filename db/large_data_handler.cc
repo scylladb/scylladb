@@ -103,7 +103,7 @@ future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable
 }
 
 future<> cql_table_large_data_handler::delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view large_table_name) const {
-    static const sstring req =
+    const sstring req =
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?",
                     large_table_name);
     return db::execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
