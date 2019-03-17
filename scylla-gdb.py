@@ -70,6 +70,20 @@ class intrusive_list:
         return self.__nonzero__()
 
 
+class std_optional:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def get(self):
+        return self.ref['_M_payload']['_M_payload']
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+    def __nonzero__(self):
+        return bool(self.ref['_M_payload']['_M_engaged'])
+
+
 class intrusive_set:
     size_t = gdb.lookup_type('size_t')
 
@@ -96,6 +110,20 @@ class intrusive_set:
     def __iter__(self):
         for n in self.__visit(self.root):
             yield n
+
+
+class boost_variant:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def which(self):
+        return self.ref['which_']
+
+    def type(self):
+        return self.ref.type.template_argument(self.ref['which_'])
+
+    def get(self):
+        return self.ref['storage_'].address.cast(self.type().pointer())
 
 
 class std_map:
@@ -194,6 +222,9 @@ class std_vector:
 
     def __bool__(self):
         return self.__nonzero__()
+
+    def external_memory_footprint(self):
+        return int(self.ref['_M_impl']['_M_end_of_storage']) - int(self.ref['_M_impl']['_M_start'])
 
 
 class static_vector:
@@ -641,6 +672,26 @@ class seastar_shared_ptr():
         return self.ref['_p']
 
 
+def has_enable_lw_shared_from_this(type):
+    for f in type.fields():
+        if f.is_base_class and 'enable_lw_shared_from_this' in f.name:
+            return True
+    return False
+
+
+class seastar_lw_shared_ptr():
+    def __init__(self, ref):
+        self.ref = ref
+        self.elem_type = ref.type.template_argument(0)
+
+    def get(self):
+        if has_enable_lw_shared_from_this(self.elem_type):
+            return self.ref['_p'].cast(self.elem_type.pointer())
+        else:
+            type = gdb.lookup_type('seastar::shared_ptr_no_esft<%s>' % str(self.elem_type.unqualified())).pointer()
+            return self.ref['_p'].cast(type)['_value'].address
+
+
 class lsa_region():
     def __init__(self, region):
         impl_ptr_type = gdb.lookup_type('logalloc::region_impl').pointer()
@@ -669,6 +720,20 @@ class dirty_mem_mgr():
 
     def virt_dirty(self):
         return int(self.ref['_virtual_region_group']['_total_memory'])
+
+
+def find_instances(type_name):
+    """
+    A generator for pointers to live objects of virtual type 'type_name'.
+    Only objects located at the beginning of allocation block are returned.
+    This is true, for instance, for all objects allocated using std::make_unique().
+    """
+    ptr_type = gdb.lookup_type(type_name).pointer()
+    vtable_name = 'vtable for %s ' % type_name
+    for obj_addr, vtable_addr in find_vptrs():
+        name = resolve(vtable_addr)
+        if name and name.startswith(vtable_name):
+            yield gdb.Value(obj_addr).cast(ptr_type)
 
 
 class scylla_memory(gdb.Command):
@@ -1528,6 +1593,34 @@ class circular_buffer(object):
             yield st[i % cap]
             i += 1
 
+    def size(self):
+        impl = self.ref['_impl']
+        return int(impl['end']) - int(impl['begin'])
+
+    def external_memory_footprint(self):
+        impl = self.ref['_impl']
+        return int(impl['capacity']) * self.ref.type.template_argument(0).sizeof
+
+
+class small_vector(object):
+    def __init__(self, ref):
+        self.ref = ref
+
+    def external_memory_footprint(self):
+        if self.ref['_begin'] == self.ref['_internal']['storage'].address:
+            return 0
+        return int(self.ref['_capacity_end']) - int(self.ref['_begin'])
+
+
+class chunked_vector(object):
+    def __init__(self, ref):
+        self.ref = ref
+
+    def external_memory_footprint(self):
+        return int(self.ref['_capacity']) * self.ref.type.template_argument(0).sizeof \
+               + small_vector(self.ref['_chunks']).external_memory_footprint()
+
+
 # Prints histogram of task types in reactor's pending task queue.
 #
 # Example:
@@ -1643,8 +1736,11 @@ class std_unique_ptr:
     def __init__(self, obj):
         self.obj = obj
 
+    def get(self):
+        return self.obj['_M_t']['_M_t']['_M_head_impl']
+
     def dereference(self):
-        return self.obj['_M_t']['_M_t']['_M_head_impl'].dereference()
+        return self.get().dereference()
 
     def __getitem__(self, item):
         return self.dereference()[item]
@@ -1734,6 +1830,79 @@ class scylla_cache(gdb.Command):
                     int(e.address), e['_key'], e['_flags'], e['_pe']))
             gdb.write("\n")
 
+
+def find_sstables():
+    """A generator which yields pointers to all live sstable objects on current shard."""
+    visited = set()
+    # FIXME: Add support for other sstable sets. Also, we should change Scylla to make this easier
+    for sst_set in find_instances('sstables::bag_sstable_set'):
+        sstables = std_vector(sst_set['_sstables'])
+        for sst_ptr in sstables:
+            sst = seastar_lw_shared_ptr(sst_ptr).get()
+            if not int(sst) in visited:
+                visited.add(int(sst))
+                yield sst
+
+
+class scylla_sstables(gdb.Command):
+    """Lists all sstable objects on currents shard together with useful information like on-disk and in-memory size."""
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla sstables', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        filter_type = gdb.lookup_type('utils::filter::murmur3_bloom_filter')
+        cpu_id = current_shard()
+        total_size = 0 # in memory
+        total_on_disk_size = 0
+        count = 0
+
+        for sst in find_sstables():
+            count += 1
+            size = 0
+
+            sc = seastar_lw_shared_ptr(sst['_components']['_value']).get()
+            local = sst['_components']['_cpu'] == cpu_id
+            size += sc.dereference().type.sizeof
+
+            bf = std_unique_ptr(sc['filter']).get().cast(filter_type.pointer())
+            bf_size = bf.dereference().type.sizeof + chunked_vector(bf['_bitset']['_storage']).external_memory_footprint()
+            size += bf_size
+
+            summary_size = std_vector(sc['summary']['_summary_data']).external_memory_footprint()
+            summary_size += chunked_vector(sc['summary']['entries']).external_memory_footprint()
+            summary_size += chunked_vector(sc['summary']['positions']).external_memory_footprint()
+            for e in std_vector(sc['summary']['_summary_data']):
+                summary_size += e['_size'] + e.type.sizeof
+            # FIXME: include external memory footprint of summary entries
+            size += summary_size
+
+            sm_size = 0
+            sm = std_optional(sc['scylla_metadata'])
+            if sm:
+                for tag, value in list_unordered_map(sm.get()['data']['data']):
+                    bv = boost_variant(value)
+                    # FIXME: only gdb.Type.template_argument(0) works for boost::variant<>
+                    if bv.which() != 0:
+                        continue
+                    val = bv.get()['value']
+                    if str(val.type) == 'sstables::sharding_metadata':
+                        sm_size += chunked_vector(val['token_ranges']['elements']).external_memory_footprint()
+            size += sm_size
+
+            # FIXME: Include compression info
+
+            data_file_size = sst['_data_file_size']
+            gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d)\n'
+                      % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size))
+
+            if local:
+                total_size += size
+                total_on_disk_size += data_file_size
+
+        gdb.write('total (shard-local): count=%d, data_file=%d, in_memory=%d\n' % (count, total_on_disk_size, total_size))
+
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -1760,3 +1929,4 @@ scylla_active_sstables()
 scylla_netw()
 scylla_gms()
 scylla_cache()
+scylla_sstables()
