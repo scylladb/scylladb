@@ -37,9 +37,7 @@ namespace sstables {
 using schema_ptr = lw_shared_ptr<const schema>;
 using shareable_components_ptr = lw_shared_ptr<shareable_components>;
 
-static constexpr inline size_t default_sstable_buffer_size() {
-    return 128 * 1024;
-}
+static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
 class sstables_manager {
 public:
@@ -53,7 +51,7 @@ public:
             sstable_format_types f,
             gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
-            size_t buffer_size = default_sstable_buffer_size());
+            size_t buffer_size = default_sstable_buffer_size);
 };
 
 }   // namespace sstables
