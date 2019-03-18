@@ -36,7 +36,47 @@
 #include "service/migration_manager.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
+#include "db/commitlog/commitlog_replayer.hh"
 #include "tmpdir.hh"
+
+SEASTAR_TEST_CASE(test_safety_after_truncate) {
+    db::config cfg{};
+    cfg.auto_snapshot() = false;
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
+        auto& db = e.local_db();
+        auto s = db.find_schema("ks", "cf");
+        dht::partition_range_vector pranges;
+
+        for (uint32_t i = 1; i <= 1000; ++i) {
+            auto pkey = partition_key::from_single_value(*s, to_bytes(sprint("key%d", i)));
+            mutation m(s, pkey);
+            m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", data_value(bytes("v1")), {});
+            pranges.emplace_back(dht::partition_range::make_singular(dht::global_partitioner().decorate_key(*s, std::move(pkey))));
+            db.apply(s, freeze(m)).get();
+        }
+
+        auto assert_query_result = [&] (size_t expected_size) {
+            auto max_size = std::numeric_limits<size_t>::max();
+            auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), 1000);
+            auto result = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size).get0();
+            assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_size);
+        };
+        assert_query_result(1000);
+
+        db.truncate("ks", "cf", [] { return make_ready_future<db_clock::time_point>(db_clock::now()); }).get();
+
+        assert_query_result(0);
+
+        auto cl = db.commitlog();
+        auto rp = db::commitlog_replayer::create_replayer(e.db()).get0();
+        auto paths = cl->list_existing_segments().get0();
+        rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+
+        assert_query_result(0);
+        return make_ready_future<>();
+    }, cfg);
+}
 
 SEASTAR_TEST_CASE(test_querying_with_limits) {
     return do_with_cql_env([](cql_test_env& e) {
