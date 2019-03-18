@@ -958,18 +958,22 @@ for pkglist in optional_packages:
 
 
 compiler_test_src = '''
-#if __GNUC__ < 7
+#if __GNUC__ < 8
     #error "MAJOR"
-#elif __GNUC__ == 7
-    #if __GNUC_MINOR__ < 3
+#elif __GNUC__ == 8
+    #if __GNUC_MINOR__ < 1
         #error "MINOR"
+    #elif __GNUC_MINOR__ == 1
+        #if __GNUC_PATCHLEVEL__ < 1
+            #error "PATCHLEVEL"
+        #endif
     #endif
 #endif
 
 int main() { return 0; }
 '''
 if not try_compile_and_link(compiler=args.cxx, source=compiler_test_src):
-    print('Wrong GCC version. Scylla needs GCC >= 7.3 to compile.')
+    print('Wrong GCC version. Scylla needs GCC >= 8.1.1 to compile.')
     sys.exit(1)
 
 if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
