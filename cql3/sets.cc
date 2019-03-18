@@ -83,13 +83,13 @@ sets::literal::validate_assignable_to(database& db, const sstring& keyspace, sha
             return;
         }
 
-        throw exceptions::invalid_request_exception(format("Invalid set literal for {} of type {}", *receiver->name, *receiver->type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Invalid set literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
     }
 
     auto&& value_spec = value_spec_of(receiver);
     for (shared_ptr<term::raw> rt : _elements) {
         if (!is_assignable(rt->test_assignment(db, keyspace, value_spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: value {} is not of type {}", *receiver->name, *rt, *value_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: value {} is not of type {}", *receiver->name, *rt, value_spec->type->as_cql3_type()));
         }
     }
 }

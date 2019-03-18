@@ -56,7 +56,7 @@ namespace functions {
 inline
 shared_ptr<function>
 make_to_blob_function(data_type from_type) {
-    auto name = from_type->as_cql3_type()->to_string() + "asblob";
+    auto name = from_type->as_cql3_type().to_string() + "asblob";
     return make_native_scalar_function<true>(name, bytes_type, { from_type },
             [] (cql_serialization_format sf, const std::vector<bytes_opt>& parameters) {
         return parameters[0];
@@ -66,7 +66,7 @@ make_to_blob_function(data_type from_type) {
 inline
 shared_ptr<function>
 make_from_blob_function(data_type to_type) {
-    sstring name = sstring("blobas") + to_type->as_cql3_type()->to_string();
+    sstring name = sstring("blobas") + to_type->as_cql3_type().to_string();
     return make_native_scalar_function<true>(name, to_type, { bytes_type },
             [name, to_type] (cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
         auto&& val = parameters[0];
@@ -79,7 +79,7 @@ make_from_blob_function(data_type to_type) {
         } catch (marshal_exception& e) {
             using namespace exceptions;
             throw invalid_request_exception(format("In call to function {}, value 0x{} is not a valid binary representation for type {}",
-                    name, to_hex(val), to_type->as_cql3_type()->to_string()));
+                    name, to_hex(val), to_type->as_cql3_type().to_string()));
         }
     });
 }

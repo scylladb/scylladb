@@ -99,16 +99,16 @@ maps::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<colum
 void
 maps::literal::validate_assignable_to(database& db, const sstring& keyspace, column_specification& receiver) {
     if (!dynamic_pointer_cast<const map_type_impl>(receiver.type)) {
-        throw exceptions::invalid_request_exception(format("Invalid map literal for {} of type {}", *receiver.name, *receiver.type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Invalid map literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
     auto&& key_spec = maps::key_spec_of(receiver);
     auto&& value_spec = maps::value_spec_of(receiver);
     for (auto&& entry : entries) {
         if (!is_assignable(entry.first->test_assignment(db, keyspace, key_spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: key {} is not of type {}", *receiver.name, *entry.first, *key_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: key {} is not of type {}", *receiver.name, *entry.first, key_spec->type->as_cql3_type()));
         }
         if (!is_assignable(entry.second->test_assignment(db, keyspace, value_spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: value {} is not of type {}", *receiver.name, *entry.second, *value_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: value {} is not of type {}", *receiver.name, *entry.second, value_spec->type->as_cql3_type()));
         }
     }
 }

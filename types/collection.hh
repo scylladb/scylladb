@@ -29,7 +29,6 @@
 
 class collection_type_impl : public abstract_type {
     static logging::logger _logger;
-    static thread_local std::unordered_map<data_type, shared_ptr<cql3::cql3_type>> _cql3_type_cache;  // initialized on demand
 public:
     static constexpr size_t max_elements = 65535;
 
@@ -49,7 +48,6 @@ public:
 protected:
     explicit collection_type_impl(sstring name, const kind& k)
             : abstract_type(std::move(name), {}, data::type_info::make_collection()), _kind(k) {}
-    virtual sstring cql3_type_name() const = 0;
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
     struct mutation {
@@ -79,7 +77,7 @@ public:
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
-    virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
+    virtual bool is_native() const override { return false; }
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
     // requires linearized collection_mutation_view, lifetime

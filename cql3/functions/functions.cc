@@ -67,13 +67,13 @@ functions::init() {
             continue;
         }
         // counters are not supported yet
-        if (type->is_counter()) {
+        if (type.is_counter()) {
             warn(unimplemented::cause::COUNTERS);
             continue;
         }
 
-        declare(make_to_blob_function(type->get_type()));
-        declare(make_from_blob_function(type->get_type()));
+        declare(make_to_blob_function(type.get_type()));
+        declare(make_from_blob_function(type.get_type()));
     }
     declare(aggregate_fcts::make_count_function<int8_t>());
     declare(aggregate_fcts::make_max_function<int8_t>());
@@ -442,7 +442,7 @@ function_call::execute_internal(cql_serialization_format sf, scalar_function& fu
     } catch (marshal_exception& e) {
         throw runtime_exception(format("Return of function {} ({}) is not a valid value for its declared return type {}",
                                        fun, to_hex(result),
-                                       *fun.return_type()->as_cql3_type()
+                                       fun.return_type()->as_cql3_type()
                                        ));
     }
 }

@@ -41,7 +41,7 @@ class set_type_impl final : public concrete_collection_type<std::vector<data_val
     data_type _elements;
     bool _is_multi_cell;
 protected:
-    virtual sstring cql3_type_name() const override;
+    virtual sstring cql3_type_name_impl() const override;
 public:
     static set_type get_instance(data_type elements, bool is_multi_cell);
     set_type_impl(data_type elements, bool is_multi_cell);

@@ -141,9 +141,9 @@ public:
 
 class selectable::with_cast : public selectable {
     ::shared_ptr<selectable> _arg;
-    ::shared_ptr<cql3_type> _type;
+    cql3_type _type;
 public:
-    with_cast(::shared_ptr<selectable> arg, ::shared_ptr<cql3_type> type)
+    with_cast(::shared_ptr<selectable> arg, cql3_type type)
         : _arg(std::move(arg)), _type(std::move(type)) {
     }
 
@@ -152,9 +152,9 @@ public:
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
     class raw : public selectable::raw {
         ::shared_ptr<selectable::raw> _arg;
-        ::shared_ptr<cql3_type> _type;
+        cql3_type _type;
     public:
-        raw(shared_ptr<selectable::raw> arg, ::shared_ptr<cql3_type> type)
+        raw(shared_ptr<selectable::raw> arg, cql3_type type)
                 : _arg(std::move(arg)), _type(std::move(type)) {
         }
         virtual shared_ptr<selectable> prepare(schema_ptr s) override;

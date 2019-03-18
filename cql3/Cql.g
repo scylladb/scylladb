@@ -1591,12 +1591,12 @@ comparator_type [bool internal] returns [shared_ptr<cql3_type::raw> t]
 #endif
     ;
 
-native_or_internal_type [bool internal] returns [shared_ptr<cql3_type> t]
+native_or_internal_type [bool internal] returns [data_type t]
     : n=native_type     { $t = n; }
     // The "internal" types, only supported when internal==true:
     | K_EMPTY   {
         if (internal) {
-            $t = cql3_type::empty;
+            $t = empty_type;
         } else {
             add_recognition_error("Invalid (reserved) user type name empty");
         }
@@ -1607,28 +1607,28 @@ comparatorType returns [shared_ptr<cql3_type::raw> t]
     : tt=comparator_type[false]    { $t = tt; }
     ;
 
-native_type returns [shared_ptr<cql3_type> t]
-    : K_ASCII     { $t = cql3_type::ascii; }
-    | K_BIGINT    { $t = cql3_type::bigint; }
-    | K_BLOB      { $t = cql3_type::blob; }
-    | K_BOOLEAN   { $t = cql3_type::boolean; }
-    | K_COUNTER   { $t = cql3_type::counter; }
-    | K_DECIMAL   { $t = cql3_type::decimal; }
-    | K_DOUBLE    { $t = cql3_type::double_; }
-    | K_DURATION  { $t = cql3_type::duration; }
-    | K_FLOAT     { $t = cql3_type::float_; }
-    | K_INET      { $t = cql3_type::inet; }
-    | K_INT       { $t = cql3_type::int_; }
-    | K_SMALLINT  { $t = cql3_type::smallint; }
-    | K_TEXT      { $t = cql3_type::text; }
-    | K_TIMESTAMP { $t = cql3_type::timestamp; }
-    | K_TINYINT   { $t = cql3_type::tinyint; }
-    | K_UUID      { $t = cql3_type::uuid; }
-    | K_VARCHAR   { $t = cql3_type::text; }
-    | K_VARINT    { $t = cql3_type::varint; }
-    | K_TIMEUUID  { $t = cql3_type::timeuuid; }
-    | K_DATE      { $t = cql3_type::date; }
-    | K_TIME      { $t = cql3_type::time; }
+native_type returns [data_type t]
+    : K_ASCII     { $t = ascii_type; }
+    | K_BIGINT    { $t = long_type; }
+    | K_BLOB      { $t = bytes_type; }
+    | K_BOOLEAN   { $t = boolean_type; }
+    | K_COUNTER   { $t = counter_type; }
+    | K_DECIMAL   { $t = decimal_type; }
+    | K_DOUBLE    { $t = double_type; }
+    | K_DURATION  { $t = duration_type; }
+    | K_FLOAT     { $t = float_type; }
+    | K_INET      { $t = inet_addr_type; }
+    | K_INT       { $t = int32_type; }
+    | K_SMALLINT  { $t = short_type; }
+    | K_TEXT      { $t = utf8_type; }
+    | K_TIMESTAMP { $t = timestamp_type; }
+    | K_TINYINT   { $t = byte_type; }
+    | K_UUID      { $t = uuid_type; }
+    | K_VARCHAR   { $t = utf8_type; }
+    | K_VARINT    { $t = varint_type; }
+    | K_TIMEUUID  { $t = timeuuid_type; }
+    | K_DATE      { $t = simple_date_type; }
+    | K_TIME      { $t = time_type; }
     ;
 
 collection_type [bool internal] returns [shared_ptr<cql3::cql3_type::raw> pt]
@@ -1674,7 +1674,7 @@ unreserved_keyword returns [sstring str]
 
 unreserved_function_keyword returns [sstring str]
     : u=basic_unreserved_keyword { $str = u; }
-    | t=native_or_internal_type[true]   { $str = t->to_string(); }
+    | t=native_or_internal_type[true]   { $str = t->as_cql3_type().to_string(); }
     ;
 
 basic_unreserved_keyword returns [sstring str]
