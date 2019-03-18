@@ -54,6 +54,7 @@
 #include "message/messaging_service.hh"
 #include "dht/i_partitioner.hh"
 #include "log.hh"
+#include "db/system_keyspace.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
@@ -2090,20 +2091,45 @@ std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const 
     return to_feature_set(app_state->value);
 }
 
-std::set<sstring> gossiper::get_supported_features() const {
-    std::unordered_map<inet_address, std::set<sstring>> features_map;
+std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const {
+    std::unordered_map<gms::inet_address, std::set<sstring>> features_map;
     std::set<sstring> common_features;
+
+    for (auto& x : loaded_peer_features) {
+        auto features = to_feature_set(x.second);
+        if (features.empty()) {
+            logger.warn("Loaded empty features for peer node {}", x.first);
+        } else {
+            features_map.emplace(x.first, std::move(features));
+        }
+    }
 
     for (auto& x : endpoint_state_map) {
         auto endpoint = x.first;
         auto features = get_supported_features(endpoint);
+        if (ignore_local_node && endpoint == get_broadcast_address()) {
+            logger.debug("Ignore SUPPORTED_FEATURES of local node: features={}", features);
+            continue;
+        }
         if (features.empty()) {
-            return std::set<sstring>();
+            auto it = loaded_peer_features.find(endpoint);
+            if (it != loaded_peer_features.end()) {
+                logger.info("Node {} does not contain SUPPORTED_FEATURES in gossip, using features saved in system table, features={}", endpoint, to_feature_set(it->second));
+            } else {
+                logger.warn("Node {} does not contain SUPPORTED_FEATURES in gossip or system table", endpoint);
+            }
+        } else {
+            // Replace the features with live info
+            features_map[endpoint] = std::move(features);
         }
-        if (common_features.empty()) {
-            common_features = features;
-        }
-        features_map.emplace(endpoint, std::move(features));
+    }
+
+    if (ignore_local_node) {
+        features_map.erase(get_broadcast_address());
+    }
+
+    if (!features_map.empty()) {
+        common_features = features_map.begin()->second;
     }
 
     for (auto& x : features_map) {
@@ -2118,72 +2144,16 @@ std::set<sstring> gossiper::get_supported_features() const {
     return common_features;
 }
 
-std::set<sstring> gossiper::get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string) {
-    std::set<sstring> common_features;
-    // Convert feature string split by "," to std::set
-    std::unordered_map<gms::inet_address, std::set<sstring>> features_map;
-    for (auto& x : peer_features_string) {
-        std::set<sstring> features = to_feature_set(x.second);
-        if (features.empty()) {
-            return std::set<sstring>();
-        }
-        if (common_features.empty()) {
-            common_features = features;
-        }
-        features_map.emplace(x.first, features);
-    }
-
-    for (auto& x : features_map) {
-        auto& features = x.second;
-        std::set<sstring> result;
-        std::set_intersection(features.begin(), features.end(),
-                common_features.begin(), common_features.end(),
-                std::inserter(result, result.end()));
-        common_features = std::move(result);
-    }
-    common_features.erase("");
-    return common_features;
-}
-
-void gossiper::check_knows_remote_features(sstring local_features_string) const {
+void gossiper::check_knows_remote_features(sstring local_features_string, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const {
     std::set<sstring> local_features = to_feature_set(local_features_string);
     auto local_endpoint = get_broadcast_address();
-    auto common_features = get_supported_features();
+    auto common_features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::yes);
     if (boost::range::includes(local_features, common_features)) {
         logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
                 local_endpoint, local_features, common_features);
     } else {
         throw std::runtime_error(sprint("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node %s features = %s, Remote common_features = %s", local_endpoint, local_features, common_features));
     }
-}
-
-void gossiper::check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const {
-    std::set<sstring> local_features = to_feature_set(local_features_string);
-    auto local_endpoint = get_broadcast_address();
-    auto common_features = get_supported_features(peer_features_string);
-    if (boost::range::includes(local_features, common_features)) {
-        logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
-                local_endpoint, local_features, common_features);
-    } else {
-        throw std::runtime_error(sprint("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node %s features = %s, Remote common_features = %s", local_endpoint, local_features, common_features));
-    }
-}
-
-static bool check_features(std::set<sstring> features, std::set<sstring> need_features) {
-    logger.debug("Checking if need_features {} in features {}", need_features, features);
-    return boost::range::includes(features, need_features);
-}
-
-future<> gossiper::wait_for_feature_on_all_node(std::set<sstring> features) {
-    return _features_condvar.wait([this, features = std::move(features)] {
-        return check_features(get_supported_features(), features);
-    });
-}
-
-future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint) {
-    return _features_condvar.wait([this, features = std::move(features), endpoint = std::move(endpoint)] {
-        return check_features(get_supported_features(endpoint), features);
-    });
 }
 
 feature_service::feature_service() = default;
@@ -2198,13 +2168,6 @@ void feature_service::register_feature(feature* f) {
     _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
 }
 
-void gossiper::register_feature(feature* f) {
-    _feature_service.register_feature(f);
-    if (check_features(get_local_gossiper().get_supported_features(), {f->name()})) {
-        f->enable();
-    }
-}
-
 void feature_service::unregister_feature(feature* f) {
     auto&& fsit = _registered_features.find(f->name());
     if (fsit == _registered_features.end()) {
@@ -2215,10 +2178,6 @@ void feature_service::unregister_feature(feature* f) {
     if (it != fs.end()) {
         fs.erase(it);
     }
-}
-
-void gossiper::unregister_feature(feature* f) {
-    _feature_service.unregister_feature(f);
 }
 
 
@@ -2232,7 +2191,8 @@ void feature_service::enable(const sstring& name) {
 
 // Runs inside seastar::async context
 void gossiper::maybe_enable_features() {
-    auto&& features = get_supported_features();
+    auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
+    auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
     container().invoke_on_all([&features] (gossiper& g) {
         for (auto&& name : features) {
             g._feature_service.enable(name);
@@ -2268,10 +2228,10 @@ feature& feature::operator=(feature&& other) {
 }
 
 void feature::enable() {
-    if (engine().cpu_id() == 0) {
-        logger.info("Feature {} is enabled", name());
-    }
     if (!_enabled) {
+        if (engine().cpu_id() == 0) {
+            logger.info("Feature {} is enabled", name());
+        }
         _enabled = true;
         _pr.set_value();
     }

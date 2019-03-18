@@ -389,9 +389,9 @@ public:
     }
 #endif
 public:
-    future<std::unordered_set<token>> prepare_replacement_info();
+    future<std::unordered_set<token>> prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
-    future<> check_for_endpoint_collision();
+    future<> check_for_endpoint_collision(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 #if 0
 
     // for testing only
@@ -453,7 +453,7 @@ public:
 #endif
 private:
     bool should_bootstrap();
-    void prepare_to_join(std::vector<inet_address> loaded_endpoints, bind_messaging_port do_bind = bind_messaging_port::yes);
+    void prepare_to_join(std::vector<inet_address> loaded_endpoints, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
     void join_token_ring(int delay);
 public:
     future<> join_ring();
