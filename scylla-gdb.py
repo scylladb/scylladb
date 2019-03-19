@@ -1192,7 +1192,7 @@ class scylla_ptr(gdb.Command):
         return ptr_meta
 
     def invoke(self, arg, from_tty):
-        ptr = int(arg, 0)
+        ptr = int(gdb.parse_and_eval(arg))
 
         ptr_meta = self.analyze(ptr)
 
