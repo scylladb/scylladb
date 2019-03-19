@@ -1060,21 +1060,71 @@ def get_thread_owning_memory(ptr):
             return t
 
 
+class pointer_metadata(object):
+    def __init__(self, ptr, thread):
+        self.ptr = ptr
+        self.thread = thread
+        self._is_containing_page_free = False
+        self.is_small = False
+        self.is_live = False
+        self.is_lsa = False
+        self.size = 0
+        self.offset_in_object = 0
+
+    def is_managed_by_seastar(self):
+        return not self.thread is None
+
+    @property
+    def is_containing_page_free(self):
+        return self._is_containing_page_free
+
+    @is_containing_page_free.setter
+    def is_containing_page_free(self):
+        self._is_containing_page_free = True
+        self._is_live = False
+
+    def __str__(self):
+        if not self.is_managed_by_seastar():
+            return "Not managed by seastar"
+
+        msg = "thread %d" % self.thread.num
+
+        if self.is_containing_page_free:
+            msg += ', page is free'
+            return msg
+
+        if self.is_small:
+            msg += ', small (size <= %d)' % self.size
+        else:
+            msg += ', large'
+
+        if self.is_live:
+            msg += ', live (0x%x +%d)' % (self.ptr - self.offset_in_object, self.offset_in_object)
+        else:
+            msg += ', free'
+
+        if self.is_lsa:
+            msg += ', LSA-managed'
+
+        return msg
+
+
 class scylla_ptr(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla ptr', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
-    def analyze(self, ptr):
+    @staticmethod
+    def analyze(ptr):
         owning_thread = None
         for t, start, size in seastar_memory_layout():
             if ptr >= start and ptr < start + size:
                 owning_thread = t
                 break
 
-        if not owning_thread:
-            return "Not managed by seastar"
+        ptr_meta = pointer_metadata(ptr, owning_thread)
 
-        msg = "thread %d" % t.num
+        if not owning_thread:
+            return ptr_meta
 
         owning_thread.switch()
 
@@ -1097,15 +1147,16 @@ class scylla_ptr(gdb.Command):
             return False
 
         if is_page_free(ptr_page_idx):
-            msg += ', page is free'
-            return msg
+            ptr_meta.is_containing_page_free = True
+            return ptr_meta
 
         pool = page['pool']
         offset_in_span = int(page['offset_in_span']) * page_size + ptr % page_size
         first_page_in_span = cpu_mem['pages'][offset / page_size - page['offset_in_span']]
         if pool:
             object_size = int(pool['_object_size'])
-            msg += ', small (size <= %d)' % object_size
+            ptr_meta.size = object_size
+            ptr_meta.is_small = True
             offset_in_object = offset_in_span % object_size
             free_object_ptr = gdb.lookup_type('void').pointer().pointer()
             char_ptr = gdb.lookup_type('char').pointer()
@@ -1126,26 +1177,26 @@ class scylla_ptr(gdb.Command):
                         break
                     next_free = next_free.reinterpret_cast(free_object_ptr).dereference()
             if free:
-                msg += ', free'
+                ptr_meta.is_live = False
             else:
-                msg += ', live (0x%x +%d)' % (ptr - offset_in_object, offset_in_object)
+                ptr_meta.is_live = True
+                ptr_meta.offset_in_object = offset_in_object
         else:
-            msg += ', large'
+            ptr_meta.is_small = False
 
         # FIXME: handle debug-mode build
         index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr))
         desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
-        if desc['_region']:
-            msg += ', LSA-managed'
+        ptr_meta.is_lsa = bool(desc['_region'])
 
-        return msg
+        return ptr_meta
 
     def invoke(self, arg, from_tty):
         ptr = int(arg, 0)
 
-        msg = self.analyze(ptr)
+        ptr_meta = self.analyze(ptr)
 
-        gdb.write(msg + '\n')
+        gdb.write("{}\n".format(str(ptr_meta)))
 
 class scylla_segment_descs(gdb.Command):
     def __init__(self):
