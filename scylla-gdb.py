@@ -1064,9 +1064,7 @@ class scylla_ptr(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla ptr', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
-    def invoke(self, arg, from_tty):
-        ptr = int(arg, 0)
-
+    def analyze(self, ptr):
         owning_thread = None
         for t, start, size in seastar_memory_layout():
             if ptr >= start and ptr < start + size:
@@ -1074,8 +1072,7 @@ class scylla_ptr(gdb.Command):
                 break
 
         if not owning_thread:
-            gdb.write("Not managed by seastar\n")
-            return
+            return "Not managed by seastar"
 
         msg = "thread %d" % t.num
 
@@ -1101,8 +1098,7 @@ class scylla_ptr(gdb.Command):
 
         if is_page_free(ptr_page_idx):
             msg += ', page is free'
-            gdb.write(msg + '\n')
-            return
+            return msg
 
         pool = page['pool']
         offset_in_span = int(page['offset_in_span']) * page_size + ptr % page_size
@@ -1142,8 +1138,14 @@ class scylla_ptr(gdb.Command):
         if desc['_region']:
             msg += ', LSA-managed'
 
-        gdb.write(msg + '\n')
+        return msg
 
+    def invoke(self, arg, from_tty):
+        ptr = int(arg, 0)
+
+        msg = self.analyze(ptr)
+
+        gdb.write(msg + '\n')
 
 class scylla_segment_descs(gdb.Command):
     def __init__(self):
