@@ -57,29 +57,8 @@ static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
 }
 
 data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str, lw_shared_ptr<user_types_metadata> user_types) {
-    static const thread_local std::unordered_map<sstring, shared_ptr<cql3::cql3_type>> native_types = []{
-        std::unordered_map<sstring, shared_ptr<cql3::cql3_type>> res;
-        for (auto& nt : cql3::cql3_type::values()) {
-            res.emplace(nt->to_string(), nt);
-        }
-        return res;
-    }();
-
-    auto i = native_types.find(str);
-    if (i != native_types.end()) {
-        return i->second->get_type();
-    }
-
     if (!user_types && service::get_storage_proxy().local_is_initialized()) {
         user_types = service::get_storage_proxy().local().get_db().local().find_keyspace(keyspace).metadata()->user_types();
-    }
-    // special-case top-level UDTs
-    if (user_types) {
-        auto& map = user_types->get_all_types();
-        auto i = map.find(utf8_type->decompose(str));
-        if (i != map.end()) {
-            return i->second;
-        }
     }
 
     auto raw = parse_raw(str);
