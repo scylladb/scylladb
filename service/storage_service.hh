@@ -295,6 +295,7 @@ private:
     gms::feature _la_sstable_feature;
     gms::feature _stream_with_rpc_stream_feature;
     gms::feature _mc_sstable_feature;
+    gms::feature _correct_static_compact_in_mc;
 public:
     void enable_all_features();
 
@@ -2280,6 +2281,10 @@ public:
 
     bool cluster_supports_mc_sstable() const {
         return bool(_mc_sstable_feature);
+    }
+
+    const gms::feature& cluster_supports_correct_static_compact_in_mc() const {
+        return _correct_static_compact_in_mc;
     }
 private:
     future<> set_cql_ready(bool ready);

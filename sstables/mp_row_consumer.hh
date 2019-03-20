@@ -808,6 +808,8 @@ class mp_row_consumer_m : public consumer_m {
     std::optional<new_mutation> _mutation;
     bool _is_mutation_end = true;
     streamed_mutation::forwarding _fwd;
+    // For static-compact tables C* stores the only row in the static row but in our representation they're regular rows.
+    const bool _treat_static_row_as_regular;
 
     std::optional<clustering_row> _in_progress_row;
     std::optional<range_tombstone> _stored_tombstone;
@@ -949,6 +951,8 @@ public:
         , _schema(schema)
         , _slice(slice)
         , _fwd(fwd)
+        , _treat_static_row_as_regular(_schema->is_static_compact_table()
+            && (!sst->has_scylla_component() || sst->features().is_enabled(sstable_feature::CorrectStaticCompact))) // See #4139
     {
         _cells.reserve(std::max(_schema->static_columns_count(), _schema->regular_columns_count()));
     }
@@ -1123,6 +1127,9 @@ public:
 
     virtual consumer_m::row_processing_result consume_static_row_start() override {
         sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", this);
+        if (_treat_static_row_as_regular) {
+            return consume_row_start({});
+        }
         _inside_static_row = true;
         _in_progress_static_row = static_row();
         return consumer_m::row_processing_result::do_proceed;

@@ -101,6 +101,7 @@ static const sstring ROLES_FEATURE = "ROLES";
 static const sstring LA_SSTABLE_FEATURE = "LA_SSTABLE_FORMAT";
 static const sstring STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
 static const sstring MC_SSTABLE_FEATURE = "MC_SSTABLE_FORMAT";
+static const sstring CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
 
 distributed<storage_service> _the_storage_service;
 
@@ -144,6 +145,7 @@ storage_service::storage_service(distributed<database>& db, sharded<auth::servic
         , _la_sstable_feature(_feature_service, LA_SSTABLE_FEATURE)
         , _stream_with_rpc_stream_feature(_feature_service, STREAM_WITH_RPC_STREAM)
         , _mc_sstable_feature(_feature_service, MC_SSTABLE_FEATURE)
+        , _correct_static_compact_in_mc(_feature_service, CORRECT_STATIC_COMPACT_IN_MC)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks) {
@@ -170,6 +172,7 @@ void storage_service::enable_all_features() {
     _la_sstable_feature.enable();
     _stream_with_rpc_stream_feature.enable();
     _mc_sstable_feature.enable();
+    _correct_static_compact_in_mc.enable();
 }
 
 enum class node_external_status {
@@ -245,7 +248,8 @@ sstring storage_service::get_config_supported_features() {
         LA_SSTABLE_FEATURE,
         STREAM_WITH_RPC_STREAM,
         MATERIALIZED_VIEWS_FEATURE,
-        INDEXES_FEATURE
+        INDEXES_FEATURE,
+        CORRECT_STATIC_COMPACT_IN_MC,
     };
     auto& config = service::get_local_storage_service()._db.local().get_config();
     if (config.enable_sstables_mc_format()) {

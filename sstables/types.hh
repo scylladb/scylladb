@@ -455,6 +455,7 @@ enum sstable_feature : uint8_t {
     NonCompoundPIEntries = 0,       // See #2993
     NonCompoundRangeTombstones = 1, // See #2986
     ShadowableTombstones = 2, // See #3885
+    CorrectStaticCompact = 3, // See #4139
     End = 4,
 };
 
@@ -504,9 +505,15 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtensionAttributes, extension_attributes>
             > data;
 
-    bool has_feature(sstable_feature f) const {
+    sstable_enabled_features get_features() const {
         auto features = data.get<scylla_metadata_type::Features, sstable_enabled_features>();
-        return features && features->is_enabled(f);
+        if (!features) {
+            return sstable_enabled_features{};
+        }
+        return *features;
+    }
+    bool has_feature(sstable_feature f) const {
+        return get_features().is_enabled(f);
     }
     const extension_attributes* get_extension_attributes() const {
         return data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();

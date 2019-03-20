@@ -370,8 +370,15 @@ static sstring pk_type_to_string(const schema& s) {
     }
 }
 
-serialization_header make_serialization_header(const schema& s, const encoding_stats& enc_stats) {
+struct sstable_schema {
     serialization_header header;
+    indexed_columns regular_columns;
+    indexed_columns static_columns;
+};
+
+sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats, const sstable_writer_config& cfg) {
+    sstable_schema sst_sch;
+    serialization_header& header = sst_sch.header;
     // mc serialization header minimum values are delta-encoded based on the default timestamp epoch times
     header.min_timestamp_base.value = static_cast<uint64_t>(enc_stats.min_timestamp - encoding_stats::timestamp_epoch);
     header.min_local_deletion_time_base.value = static_cast<uint64_t>(enc_stats.min_local_deletion_time - encoding_stats::deletion_time_epoch);
@@ -385,23 +392,36 @@ serialization_header make_serialization_header(const schema& s, const encoding_s
         header.clustering_key_types_names.elements.push_back(std::move(ck_type_name));
     }
 
-    header.static_columns.elements.reserve(s.static_columns_count());
-    for (const auto& static_column : s.static_columns()) {
+    auto add_column = [&] (const column_definition& column) {
         serialization_header::column_desc cd;
-        cd.name = to_bytes_array_vint_size(static_column.name());
-        cd.type_name = to_bytes_array_vint_size(type_name_with_udt_frozen(static_column.type));
-        header.static_columns.elements.push_back(std::move(cd));
+        cd.name = to_bytes_array_vint_size(column.name());
+        cd.type_name = to_bytes_array_vint_size(type_name_with_udt_frozen(column.type));
+        if (column.is_static()) {
+            header.static_columns.elements.push_back(std::move(cd));
+            sst_sch.static_columns.push_back(column);
+        } else if (column.is_regular()) {
+            header.regular_columns.elements.push_back(std::move(cd));
+            sst_sch.regular_columns.push_back(column);
+        }
+    };
+
+    if (cfg.correctly_serialize_static_compact_in_mc) {
+        for (const auto& column : s.v3().all_columns()) {
+            add_column(column);
+        }
+    } else {
+        for (const auto& column : s.all_columns()) {
+            add_column(column);
+        }
     }
 
-    header.regular_columns.elements.reserve(s.regular_columns_count());
-    for (const auto& regular_column : s.regular_columns()) {
-        serialization_header::column_desc cd;
-        cd.name = to_bytes_array_vint_size(regular_column.name());
-        cd.type_name = to_bytes_array_vint_size(type_name_with_udt_frozen(regular_column.type));
-        header.regular_columns.elements.push_back(std::move(cd));
-    }
+    // For static and regular columns, we write all simple columns first followed by collections
+    // These containers have columns partitioned by atomicity
+    auto pred = [] (const std::reference_wrapper<const column_definition>& column) { return column.get().is_atomic(); };
+    boost::range::stable_partition(sst_sch.regular_columns, pred);
+    boost::range::stable_partition(sst_sch.static_columns, pred);
 
-    return header;
+    return sst_sch;
 }
 
 enum class cell_flags : uint8_t {
@@ -507,18 +527,6 @@ GCC6_CONCEPT(
     };
 )
 
-static indexed_columns get_indexed_columns_partitioned_by_atomicity(schema::const_iterator_range_type columns) {
-    indexed_columns result;
-    result.reserve(columns.size());
-    for (const auto& col: columns) {
-        result.emplace_back(col);
-    }
-    boost::range::stable_partition(
-            result,
-            [](const std::reference_wrapper<const column_definition>& column) { return column.get().is_atomic();});
-    return result;
-}
-
 // Used for writing SSTables in 'mc' format.
 class writer : public sstable_writer::writer_impl {
 private:
@@ -540,10 +548,7 @@ private:
     range_tombstone_stream _range_tombstones;
     bytes_ostream _tmp_bufs;
 
-    // For static and regular columns, we write all simple columns first followed by collections
-    // These containers have columns partitioned by atomicity
-    const indexed_columns _static_columns;
-    const indexed_columns _regular_columns;
+    const sstable_schema _sst_schema;
 
     struct cdef_and_collection {
         const column_definition* cdef;
@@ -584,6 +589,7 @@ private:
         size_t desired_block_size;
     } _pi_write_m;
     column_stats _c_stats;
+    bool _write_regular_as_static; // See #4139
 
     void init_file_writers();
     void close_data_writer();
@@ -594,7 +600,7 @@ private:
     }
 
     void ensure_static_row_is_written_if_needed() {
-        if (!_static_columns.empty() && !_static_row_written) {
+        if (!_sst_schema.static_columns.empty() && !_static_row_written) {
             consume(static_row{});
         }
     }
@@ -659,7 +665,7 @@ private:
 
     void write_cells(bytes_ostream& writer, column_kind kind, const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
     void write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion);
-    void write_static_row(const row& static_row);
+    void write_static_row(const row&, column_kind);
 
     // Clustered is a term used to denote an entity that has a clustering key prefix
     // and constitutes an entry of a partition.
@@ -703,8 +709,8 @@ public:
         , _shard(shard)
         , _range_tombstones(_schema)
         , _tmp_bufs(_sst.sstable_buffer_size)
-        , _static_columns(get_indexed_columns_partitioned_by_atomicity(s.static_columns()))
-        , _regular_columns(get_indexed_columns_partitioned_by_atomicity(s.regular_columns()))
+        , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
+        , _write_regular_as_static(cfg.correctly_serialize_static_compact_in_mc && s.is_static_compact_table())
     {
         _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
         _sst.write_toc(_pc);
@@ -1086,7 +1092,7 @@ void writer::write_cells(bytes_ostream& writer, column_kind kind, const row& row
     // This differs from Origin where all updated columns are tracked and the set of filled columns of a row
     // is compared with the set of all columns filled in the memtable. So our encoding may be less optimal in some cases
     // but still valid.
-    write_missing_columns(writer, kind == column_kind::static_column ? _static_columns : _regular_columns, row_body);
+    write_missing_columns(writer, kind == column_kind::static_column ? _sst_schema.static_columns : _sst_schema.regular_columns, row_body);
     row_body.for_each_cell([this, &writer, kind, &properties, has_complex_deletion] (column_id id, const atomic_cell_or_collection& c) {
         auto&& column_definition = _schema.column_at(kind, id);
         if (!column_definition.is_atomic()) {
@@ -1151,16 +1157,14 @@ static bool row_has_complex_deletion(const schema& s, const row& r, column_kind 
     return result;
 }
 
-void writer::write_static_row(const row& static_row) {
-    assert(_schema.is_compound());
-
+void writer::write_static_row(const row& static_row, column_kind kind) {
     uint64_t current_pos = _data_writer->offset();
     // Static row flag is stored in extended flags so extension_flag is always set for static rows
     row_flags flags = row_flags::extension_flag;
-    if (static_row.size() == _schema.static_columns_count()) {
+    if (static_row.size() == _sst_schema.static_columns.size()) {
         flags |= row_flags::has_all_columns;
     }
-    bool has_complex_deletion = row_has_complex_deletion(_schema, static_row, column_kind::static_column);
+    bool has_complex_deletion = row_has_complex_deletion(_schema, static_row, kind);
     if (has_complex_deletion) {
         flags |= row_flags::has_complex_deletion;
     }
@@ -1174,14 +1178,13 @@ void writer::write_static_row(const row& static_row) {
 
     _partition_header_length += (_data_writer->offset() - current_pos);
 
-    // Collect statistics
     ++_c_stats.rows_count;
+    _static_row_written = true;
 }
 
 stop_iteration writer::consume(static_row&& sr) {
     ensure_tombstone_is_written();
-    write_static_row(sr.cells());
-    _static_row_written = true;
+    write_static_row(sr.cells(), column_kind::static_column);
     return stop_iteration::no;
 }
 
@@ -1204,7 +1207,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
         ext_flags = row_extended_flags::has_shadowable_deletion_scylla;
     }
 
-    if (clustered_row.cells().size() == _schema.regular_columns_count()) {
+    if (clustered_row.cells().size() == _sst_schema.regular_columns.size()) {
         flags |= row_flags::has_all_columns;
     }
     bool has_complex_deletion = row_has_complex_deletion(_schema, clustered_row.cells(), column_kind::regular_column);
@@ -1234,6 +1237,11 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
 }
 
 stop_iteration writer::consume(clustering_row&& cr) {
+    if (_write_regular_as_static) {
+        ensure_tombstone_is_written();
+        write_static_row(cr.cells(), column_kind::regular_column);
+        return stop_iteration::no;
+    }
     drain_tombstones(position_in_partition_view::after_key(cr.key()));
     write_clustered(cr);
     return stop_iteration::no;
@@ -1359,6 +1367,8 @@ void writer::consume_end_of_stream() {
     _index_writer->close();
     _index_writer.reset();
     _sst.set_first_and_last_keys();
+
+    _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
     seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(),
             dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
@@ -1370,6 +1380,9 @@ void writer::consume_end_of_stream() {
     auto features = sstable_enabled_features::all();
     if (!_cfg.correctly_serialize_non_compound_range_tombstones) {
         features.disable(sstable_feature::NonCompoundRangeTombstones);
+    }
+    if (!_cfg.correctly_serialize_static_compact_in_mc) {
+        features.disable(sstable_feature::CorrectStaticCompact);
     }
     _sst.write_scylla_metadata(_pc, _shard, std::move(features));
     _cfg.monitor->on_write_completed();

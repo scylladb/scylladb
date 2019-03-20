@@ -3853,7 +3853,22 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     validate_stats_metadata(s, written_sst, table_name);
 }
 
+namespace sstables::mc {
+
+using indexed_columns = std::vector<std::reference_wrapper<const column_definition>>;
+
+struct sstable_schema {
+    serialization_header header;
+    indexed_columns regular_columns;
+    indexed_columns static_columns;
+};
+
+sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats, const sstable_writer_config& cfg);
+
+}
+
 SEASTAR_THREAD_TEST_CASE(test_serialization_header_with_user_defined_types) {
+    storage_service_for_tests ssft;
     // CREATE TYPE ut (my_int int, my_boolean boolean, my_text text);
     auto ut = user_type_impl::get_instance("sst3", to_bytes("ut"),
             {to_bytes("my_int"), to_bytes("my_boolean"), to_bytes("my_text")},
@@ -3870,7 +3885,8 @@ SEASTAR_THREAD_TEST_CASE(test_serialization_header_with_user_defined_types) {
     builder.with_column("rc", ut);
     schema_ptr s = builder.build();
     sstring expected_ut_name = "org.apache.cassandra.db.marshal.FrozenType(" + ut->name() + ")";
-    auto header = mc::make_serialization_header(*s, encoding_stats{});
+    auto sst_schema = mc::make_sstable_schema(*s, encoding_stats{}, sstable_writer_config{});
+    auto& header = sst_schema.header;
     auto pk_type = to_sstring_view(header.pk_type_name.value);
     BOOST_REQUIRE(pk_type == "org.apache.cassandra.db.marshal.CompositeType(" + expected_ut_name + "," + expected_ut_name + ")");
     BOOST_REQUIRE(header.clustering_key_types_names.elements.size() == 2);

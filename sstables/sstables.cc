@@ -1816,11 +1816,6 @@ void seal_statistics(sstable_version_types v, statistics& s, metadata_collector&
     collector.construct_stats(stats);
     s.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
 
-    if (v == sstable_version_types::mc) {
-        auto header = mc::make_serialization_header(*schema, enc_stats);
-        s.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(header));
-    }
-
     populate_statistics_offsets(v, s);
 }
 
@@ -3082,6 +3077,10 @@ mutation_source sstable::as_mutation_source() {
 
 bool supports_correct_non_compound_range_tombstones() {
     return service::get_local_storage_service().cluster_supports_reading_correctly_serialized_range_tombstones();
+}
+
+bool supports_correct_static_compact_in_mc() {
+    return bool(service::get_local_storage_service().cluster_supports_correct_static_compact_in_mc());
 }
 
 }

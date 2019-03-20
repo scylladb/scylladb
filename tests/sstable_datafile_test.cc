@@ -4710,3 +4710,30 @@ SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
+    return async([] {
+        // CREATE COLUMNFAMILY cf (key varchar PRIMARY KEY, c2 text, c1 text) WITH COMPACT STORAGE ;
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("c1", utf8_type)
+            .with_column("c2", utf8_type)
+            .build(schema_builder::compact_storage::yes);
+
+        // INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde');
+        auto sst = make_sstable(s, get_test_dir("cassandra_static_compact", s), 1, sstables::sstable::version_types::mc, big);
+        sst->load().get0();
+
+        auto pkey = partition_key::from_exploded(*s, { utf8_type->decompose("a") });
+        auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
+        mutation m(s, dkey);
+        m.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("c1"),
+                    atomic_cell::make_live(*utf8_type, 1551785032379079, utf8_type->decompose("abc"), {}));
+        m.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("c2"),
+                    atomic_cell::make_live(*utf8_type, 1551785032379079, utf8_type->decompose("cde"), {}));
+
+        assert_that(sst->as_mutation_source().make_reader(s))
+            .produces(m)
+            .produces_end_of_stream();
+    });
+}

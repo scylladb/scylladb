@@ -1473,3 +1473,46 @@ SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
             .produces_end_of_stream();
     }
 }
+
+SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
+    return async([] () {
+        storage_service_for_tests ssft;
+        for (const auto version : all_sstable_versions) {
+            for (auto correctly_serialize : {false, true}) {
+                auto s = schema_builder("ks", "test")
+                    .with_column("pk", int32_type, column_kind::partition_key)
+                    .with_column("v1", int32_type)
+                    .with_column("v2", int32_type)
+                    .build(schema_builder::compact_storage::yes);
+
+                auto pk1 = partition_key::from_exploded(*s, {int32_type->decompose(1)});
+                auto dk1 = dht::global_partitioner().decorate_key(*s, pk1);
+                mutation m1(s, dk1);
+                m1.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v1"),
+                    atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(4), {}));
+
+                auto pk2 = partition_key::from_exploded(*s, {int32_type->decompose(2)});
+                auto dk2 = dht::global_partitioner().decorate_key(*s, pk2);
+                mutation m2(s, dk2);
+                m2.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v1"),
+                    atomic_cell::make_live(*int32_type, 1511270919978348, int32_type->decompose(5), {}));
+                m2.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v2"),
+                    atomic_cell::make_live(*int32_type, 1511270919978347, int32_type->decompose(6), {}));
+
+                std::vector<mutation> muts = {m1, m2};
+                boost::sort(muts, mutation_decorated_key_less_comparator{});
+
+                tmpdir dir;
+                sstable_writer_config cfg;
+                cfg.large_partition_handler = &nop_lp_handler;
+                cfg.correctly_serialize_static_compact_in_mc = correctly_serialize;
+                auto ms = make_sstable_mutation_source(s, dir.path, muts, cfg, version);
+
+                assert_that(ms.make_reader(s))
+                    .produces(muts[0])
+                    .produces(muts[1])
+                    .produces_end_of_stream();
+            }
+        }
+    });
+}
