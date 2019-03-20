@@ -36,7 +36,5 @@ std::unique_ptr<sstable_writer::writer_impl> make_writer(sstable& sst,
     const io_priority_class& pc,
     shard_id shard);
 
-serialization_header make_serialization_header(const schema&, const encoding_stats&);
-
 }
 }

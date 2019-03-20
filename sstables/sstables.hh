@@ -108,6 +108,7 @@ class data_consume_context;
 class index_reader;
 
 bool supports_correct_non_compound_range_tombstones();
+bool supports_correct_static_compact_in_mc();
 
 struct sstable_writer_config {
     std::optional<size_t> promoted_index_block_size;
@@ -117,6 +118,7 @@ struct sstable_writer_config {
     std::optional<db::replay_position> replay_position;
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
+    bool correctly_serialize_static_compact_in_mc = supports_correct_static_compact_in_mc();
     db::large_data_handler* large_data_handler;
     utils::UUID run_identifier = utils::make_random_uuid();
 };
@@ -686,6 +688,13 @@ public:
 
     bool has_shadowable_tombstones() const {
         return has_scylla_component() && _components->scylla_metadata->has_feature(sstable_feature::ShadowableTombstones);
+    }
+
+    sstable_enabled_features features() const {
+        if (!has_scylla_component()) {
+            return {};
+        }
+        return _components->scylla_metadata->get_features();
     }
 
     utils::UUID run_identifier() const {
