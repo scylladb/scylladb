@@ -180,18 +180,24 @@ enum class index_metadata_kind {
 };
 
 class index_metadata final {
+public:
+    struct is_local_index_tag {};
+    using is_local_index = bool_class<is_local_index_tag>;
+private:
     utils::UUID _id;
     sstring _name;
     index_metadata_kind _kind;
     index_options_map _options;
+    bool _local;
 public:
-    index_metadata(const sstring& name, const index_options_map& options, index_metadata_kind kind);
+    index_metadata(const sstring& name, const index_options_map& options, index_metadata_kind kind, is_local_index local);
     bool operator==(const index_metadata& other) const;
     bool equals_noname(const index_metadata& other) const;
     const utils::UUID& id() const;
     const sstring& name() const;
     const index_metadata_kind kind() const;
     const index_options_map& options() const;
+    bool local() const;
     static sstring get_default_index_name(const sstring& cf_name, std::optional<sstring> root);
 };
 

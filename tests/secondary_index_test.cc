@@ -618,3 +618,321 @@ SEASTAR_TEST_CASE(test_secondary_index_contains_virtual_columns) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_local_secondary_index) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table t (p int, c int, v1 int, v2 int, primary key(p, c))").get();
+        e.execute_cql("create index local_t_v1 on t ((p),v1)").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("create index local_t_p on t(p, v2)").get(), std::exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("create index local_t_p on t((v1), v2)").get(), std::exception);
+
+        e.execute_cql("insert into t (p,c,v1,v2) values (1,1,1,1)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (1,2,3,2)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (1,3,3,3)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (1,4,5,6)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (2,1,3,4)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (2,1,3,5)").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("select * from t where v1 = 1").get(), exceptions::invalid_request_exception);
+
+        auto get_local_index_read_count = [&] {
+            return e.db().map_reduce0([] (database& local_db) {
+                return local_db.find_column_family("ks", "local_t_v1_index").get_stats().reads.hist.count;
+            }, 0, std::plus<int64_t>()).get0();
+        };
+
+        int64_t expected_read_count = 0;
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where p = 1 and v1 = 3").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(2)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(3)}, {int32_type->decompose(3)}, {int32_type->decompose(3)}},
+            });
+            ++expected_read_count;
+            BOOST_REQUIRE_EQUAL(get_local_index_read_count(), expected_read_count);
+        });
+
+        // Even with local indexes present, filtering should work without issues
+        auto res = e.execute_cql("select * from t where v1 = 1 ALLOW FILTERING").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}},
+        });
+        BOOST_REQUIRE_EQUAL(get_local_index_read_count(), expected_read_count);
+    });
+}
+
+SEASTAR_TEST_CASE(test_local_and_global_secondary_index) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table t (p int, c int, v1 int, v2 int, primary key(p, c))").get();
+        e.execute_cql("create index local_t_v1 on t ((p),v1)").get();
+        e.execute_cql("create index global_t_v1 on t(v1)").get();
+
+        e.execute_cql("insert into t (p,c,v1,v2) values (1,1,1,1)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (1,2,3,2)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (1,3,3,3)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (1,4,5,6)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (2,1,3,4)").get();
+        e.execute_cql("insert into t (p,c,v1,v2) values (2,6,3,5)").get();
+
+        auto get_local_index_read_count = [&] {
+            return e.db().map_reduce0([] (database& local_db) {
+                return local_db.find_column_family("ks", "local_t_v1_index").get_stats().reads.hist.count;
+            }, 0, std::plus<int64_t>()).get0();
+        };
+        auto get_global_index_read_count = [&] {
+            return e.db().map_reduce0([] (database& local_db) {
+                return local_db.find_column_family("ks", "global_t_v1_index").get_stats().reads.hist.count;
+            }, 0, std::plus<int64_t>()).get0();
+        };
+
+        int64_t expected_local_index_read_count = 0;
+        int64_t expected_global_index_read_count = 0;
+
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where p = 1 and v1 = 3").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(2)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(3)}, {int32_type->decompose(3)}, {int32_type->decompose(3)}},
+            });
+            ++expected_local_index_read_count;
+            BOOST_REQUIRE_EQUAL(get_local_index_read_count(), expected_local_index_read_count);
+            BOOST_REQUIRE_EQUAL(get_global_index_read_count(), expected_global_index_read_count);
+        });
+
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where v1 = 3").get0();
+            ++expected_global_index_read_count;
+            BOOST_REQUIRE_EQUAL(get_local_index_read_count(), expected_local_index_read_count);
+            BOOST_REQUIRE_EQUAL(get_global_index_read_count(), expected_global_index_read_count);
+            assert_that(res).is_rows().with_rows_ignore_order({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(2)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(3)}, {int32_type->decompose(3)}, {int32_type->decompose(3)}},
+                {{int32_type->decompose(2)}, {int32_type->decompose(1)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}},
+                {{int32_type->decompose(2)}, {int32_type->decompose(6)}, {int32_type->decompose(3)}, {int32_type->decompose(5)}},
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_local_index_paging) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2))").get();
+        e.execute_cql("CREATE INDEX ON tab ((p),v)").get();
+        e.execute_cql("CREATE INDEX ON tab ((p),c2)").get();
+
+        e.execute_cql("INSERT INTO tab (p, c1, c2, v) VALUES (1, 1, 2, 1)").get();
+        e.execute_cql("INSERT INTO tab (p, c1, c2, v) VALUES (1, 1, 1, 1)").get();
+        e.execute_cql("INSERT INTO tab (p, c1, c2, v) VALUES (1, 2, 2, 4)").get();
+        e.execute_cql("INSERT INTO tab (p, c1, c2, v) VALUES (3, 1, 2, 1)").get();
+
+        auto extract_paging_state = [] (::shared_ptr<cql_transport::messages::result_message> res) {
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            auto paging_state = rows->rs().get_metadata().paging_state();
+            assert(paging_state);
+            return ::make_shared<service::pager::paging_state>(*paging_state);
+        };
+
+        eventually([&] {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE p = 1 and v = 1", std::move(qo)).get0();
+            auto paging_state = extract_paging_state(res);
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)},
+            }});
+
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            res = e.execute_cql("SELECT * FROM tab WHERE p = 1 and v = 1", std::move(qo)).get0();
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+            }});
+        });
+
+        eventually([&] {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE p = 1 and c2 = 2", std::move(qo)).get0();
+            auto paging_state = extract_paging_state(res);
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+            }});
+
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            res = e.execute_cql("SELECT * FROM tab WHERE p = 1 and c2 = 2", std::move(qo)).get0();
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(2)}, {int32_type->decompose(4)},
+            }});
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_malformed_local_index) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (p1 int, p2 int, c1 int, c2 int, v int, PRIMARY KEY ((p1, p2), c1, c2))").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p2),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2,p1),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,c1),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((c1,c2),v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2),c1,v)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2))").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2),p1)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2),p2)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p1,p2),(c1,c2))").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON tab ((p2,p1),v)").get(), exceptions::invalid_request_exception);
+    });
+}
+
+SEASTAR_TEST_CASE(test_local_index_multi_pk_columns) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (p1 int, p2 int, c1 int, c2 int, v int, PRIMARY KEY ((p1, p2), c1, c2))").get();
+        e.execute_cql("CREATE INDEX ON tab ((p1,p2),v)").get();
+        e.execute_cql("CREATE INDEX ON tab ((p1,p2),c2)").get();
+
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 2, 1, 2, 1)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 2, 1, 1, 1)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 3, 2, 2, 4)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 2, 3, 2, 4)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (1, 2, 3, 7, 4)").get();
+        e.execute_cql("INSERT INTO tab (p1, p2, c1, c2, v) VALUES (3, 3, 1, 2, 1)").get();
+
+        eventually([&] {
+            auto res = e.execute_cql("select * from tab where p1 = 1 and p2 = 2 and v = 4").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(4)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(4)}},
+            });
+        });
+
+        eventually([&] {
+            auto res = e.execute_cql("select * from tab where p1 = 1 and p2 = 2 and v = 5").get0();
+            assert_that(res).is_rows().with_size(0);
+        });
+
+        BOOST_REQUIRE_THROW(e.execute_cql("select * from tab where p1 = 1 and v = 3").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("select * from tab where p2 = 2 and v = 3").get(), exceptions::invalid_request_exception);
+    });
+}
+
+SEASTAR_TEST_CASE(test_local_index_case_sensitive) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE \"FooBar\" (a int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON \"FooBar\" ((a),b)").get();
+        e.execute_cql("INSERT INTO \"FooBar\" (a, b, c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from \"FooBar\" WHERE a = 1 AND b = 1").get();
+
+        e.execute_cql("CREATE TABLE tab (a int PRIMARY KEY, \"FooBar\" int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab ((a),\"FooBar\")").get();
+
+        e.execute_cql("INSERT INTO tab (a, \"FooBar\", c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab WHERE a = 1 and \"FooBar\" = 2").get();
+
+        e.execute_cql("CREATE TABLE tab2 (\"FooBar\" int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab2 ((\"FooBar\"),b)").get();
+        e.execute_cql("INSERT INTO tab2 (\"FooBar\", b, c) VALUES (1, 2, 3)").get();
+
+        e.execute_cql("SELECT * from tab2 WHERE \"FooBar\" = 1 AND b = 2").get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_local_index_unorthodox_name) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (a int PRIMARY KEY, \"Comma\\,,\" int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab ((a),\"Comma\\,,\")").get();
+        e.execute_cql("INSERT INTO tab (a, \"Comma\\,,\", c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab WHERE a = 1 and \"Comma\\,,\" = 2").get();
+
+        e.execute_cql("CREATE TABLE tab2 (\"CommaWithParentheses,abc)\" int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab2 ((\"CommaWithParentheses,abc)\"),b)").get();
+        e.execute_cql("INSERT INTO tab2 (\"CommaWithParentheses,abc)\", b, c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab2 WHERE \"CommaWithParentheses,abc)\" = 1 AND b = 2").get();
+
+        e.execute_cql("CREATE TABLE tab3 (\"YetAnotherComma\\,ff,a\" int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab3 ((\"YetAnotherComma\\,ff,a\"),b)").get();
+        e.execute_cql("INSERT INTO tab3 (\"YetAnotherComma\\,ff,a\", b, c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab3 WHERE \"YetAnotherComma\\,ff,a\" = 1 AND b = 2").get();
+
+        e.execute_cql("CREATE TABLE tab4 (\"escapedcomma\\,inthemiddle\" int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab4 ((\"escapedcomma\\,inthemiddle\"),b)").get();
+        e.execute_cql("INSERT INTO tab4 (\"escapedcomma\\,inthemiddle\", b, c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab4 WHERE \"escapedcomma\\,inthemiddle\" = 1 AND b = 2").get();
+
+        e.execute_cql("CREATE TABLE tab5 (a int PRIMARY KEY, \"(b)\" int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab5 (\"(b)\")").get();
+        e.execute_cql("INSERT INTO tab5 (a, \"(b)\", c) VALUES (1, 2, 3)").get();
+        e.execute_cql("SELECT * from tab5 WHERE \"(b)\" = 1").get();
+
+        e.execute_cql("CREATE TABLE tab6 (\"trailingbacklash\\\" int, b int, c int, d int, primary key ((\"trailingbacklash\\\", b)))").get();
+        e.execute_cql("CREATE INDEX ON tab6((\"trailingbacklash\\\", b),c)").get();
+        e.execute_cql("INSERT INTO tab6 (\"trailingbacklash\\\", b, c, d) VALUES (1, 2, 3, 4)").get();
+        e.execute_cql("SELECT * FROM tab6 WHERE c = 3 and \"trailingbacklash\\\" = 1 and b = 2").get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_local_index_operations) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE t (p1 int, p2 int, c int, v1 int, v2 int, PRIMARY KEY ((p1,p2),c))").get();
+        // Both global and local indexes can be created
+        e.execute_cql("CREATE INDEX ON t (v1)").get();
+        e.execute_cql("CREATE INDEX ON t ((p1,p2),v1)").get();
+
+        // Duplicate index cannot be created, even if it's named
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON t ((p1,p2),v1)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX named_idx ON t ((p1,p2),v1)").get(), exceptions::invalid_request_exception);
+        e.execute_cql("CREATE INDEX IF NOT EXISTS named_idx ON t ((p1,p2),v1)").get();
+
+        // Even with global index dropped, duplicated local index cannot be created
+        e.execute_cql("DROP INDEX t_v1_idx").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX named_idx ON t ((p1,p2),v1)").get(), exceptions::invalid_request_exception);
+
+        e.execute_cql("DROP INDEX t_v1_idx_1").get();
+        e.execute_cql("CREATE INDEX named_idx ON t ((p1,p2),v1)").get();
+        e.execute_cql("DROP INDEX named_idx").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("DROP INDEX named_idx").get(), exceptions::invalid_request_exception);
+        e.execute_cql("DROP INDEX IF EXISTS named_idx").get();
+
+        // Even if a default name is taken, it's possible to create a local index
+        e.execute_cql("CREATE INDEX t_v1_idx ON t(v2)").get();
+        e.execute_cql("CREATE INDEX ON t(v1)").get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_local_index_prefix_optimization) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE t (p1 int, p2 int, c1 int, c2 int, v int, PRIMARY KEY ((p1,p2),c1,c2))").get();
+        // Both global and local indexes can be created
+        e.execute_cql("CREATE INDEX ON t ((p1,p2),v)").get();
+
+        e.execute_cql("INSERT INTO t (p1,p2,c1,c2,v) VALUES (1,2,3,4,5);").get();
+        e.execute_cql("INSERT INTO t (p1,p2,c1,c2,v) VALUES (2,3,4,5,6);").get();
+        e.execute_cql("INSERT INTO t (p1,p2,c1,c2,v) VALUES (3,4,5,6,7);").get();
+
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where p1 = 1 and p2 = 2 and c1 = 3 and v = 5").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}},
+            });
+        });
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where p1 = 1 and p2 = 2 and c1 = 3 and c2 = 4 and v = 5").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}},
+            });
+        });
+        BOOST_REQUIRE_THROW(e.execute_cql("select * from t where p1 = 1 and p2 = 2 and c2 = 4 and v = 5").get(), exceptions::invalid_request_exception);
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where p1 = 2 and p2 = 3 and c2 = 5 and v = 6 ALLOW FILTERING").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+            });
+        });
+    });
+}

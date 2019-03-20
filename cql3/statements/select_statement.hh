@@ -53,6 +53,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
 #include "validation.hh"
+#include "transport/messages/result_message.hh"
 
 namespace cql3 {
 
@@ -169,7 +170,10 @@ public:
 
 class indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
+    ::shared_ptr<restrictions::restrictions> _used_index_restrictions;
     schema_ptr _view_schema;
+    noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
+    noncopyable_function<query::partition_slice(const query_options&)> _get_partition_slice_for_posting_list;
 public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,
                                                                     schema_ptr schema,
@@ -194,6 +198,7 @@ public:
                                    ::shared_ptr<term> per_partition_limit,
                                    cql_stats &stats,
                                    const secondary_index::index& index,
+                                   ::shared_ptr<restrictions::restrictions> used_index_restrictions,
                                    schema_ptr view_schema);
 
 private:
@@ -246,6 +251,22 @@ private:
         _stats.rows_read += rows_read;
         _stats.secondary_index_rows_read += rows_read;
     }
+
+    future<::shared_ptr<cql_transport::messages::result_message::rows>>read_posting_list(
+            service::storage_proxy& proxy,
+            const query_options& options,
+            int32_t limit,
+            service::query_state& state,
+            gc_clock::time_point now,
+            db::timeout_clock::time_point timeout,
+            bool include_base_clustering_key);
+
+    dht::partition_range_vector get_partition_ranges_for_local_index_posting_list(const query_options& options) const;
+    dht::partition_range_vector get_partition_ranges_for_global_index_posting_list(const query_options& options) const;
+
+    query::partition_slice get_partition_slice_for_local_index_posting_list(const query_options& options) const;
+    query::partition_slice get_partition_slice_for_global_index_posting_list(const query_options& options) const;
+
 };
 
 }

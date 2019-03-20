@@ -823,10 +823,15 @@ createIndexStatement returns [::shared_ptr<create_index_statement> expr]
     ;
 
 indexIdent returns [::shared_ptr<index_target::raw> id]
+    @init {
+        std::vector<::shared_ptr<cql3::column_identifier::raw>> columns;
+    }
     : c=cident                   { $id = index_target::raw::values_of(c); }
     | K_KEYS '(' c=cident ')'    { $id = index_target::raw::keys_of(c); }
     | K_ENTRIES '(' c=cident ')' { $id = index_target::raw::keys_and_values_of(c); }
     | K_FULL '(' c=cident ')'    { $id = index_target::raw::full_collection(c); }
+    | '(' c1=cident { columns.push_back(c1); } ( ',' cn=cident { columns.push_back(cn); } )* ')' { $id = index_target::raw::columns(std::move(columns)); }
+
     ;
 
 /**

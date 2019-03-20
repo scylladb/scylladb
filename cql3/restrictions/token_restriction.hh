@@ -73,7 +73,7 @@ public:
         return _column_definitions;
     }
 
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const override {
         return false;
     }
 

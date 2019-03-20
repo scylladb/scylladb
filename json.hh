@@ -82,6 +82,17 @@ inline Json::Value to_json_value(const sstring& raw) {
     return root;
 }
 
+inline bool to_json_value(const sstring& raw, Json::Value& root) {
+#if defined(JSONCPP_VERSION_HEXA) && (JSONCPP_VERSION_HEXA >= 0x010400) // >= 1.4.0
+    Json::CharReaderBuilder rbuilder;
+    std::unique_ptr<Json::CharReader> reader(rbuilder.newCharReader());
+    return reader->parse(raw.begin(), raw.end(), &root, NULL);
+#else
+    Json::Reader reader;
+    return reader.parse(std::string{raw}, root);
+#endif
+}
+
 template<typename Map>
 inline Map to_map(const sstring& raw, Map&& map) {
     Json::Value root = to_json_value(raw);

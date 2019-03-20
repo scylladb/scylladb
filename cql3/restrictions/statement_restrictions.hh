@@ -171,11 +171,18 @@ public:
     std::vector<const column_definition*> get_column_defs_for_filtering(database& db) const;
 
     /**
+     * Gives a score that the index has - index with the highest score will be chosen
+     * in find_idx()
+     */
+    int score(const secondary_index::index& index) const;
+
+    /**
      * Determines the index to be used with the restriction.
      * @param db - the database context (for extracting index manager)
      * @return If an index can be used, an optional containing this index, otherwise an empty optional.
+     * In case the index is returned, second parameter returns the index restriction it uses.
      */
-    std::optional<secondary_index::index> find_idx(secondary_index::secondary_index_manager& sim) const;
+    std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> find_idx(secondary_index::secondary_index_manager& sim) const;
 
     /**
      * Checks if the partition key has some unrestricted components.

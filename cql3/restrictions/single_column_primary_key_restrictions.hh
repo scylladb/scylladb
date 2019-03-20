@@ -367,8 +367,8 @@ public:
         return _restrictions->restrictions();
     }
 
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
-        return _restrictions->has_supporting_index(index_manager);
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const override {
+        return _restrictions->has_supporting_index(index_manager, allow_local);
     }
 
 #if 0

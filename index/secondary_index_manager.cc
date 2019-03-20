@@ -91,7 +91,8 @@ void secondary_index_manager::reload() {
 }
 
 void secondary_index_manager::add_index(const index_metadata& im) {
-    sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
+    sstring index_target = im.options().at(cql3::statements::index_target::target_option_name);
+    sstring index_target_name = target_parser::get_target_column_name_from_string(index_target);
     _indices.emplace(im.name(), index{index_target_name, im});
 }
 
@@ -113,22 +114,36 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
     auto schema = _cf.schema();
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
     schema_builder builder{schema->ks_name(), index_table_name(im.name())};
-    auto target = target_parser::parse(schema, im);
-    const auto* index_target = std::get<const column_definition*>(target);
-    auto target_type = std::get<cql3::statements::index_target::target_type>(target);
+    auto target_info = target_parser::parse(schema, im);
+    const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
+    auto target_type = target_info.type;
     if (target_type != cql3::statements::index_target::target_type::values) {
         throw std::runtime_error(format("Unsupported index target type: {}", to_sstring(target_type)));
     }
-    builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
-    // Additional token column is added to ensure token order on secondary index queries
-    bytes token_column_name = get_available_token_column_name(*schema);
-    builder.with_column(token_column_name, bytes_type, column_kind::clustering_key);
-    for (auto& col : schema->partition_key_columns()) {
-        if (col == *index_target) {
-            continue;
+
+    // For local indexing, start with base partition key
+    if (im.local()) {
+        if (index_target->is_partition_key()) {
+            throw exceptions::invalid_request_exception("Local indexing based on partition key column is not allowed,"
+                    " since whole base partition key must be used in queries anyway. Use global indexing instead.");
         }
-        builder.with_column(col.name(), col.type, column_kind::clustering_key);
+        for (auto& col : schema->partition_key_columns()) {
+            builder.with_column(col.name(), col.type, column_kind::partition_key);
+        }
+        builder.with_column(index_target->name(), index_target->type, column_kind::clustering_key);
+    } else {
+        builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
+        // Additional token column is added to ensure token order on secondary index queries
+        bytes token_column_name = get_available_token_column_name(*schema);
+        builder.with_column(token_column_name, bytes_type, column_kind::clustering_key);
+        for (auto& col : schema->partition_key_columns()) {
+            if (col == *index_target) {
+                continue;
+            }
+            builder.with_column(col.name(), col.type, column_kind::clustering_key);
+        }
     }
+
     for (auto& col : schema->clustering_key_columns()) {
         if (col == *index_target) {
             continue;
@@ -140,7 +155,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
             db::view::create_virtual_column(builder, def.name(), def.type);
         }
     }
-    const sstring where_clause = format("{} IS NOT NULL", cql3::util::maybe_quote(index_target_name));
+    const sstring where_clause = format("{} IS NOT NULL", index_target->name_as_cql_string());
     builder.with_view_info(*schema, false, where_clause);
     return view_ptr{builder.build()};
 }
