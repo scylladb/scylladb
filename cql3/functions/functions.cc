@@ -63,7 +63,7 @@ functions::init() {
     for (auto&& type : cql3_type::values()) {
         // Note: because text and varchar ends up being synonymous, our automatic makeToBlobFunction doesn't work
         // for varchar, so we special case it below. We also skip blob for obvious reasons.
-        if (type == cql3_type::varchar || type == cql3_type::blob) {
+        if (type == cql3_type::blob) {
             continue;
         }
         // counters are not supported yet

@@ -1624,7 +1624,7 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_TIMESTAMP { $t = cql3_type::timestamp; }
     | K_TINYINT   { $t = cql3_type::tinyint; }
     | K_UUID      { $t = cql3_type::uuid; }
-    | K_VARCHAR   { $t = cql3_type::varchar; }
+    | K_VARCHAR   { $t = cql3_type::text; }
     | K_VARINT    { $t = cql3_type::varint; }
     | K_TIMEUUID  { $t = cql3_type::timeuuid; }
     | K_DATE      { $t = cql3_type::date; }
