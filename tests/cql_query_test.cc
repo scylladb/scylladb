@@ -27,7 +27,6 @@
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <seastar/net/inet_address.hh>
-#include <seastar/core/metrics_api.hh>
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
