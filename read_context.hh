@@ -38,7 +38,7 @@ class autoupdating_underlying_reader final {
     row_cache& _cache;
     read_context& _read_context;
     stdx::optional<flat_mutation_reader> _reader;
-    utils::phased_barrier::phase_type _reader_creation_phase;
+    utils::phased_barrier::phase_type _reader_creation_phase = 0;
     dht::partition_range _range = { };
     stdx::optional<dht::decorated_key> _last_key;
     stdx::optional<dht::decorated_key> _new_last_key;
@@ -105,7 +105,6 @@ public:
         return make_ready_future<>();
     }
     utils::phased_barrier::phase_type creation_phase() const {
-        assert(_reader);
         return _reader_creation_phase;
     }
     const dht::partition_range& range() const {
