@@ -2,9 +2,7 @@ FROM centos:7
 
 MAINTAINER Avi Kivity <avi@cloudius-systems.com>
 
-#enable systemd
 ENV container docker
-VOLUME [ "/sys/fs/cgroup" ]
 
 ADD scylla_bashrc /scylla_bashrc
 
