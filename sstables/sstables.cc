@@ -2569,7 +2569,7 @@ std::vector<sstring> sstable::component_filenames() const {
 }
 
 bool sstable::requires_view_building() const {
-    return boost::algorithm::ends_with(_dir, "staging") || boost::algorithm::ends_with(_dir, "upload");
+    return boost::algorithm::ends_with(_dir, "staging");
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
