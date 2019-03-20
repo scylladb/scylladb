@@ -282,7 +282,7 @@ public:
         _cl_acks += nr;
         if (!_cl_achieved && _cl_acks >= _total_block_for) {
              _cl_achieved = true;
-            delay([] (abstract_write_response_handler* self) {
+            delay(get_trace_state(), [] (abstract_write_response_handler* self) {
                 if (self->_proxy->need_throttle_writes()) {
                     self->_throttled = true;
                     self->_proxy->_throttled_writes.push_back(self->_id);
@@ -298,7 +298,7 @@ public:
             _failed += count;
             if (_total_block_for + _failed > _total_endpoints) {
                 _error = error::FAILURE;
-                delay([] (abstract_write_response_handler*) { });
+                delay(get_trace_state(), [] (abstract_write_response_handler*) { });
                 return true;
             }
         }
@@ -393,15 +393,16 @@ public:
     }
     // Calculates how much to delay completing the request. The delay adds to the request's inherent latency.
     template<typename Func>
-    void delay(Func&& on_resume) {
+    void delay(tracing::trace_state_ptr trace, Func&& on_resume) {
         auto backlog = max_backlog();
         auto delay = calculate_delay(backlog);
         stats().last_mv_flow_control_delay = delay;
         if (delay.count() == 0) {
+            tracing::trace(trace, "Delay decision due to throttling: do not delay, resuming now");
             on_resume(this);
         } else {
             ++stats().throttled_base_writes;
-            slogger.trace("Delaying user write due to view update backlog {}/{} by {}us",
+            tracing::trace(trace, "Delaying user write due to view update backlog {}/{} by {}us",
                           backlog.current, backlog.max, delay.count());
             sleep_abortable<seastar::steady_clock_type>(delay).finally([self = shared_from_this(), on_resume = std::forward<Func>(on_resume)] {
                 --self->stats().throttled_base_writes;
