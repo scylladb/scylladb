@@ -292,9 +292,6 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     if (_partition_keys.empty()) {
         throw exceptions::invalid_request_exception(format("Must select at least a column for a Materialized View"));
     }
-    if (_clustering_keys.empty()) {
-        throw exceptions::invalid_request_exception(format("No columns are defined for Materialized View other than primary key"));
-    }
 
     // The unique feature of a filter by a non-key column is that the
     // value of such column can be updated - and also be expired with TTL
