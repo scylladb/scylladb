@@ -268,6 +268,10 @@ private:
     dht::selective_token_range_sharder _sharder;
     // Seed for the repair row hashing
     uint64_t _seed;
+    // Pin the table while the reader is alive.
+    // Only needed for local readers, the multishard reader takes care
+    // of pinning tables on used shards.
+    std::optional<utils::phased_barrier::operation> _local_read_op;
     // Local reader or multishard reader to read the range
     flat_mutation_reader _reader;
     // Current partition read from disk
@@ -287,6 +291,7 @@ public:
             , _range(dht::to_partition_range(range))
             , _sharder(remote_partitioner, range, remote_shard)
             , _seed(seed)
+            , _local_read_op(local_reader ? std::optional(cf.read_in_progress()) : std::nullopt)
             , _reader(make_reader(db, cf, local_partitioner, local_reader)) {
     }
 
