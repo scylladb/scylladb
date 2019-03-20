@@ -194,8 +194,6 @@ static void prepare_builder_from_table_row(const schema_ctxt&, schema_builder&, 
 
 using namespace v3;
 
-std::vector<const char*> ALL { KEYSPACES, TABLES, SCYLLA_TABLES, COLUMNS, DROPPED_COLUMNS, TRIGGERS, VIEWS, TYPES, FUNCTIONS, AGGREGATES, INDEXES };
-
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 future<> save_system_schema(const sstring & ksname) {
@@ -203,7 +201,7 @@ future<> save_system_schema(const sstring & ksname) {
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
-    return parallel_for_each(ALL, [ksm] (sstring cf) {
+    return parallel_for_each(all_table_names(), [ksm] (sstring cf) {
         auto deletion_timestamp = schema_creation_timestamp() - 1;
         return db::execute_cql(sprint("DELETE FROM %s.%s USING TIMESTAMP %s WHERE keyspace_name = ?", NAME, cf,
             deletion_timestamp), ksm->name()).discard_result();
@@ -598,7 +596,7 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
         }
     };
     return do_with(md5_hasher(), [map, reduce] (auto& hash) {
-        return do_for_each(ALL.begin(), ALL.end(), [&hash, map, reduce] (auto& table) {
+        return do_for_each(all_table_names(), [&hash, map, reduce] (auto& table) {
             return map(table).then([&hash, reduce] (auto&& mutations) {
                 reduce(hash, mutations);
             });
@@ -629,7 +627,7 @@ future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<ser
         std::move(mutations.begin(), mutations.end(), std::back_inserter(result));
         return std::move(result);
     };
-    return map_reduce(ALL.begin(), ALL.end(), map, std::vector<frozen_mutation>{}, reduce);
+    return map_reduce(all_table_names(), map, std::vector<frozen_mutation>{}, reduce);
 }
 
 future<schema_result>
@@ -2663,10 +2661,20 @@ data_type parse_type(sstring str)
 }
 
 std::vector<schema_ptr> all_tables() {
+    // Don't forget to update this list when new schema tables are added.
+    // The listed schema tables are the ones synchronized between nodes,
+    // and forgetting one of them in this list can cause bugs like #4339.
     return {
         keyspaces(), tables(), scylla_tables(), columns(), dropped_columns(), triggers(),
         views(), indexes(), types(), functions(), aggregates(), view_virtual_columns()
     };
+}
+
+const std::vector<sstring>& all_table_names() {
+    static thread_local std::vector<sstring> all =
+            boost::copy_range<std::vector<sstring>>(all_tables() |
+            boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
+    return all;
 }
 
 namespace legacy {

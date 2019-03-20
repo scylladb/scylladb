@@ -127,9 +127,8 @@ using namespace v3;
 // Replication of schema between nodes with different version is inhibited.
 extern const sstring version;
 
-extern std::vector<const char*> ALL;
-
 std::vector<schema_ptr> all_tables();
+const std::vector<sstring>& all_table_names();
 
 // saves/creates "ks" + all tables etc, while first deleting all old schema entries (will be rewritten)
 future<> save_system_schema(const sstring & ks);
