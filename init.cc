@@ -26,6 +26,8 @@
 #include "service/storage_service.hh"
 #include "to_string.hh"
 #include "gms/inet_address.hh"
+#include "gms/feature_service.hh"
+#include "seastarx.hh"
 
 logging::logger startlog("init");
 
@@ -34,13 +36,15 @@ logging::logger startlog("init");
 // duplicated in cql_test_env.cc
 // until proper shutdown is done.
 
-void init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
-    service::init_storage_service(db, auth_service, sys_dist_ks).get();
+void init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<gms::feature_service>& feature_service) {
+    service::init_storage_service(db, auth_service, sys_dist_ks, feature_service).get();
     // #293 - do not stop anything
     //engine().at_exit([] { return service::deinit_storage_service(); });
 }
 
-void init_ms_fd_gossiper(sstring listen_address_in
+void init_ms_fd_gossiper(sharded<gms::feature_service>& features
+                , sstring listen_address_in
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
                 , bool tcp_nodelay_inter_dc
@@ -152,7 +156,7 @@ void init_ms_fd_gossiper(sstring listen_address_in
                 to_string(seeds), listen_address_in, broadcast_address);
         throw std::runtime_error("Use broadcast_address for seeds list");
     }
-    gms::get_gossiper().start().get();
+    gms::get_gossiper().start(std::ref(features)).get();
     auto& gossiper = gms::get_local_gossiper();
     gossiper.set_seeds(seeds);
     // #293 - do not stop anything

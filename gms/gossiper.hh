@@ -70,6 +70,8 @@ class inet_address;
 class i_endpoint_state_change_subscriber;
 class i_failure_detector;
 
+class feature_service;
+
 struct bind_messaging_port_tag {};
 using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
@@ -88,6 +90,7 @@ using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
 public:
     using clk = seastar::lowres_system_clock;
+    using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
 private:
     using messaging_verb = netw::messaging_verb;
     using messaging_service = netw::messaging_service;
@@ -236,7 +239,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    gossiper();
+    explicit gossiper(feature_service& features);
 
     void set_last_processed_message_at();
     void set_last_processed_message_at(clk::time_point tp);
@@ -565,29 +568,20 @@ private:
     uint64_t _msg_processing = 0;
     bool _ms_registered = false;
     bool _gossiped_to_seed = false;
+    bool _gossip_settled = false;
 
     class msg_proc_guard;
 private:
     condition_variable _features_condvar;
-    std::unordered_map<sstring, std::vector<feature*>> _registered_features;
+    feature_service& _feature_service;
     friend class feature;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
     // Get features supported by all the nodes this node knows about
-    std::set<sstring> get_supported_features() const;
-    // Get features supported by all the nodes listed in the address/feature map
-    static std::set<sstring> get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string);
-    // Wait for features are available on all nodes this node knows about
-    future<> wait_for_feature_on_all_node(std::set<sstring> features);
-    // Wait for features are available on a particular node
-    future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint);
+    std::set<sstring> get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const;
 public:
-    void check_knows_remote_features(sstring local_features_string) const;
-    void check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const;
+    void check_knows_remote_features(sstring local_features_string, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;
     void maybe_enable_features();
-private:
-    void register_feature(feature* f);
-    void unregister_feature(feature* f);
 private:
     seastar::metrics::metric_groups _metrics;
 };

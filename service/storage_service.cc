@@ -124,9 +124,26 @@ int get_generation_number() {
     return generation_number;
 }
 
-storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks)
-        : _db(db)
+storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        gms::feature_service& feature_service)
+        : _feature_service(feature_service)
+        , _db(db)
         , _auth_service(auth_service)
+        , _range_tombstones_feature(_feature_service, RANGE_TOMBSTONES_FEATURE)
+        , _large_partitions_feature(_feature_service, LARGE_PARTITIONS_FEATURE)
+        , _materialized_views_feature(_feature_service, MATERIALIZED_VIEWS_FEATURE)
+        , _counters_feature(_feature_service, COUNTERS_FEATURE)
+        , _indexes_feature(_feature_service, INDEXES_FEATURE)
+        , _digest_multipartition_read_feature(_feature_service, DIGEST_MULTIPARTITION_READ_FEATURE)
+        , _correct_counter_order_feature(_feature_service, CORRECT_COUNTER_ORDER_FEATURE)
+        , _schema_tables_v3(_feature_service, SCHEMA_TABLES_V3)
+        , _correct_non_compound_range_tombstones(_feature_service, CORRECT_NON_COMPOUND_RANGE_TOMBSTONES)
+        , _write_failure_reply_feature(_feature_service, WRITE_FAILURE_REPLY_FEATURE)
+        , _xxhash_feature(_feature_service, XXHASH_FEATURE)
+        , _roles_feature(_feature_service, ROLES_FEATURE)
+        , _la_sstable_feature(_feature_service, LA_SSTABLE_FEATURE)
+        , _stream_with_rpc_stream_feature(_feature_service, STREAM_WITH_RPC_STREAM)
+        , _mc_sstable_feature(_feature_service, MC_SSTABLE_FEATURE)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks) {
@@ -135,6 +152,24 @@ storage_service::storage_service(distributed<database>& db, sharded<auth::servic
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
     commit_error.connect([this] { isolate_on_commit_error(); });
+}
+
+void storage_service::enable_all_features() {
+    _range_tombstones_feature.enable();
+    _large_partitions_feature.enable();
+    _materialized_views_feature.enable();
+    _counters_feature.enable();
+    _indexes_feature.enable();
+    _digest_multipartition_read_feature.enable();
+    _correct_counter_order_feature.enable();
+    _schema_tables_v3.enable();
+    _correct_non_compound_range_tombstones.enable();
+    _write_failure_reply_feature.enable();
+    _xxhash_feature.enable();
+    _roles_feature.enable();
+    _la_sstable_feature.enable();
+    _stream_with_rpc_stream_feature.enable();
+    _mc_sstable_feature.enable();
 }
 
 enum class node_external_status {
@@ -276,7 +311,7 @@ bool storage_service::should_bootstrap() {
 }
 
 // Runs inside seastar::async context
-void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints, bind_messaging_port do_bind) {
+void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
     if (_joined) {
         return;
     }
@@ -306,25 +341,20 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         if (!is_auto_bootstrap()) {
             throw std::runtime_error("Trying to replace_address with auto_bootstrap disabled will not work, check your configuration");
         }
-        _bootstrap_tokens = prepare_replacement_info().get0();
+        _bootstrap_tokens = prepare_replacement_info(loaded_peer_features).get0();
         app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens));
         app_states.emplace(gms::application_state::STATUS, value_factory.hibernate(true));
     } else if (should_bootstrap()) {
-        check_for_endpoint_collision().get();
+        check_for_endpoint_collision(loaded_peer_features).get();
     } else {
         auto& gossiper = gms::get_local_gossiper();
         auto seeds = gms::get_local_gossiper().get_seeds();
         auto my_ep = get_broadcast_address();
-        auto peer_features = db::system_keyspace::load_peer_features().get0();
-        slogger.info("load_peer_features: peer_features size={}", peer_features.size());
-        for (auto& x : peer_features) {
-            slogger.info("load_peer_features: peer={}, supported_features={}", x.first, x.second);
-        }
         auto local_features = get_config_supported_features();
 
         if (seeds.count(my_ep)) {
             // This node is a seed node
-            if (peer_features.empty()) {
+            if (loaded_peer_features.empty()) {
                 // This is a competely new seed node, skip the check
                 slogger.info("Checking remote features skipped, since this node is a new seed node which knows nothing about the cluster");
             } else {
@@ -332,7 +362,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                 if (seeds.size() == 1) {
                     // This node is the only seed node, check features with system table
                     slogger.info("Checking remote features with system table, since this node is the only seed node");
-                    gossiper.check_knows_remote_features(local_features, peer_features);
+                    gossiper.check_knows_remote_features(local_features, loaded_peer_features);
                 } else {
                     // More than one seed node in the seed list, do shadow round with other seed nodes
                     bool ok;
@@ -347,11 +377,11 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                     }
 
                     if (ok) {
-                        gossiper.check_knows_remote_features(local_features);
+                        gossiper.check_knows_remote_features(local_features, loaded_peer_features);
                     } else {
                         // Check features with system table
                         slogger.info("Checking remote features with gossip failed, fallback to check with system table");
-                        gossiper.check_knows_remote_features(local_features, peer_features);
+                        gossiper.check_knows_remote_features(local_features, loaded_peer_features);
                     }
 
                     gossiper.reset_endpoint_state_map().get();
@@ -367,7 +397,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
             // (missing features) to join the cluser.
             slogger.info("Checking remote features with gossip");
             gossiper.do_shadow_round().get();
-            gossiper.check_knows_remote_features(local_features);
+            gossiper.check_knows_remote_features(local_features, loaded_peer_features);
             gossiper.reset_endpoint_state_map().get();
             for (auto ep : loaded_endpoints) {
                 gossiper.add_saved_endpoint(ep);
@@ -408,9 +438,6 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     auto& proxy = service::get_storage_proxy();
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
     update_schema_version_and_announce(proxy).get();// Ensure we know our own actual Schema UUID in preparation for updates
-    get_storage_service().invoke_on_all([] (auto& ss) {
-        ss.register_features();
-    }).get();
 #if 0
     if (!MessagingService.instance().isListening())
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
@@ -419,24 +446,8 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     HintedHandOffManager.instance.start();
     BatchlogManager.instance.start();
 #endif
-}
-
-void storage_service::register_features() {
-    _range_tombstones_feature = gms::feature(RANGE_TOMBSTONES_FEATURE);
-    _large_partitions_feature = gms::feature(LARGE_PARTITIONS_FEATURE);
-    _counters_feature = gms::feature(COUNTERS_FEATURE);
-    _digest_multipartition_read_feature = gms::feature(DIGEST_MULTIPARTITION_READ_FEATURE);
-    _correct_counter_order_feature = gms::feature(CORRECT_COUNTER_ORDER_FEATURE);
-    _schema_tables_v3 = gms::feature(SCHEMA_TABLES_V3);
-    _correct_non_compound_range_tombstones = gms::feature(CORRECT_NON_COMPOUND_RANGE_TOMBSTONES);
-    _write_failure_reply_feature = gms::feature(WRITE_FAILURE_REPLY_FEATURE);
-    _xxhash_feature = gms::feature(XXHASH_FEATURE);
-    _roles_feature = gms::feature(ROLES_FEATURE);
-    _la_sstable_feature = gms::feature(LA_SSTABLE_FEATURE);
-    _stream_with_rpc_stream_feature = gms::feature(STREAM_WITH_RPC_STREAM);
-    _mc_sstable_feature = gms::feature(MC_SSTABLE_FEATURE);
-    _materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);
-    _indexes_feature = gms::feature(INDEXES_FEATURE);
+    // Wait for gossip to settle so that the fetures will be enabled
+    gms::get_local_gossiper().wait_for_gossip_to_settle().get();
 }
 
 // Runs inside seastar::async context
@@ -1436,7 +1447,13 @@ future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
             }
         }
 
-        prepare_to_join(std::move(loaded_endpoints), do_bind);
+        auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
+        slogger.info("loaded_peer_features: peer_features size={}", loaded_peer_features.size());
+        for (auto& x : loaded_peer_features) {
+            slogger.info("loaded_peer_features: peer={}, supported_features={}", x.first, x.second);
+        }
+
+        prepare_to_join(std::move(loaded_endpoints), loaded_peer_features, do_bind);
 #if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
         for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
@@ -1513,20 +1530,21 @@ future<> storage_service::stop() {
     return make_ready_future<>();
 }
 
-future<> storage_service::check_for_endpoint_collision() {
+future<> storage_service::check_for_endpoint_collision(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     slogger.debug("Starting shadow gossip round to check for endpoint collision");
 #if 0
     if (!MessagingService.instance().isListening())
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
 #endif
-    return seastar::async([this] {
+    return seastar::async([this, loaded_peer_features] {
         auto& gossiper = gms::get_local_gossiper();
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
+        auto local_features = get_config_supported_features();
         do {
             slogger.info("Checking remote features with gossip");
             gossiper.do_shadow_round().get();
-            gossiper.check_knows_remote_features(get_config_supported_features());
+            gossiper.check_knows_remote_features(local_features, loaded_peer_features);
             auto addr = get_broadcast_address();
             if (!gossiper.is_safe_for_bootstrap(addr)) {
                 throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
@@ -1578,7 +1596,7 @@ void storage_service::remove_endpoint(inet_address endpoint) {
     }).get();
 }
 
-future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
+future<std::unordered_set<token>> storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!db().local().get_replace_address()) {
         throw std::runtime_error(sprint("replace_address is empty"));
     }
@@ -1594,9 +1612,10 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
 
     // make magic happen
     slogger.info("Checking remote features with gossip");
-    return gms::get_local_gossiper().do_shadow_round().then([this, replace_address] {
+    return gms::get_local_gossiper().do_shadow_round().then([this, loaded_peer_features, replace_address] {
         auto& gossiper = gms::get_local_gossiper();
-        gossiper.check_knows_remote_features(get_config_supported_features());
+        auto local_features = get_config_supported_features();
+        gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         // now that we've gossiped at least once, we should be able to find the node we're replacing
         auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
         if (!state) {
@@ -3302,6 +3321,15 @@ void storage_service::notify_cql_change(inet_address endpoint, bool ready)
     } else {
         notify_down(endpoint);
     }
+}
+
+future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<gms::feature_service>& feature_service) {
+    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(feature_service));
+}
+
+future<> deinit_storage_service() {
+    return service::get_storage_service().stop();
 }
 
 } // namespace service

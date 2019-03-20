@@ -64,6 +64,7 @@
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include <db/view/view_update_from_staging_generator.hh>
+#include "gms/feature_service.hh"
 
 seastar::metrics::metric_groups app_metrics;
 
@@ -333,6 +334,7 @@ int main(int ac, char** av) {
     httpd::http_server_control prometheus_server;
     prometheus::config pctx;
     directories dirs;
+    sharded<gms::feature_service> feature_service;
 
     return app.run_deprecated(ac, av, [&] {
 
@@ -360,7 +362,8 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator] {
+        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator,
+                               &feature_service] {
             read_config(opts, *cfg).get();
             configurable::init_all(opts, *cfg, *ext).get();
 
@@ -380,6 +383,8 @@ int main(int ac, char** av) {
                     throw bad_configuration_error();
                 }
             }
+            feature_service.start().get();
+            // FIXME: feature_service.stop(), when we fix up shutdown
             dht::set_global_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto make_sched_group = [&] (sstring name, unsigned shares) {
                 if (cfg->cpu_scheduler()) {
@@ -503,7 +508,7 @@ int main(int ac, char** av) {
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             supervisor::notify("initializing storage service");
-            init_storage_service(db, auth_service, sys_dist_ks);
+            init_storage_service(db, auth_service, sys_dist_ks, feature_service);
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
@@ -599,7 +604,8 @@ int main(int ac, char** av) {
             scfg.statement = dbcfg.statement_scheduling_group;
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
-            init_ms_fd_gossiper(listen_address
+            init_ms_fd_gossiper(feature_service
+                    , listen_address
                     , storage_port
                     , ssl_storage_port
                     , tcp_nodelay_inter_dc
@@ -780,6 +786,7 @@ int main(int ac, char** av) {
             });
 
             api::set_server_cache(ctx);
+            startlog.info("Waiting for gossip to settle before accepting client requests...");
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
 
