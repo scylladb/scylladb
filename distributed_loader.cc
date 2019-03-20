@@ -234,15 +234,16 @@ distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::
                         throw std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead.");
                     }
                     sst->mutate_sstable_level(0).get();
-                    // If view updates need to be generated, leave them in upload/ directory, so they will be treated as staging sstables.
                     const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), cf, streaming::stream_reason::repair).get0();
+                    sstring datadir = cf._config.datadir;
                     if (use_view_update_path) {
-                        return std::move(comps);
+                        // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
+                        datadir += "/staging";
                     }
-                    sst->create_links(cf._config.datadir, gen).get();
+                    sst->create_links(datadir, gen).get();
                     sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir()).get();
                     comps.generation = gen;
-                    comps.sstdir = cf._config.datadir;
+                    comps.sstdir = std::move(datadir);
                     return std::move(comps);
                 });
             }).get0();
