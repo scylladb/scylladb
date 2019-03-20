@@ -620,6 +620,66 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
     });
 }
 
+// Reproducer for https://github.com/scylladb/scylla/issues/4236
+SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flushes) {
+    return seastar::async([] {
+        auto s = make_schema();
+
+        std::vector<mutation> mutations = make_ring(s, 3);
+
+        auto mt = make_lw_shared<memtable>(s);
+        for (auto&& m : mutations) {
+            mt->apply(m);
+        }
+
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+        bool cancel_updater = false;
+        auto updater = repeat([&] {
+            if (cancel_updater) {
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+            return later().then([&] {
+                auto mt = make_lw_shared<memtable>(s);
+                return cache.update([]{}, *mt).then([mt] {
+                    return stop_iteration::no;
+                });
+            });
+        });
+
+        {
+            auto pr = dht::partition_range::make_singular(query::ring_position(mutations[1].decorated_key()));
+            assert_that(cache.make_reader(s, pr))
+                .produces(mutations[1])
+                .produces_end_of_stream();
+        }
+
+        {
+            auto pr = dht::partition_range::make_ending_with(
+                {query::ring_position(mutations[2].decorated_key()), true});
+            assert_that(cache.make_reader(s, pr))
+                .produces(mutations[0])
+                .produces(mutations[1])
+                .produces(mutations[2])
+                .produces_end_of_stream();
+        }
+
+        cache.invalidate([]{}).get();
+
+        {
+            assert_that(cache.make_reader(s, query::full_partition_range))
+                .produces(mutations[0])
+                .produces(mutations[1])
+                .produces(mutations[2])
+                .produces_end_of_stream();
+        }
+
+        cancel_updater = true;
+        updater.get();
+    });
+}
+
 SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
     return seastar::async([] {
         cache_tracker tracker;
