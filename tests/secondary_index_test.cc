@@ -904,3 +904,35 @@ SEASTAR_TEST_CASE(test_local_index_operations) {
         e.execute_cql("CREATE INDEX ON t(v1)").get();
     });
 }
+
+SEASTAR_TEST_CASE(test_local_index_prefix_optimization) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE t (p1 int, p2 int, c1 int, c2 int, v int, PRIMARY KEY ((p1,p2),c1,c2))").get();
+        // Both global and local indexes can be created
+        e.execute_cql("CREATE INDEX ON t ((p1,p2),v)").get();
+
+        e.execute_cql("INSERT INTO t (p1,p2,c1,c2,v) VALUES (1,2,3,4,5);").get();
+        e.execute_cql("INSERT INTO t (p1,p2,c1,c2,v) VALUES (2,3,4,5,6);").get();
+        e.execute_cql("INSERT INTO t (p1,p2,c1,c2,v) VALUES (3,4,5,6,7);").get();
+
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where p1 = 1 and p2 = 2 and c1 = 3 and v = 5").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}},
+            });
+        });
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where p1 = 1 and p2 = 2 and c1 = 3 and c2 = 4 and v = 5").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}},
+            });
+        });
+        BOOST_REQUIRE_THROW(e.execute_cql("select * from t where p1 = 1 and p2 = 2 and c2 = 4 and v = 5").get(), exceptions::invalid_request_exception);
+        eventually([&] {
+            auto res = e.execute_cql("select * from t where p1 = 2 and p2 = 3 and c2 = 5 and v = 6 ALLOW FILTERING").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+            });
+        });
+    });
+}
