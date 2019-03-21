@@ -493,7 +493,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     BatchlogManager.instance.start();
 #endif
     // Wait for gossip to settle so that the fetures will be enabled
-    gms::get_local_gossiper().wait_for_gossip_to_settle().get();
+    if (do_bind) {
+        gms::get_local_gossiper().wait_for_gossip_to_settle().get();
+    }
 }
 
 static auth::permissions_cache_config permissions_cache_config_from_db_config(const db::config& dc) {
