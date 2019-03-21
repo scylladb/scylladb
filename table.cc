@@ -991,6 +991,9 @@ table::start() {
 
 future<>
 table::stop() {
+    if (_async_gate.is_closed()) {
+        return make_ready_future<>();
+    }
     return _async_gate.close().then([this] {
         return when_all(await_pending_writes(), await_pending_reads(), await_pending_streams()).discard_result().finally([this] {
             return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
