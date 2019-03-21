@@ -75,7 +75,9 @@ public:
     // Once large_data_handler is stopped no further updates will be accepted.
     bool stopped() const { return _stopped; }
     future<> stop() {
-        assert(!stopped());
+        if (stopped()) {
+            return make_ready_future<>();
+        }
         _stopped = true;
         return _sem.wait(max_concurrency);
     }
