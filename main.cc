@@ -70,6 +70,8 @@
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
 
+namespace fs = std::filesystem;
+
 seastar::metrics::metric_groups app_metrics;
 
 using namespace std::chrono_literals;
@@ -91,14 +93,13 @@ V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, con
     return def;
 }
 
-static boost::filesystem::path relative_conf_dir(boost::filesystem::path path) {
+static fs::path relative_conf_dir(fs::path path) {
     static auto conf_dir = db::config::get_conf_dir(); // this is not gonna change in our life time
     return conf_dir / path;
 }
 
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
-    using namespace boost::filesystem;
     sstring file;
 
     if (opts.count("options-file") > 0) {
@@ -568,7 +569,7 @@ int main(int ac, char** av) {
 
             supervisor::notify("creating hints directories");
             if (hinted_handoff_enabled) {
-                boost::filesystem::path hints_base_dir(db.local().get_config().hints_directory());
+                fs::path hints_base_dir(db.local().get_config().hints_directory());
                 dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
                 directories.insert(db.local().get_config().hints_directory());
                 for (unsigned i = 0; i < smp::count; ++i) {
@@ -577,7 +578,7 @@ int main(int ac, char** av) {
                     directories.insert(std::move(shard_dir));
                 }
             }
-            boost::filesystem::path view_pending_updates_base_dir = boost::filesystem::path(db.local().get_config().view_hints_directory());
+            fs::path view_pending_updates_base_dir = fs::path(db.local().get_config().view_hints_directory());
             sstring view_pending_updates_base_dir_str = view_pending_updates_base_dir.native();
             dirs.touch_and_lock(view_pending_updates_base_dir_str).get();
             directories.insert(view_pending_updates_base_dir_str);

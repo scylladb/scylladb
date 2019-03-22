@@ -33,7 +33,6 @@
 #include "tests/test_services.hh"
 #include "tests/sstable_test_env.hh"
 #include "tmpdir.hh"
-#include <boost/filesystem.hpp>
 #include <array>
 
 constexpr auto la = sstables::sstable::version_types::la;
@@ -689,11 +688,11 @@ public:
             storage_service_for_tests ssft;
             auto src_dir = tmpdir();
             auto dest_dir = tmpdir();
-            for (const auto& entry : seastar::compat::filesystem::directory_iterator(src.c_str())) {
-                seastar::compat::filesystem::copy(entry.path(), src_dir.path() / entry.path().filename());
+            for (const auto& entry : std::filesystem::directory_iterator(src.c_str())) {
+                std::filesystem::copy(entry.path(), src_dir.path() / entry.path().filename());
             }
             auto dest_path = dest_dir.path() / src.c_str();
-            seastar::compat::filesystem::create_directories(dest_path);
+            std::filesystem::create_directories(dest_path);
             test_env env;
             fut(env, src_dir.path().string(), dest_path.string()).get();
         });

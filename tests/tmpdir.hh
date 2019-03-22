@@ -27,23 +27,25 @@
 
 #include "utils/UUID.hh"
 
+namespace fs = std::filesystem;
+
 // Creates a new empty directory with arbitrary name, which will be removed
 // automatically when tmpdir object goes out of scope.
 class tmpdir {
-    seastar::compat::filesystem::path _path;
+    fs::path _path;
 
 private:
     void remove() {
         if (!_path.empty()) {
-            seastar::compat::filesystem::remove_all(_path);
+            fs::remove_all(_path);
         }
     }
 
 public:
     tmpdir()
-     : _path(seastar::compat::filesystem::temp_directory_path() /
-             fmt::format(FMT_STRING("scylla-{}"), utils::make_random_uuid())) {
-        seastar::compat::filesystem::create_directories(_path);
+     : _path(fs::temp_directory_path() /
+             fs::path(fmt::format(FMT_STRING("scylla-{}"), utils::make_random_uuid()))) {
+        fs::create_directories(_path);
     }
 
     tmpdir(tmpdir&& other) noexcept : _path(std::exchange(other._path, {})) { }
@@ -58,5 +60,5 @@ public:
         remove();
     }
 
-    const seastar::compat::filesystem::path& path() const noexcept { return _path; }
+    const fs::path& path() const noexcept { return _path; }
 };

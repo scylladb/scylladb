@@ -66,6 +66,8 @@
 
 #include "sstable_utils.hh"
 
+namespace fs = std::filesystem;
+
 using namespace sstables;
 
 static const sstring some_keyspace("ks");
@@ -3633,7 +3635,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
 
 // Must be run in a seastar thread
 static
-shared_sstable make_sstable_easy(test_env& env, const seastar::compat::filesystem::path& path, flat_mutation_reader rd, sstable_writer_config cfg, const sstables::sstable::version_types version) {
+shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg, const sstables::sstable::version_types version) {
     auto s = rd.schema();
     auto sst = env.make_sstable(s, path.string(), 1, version, big);
     sst->write_components(std::move(rd), 1, s, cfg, encoding_stats{}).get();
@@ -3817,8 +3819,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
     });
 }
 
-static void copy_directory(boost::filesystem::path src_dir, boost::filesystem::path dst_dir) {
-    namespace fs = boost::filesystem;
+static void copy_directory(fs::path src_dir, fs::path dst_dir) {
     fs::create_directory(dst_dir);
     auto src_dir_components = std::distance(src_dir.begin(), src_dir.end());
     using rdi = fs::recursive_directory_iterator;

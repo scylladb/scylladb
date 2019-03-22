@@ -24,16 +24,18 @@
 #include "locator/ec2_snitch.hh"
 #include "utils/fb_utilities.hh"
 #include <seastar/testing/test_case.hh>
-#include <boost/filesystem.hpp>
+#include <seastar/util/std-compat.hh>
 #include <vector>
 #include <string>
 #include <tuple>
 
-static boost::filesystem::path test_files_subdir("tests/snitch_property_files");
+namespace fs = std::filesystem;
+
+static fs::path test_files_subdir("tests/snitch_property_files");
 
 future<> one_test(const std::string& property_fname, bool exp_result) {
     using namespace locator;
-    using namespace boost::filesystem;
+    using namespace std::filesystem;
 
     printf("Testing %s property file: %s\n",
            (exp_result ? "well-formed" : "ill-formed"),

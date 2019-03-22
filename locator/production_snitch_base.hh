@@ -42,7 +42,6 @@
 #include <utility>
 #include <optional>
 #include <unordered_set>
-#include <boost/filesystem.hpp>
 
 #include "gms/endpoint_state.hh"
 #include "locator/token_metadata.hh"
