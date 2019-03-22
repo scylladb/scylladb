@@ -70,6 +70,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm/transform.hpp>
+#include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/join.hpp>
 
@@ -148,8 +149,8 @@ struct user_types_to_drop final {
 };
 
 [[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy,
-    schema_result&& before,
-    schema_result&& after);
+    schema_result before,
+    schema_result after);
 
 static future<> do_merge_schema(distributed<service::storage_proxy>&, std::vector<mutation>, bool do_flush);
 
@@ -1033,84 +1034,138 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     }).get();
 }
 
-struct naked_user_type {
-    const sstring keyspace;
-    const sstring qualified_name;
+static std::vector<const query::result_set_row*> collect_rows(const std::set<sstring>& keys, const schema_result& result) {
+    std::vector<const query::result_set_row*> ret;
+    for (const auto& key : keys) {
+        for (const auto& row : result.find(key)->second->rows()) {
+            ret.push_back(&row);
+        }
+    }
+    return ret;
+}
+
+// Build a map from primary keys to rows.
+static std::map<std::vector<bytes>, const query::result_set_row*> build_row_map(const query::result_set& result) {
+    const std::vector<query::result_set_row>& rows = result.rows();
+    const schema_ptr& schema = result.schema();
+    std::vector<column_definition> primary_key;
+    for (const auto& column : schema->partition_key_columns()) {
+        primary_key.push_back(column);
+    }
+    for (const auto& column : schema->clustering_key_columns()) {
+        primary_key.push_back(column);
+    }
+    std::map<std::vector<bytes>, const query::result_set_row*> ret;
+    for (const auto& row: rows) {
+        std::vector<bytes> key;
+        for (const auto& column : primary_key) {
+            const data_value &val = row.get_data_value(column.name_as_text());
+            key.push_back(val.serialize());
+        }
+        ret.insert(std::pair(std::move(key), &row));
+    }
+    return ret;
+}
+
+struct row_diff {
+    std::vector<const query::result_set_row*> altered;
+    std::vector<const query::result_set_row*> created;
+    std::vector<const query::result_set_row*> dropped;
 };
 
-static inline void collect_types(
-        database& db, std::set<sstring>& keys, schema_result& result, std::vector<naked_user_type>& to) {
-    for (auto&& key : keys) {
-        auto&& value = result[key];
-        auto ks = db.find_keyspace(key).metadata();
-        auto types = create_types_from_schema_partition(*ks, std::move(value));
-        boost::transform(types, std::back_inserter(to), [] (user_type type) {
-            return naked_user_type{std::move(type->_keyspace), std::move(type->name())};
-        });
+// Compute which rows have been created, dropped or altered.
+// A row is identified by its primary key.
+// In the output, all entries of a given keyspace are together.
+static row_diff diff_rows(
+        distributed<service::storage_proxy>& proxy, const schema_result& before, const schema_result& after) {
+    auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
+
+    // For new or empty keyspaces, just record each row.
+    auto dropped = collect_rows(diff.entries_only_on_left, before); // Keyspaces now without rows
+    auto created = collect_rows(diff.entries_only_on_right, after); // New keyspaces with rows
+    std::vector<const query::result_set_row*> altered;
+
+    for (const auto& key : diff.entries_differing) {
+        // For each keyspace that changed, compute the difference of the corresponding result_set to find which rows
+        // have changed.
+        auto before_rows = build_row_map(*before.find(key)->second);
+        auto after_rows = build_row_map(*after.find(key)->second);
+        auto diff_row = difference(before_rows, after_rows, indirect_equal_to<const query::result_set_row*>());
+        for (const auto& key : diff_row.entries_only_on_left) {
+            dropped.push_back(before_rows.find(key)->second);
+        }
+        for (const auto& key : diff_row.entries_only_on_right) {
+            created.push_back(after_rows.find(key)->second);
+        }
+        for (const auto& key : diff_row.entries_differing) {
+            altered.push_back(after_rows.find(key)->second);
+        }
     }
+    return {std::move(altered), std::move(created), std::move(dropped)};
+}
+
+template<typename V>
+static std::vector<V> get_list(const query::result_set_row& row, const sstring& name);
+
+// Create types for a given keyspace. This takes care of topologically sorting user defined types.
+template <typename T> static std::vector<user_type> create_types(keyspace_metadata& ks, T&& range) {
+    cql_type_parser::raw_builder builder(ks);
+    for (const query::result_set_row& row : range) {
+        builder.add(row.get_nonnull<sstring>("type_name"),
+                        get_list<sstring>(row, "field_names"),
+                        get_list<sstring>(row, "field_types"));
+    }
+    return builder.build();
+}
+
+// Given a set of rows that is sorted by keyspace, create types for each keyspace.
+// The topological sort in each keyspace is necessary when creating types, since we can only create a type when the
+// types it reference have already been created.
+static std::vector<user_type> create_types(database& db, const std::vector<const query::result_set_row*>& rows) {
+    std::vector<user_type> ret;
+    for (auto i = rows.begin(), e = rows.end(); i != e;) {
+        const auto &row = *i;
+        auto keyspace = row->get_nonnull<sstring>("keyspace_name");
+        auto next = std::find_if(i, e, [&keyspace](const query::result_set_row* r) {
+            return r->get_nonnull<sstring>("keyspace_name") != keyspace;
+        });
+        auto ks = db.find_keyspace(keyspace).metadata();
+        auto v = create_types(*ks, boost::make_iterator_range(i, next) | boost::adaptors::indirected);
+        ret.insert(ret.end(), std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
+        i = next;
+    }
+    return ret;
 }
 
 // see the comments for merge_keyspaces()
-[[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
+[[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after)
 {
-    std::vector<naked_user_type> created, altered, dropped;
-
-    auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
-
-    auto& db = proxy.local().get_db().local();
-    collect_types(db, diff.entries_only_on_left, before, dropped); // Keyspaces with no more types
-    collect_types(db, diff.entries_only_on_right, after, created); // New keyspaces with types
-
-    for (auto&& keyspace : diff.entries_differing) {
-        // The user types of this keyspace differ, so diff the current types with the updated ones
-        auto ks = db.find_keyspace(keyspace).metadata();
-        auto current_types = ks->user_types()->get_all_types();
-        decltype(current_types) updated_types;
-        auto ts = create_types_from_schema_partition(*ks, std::move(after[keyspace]));
-        updated_types.reserve(ts.size());
-        for (auto&& type : ts) {
-            updated_types[type->_name] = std::move(type);
-        }
-
-        auto delta = difference(current_types, updated_types, indirect_equal_to<user_type>());
-
-        for (auto&& type_name : delta.entries_only_on_left) {
-            dropped.emplace_back(naked_user_type{keyspace, current_types[type_name]->name()});
-        }
-        for (auto&& type_name : delta.entries_only_on_right) {
-            created.emplace_back(naked_user_type{keyspace, updated_types[type_name]->name()});
-        }
-        for (auto&& type_name : delta.entries_differing) {
-            altered.emplace_back(naked_user_type{keyspace, updated_types[type_name]->name()});
-        }
-    }
+    auto diff = diff_rows(proxy, before, after);
 
     // Create and update user types before any tables/views are created that potentially
     // use those types. Similarly, defer dropping until after tables/views that may use
     // some of these user types are dropped.
 
-    proxy.local().get_db().invoke_on_all([&created, &altered] (database& db) {
+    proxy.local().get_db().invoke_on_all([&diff] (database& db) {
         return seastar::async([&] {
-            for (auto&& type : created) {
-                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type.qualified_name));
+            for (auto&& user_type : create_types(db, diff.created)) {
                 db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
                 service::get_local_migration_manager().notify_create_user_type(user_type).get();
             }
-            for (auto&& type : altered) {
-                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type.qualified_name));
+            for (auto&& user_type : create_types(db, diff.altered)) {
                 db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
                 service::get_local_migration_manager().notify_update_user_type(user_type).get();
             }
         });
     }).get();
 
-    return user_types_to_drop{[&proxy, dropped = std::move(dropped)] {
-        proxy.local().get_db().invoke_on_all([dropped = std::move(dropped)](database& db) {
-            return do_for_each(dropped, [&db](auto& user_type_to_drop) {
-                auto user_type = dynamic_pointer_cast<const user_type_impl>(
-                        parse_type(std::move(user_type_to_drop.qualified_name)));
-                db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
-                return service::get_local_migration_manager().notify_drop_user_type(user_type);
+    return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable {
+        proxy.local().get_db().invoke_on_all([&rows](database& db) {
+            return do_with(create_types(db, rows), [&db] (auto &dropped) {
+                return do_for_each(dropped, [&db](auto& user_type) {
+                    db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
+                    return service::get_local_migration_manager().notify_drop_user_type(user_type);
+                });
             });
         }).get();
     }};
@@ -1385,13 +1440,7 @@ static std::vector<V> get_list(const query::result_set_row& row, const sstring& 
 
 std::vector<user_type> create_types_from_schema_partition(
         keyspace_metadata& ks, lw_shared_ptr<query::result_set> result) {
-    cql_type_parser::raw_builder builder(ks);
-    for (auto&& row : result->rows()) {
-        builder.add(row.get_nonnull<sstring>("type_name"),
-                        get_list<sstring>(row, "field_names"),
-                        get_list<sstring>(row, "field_types"));
-    }
-    return builder.build();
+    return create_types(ks, result->rows());
 }
 
 /*
