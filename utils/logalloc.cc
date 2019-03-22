@@ -2258,6 +2258,7 @@ allocating_section::guard::~guard() {
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
 
 void allocating_section::reserve() {
+  try {
     shard_segment_pool.set_emergency_reserve_max(std::max(_lsa_reserve, _minimum_lsa_emergency_reserve));
     shard_segment_pool.refill_emergency_reserve();
 
@@ -2272,6 +2273,13 @@ void allocating_section::reserve() {
     }
 
     shard_segment_pool.clear_allocation_failure_flag();
+  } catch (const std::bad_alloc&) {
+        if (shard_tracker().should_abort_on_bad_alloc()) {
+            llogger.error("Aborting due to allocation failure");
+            abort();
+        }
+        throw;
+  }
 }
 
 void allocating_section::on_alloc_failure(logalloc::region& r) {
@@ -2283,15 +2291,7 @@ void allocating_section::on_alloc_failure(logalloc::region& r) {
         _std_reserve *= 2; // FIXME: decay?
         llogger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", this, _std_reserve);
     }
-    try {
-        reserve();
-    } catch (const std::bad_alloc&) {
-        if (shard_tracker().should_abort_on_bad_alloc()) {
-            llogger.error("Aborting due to allocation failure");
-            abort();
-        }
-        throw;
-    }
+    reserve();
 }
 
 #else
