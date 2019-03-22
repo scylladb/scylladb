@@ -249,7 +249,6 @@ private:
         return _updates.emplace(std::move(key), mutation_partition(_view)).first->second;
     }
     row_marker compute_row_marker(const clustering_row& base_row) const;
-    dht::token token_for(const partition_key& base_key);
     deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
     bool can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const;
     void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
@@ -296,10 +295,6 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
     }
 
     return marker;
-}
-
-dht::token view_updates::token_for(const partition_key& base_key) {
-    return dht::global_partitioner().get_token(*_base, base_key);
 }
 
 deletable_row& view_updates::get_view_row(const partition_key& base_key, const clustering_row& update) {
