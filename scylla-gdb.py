@@ -237,7 +237,7 @@ class static_vector:
     def __iter__(self):
         t = self.ref.type.strip_typedefs()
         value_type = t.template_argument(0)
-        data = self.ref['m_holder']['storage']['dummy'].cast(value_type.pointer())
+        data = self.ref['m_holder']['storage']['dummy']['dummy'].cast(value_type.pointer())
         for i in range(self.__len__()):
             yield data[i]
 
@@ -604,10 +604,8 @@ def find_single_sstable_readers():
         if name and name.startswith(vtable_name):
             yield obj_addr.reinterpret_cast(ptr_type)
 
-# Yields sstable* once for each active sstable reader
-
-
 def find_active_sstables():
+    """ Yields sstable* once for each active sstable reader. """
     sstable_ptr_type = gdb.lookup_type('sstables::sstable').pointer()
     for reader in find_single_sstable_readers():
         sstable_ptr = reader['_sst']['_p']
@@ -1062,24 +1060,71 @@ def get_thread_owning_memory(ptr):
             return t
 
 
+class pointer_metadata(object):
+    def __init__(self, ptr, thread):
+        self.ptr = ptr
+        self.thread = thread
+        self._is_containing_page_free = False
+        self.is_small = False
+        self.is_live = False
+        self.is_lsa = False
+        self.size = 0
+        self.offset_in_object = 0
+
+    def is_managed_by_seastar(self):
+        return not self.thread is None
+
+    @property
+    def is_containing_page_free(self):
+        return self._is_containing_page_free
+
+    @is_containing_page_free.setter
+    def is_containing_page_free(self):
+        self._is_containing_page_free = True
+        self._is_live = False
+
+    def __str__(self):
+        if not self.is_managed_by_seastar():
+            return "Not managed by seastar"
+
+        msg = "thread %d" % self.thread.num
+
+        if self.is_containing_page_free:
+            msg += ', page is free'
+            return msg
+
+        if self.is_small:
+            msg += ', small (size <= %d)' % self.size
+        else:
+            msg += ', large'
+
+        if self.is_live:
+            msg += ', live (0x%x +%d)' % (self.ptr - self.offset_in_object, self.offset_in_object)
+        else:
+            msg += ', free'
+
+        if self.is_lsa:
+            msg += ', LSA-managed'
+
+        return msg
+
+
 class scylla_ptr(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla ptr', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
-    def invoke(self, arg, from_tty):
-        ptr = int(arg, 0)
-
+    @staticmethod
+    def analyze(ptr):
         owning_thread = None
         for t, start, size in seastar_memory_layout():
             if ptr >= start and ptr < start + size:
                 owning_thread = t
                 break
 
-        if not owning_thread:
-            gdb.write("Not managed by seastar\n")
-            return
+        ptr_meta = pointer_metadata(ptr, owning_thread)
 
-        msg = "thread %d" % t.num
+        if not owning_thread:
+            return ptr_meta
 
         owning_thread.switch()
 
@@ -1102,16 +1147,16 @@ class scylla_ptr(gdb.Command):
             return False
 
         if is_page_free(ptr_page_idx):
-            msg += ', page is free'
-            gdb.write(msg + '\n')
-            return
+            ptr_meta.is_containing_page_free = True
+            return ptr_meta
 
         pool = page['pool']
         offset_in_span = int(page['offset_in_span']) * page_size + ptr % page_size
         first_page_in_span = cpu_mem['pages'][offset / page_size - page['offset_in_span']]
         if pool:
             object_size = int(pool['_object_size'])
-            msg += ', small (size <= %d)' % object_size
+            ptr_meta.size = object_size
+            ptr_meta.is_small = True
             offset_in_object = offset_in_span % object_size
             free_object_ptr = gdb.lookup_type('void').pointer().pointer()
             char_ptr = gdb.lookup_type('char').pointer()
@@ -1132,20 +1177,26 @@ class scylla_ptr(gdb.Command):
                         break
                     next_free = next_free.reinterpret_cast(free_object_ptr).dereference()
             if free:
-                msg += ', free'
+                ptr_meta.is_live = False
             else:
-                msg += ', live (0x%x +%d)' % (ptr - offset_in_object, offset_in_object)
+                ptr_meta.is_live = True
+                ptr_meta.offset_in_object = offset_in_object
         else:
-            msg += ', large'
+            ptr_meta.is_small = False
 
         # FIXME: handle debug-mode build
         index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr))
         desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
-        if desc['_region']:
-            msg += ', LSA-managed'
+        ptr_meta.is_lsa = bool(desc['_region'])
 
-        gdb.write(msg + '\n')
+        return ptr_meta
 
+    def invoke(self, arg, from_tty):
+        ptr = int(gdb.parse_and_eval(arg))
+
+        ptr_meta = self.analyze(ptr)
+
+        gdb.write("{}\n".format(str(ptr_meta)))
 
 class scylla_segment_descs(gdb.Command):
     def __init__(self):
@@ -1209,7 +1260,7 @@ class scylla_lsa(gdb.Command):
 names = {}  # addr (int) -> name (str)
 
 
-def resolve(addr):
+def resolve(addr, cache=True):
     if addr in names:
         return names[addr]
 
@@ -1218,7 +1269,8 @@ def resolve(addr):
         name = None
     else:
         name = infosym[:infosym.find('in section')]
-    names[addr] = name
+    if cache:
+        names[addr] = name
     return name
 
 
@@ -1621,65 +1673,235 @@ class chunked_vector(object):
                + small_vector(self.ref['_chunks']).external_memory_footprint()
 
 
-# Prints histogram of task types in reactor's pending task queue.
-#
-# Example:
-# (gdb) scylla task-stats
-#    16243: 0x18904f0 vtable for lambda_task<later()::{lambda()#1}> + 16
-#    16091: 0x197fc60 _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_exception...
-#    16090: 0x19bab50 _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZN7s...
-#    14280: 0x1b36940 _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queue15...
-#
-#    ^      ^         ^
-#    |      |         '-- symbol name for vtable pointer
-#    |      '------------ vtable pointer for the object pointed to by task*
-#    '------------------- task count
-#
+def get_local_tasks():
+    """ Return a list of task pointers for the local reactor. """
+    for tq_ptr in static_vector(gdb.parse_and_eval('\'seastar\'::local_engine._task_queues')):
+        tq = std_unique_ptr(tq_ptr).dereference()
+        for t in circular_buffer(tq['_q']):
+            yield std_unique_ptr(t).get()
 
 
 class scylla_task_stats(gdb.Command):
+    """ Prints histogram of task types in reactor's pending task queue.
+
+    Example:
+    (gdb) scylla task-stats
+       16243: 0x18904f0 vtable for lambda_task<later()::{lambda()#1}> + 16
+       16091: 0x197fc60 _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_exception...
+       16090: 0x19bab50 _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZN7s...
+       14280: 0x1b36940 _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queue15...
+
+       ^      ^         ^
+       |      |         '-- symbol name for vtable pointer
+       |      '------------ vtable pointer for the object pointed to by task*
+       '------------------- task count
+    """
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla task-stats', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     def invoke(self, arg, for_tty):
         vptr_count = defaultdict(int)
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        for t in circular_buffer(gdb.parse_and_eval('\'seastar\'::local_engine._pending_tasks')):
-            vptr = int(t['_M_t']['_M_head_impl'].reinterpret_cast(vptr_type).dereference())
+        for ptr in get_local_tasks():
+            vptr = int(ptr.reinterpret_cast(vptr_type).dereference())
             vptr_count[vptr] += 1
         for vptr, count in sorted(vptr_count.items(), key=lambda e: -e[1]):
             gdb.write('%10d: 0x%x %s\n' % (count, vptr, resolve(vptr)))
 
 
-# Prints contents of reactor pending tasks queue.
-#
-# Example:
-# (gdb) scylla tasks
-# (task*) 0x60017d8c7f88  _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queu...
-# (task*) 0x60019a391730  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
-# (task*) 0x60018fac2208  vtable for lambda_task<later()::{lambda()#1}> + 16
-# (task*) 0x60016e8b7428  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
-# (task*) 0x60017e5bece8  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
-# (task*) 0x60017e7f8aa0  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
-# (task*) 0x60018fac21e0  vtable for lambda_task<later()::{lambda()#1}> + 16
-# (task*) 0x60016e8b7540  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
-# (task*) 0x600174c34d58  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
-#
-#         ^               ^
-#         |               |
-#         |               '------------ symbol name for task's vtable pointer
-#         '---------------------------- task pointer
-#
 class scylla_tasks(gdb.Command):
+    """ Prints contents of reactor pending tasks queue.
+
+    Example:
+    (gdb) scylla tasks
+    (task*) 0x60017d8c7f88  _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queu...
+    (task*) 0x60019a391730  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
+    (task*) 0x60018fac2208  vtable for lambda_task<later()::{lambda()#1}> + 16
+    (task*) 0x60016e8b7428  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+    (task*) 0x60017e5bece8  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+    (task*) 0x60017e7f8aa0  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
+    (task*) 0x60018fac21e0  vtable for lambda_task<later()::{lambda()#1}> + 16
+    (task*) 0x60016e8b7540  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+    (task*) 0x600174c34d58  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+
+            ^               ^
+            |               |
+            |               '------------ symbol name for task's vtable pointer
+            '---------------------------- task pointer
+    """
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla tasks', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     def invoke(self, arg, for_tty):
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        for t in circular_buffer(gdb.parse_and_eval('\'seastar\'::local_engine._pending_tasks')):
-            ptr = t['_M_t']['_M_head_impl']
+        for ptr in get_local_tasks():
             vptr = int(ptr.reinterpret_cast(vptr_type).dereference())
             gdb.write('(task*) 0x%x  %s\n' % (ptr, resolve(vptr)))
+
+
+
+class scylla_fiber(gdb.Command):
+    """ Walk the continuation chain starting from the given task
+
+    Example (cropped for brevity):
+    (gdb) scylla fiber this
+    #0  (task*) 0x0000600000550360 0x000000000468ac40 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
+    #1  (task*) 0x0000600000550300 0x00000000046c3778 vtable for seastar::continuation<seastar::future<seastar::optimized_optional<mutation_fragment> >::then_impl<>()::{lambda(auto:2)#1}, seastar::optimized_optional<mutation_fragment> > + 16
+    #2  (task*) 0x00006000018af600 0x00000000046c37a0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
+    #3  (task*) 0x00006000005502a0 0x00000000046c37f0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
+    #4  (task*) 0x0000600001a65e10 0x00000000046c6b10 vtable for seastar::continuation<seastar::future<boost::iterator_range<mutation_fragment*> >::then_impl<...>(...)::{lambda(auto:1)#1}, boost::iterator_range<mutation_fragment*> > + 16
+     ^          ^                ^                    ^
+    (1)        (2)              (3)                  (4)
+
+    1) Task index (0 is the task passed to the command).
+    2) Pointer to the task object.
+    3) Pointer to the task's vtable.
+    4) Symbol name of the task's vtable.
+
+    Invoke `scylla fiber --help` for more information on usage.
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla fiber', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+        self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        # List of whitelisted symbol names. Each symbol is a tuple, where each
+        # element is a component of the name, the last element being the class
+        # name itself.
+        # We can't just merge them as `info symbol` might return mangled names too.
+        self._whitelist = scylla_fiber._make_symbol_matchers([
+                ("seastar", "continuation"),
+                ("seastar", "future", "thread_wake_task"),
+                ("seastar", "internal", "do_until_state"),
+                ("seastar", "internal", "do_with_state"),
+                ("seastar", "internal", "repeat_until_value_state"),
+                ("seastar", "internal", "repeater"),
+                ("seastar", "internal", "when_all_state_component"),
+                ("seastar", "lambda_task"),
+        ])
+
+
+    @staticmethod
+    def _make_symbol_matchers(symbol_specs):
+        return list(map(scylla_fiber._make_symbol_matcher, symbol_specs))
+
+    @staticmethod
+    def _make_symbol_matcher(symbol_spec):
+        unmangled_prefix = 'vtable for {}'.format('::'.join(symbol_spec))
+        def matches_symbol(name):
+            if name.startswith(unmangled_prefix):
+                return True
+
+            try:
+                positions = [name.index(part) for part in symbol_spec]
+                return sorted(positions) == positions
+            except ValueError:
+                return False
+
+        return matches_symbol
+
+    def _name_is_on_whitelist(self, name):
+        for matcher in self._whitelist:
+            if matcher(name):
+                return True
+        return False
+
+    def _maybe_log(self, msg, verbose):
+        if verbose:
+            gdb.write(msg)
+
+    def _probe_pointer(self, ptr, verbose):
+        """ Check if the pointer is a task pointer
+
+        The pattern we are looking for is:
+        ptr -> vtable ptr for a symbol that matches our whitelist
+
+        In addition, ptr has to point to a the beginning of an allocation
+        block, managed by seastar, that contains a live object.
+        """
+        try:
+            maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(self._vptr_type).dereference())
+            self._maybe_log(" -> 0x{:016x}".format(maybe_vptr), verbose)
+        except gdb.MemoryError:
+            self._maybe_log(" Not a pointer\n", verbose)
+            return
+
+        resolved_symbol = resolve(maybe_vptr, False)
+        if resolved_symbol is None:
+            self._maybe_log(" Not a vtable ptr\n", verbose)
+            return
+
+        self._maybe_log(" => {}".format(resolved_symbol), verbose)
+
+        if not self._name_is_on_whitelist(resolved_symbol):
+            self._maybe_log(" Symbol name doesn't match whitelisted symbols\n", verbose)
+            return
+
+        ptr_meta = scylla_ptr.analyze(ptr)
+        if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live or ptr_meta.offset_in_object != 0:
+            self._maybe_log(" Not the start of an allocation block or not a live object\n", verbose)
+            return
+
+        self._maybe_log(" Task found\n", verbose)
+
+        return ptr_meta, maybe_vptr, resolved_symbol
+
+    def _do_walk(self, ptr_meta, i, max_depth, verbose):
+        if max_depth > -1 and i >= max_depth:
+            return []
+
+        ptr = ptr_meta.ptr
+        region_start = ptr + self._vptr_type.sizeof # ignore our own vtable
+        region_end = region_start + (ptr_meta.size - ptr_meta.size % self._vptr_type.sizeof)
+        self._maybe_log("Scanning task #{} @ 0x{:016x}: {}\n".format(i, ptr, str(ptr_meta)), verbose)
+
+        for it in range(region_start, region_end, self._vptr_type.sizeof):
+            maybe_tptr = int(gdb.Value(it).reinterpret_cast(self._vptr_type).dereference())
+            self._maybe_log("0x{:016x}+0x{:04x} -> 0x{:016x}".format(ptr, it - ptr, maybe_tptr), verbose)
+
+            res = self._probe_pointer(maybe_tptr, verbose)
+
+            if res is None:
+                continue
+
+            tptr_meta, vptr, name = res
+
+            fiber = self._do_walk(tptr_meta, i + 1, max_depth, verbose)
+            fiber.append((maybe_tptr, vptr, name))
+            return fiber
+
+        return []
+
+    def _walk(self, ptr, max_depth, verbose):
+        ptr_meta = scylla_ptr.analyze(int(ptr))
+
+        if not ptr_meta.is_managed_by_seastar():
+            gdb.write("Task pointer 0x{:016x} is not an object managed by seastar\n")
+            return []
+
+        return reversed(self._do_walk(ptr_meta, 0, max_depth, verbose))
+
+    def invoke(self, arg, for_tty):
+        parser = argparse.ArgumentParser(description="scylla fiber")
+        parser.add_argument("-v", "--verbose", action="store_true", default=False,
+                help="Make the command more verbose about what it is doing")
+        parser.add_argument("-d", "--max-depth", action="store", type=int, default=-1,
+                help="Maximum depth to traverse on the continuation chain")
+        parser.add_argument("task", action="store", help="An expression that evaluates to a valid `seastar::task*` value. Cannot contain white-space.")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        try:
+            fiber = self._walk(gdb.parse_and_eval(args.task), args.max_depth, args.verbose)
+
+            for i, (tptr, vptr, name) in enumerate(fiber):
+                gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
+        except KeyboardInterrupt:
+            return
 
 
 def find_in_live(mem_start, mem_size, value, size_selector='g'):
@@ -1694,18 +1916,17 @@ def find_in_live(mem_start, mem_size, value, size_selector='g'):
                     offset = addr - obj_start
                     yield obj_start, offset
 
-# Finds live objects on seastar heap of current shard which contain given value.
-# Prints results in 'scylla ptr' format.
-#
-# Example:
-#
-#   (gdb) scylla find 0x600005321900
-#   thread 1, small (size <= 512), live (0x6000000f3800 +48)
-#   thread 1, small (size <= 56), live (0x6000008a1230 +32)
-#
-
-
 class scylla_find(gdb.Command):
+    """ Finds live objects on seastar heap of current shard which contain given value.
+    Prints results in 'scylla ptr' format.
+
+    Example:
+
+      (gdb) scylla find 0x600005321900
+      thread 1, small (size <= 512), live (0x6000000f3800 +48)
+      thread 1, small (size <= 56), live (0x6000008a1230 +32)
+    """
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla find', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
@@ -1746,10 +1967,10 @@ class std_unique_ptr:
         return self.dereference()[item]
 
     def address(self):
-        return self.dereference().address
+        return self.get()
 
     def __nonzero__(self):
-        return bool(self.obj['_M_t']['_M_t']['_M_head_impl'])
+        return bool(self.get())
 
     def __bool__(self):
         return self.__nonzero__()
@@ -1923,6 +2144,7 @@ scylla_unthread()
 scylla_threads()
 scylla_task_stats()
 scylla_tasks()
+scylla_fiber()
 scylla_find()
 scylla_task_histogram()
 scylla_active_sstables()
