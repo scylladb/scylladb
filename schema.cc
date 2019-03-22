@@ -1253,7 +1253,33 @@ raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool includ
 { }
 
 column_computation_ptr column_computation::deserialize(bytes_view raw) {
-    throw std::runtime_error("Incorrect column computation value");
+    return deserialize(json::to_json_value(sstring(raw.begin(), raw.end())));
+}
+
+column_computation_ptr column_computation::deserialize(const Json::Value& parsed) {
+    if (!parsed.isObject()) {
+        throw std::runtime_error(format("Invalid column computation value: {}", parsed.toStyledString()));
+    }
+    Json::Value type_json = parsed.get("type", Json::Value());
+    if (!type_json.isString()) {
+        throw std::runtime_error(format("Type {} is not convertible to string", type_json.toStyledString()));
+    }
+    sstring type = type_json.asString();
+    if (type == "token") {
+        return std::make_unique<token_column_computation>();
+    }
+    throw std::runtime_error(format("Incorrect column computation type {} found when parsing {}", type, parsed.toStyledString()));
+}
+
+bytes token_column_computation::serialize() const {
+    Json::Value serialized(Json::objectValue);
+    serialized["type"] = Json::Value("token");
+    return to_bytes(json::to_sstring(serialized));
+}
+
+bytes_opt token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
+    dht::i_partitioner& partitioner = dht::global_partitioner();
+    return partitioner.token_to_bytes(partitioner.get_token(schema, key));
 }
 
 bool operator==(const raw_view_info& x, const raw_view_info& y) {
