@@ -7,9 +7,11 @@ print_usage() {
     echo "  --target target distribution in mock cfg name"
     echo "  --xtrace print command traces before executing command"
     echo "  --reloc-pkg specify relocatable package path"
+    echo "  --builddir specify rpmbuild directory"
     exit 1
 }
 RELOC_PKG=build/release/scylla-package.tar.gz
+BUILDDIR=build/redhat
 OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -31,6 +33,10 @@ while [ $# -gt 0 ]; do
             RELOC_PKG=$2
             shift 2
             ;;
+        "--builddir")
+            builddir="$2"
+            shift 2
+            ;;
         *)
             print_usage
             ;;
@@ -46,7 +52,7 @@ RELOC_PKG=$(readlink -f $RELOC_PKG)
 if [[ ! $OPTS =~ --reloc-pkg ]]; then
     OPTS="$OPTS --reloc-pkg $RELOC_PKG"
 fi
-mkdir -p build/redhat/scylla-package
-tar -C build/redhat/scylla-package -xpf $RELOC_PKG SCYLLA-RELOCATABLE-FILE SCYLLA-RELEASE-FILE SCYLLA-VERSION-FILE dist/redhat
-cd build/redhat/scylla-package
+mkdir -p $BUILDDIR/scylla-package
+tar -C $BUILDDIR/scylla-package -xpf $RELOC_PKG SCYLLA-RELOCATABLE-FILE SCYLLA-RELEASE-FILE SCYLLA-VERSION-FILE dist/redhat
+cd $BUILDDIR/scylla-package
 exec ./dist/redhat/build_rpm.sh $OPTS
