@@ -123,7 +123,7 @@ inline user_type create_type_statement::create_type(database& db)
     }
 
     for (auto&& column_type : _column_types) {
-        field_types.push_back(column_type->prepare(db, keyspace())->get_type());
+        field_types.push_back(column_type->prepare(db, keyspace()).get_type());
     }
 
     return user_type_impl::get_instance(keyspace(), _name.get_user_type_name(),

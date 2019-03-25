@@ -34,11 +34,7 @@
 
 namespace cql3 {
 
-sstring cql3_type::to_string() const {
-    return _name;
-}
-
-shared_ptr<cql3_type> cql3_type::raw::prepare(database& db, const sstring& keyspace) {
+cql3_type cql3_type::raw::prepare(database& db, const sstring& keyspace) {
     try {
         auto&& ks = db.find_keyspace(keyspace);
         return prepare_internal(keyspace, ks.metadata()->user_types());
@@ -57,16 +53,16 @@ bool cql3_type::raw::references_user_type(const sstring& name) const {
 
 class cql3_type::raw_type : public raw {
 private:
-    shared_ptr<cql3_type> _type;
+    cql3_type _type;
 public:
-    raw_type(shared_ptr<cql3_type> type)
+    raw_type(cql3_type type)
         : _type{type}
     { }
 public:
-    virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) {
+    virtual cql3_type prepare(database& db, const sstring& keyspace) {
         return _type;
     }
-    shared_ptr<cql3_type> prepare_internal(const sstring&, lw_shared_ptr<user_types_metadata>) override {
+    cql3_type prepare_internal(const sstring&, lw_shared_ptr<user_types_metadata>) override {
         return _type;
     }
 
@@ -75,15 +71,15 @@ public:
     }
 
     virtual bool is_counter() const {
-        return _type->is_counter();
+        return _type.is_counter();
     }
 
     virtual sstring to_string() const {
-        return _type->to_string();
+        return _type.to_string();
     }
 
     virtual bool is_duration() const override {
-        return _type->get_type()->equals(duration_type);
+        return _type.get_type()->equals(duration_type);
     }
 };
 
@@ -114,7 +110,7 @@ public:
         return true;
     }
 
-    virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
         assert(_values); // "Got null values type for a collection";
 
         if (!_frozen && _values->supports_freezing() && !_values->_frozen) {
@@ -131,18 +127,18 @@ public:
         }
 
         if (_kind == &collection_type_impl::kind::list) {
-            return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
+            return cql3_type(list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !_frozen));
         } else if (_kind == &collection_type_impl::kind::set) {
             if (_values->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed inside sets: {}", *this));
             }
-            return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
+            return cql3_type(set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !_frozen));
         } else if (_kind == &collection_type_impl::kind::map) {
             assert(_keys); // "Got null keys type for a collection";
             if (_keys->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed as map keys: {}", *this));
             }
-            return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types)->get_type(), _values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
+            return cql3_type(map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types).get_type(), _values->prepare_internal(keyspace, user_types).get_type(), !_frozen));
         }
         abort();
     }
@@ -184,7 +180,7 @@ public:
         _frozen = true;
     }
 
-    virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
         if (_name.has_keyspace()) {
             // The provided keyspace is the one of the current statement this is part of. If it's different from the keyspace of
             // the UTName, we reject since we want to limit user types to their own keyspace (see #6643)
@@ -205,7 +201,7 @@ public:
             if (!_frozen) {
                 throw exceptions::invalid_request_exception("Non-frozen User-Defined types are not supported, please use frozen<>");
             }
-            return make_shared<cql3_type>(_name.to_string(), std::move(type));
+            return cql3_type(std::move(type));
         } catch (std::out_of_range& e) {
             throw exceptions::invalid_request_exception(format("Unknown type {}", _name));
         }
@@ -243,7 +239,7 @@ public:
         }
         _frozen = true;
     }
-    virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
         if (!_frozen) {
             freeze();
         }
@@ -252,7 +248,7 @@ public:
             if (t->is_counter()) {
                 throw exceptions::invalid_request_exception("Counters are not allowed inside tuples");
             }
-            ts.push_back(t->prepare_internal(keyspace, user_types)->get_type());
+            ts.push_back(t->prepare_internal(keyspace, user_types).get_type());
         }
         return tuple_type_impl::get_instance(std::move(ts))->as_cql3_type();
     }
@@ -290,7 +286,7 @@ cql3_type::raw::freeze() {
 }
 
 shared_ptr<cql3_type::raw>
-cql3_type::raw::from(shared_ptr<cql3_type> type) {
+cql3_type::raw::from(cql3_type type) {
     return ::make_shared<raw_type>(type);
 }
 
@@ -325,32 +321,31 @@ cql3_type::raw::frozen(shared_ptr<raw> t) {
     return t;
 }
 
-thread_local shared_ptr<cql3_type> cql3_type::ascii = make("ascii", ascii_type, cql3_type::kind::ASCII);
-thread_local shared_ptr<cql3_type> cql3_type::bigint = make("bigint", long_type, cql3_type::kind::BIGINT);
-thread_local shared_ptr<cql3_type> cql3_type::blob = make("blob", bytes_type, cql3_type::kind::BLOB);
-thread_local shared_ptr<cql3_type> cql3_type::boolean = make("boolean", boolean_type, cql3_type::kind::BOOLEAN);
-thread_local shared_ptr<cql3_type> cql3_type::double_ = make("double", double_type, cql3_type::kind::DOUBLE);
-thread_local shared_ptr<cql3_type> cql3_type::empty = make("empty", empty_type, cql3_type::kind::EMPTY);
-thread_local shared_ptr<cql3_type> cql3_type::float_ = make("float", float_type, cql3_type::kind::FLOAT);
-thread_local shared_ptr<cql3_type> cql3_type::int_ = make("int", int32_type, cql3_type::kind::INT);
-thread_local shared_ptr<cql3_type> cql3_type::smallint = make("smallint", short_type, cql3_type::kind::SMALLINT);
-thread_local shared_ptr<cql3_type> cql3_type::text = make("text", utf8_type, cql3_type::kind::TEXT);
-thread_local shared_ptr<cql3_type> cql3_type::timestamp = make("timestamp", timestamp_type, cql3_type::kind::TIMESTAMP);
-thread_local shared_ptr<cql3_type> cql3_type::tinyint = make("tinyint", byte_type, cql3_type::kind::TINYINT);
-thread_local shared_ptr<cql3_type> cql3_type::uuid = make("uuid", uuid_type, cql3_type::kind::UUID);
-thread_local shared_ptr<cql3_type> cql3_type::varchar = make("varchar", utf8_type, cql3_type::kind::TEXT);
-thread_local shared_ptr<cql3_type> cql3_type::timeuuid = make("timeuuid", timeuuid_type, cql3_type::kind::TIMEUUID);
-thread_local shared_ptr<cql3_type> cql3_type::date = make("date", simple_date_type, cql3_type::kind::DATE);
-thread_local shared_ptr<cql3_type> cql3_type::time = make("time", time_type, cql3_type::kind::TIME);
-thread_local shared_ptr<cql3_type> cql3_type::inet = make("inet", inet_addr_type, cql3_type::kind::INET);
-thread_local shared_ptr<cql3_type> cql3_type::varint = make("varint", varint_type, cql3_type::kind::VARINT);
-thread_local shared_ptr<cql3_type> cql3_type::decimal = make("decimal", decimal_type, cql3_type::kind::DECIMAL);
-thread_local shared_ptr<cql3_type> cql3_type::counter = make("counter", counter_type, cql3_type::kind::COUNTER);
-thread_local shared_ptr<cql3_type> cql3_type::duration = make("duration", duration_type, cql3_type::kind::DURATION);
+thread_local cql3_type cql3_type::ascii{ascii_type};
+thread_local cql3_type cql3_type::bigint{long_type};
+thread_local cql3_type cql3_type::blob{bytes_type};
+thread_local cql3_type cql3_type::boolean{boolean_type};
+thread_local cql3_type cql3_type::double_{double_type};
+thread_local cql3_type cql3_type::empty{empty_type};
+thread_local cql3_type cql3_type::float_{float_type};
+thread_local cql3_type cql3_type::int_{int32_type};
+thread_local cql3_type cql3_type::smallint{short_type};
+thread_local cql3_type cql3_type::text{utf8_type};
+thread_local cql3_type cql3_type::timestamp{timestamp_type};
+thread_local cql3_type cql3_type::tinyint{byte_type};
+thread_local cql3_type cql3_type::uuid{uuid_type};
+thread_local cql3_type cql3_type::timeuuid{timeuuid_type};
+thread_local cql3_type cql3_type::date{simple_date_type};
+thread_local cql3_type cql3_type::time{time_type};
+thread_local cql3_type cql3_type::inet{inet_addr_type};
+thread_local cql3_type cql3_type::varint{varint_type};
+thread_local cql3_type cql3_type::decimal{decimal_type};
+thread_local cql3_type cql3_type::counter{counter_type};
+thread_local cql3_type cql3_type::duration{duration_type};
 
-const std::vector<shared_ptr<cql3_type>>&
+const std::vector<cql3_type>&
 cql3_type::values() {
-    static thread_local std::vector<shared_ptr<cql3_type>> v = {
+    static thread_local std::vector<cql3_type> v = {
         cql3_type::ascii,
         cql3_type::bigint,
         cql3_type::blob,
@@ -367,7 +362,6 @@ cql3_type::values() {
         cql3_type::timestamp,
         cql3_type::tinyint,
         cql3_type::uuid,
-        cql3_type::varchar,
         cql3_type::varint,
         cql3_type::timeuuid,
         cql3_type::date,

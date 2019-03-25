@@ -137,7 +137,8 @@ public:
     virtual bool equals(const abstract_type& other) const override;
     virtual bool is_compatible_with(const abstract_type& previous) const override;
     virtual bool is_value_compatible_with_internal(const abstract_type& previous) const override;
-    virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
+    virtual sstring cql3_type_name_impl() const override;
+    virtual bool is_native() const override { return false; }
     virtual bool is_tuple() const override { return true; }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;

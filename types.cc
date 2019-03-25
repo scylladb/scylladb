@@ -268,8 +268,12 @@ struct byte_type_impl : integer_type_impl<int8_t> {
         }
     }
 
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::tinyint;
+    virtual sstring cql3_type_name_impl() const override {
+        return "tinyint";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::TINYINT;
     }
 };
 
@@ -283,8 +287,12 @@ struct short_type_impl : integer_type_impl<int16_t> {
         }
     }
 
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::smallint;
+    virtual sstring cql3_type_name_impl() const override {
+        return "smallint";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::SMALLINT;
     }
 };
 
@@ -292,8 +300,12 @@ struct int32_type_impl : integer_type_impl<int32_t> {
     int32_type_impl() : integer_type_impl{int32_type_name, 4}
     { }
 
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::int_;
+    virtual sstring cql3_type_name_impl() const override {
+        return "int";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::INT;
     }
 };
 
@@ -301,8 +313,12 @@ struct long_type_impl : integer_type_impl<int64_t> {
     long_type_impl() : integer_type_impl{long_type_name, 8}
     { }
 
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::bigint;
+    virtual sstring cql3_type_name_impl() const override {
+        return "bigint";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::BIGINT;
     }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == timestamp_type.get();
@@ -369,16 +385,24 @@ struct string_type_impl : public concrete_type<sstring> {
 
 struct ascii_type_impl final : public string_type_impl {
     ascii_type_impl() : string_type_impl(ascii_type_name) {}
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::ascii;
+    virtual sstring cql3_type_name_impl() const override {
+        return "ascii";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::ASCII;
     }
 };
 
 struct utf8_type_impl final : public string_type_impl {
     static const char* name;
     utf8_type_impl() : string_type_impl(utf8_type_name) {}
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::text;
+    virtual sstring cql3_type_name_impl() const override {
+        return "text";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::TEXT;
     }
     virtual bool is_compatible_with(const abstract_type& other) const override {
         // Anything that is ascii is also utf8, and they both use bytes
@@ -441,8 +465,12 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         v.remove_prefix(2);
         return bytes_type->from_string(v);
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::blob;
+    virtual sstring cql3_type_name_impl() const override {
+        return "blob";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::BLOB;
     }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return true;
@@ -522,8 +550,12 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         }
         return this->decompose(value.asBool());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::boolean;
+    virtual sstring cql3_type_name_impl() const override {
+        return "boolean";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::BOOLEAN;
     }
 };
 
@@ -585,8 +617,12 @@ public:
         }
         return from_string(value.asString());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::timestamp;
+    virtual sstring cql3_type_name_impl() const override {
+        return "timestamp";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::TIMESTAMP;
     }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timestamp_type.get() || &other == long_type.get();
@@ -699,8 +735,12 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         }
         return from_string(value.asString());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::timeuuid;
+    virtual sstring cql3_type_name_impl() const override {
+        return "timeuuid";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::TIMEUUID;
     }
 private:
     static int compare_bytes(bytes_view o1, bytes_view o2) {
@@ -875,8 +915,12 @@ public:
         }
         return from_string(value.asString());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::timestamp;
+    virtual sstring cql3_type_name_impl() const override {
+        return "timestamp";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::TIMESTAMP;
     }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == long_type.get();
@@ -985,8 +1029,12 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::date;
+    virtual sstring cql3_type_name_impl() const override {
+        return "date";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::DATE;
     }
 };
 
@@ -1086,8 +1134,12 @@ struct time_type_impl : public simple_type_impl<int64_t> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::time;
+    virtual sstring cql3_type_name_impl() const override {
+        return "time";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::TIME;
     }
 };
 
@@ -1174,8 +1226,12 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::uuid;
+    virtual sstring cql3_type_name_impl() const override {
+        return "uuid";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::UUID;
     }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timeuuid_type.get();
@@ -1282,8 +1338,12 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::inet;
+    virtual sstring cql3_type_name_impl() const override {
+        return "inet";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::INET;
     }
 };
 
@@ -1444,15 +1504,23 @@ struct floating_type_impl : public simple_type_impl<T> {
 
 struct double_type_impl : floating_type_impl<double> {
     double_type_impl() : floating_type_impl{double_type_name, 8} { }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::double_;
+    virtual sstring cql3_type_name_impl() const override {
+        return "double";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::DOUBLE;
     }
 };
 
 struct float_type_impl : floating_type_impl<float> {
     float_type_impl() : floating_type_impl{float_type_name, 4} { }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::float_;
+    virtual sstring cql3_type_name_impl() const override {
+        return "float";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::FLOAT;
     }
 };
 
@@ -1574,8 +1642,12 @@ public:
             throw marshal_exception(format("unable to make int from '{}'", text));
         }
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::varint;
+    virtual sstring cql3_type_name_impl() const override {
+        return "varint";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::VARINT;
     }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || int32_type->is_value_compatible_with(other) || long_type->is_value_compatible_with(other);
@@ -1686,8 +1758,12 @@ public:
             throw marshal_exception(format("unable to make BigDecimal from '{}'", text));
         }
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::decimal;
+    virtual sstring cql3_type_name_impl() const override {
+        return "decimal";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::DECIMAL;
     }
 };
 
@@ -1731,8 +1807,12 @@ public:
     virtual bool is_counter() const override {
         return true;
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::counter;
+    virtual sstring cql3_type_name_impl() const override {
+        return "counter";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::COUNTER;
     }
     virtual size_t native_value_size() const override {
         fail(unimplemented::cause::COUNTERS);
@@ -1903,8 +1983,12 @@ public:
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
-    virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::duration;
+    virtual sstring cql3_type_name_impl() const override {
+        return "duration";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::DURATION;
     }
     virtual bool references_duration() const override {
         return true;
@@ -1957,8 +2041,12 @@ struct empty_type_impl : abstract_type {
     virtual bytes from_string(sstring_view text) const override {
         return {};
     }
-    virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return cql3::cql3_type::empty;
+    virtual sstring cql3_type_name_impl() const override {
+        return "empty";
+    }
+    virtual bool is_native() const override { return true; }
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return cql3_kind::EMPTY;
     }
     virtual size_t native_value_size() const override {
         return 0;
@@ -2003,8 +2091,6 @@ struct empty_type_impl : abstract_type {
 
 logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
-
-thread_local std::unordered_map<data_type, shared_ptr<cql3::cql3_type>> collection_type_impl::_cql3_type_cache;
 
 const collection_type_impl::kind collection_type_impl::kind::map(
         [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
@@ -2095,20 +2181,6 @@ collection_type_impl::is_value_compatible_with_internal(const abstract_type& pre
     return is_value_compatible_with_frozen(cprev);
 }
 
-shared_ptr<cql3::cql3_type>
-collection_type_impl::as_cql3_type() const {
-    auto ret = _cql3_type_cache[shared_from_this()];
-    if (!ret) {
-        auto name = cql3_type_name();
-        if (!is_multi_cell()) {
-            name = "frozen<" + name + ">";
-        }
-        ret = make_shared<cql3::cql3_type>(name, shared_from_this(), false);
-        _cql3_type_cache[shared_from_this()] = ret;
-    }
-    return ret;
-}
-
 bytes
 collection_type_impl::to_value(collection_mutation_view mut, cql_serialization_format sf) const {
   return mut.data.with_linearized([&] (bytes_view bv) {
@@ -2178,8 +2250,31 @@ void write_collection_value(bytes::iterator& out, cql_serialization_format sf, b
     out = std::copy_n(val_bytes.begin(), val_bytes.size(), out);
 }
 
+abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
+    assert(0 && "no kind for this type");
+}
+
+cql3::cql3_type abstract_type::as_cql3_type() const {
+    return cql3::cql3_type(shared_from_this());
+}
+
+abstract_type::cql3_kind_enum_set::prepared abstract_type::get_cql3_kind() const {
+    return cql3_kind_enum_set::prepare(get_cql3_kind_impl());
+}
+
 sstring abstract_type::quote_json_string(const sstring& s) {
     return json::value_to_quoted_string(s);
+}
+
+const sstring& abstract_type::cql3_type_name() const {
+    if (_cql3_type_name.empty()) {
+        auto name = cql3_type_name_impl();
+        if (!is_native() && !is_multi_cell()) {
+            name = "frozen<" + name + ">";
+        }
+        _cql3_type_name = name;
+    }
+    return _cql3_type_name;
 }
 
 void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value) {
@@ -2475,7 +2570,7 @@ map_type_impl::serialize_partially_deserialized_form(
 
 }
 sstring
-map_type_impl::cql3_type_name() const {
+map_type_impl::cql3_type_name_impl() const {
     return format("map<{}, {}>", _keys->as_cql3_type(), _values->as_cql3_type());
 }
 
@@ -2995,7 +3090,7 @@ set_type_impl::serialize_partially_deserialized_form(
 }
 
 sstring
-set_type_impl::cql3_type_name() const {
+set_type_impl::cql3_type_name_impl() const {
     return format("set<{}>", _elements->as_cql3_type());
 }
 
@@ -3219,7 +3314,7 @@ list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
 }
 
 sstring
-list_type_impl::cql3_type_name() const {
+list_type_impl::cql3_type_name_impl() const {
     return format("list<{}>", _elements->as_cql3_type());
 }
 
@@ -3565,14 +3660,9 @@ tuple_type_impl::hash(bytes_view v) const {
                              std::bit_xor<>());
 }
 
-shared_ptr<cql3::cql3_type>
-tuple_type_impl::as_cql3_type() const {
-    auto tuple_name = is_multi_cell() ? "tuple<{}>" : "frozen<tuple<{}>>";
-    auto name = format(std::move(tuple_name),
-                       ::join(", ",
-                            all_types()
-                            | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));
-    return make_shared<cql3::cql3_type>(std::move(name), shared_from_this(), false);
+sstring tuple_type_impl::cql3_type_name_impl() const {
+    return format("tuple<{}>",
+            ::join(", ", all_types() | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));
 }
 
 sstring
@@ -3625,10 +3715,8 @@ user_type_impl::get_name_as_string() const {
     return real_utf8_type->from_value(utf8_type->deserialize(_name));
 }
 
-shared_ptr<cql3::cql3_type>
-user_type_impl::as_cql3_type() const {
-    auto name = is_multi_cell() ? get_name_as_string() : "frozen<" + get_name_as_string() + ">";
-    return make_shared<cql3::cql3_type>(std::move(name), shared_from_this(), false);
+sstring user_type_impl::cql3_type_name_impl() const {
+    return get_name_as_string();
 }
 
 sstring

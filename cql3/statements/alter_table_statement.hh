@@ -83,9 +83,9 @@ public:
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) override;
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 private:
-    void add_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const shared_ptr<cql3_type> validator, const column_definition* def, bool is_static);
-    void alter_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const shared_ptr<cql3_type> validator, const column_definition* def, bool is_static);
-    void drop_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const shared_ptr<cql3_type> validator, const column_definition* def, bool is_static);
+    void add_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static);
+    void alter_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static);
+    void drop_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static);
 };
 
 }

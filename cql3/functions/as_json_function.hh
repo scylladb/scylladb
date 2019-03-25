@@ -134,7 +134,7 @@ public:
             }
             os << selector_name;
         }
-        os << ") -> " << utf8_type->as_cql3_type()->to_string();
+        os << ") -> " << utf8_type->as_cql3_type().to_string();
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {

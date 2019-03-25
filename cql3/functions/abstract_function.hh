@@ -106,9 +106,9 @@ abstract_function::print(std::ostream& os) const {
         if (i > 0) {
             os << ", ";
         }
-        os << _arg_types[i]->as_cql3_type()->to_string();
+        os << _arg_types[i]->as_cql3_type().to_string();
     }
-    os << ") -> " << _return_type->as_cql3_type()->to_string();
+    os << ") -> " << _return_type->as_cql3_type().to_string();
 }
 
 }

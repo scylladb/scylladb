@@ -429,6 +429,33 @@ class abstract_type : public enable_shared_from_this<abstract_type> {
     std::optional<uint32_t> _value_length_if_fixed;
     data::type_imr_descriptor _imr_state;
 public:
+    enum class cql3_kind : int8_t {
+        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, EMPTY, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARINT, TIMEUUID, DATE, TIME, DURATION
+    };
+    using cql3_kind_enum = super_enum<cql3_kind,
+        cql3_kind::ASCII,
+        cql3_kind::BIGINT,
+        cql3_kind::BLOB,
+        cql3_kind::BOOLEAN,
+        cql3_kind::COUNTER,
+        cql3_kind::DECIMAL,
+        cql3_kind::DOUBLE,
+        cql3_kind::EMPTY,
+        cql3_kind::FLOAT,
+        cql3_kind::INET,
+        cql3_kind::INT,
+        cql3_kind::SMALLINT,
+        cql3_kind::TINYINT,
+        cql3_kind::TEXT,
+        cql3_kind::TIMESTAMP,
+        cql3_kind::UUID,
+        cql3_kind::VARINT,
+        cql3_kind::TIMEUUID,
+        cql3_kind::DATE,
+        cql3_kind::TIME,
+        cql3_kind::DURATION>;
+    using cql3_kind_enum_set = enum_set<cql3_kind_enum>;
+
     abstract_type(sstring name, std::optional<uint32_t> value_length_if_fixed, data::type_info ti)
         : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti) {}
     virtual ~abstract_type() {}
@@ -566,9 +593,16 @@ public:
     virtual bool is_reversed() const { return false; }
     virtual bool is_tuple() const { return false; }
     virtual bool is_user_type() const { return false; }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const = 0;
+    virtual bool is_native() const = 0;
+    cql3::cql3_type as_cql3_type() const;
+    const sstring& cql3_type_name() const;
+    cql3_kind_enum_set::prepared get_cql3_kind() const;
     virtual shared_ptr<const abstract_type> freeze() const { return shared_from_this(); }
     friend class list_type_impl;
+private:
+    virtual cql3_kind get_cql3_kind_impl() const;
+    virtual sstring cql3_type_name_impl() const = 0;
+    mutable sstring _cql3_type_name;
 protected:
     // native_value_* methods are virualized versions of native_type's
     // sizeof/alignof/copy-ctor/move-ctor etc.
@@ -928,8 +962,16 @@ public:
         return _underlying_type->from_string(s);
     }
 
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return _underlying_type->as_cql3_type();
+    virtual cql3_kind get_cql3_kind_impl() const override {
+        return _underlying_type->get_cql3_kind_impl();
+    }
+
+    virtual sstring cql3_type_name_impl() const override {
+        return _underlying_type->cql3_type_name_impl();
+    }
+
+    virtual bool is_native() const {
+        return _underlying_type->is_native();
     }
 
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {

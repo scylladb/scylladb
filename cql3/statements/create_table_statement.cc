@@ -208,17 +208,17 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     std::optional<std::map<bytes, data_type>> defined_multi_cell_collections;
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
-        ::shared_ptr<cql3_type> pt = entry.second->prepare(db, keyspace());
-        if (pt->is_counter() && !service::get_local_storage_service().cluster_supports_counters()) {
+        cql3_type pt = entry.second->prepare(db, keyspace());
+        if (pt.is_counter() && !service::get_local_storage_service().cluster_supports_counters()) {
             throw exceptions::invalid_request_exception("Counter support is not enabled");
         }
-        if (pt->is_collection() && pt->get_type()->is_multi_cell()) {
+        if (pt.is_collection() && pt.get_type()->is_multi_cell()) {
             if (!defined_multi_cell_collections) {
                 defined_multi_cell_collections = std::map<bytes, data_type>{};
             }
-            defined_multi_cell_collections->emplace(id->name(), pt->get_type());
+            defined_multi_cell_collections->emplace(id->name(), pt.get_type());
         }
-        stmt->_columns.emplace(id, pt->get_type()); // we'll remove what is not a column below
+        stmt->_columns.emplace(id, pt.get_type()); // we'll remove what is not a column below
     }
     if (_key_aliases.empty()) {
         throw exceptions::invalid_request_exception("No PRIMARY KEY specifed (exactly one required)");

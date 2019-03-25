@@ -44,7 +44,7 @@ class map_type_impl final : public concrete_collection_type<std::vector<std::pai
     data_type _key_value_pair_type;
     bool _is_multi_cell;
 protected:
-    virtual sstring cql3_type_name() const override;
+    virtual sstring cql3_type_name_impl() const override;
 public:
     static shared_ptr<const map_type_impl> get_instance(data_type keys, data_type values, bool is_multi_cell);
     map_type_impl(data_type keys, data_type values, bool is_multi_cell);

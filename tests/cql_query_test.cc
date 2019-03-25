@@ -3373,3 +3373,28 @@ SEASTAR_TEST_CASE(test_cache_bypass) {
     });
 }
 
+SEASTAR_TEST_CASE(test_describe_varchar) {
+   // Test that, like cassandra, a varchar column is represented as a text column.
+   return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table tbl (id int PRIMARY KEY, t text, v varchar);").get();
+        auto ks = utf8_type->decompose("ks");
+        auto tbl = utf8_type->decompose("tbl");
+        auto id = utf8_type->decompose("id");
+        auto t = utf8_type->decompose("t");
+        auto v = utf8_type->decompose("v");
+        auto none = utf8_type->decompose("NONE");
+        auto partition_key = utf8_type->decompose("partition_key");
+        auto regular = utf8_type->decompose("regular");
+        auto pos_0 = int32_type->decompose(0);
+        auto pos_m1 = int32_type->decompose(-1);
+        auto int_t = utf8_type->decompose("int");
+        auto text_t = utf8_type->decompose("text");
+        assert_that(e.execute_cql("select * from system_schema.columns where keyspace_name = 'ks';").get0())
+            .is_rows()
+            .with_rows({
+                    {ks, tbl, id, none, id, partition_key, pos_0, int_t},
+                    {ks, tbl, t, none, t, regular, pos_m1, text_t},
+                    {ks, tbl, v, none, v, regular, pos_m1, text_t}
+                });
+   });
+}

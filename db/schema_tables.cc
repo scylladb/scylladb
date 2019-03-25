@@ -1454,7 +1454,7 @@ void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, 
 
     auto field_types_column = s->get_column_definition("field_types");
     auto field_types = make_list_mutation(type->field_types(), *field_types_column, timestamp, [](auto&& type) {
-        return data_value(type->as_cql3_type()->to_string());
+        return data_value(type->as_cql3_type().to_string());
     });
     m.set_clustered_cell(ckey, *field_types_column, std::move(field_types));
 
@@ -1594,7 +1594,7 @@ static void add_dropped_column_to_schema_mutation(schema_ptr table, const sstrin
      * them anymore), so before storing dropped columns in schema we expand UDTs to tuples. See expandUserTypes method.
      * Because of that, we can safely pass Types.none() to parse()
      */
-    m.set_clustered_cell(ckey, "type", expand_user_type(column.type)->as_cql3_type()->to_string(), timestamp);
+    m.set_clustered_cell(ckey, "type", expand_user_type(column.type)->as_cql3_type().to_string(), timestamp);
 }
 
 mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type timestamp) {
@@ -2147,7 +2147,7 @@ static void add_column_to_schema_mutation(schema_ptr table,
     m.set_clustered_cell(ckey, "kind", serialize_kind(column.kind), timestamp);
     m.set_clustered_cell(ckey, "position", pos, timestamp);
     m.set_clustered_cell(ckey, "clustering_order", sstring(order), timestamp);
-    m.set_clustered_cell(ckey, "type", type->as_cql3_type()->to_string(), timestamp);
+    m.set_clustered_cell(ckey, "type", type->as_cql3_type().to_string(), timestamp);
 }
 
 sstring serialize_kind(column_kind kind)

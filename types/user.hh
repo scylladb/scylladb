@@ -52,7 +52,8 @@ public:
     sstring field_name_as_string(size_t i) const { return _string_field_names[i]; }
     const std::vector<bytes>& field_names() const { return _field_names; }
     sstring get_name_as_string() const;
-    virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
+    virtual sstring cql3_type_name_impl() const override;
+    virtual bool is_native() const override { return false; }
     virtual bool equals(const abstract_type& other) const override;
     virtual bool is_user_type() const override { return true; }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;

@@ -162,7 +162,7 @@ static void validate_column_rename(database& db, const schema& schema, const col
     }
 }
 
-void alter_table_statement::add_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const shared_ptr<cql3_type> validator, const column_definition* def, bool is_static) {
+void alter_table_statement::add_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static) {
     if (is_static) {
         if (!schema->is_compound()) {
             throw exceptions::invalid_request_exception("Static columns are not allowed in COMPACT STORAGE tables");
@@ -185,7 +185,7 @@ void alter_table_statement::add_column(schema_ptr schema, const table& cf, schem
         throw exceptions::invalid_request_exception(format("Cannot re-add previously dropped counter column {}", column_name));
     }
 
-    auto type = validator->get_type();
+    auto type = validator.get_type();
     if (type->is_collection() && type->is_multi_cell()) {
         if (!schema->is_compound()) {
             throw exceptions::invalid_request_exception("Cannot use non-frozen collections with a non-composite PRIMARY KEY");
@@ -229,12 +229,12 @@ void alter_table_statement::add_column(schema_ptr schema, const table& cf, schem
     }
 }
 
-void alter_table_statement::alter_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const shared_ptr<cql3_type> validator, const column_definition* def, bool is_static) {
+void alter_table_statement::alter_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static) {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
 
-    auto type = validate_alter(schema, *def, *validator);
+    auto type = validate_alter(schema, *def, validator);
     // In any case, we update the column definition
     cfm.alter_column_type(column_name->name(), type);
 
@@ -244,14 +244,14 @@ void alter_table_statement::alter_column(schema_ptr schema, const table& cf, sch
         auto* view_def = view->get_column_definition(column_name->name());
         if (view_def) {
             schema_builder builder(view);
-            auto view_type = validate_alter(view, *view_def, *validator);
+            auto view_type = validate_alter(view, *view_def, validator);
             builder.alter_column_type(column_name->name(), std::move(view_type));
             view_updates.push_back(view_ptr(builder.build()));
         }
     }
 }
 
-void alter_table_statement::drop_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const shared_ptr<cql3_type> validator, const column_definition* def, bool is_static) {
+void alter_table_statement::drop_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static) {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
@@ -285,12 +285,12 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
     auto& cf = db.find_column_family(schema);
     std::vector<view_ptr> view_updates;
 
-    using column_change_fn = std::function<void (alter_table_statement*, const schema_ptr, const table&, schema_builder&, std::vector<view_ptr>&, const shared_ptr<column_identifier>, const shared_ptr<cql3_type>, const column_definition*, bool)>;
+    using column_change_fn = std::function<void (alter_table_statement*, const schema_ptr, const table&, schema_builder&, std::vector<view_ptr>&, const shared_ptr<column_identifier>, const data_type, const column_definition*, bool)>;
 
     auto invoke_column_change_fn = [&] (column_change_fn fn) {
          for (auto& [raw_name, raw_validator, is_static] : _column_changes) {
              auto column_name = raw_name->prepare_column_identifier(schema);
-             auto validator = raw_validator ? raw_validator->prepare(db, keyspace()) : nullptr;
+             auto validator = raw_validator ? raw_validator->prepare(db, keyspace()).get_type() : nullptr;
              auto* def = get_column_definition(schema, *column_name);
              fn(this, schema, cf, cfm, view_updates, column_name, validator, def, is_static);
          }

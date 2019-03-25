@@ -219,12 +219,12 @@ table_description::table_description(std::vector<column> partition_key, std::vec
 { }
 
 void table_description::add_static_column(const sstring& name, data_type type) {
-    _change_log.emplace_back(format("added static column \'{}\' of type \'{}\'", name, type->as_cql3_type()->to_string()));
+    _change_log.emplace_back(format("added static column \'{}\' of type \'{}\'", name, type->as_cql3_type().to_string()));
     add_column(_static_columns, name, type);
 }
 
 void table_description::add_regular_column(const sstring& name, data_type type) {
-    _change_log.emplace_back(format("added regular column \'{}\' of type \'{}\'", name, type->as_cql3_type()->to_string()));
+    _change_log.emplace_back(format("added regular column \'{}\' of type \'{}\'", name, type->as_cql3_type().to_string()));
     add_column(_regular_columns, name, type);
 }
 
@@ -253,22 +253,22 @@ void table_description::remove_regular_column(const sstring& name) {
 }
 
 void table_description::alter_partition_column_type(const sstring& name, data_type new_type) {
-    _change_log.emplace_back(format("altered partition column \'{}\' type to \'{}\'", name, new_type->as_cql3_type()->to_string()));
+    _change_log.emplace_back(format("altered partition column \'{}\' type to \'{}\'", name, new_type->as_cql3_type().to_string()));
     alter_column_type(_partition_key, name, new_type);
 }
 
 void table_description::alter_clustering_column_type(const sstring& name, data_type new_type) {
-    _change_log.emplace_back(format("altered clustering column \'{}\' type to \'{}\'", name, new_type->as_cql3_type()->to_string()));
+    _change_log.emplace_back(format("altered clustering column \'{}\' type to \'{}\'", name, new_type->as_cql3_type().to_string()));
     alter_column_type(_clustering_key, name, new_type);
 }
 
 void table_description::alter_static_column_type(const sstring& name, data_type new_type) {
-    _change_log.emplace_back(format("altered static column \'{}\' type to \'{}\'", name, new_type->as_cql3_type()->to_string()));
+    _change_log.emplace_back(format("altered static column \'{}\' type to \'{}\'", name, new_type->as_cql3_type().to_string()));
     alter_column_type(_static_columns, name, new_type);
 }
 
 void table_description::alter_regular_column_type(const sstring& name, data_type new_type) {
-    _change_log.emplace_back(format("altered regular column \'{}\' type to \'{}\'", name, new_type->as_cql3_type()->to_string()));
+    _change_log.emplace_back(format("altered regular column \'{}\' type to \'{}\'", name, new_type->as_cql3_type().to_string()));
     alter_column_type(_regular_columns, name, new_type);
 }
 
