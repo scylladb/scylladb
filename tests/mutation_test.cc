@@ -1701,6 +1701,24 @@ SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_cell_equals) {
+    auto now = gc_clock::now();
+    auto ttl = gc_clock::duration(0);
+
+    auto c1 = atomic_cell_or_collection(atomic_cell::make_live(*bytes_type, 1, bytes(1, 'a'), now, ttl));
+    auto c2 = atomic_cell_or_collection(atomic_cell::make_dead(1, now));
+    BOOST_REQUIRE(!c1.equals(*bytes_type, c2));
+    BOOST_REQUIRE(!c2.equals(*bytes_type, c1));
+
+    auto c3 = atomic_cell_or_collection(atomic_cell::make_live_counter_update(1, 2));
+    auto c4 = atomic_cell_or_collection(atomic_cell::make_live(*bytes_type, 1, bytes(1, 'a')));
+    BOOST_REQUIRE(!c3.equals(*bytes_type, c4));
+    BOOST_REQUIRE(!c4.equals(*bytes_type, c3));
+
+    BOOST_REQUIRE(!c1.equals(*bytes_type, c4));
+    BOOST_REQUIRE(!c4.equals(*bytes_type, c1));
+}
+
 SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
     measuring_allocator alloc;
 

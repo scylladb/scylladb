@@ -192,20 +192,20 @@ bool atomic_cell_or_collection::equals(const abstract_type& type, const atomic_c
         if (a.timestamp() != b.timestamp()) {
             return false;
         }
+        if (a.is_live() != b.is_live()) {
+            return false;
+        }
         if (a.is_live()) {
-            if (!b.is_live()) {
+            if (a.is_counter_update() != b.is_counter_update()) {
                 return false;
             }
             if (a.is_counter_update()) {
-                if (!b.is_counter_update()) {
-                    return false;
-                }
                 return a.counter_update_value() == b.counter_update_value();
             }
+            if (a.is_live_and_has_ttl() != b.is_live_and_has_ttl()) {
+                return false;
+            }
             if (a.is_live_and_has_ttl()) {
-                if (!b.is_live_and_has_ttl()) {
-                    return false;
-                }
                 if (a.ttl() != b.ttl() || a.expiry() != b.expiry()) {
                     return false;
                 }
