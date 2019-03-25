@@ -47,25 +47,25 @@ std::ostream& operator<<(std::ostream& os, const result_message::schema_change& 
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::rows& msg) {
-    fmt_print(os, "{{result_message::rows ");
+    os << "{result_message::rows ";
     struct visitor {
         std::ostream& _os;
-        void start_row() { fmt_print(_os, "{{row: "); }
+        void start_row() { _os << "{row: "; }
         void accept_value(std::optional<query::result_bytes_view> value) {
             if (!value) {
-                fmt_print(_os, " null");
+                _os << " null";
                 return;
             }
-            fmt_print(_os, " ");
+            _os << " ";
             using boost::range::for_each;
             for_each(*value, [this] (bytes_view fragment) {
-                fmt_print(_os, "{}", fragment);
+                _os << fragment;
             });
         }
-        void end_row() { fmt_print(_os, "}}"); }
+        void end_row() { _os << "}"; }
     };
     msg.rs().visit(visitor { os });
-    fmt_print(os, "}}");
+    os << "}";
     return os;
 }
 
