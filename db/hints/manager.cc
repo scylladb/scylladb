@@ -83,6 +83,9 @@ void manager::register_metrics(const sstring& group_name) {
 
         sm::make_derive("discarded", _stats.discarded,
                         sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
+
+        sm::make_derive("corrupted_files", _stats.corrupted_files,
+                        sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
     });
 }
 
@@ -729,6 +732,10 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
         }, _last_not_complete_rp.pos, &_db.extensions()).get0();
 
         s->done().get();
+    } catch (db::commitlog::segment_error& ex) {
+        manager_logger.error("{}: {}. Dropping...", fname, ex.what());
+        ctx_ptr->state.remove(send_state::segment_replay_failed);
+        ++this->shard_stats().corrupted_files;
     } catch (...) {
         manager_logger.trace("sending of {} failed: {}", fname, std::current_exception());
         ctx_ptr->state.set(send_state::segment_replay_failed);
