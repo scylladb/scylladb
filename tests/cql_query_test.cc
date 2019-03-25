@@ -43,6 +43,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "db/config.hh"
+#include "sstables/compaction_manager.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -61,9 +62,12 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         sstring blob(1024*1024, 'x');
         e.execute_cql("insert into tbl (a, b) values (42, 'foo');").get();
         e.execute_cql("insert into tbl (a, b) values (44, '" + blob + "');").get();
-        e.db().invoke_on_all([] (database& dbi) {
-            return dbi.flush_all_memtables();
-        }).get();
+        auto flush = [&] {
+            e.db().invoke_on_all([] (database& dbi) {
+                return dbi.flush_all_memtables();
+            }).get();
+        };
+        flush();
 
         shared_ptr<cql_transport::messages::result_message> msg = e.execute_cql("select partition_key, row_size from system.large_rows where table_name = 'tbl' allow filtering;").get0();
         auto res = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
@@ -89,6 +93,27 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
             .is_rows()
             .with_size(1)
             .with_row({"44", "b", "tbl"});
+
+        e.execute_cql("delete from tbl where a = 44;").get();
+
+        // In order to guarantee that system.large_rows has been updated, we have to
+        // * flush, so that a thumbstone for the above delete is created.
+        // * do a major compaction, so that the thumbstone is combined with the old entry.
+        // * stop the db, as only then do we wait for sstable deletions.
+        flush();
+        e.db().invoke_on_all([] (database& dbi) {
+            return parallel_for_each(dbi.get_column_families(), [&dbi] (auto& table) {
+                return dbi.get_compaction_manager().submit_major_compaction(&*table.second);
+            });
+        }).get();
+        stop_database(e.db()).get();
+
+        assert_that(e.execute_cql("select partition_key from system.large_rows where table_name = 'tbl' allow filtering;").get0())
+            .is_rows()
+            .is_empty();
+        assert_that(e.execute_cql("select partition_key from system.large_cells where table_name = 'tbl' allow filtering;").get0())
+            .is_rows()
+            .is_empty();
 
         return make_ready_future<>();
     }, cfg).get();
