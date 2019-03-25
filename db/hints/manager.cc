@@ -316,6 +316,10 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             cfg.fname_prefix = manager::FILENAME_PREFIX;
             cfg.extensions = &_shard_manager.local_db().extensions();
 
+            // HH doesn't utilize the flow that benefits from reusing segments.
+            // Therefore let's simply disable it to avoid any possible confusion.
+            cfg.reuse_segments = false;
+
             return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
                 // When this happens we want to refill _sender's segments only if it has finished with the segments he had before.
