@@ -609,7 +609,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
                                     remote_addr);
 
-    it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
+    auto res = _clients[idx].emplace(id, shard_info(std::move(client)));
+    assert(res.second);
+    it = res.first;
     uint32_t src_cpu_id = engine().cpu_id();
     _rpc->make_client<rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id,
                                                                                                            query::result_memory_limiter::maximum_result_size);
