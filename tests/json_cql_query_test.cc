@@ -38,6 +38,7 @@
 #include "utils/big_decimal.hh"
 #include "types/tuple.hh"
 #include "types/user.hh"
+#include "types/list.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -575,5 +576,28 @@ SEASTAR_TEST_CASE(test_json_udt) {
         assert_that(msg).is_rows().with_rows({{
             utf8_type->decompose(sstring("{\"id\": 1, \"v\": {\"WeirdNameThatNeedsEscaping\\\\n,)\": 7}}"))
         }});
+    });
+}
+
+// Checks #4348
+SEASTAR_TEST_CASE(test_unpack_decimal){
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create type ds (d1 decimal, d2 varint, d3 int)").get();
+        e.execute_cql("create table t (id int PRIMARY KEY, ds list<frozen<ds>>);").get();
+        e.execute_cql("update t set ds = fromJson('[{\"d1\":1,\"d2\":2,\"d3\":3}]') where id = 1").get();
+
+        auto ut = user_type_impl::get_instance("ks", to_bytes("ds"),
+                {to_bytes("d1"), to_bytes("d2"), to_bytes("d3")},
+                {decimal_type, varint_type, int32_type});
+        auto ut_val = make_user_value(ut,
+                user_type_impl::native_type({big_decimal{0, boost::multiprecision::cpp_int(1)},
+                boost::multiprecision::cpp_int(2),
+                3}));
+
+        auto lt = list_type_impl::get_instance(ut, true);
+        auto lt_val = lt->decompose(make_list_value(lt, list_type_impl::native_type{{ut_val}}));
+
+        auto msg = e.execute_cql("select * from t where id = 1;").get0();
+        assert_that(msg).is_rows().with_rows({{int32_type->decompose(1), lt_val}});
     });
 }
