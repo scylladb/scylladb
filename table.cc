@@ -21,6 +21,7 @@
 
 #include "database.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "service/priority_manager.hh"
 #include "db/view/view_updating_consumer.hh"
 #include "cell_locking.hh"
@@ -484,10 +485,7 @@ sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<s
     if (subdir) {
         dir += "/" + *subdir;
     }
-    auto newtab = sstables::make_sstable(_schema,
-            dir, calculate_generation_for_new_table(),
-            get_highest_supported_format(),
-            sstables::sstable::format_types::big);
+    auto newtab = make_sstable(dir);
     tlogger.debug("Created sstable for streaming: ks={}, cf={}, dir={}", schema()->ks_name(), schema()->cf_name(), dir);
     return newtab;
 }
@@ -599,10 +597,29 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
             fwd_mr);
 }
 
+sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
+        io_error_handler_gen error_handler_gen) {
+    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f, gc_clock::now(), error_handler_gen);
+}
+
+sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation,
+        sstables::sstable_version_types v, sstables::sstable_format_types f) {
+    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f);
+}
+
+sstables::shared_sstable table::make_sstable(sstring dir) {
+    return make_sstable(dir, calculate_generation_for_new_table(),
+                        get_highest_supported_format(), sstables::sstable::format_types::big);
+}
+
+sstables::shared_sstable table::make_sstable() {
+    return make_sstable(_config.datadir);
+}
+
 future<sstables::shared_sstable>
 table::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64_t generation,
         sstables::sstable::version_types v, sstables::sstable::format_types f) {
-    auto sst = sstables::make_sstable(_schema, dir, generation, v, f);
+    auto sst = make_sstable(dir, generation, v, f);
     if (!belongs_to_current_shard(info.owners)) {
         tlogger.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
         return make_ready_future<sstables::shared_sstable>();
@@ -781,10 +798,7 @@ table::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
     auto guard = _streaming_flush_phaser.start();
     return with_gate(_streaming_flush_gate, [this, old, permit = std::move(permit)] () mutable {
         return with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
-            auto newtab = sstables::make_sstable(_schema,
-                _config.datadir, calculate_generation_for_new_table(),
-                get_highest_supported_format(),
-                sstables::sstable::format_types::big);
+            auto newtab = make_sstable();
 
             newtab->set_unshared();
 
@@ -802,7 +816,7 @@ table::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
             database_sstable_write_monitor monitor(std::move(fp), newtab, _compaction_manager, _compaction_strategy, old->get_max_timestamp());
             return do_with(std::move(monitor), [this, newtab, old, permit = std::move(permit)] (auto& monitor) mutable {
                 auto&& priority = service::get_local_streaming_write_priority();
-                return write_memtable_to_sstable(*old, newtab, monitor, get_large_data_handler(), incremental_backups_enabled(), priority, false).then([this, newtab, old] {
+                return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false).then([this, newtab, old] {
                     return newtab->open_data();
                 }).then([this, old, newtab] () {
                     return with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, newtab, old] {
@@ -843,17 +857,14 @@ future<> table::seal_active_streaming_memtable_big(streaming_memtable_big& smb, 
     return with_gate(_streaming_flush_gate, [this, old, &smb, permit = std::move(permit)] () mutable {
         return with_gate(smb.flush_in_progress, [this, old, &smb, permit = std::move(permit)] () mutable {
             return with_lock(_sstables_lock.for_read(), [this, old, &smb, permit = std::move(permit)] () mutable {
-                auto newtab = sstables::make_sstable(_schema,
-                                                     _config.datadir, calculate_generation_for_new_table(),
-                                                     get_highest_supported_format(),
-                                                     sstables::sstable::format_types::big);
+                auto newtab = make_sstable();
 
                 newtab->set_unshared();
 
                 auto fp = permit.release_sstable_write_permit();
                 auto monitor = std::make_unique<database_sstable_write_monitor>(std::move(fp), newtab, _compaction_manager, _compaction_strategy, old->get_max_timestamp());
                 auto&& priority = service::get_local_streaming_write_priority();
-                auto fut = write_memtable_to_sstable(*old, newtab, *monitor, get_large_data_handler(), incremental_backups_enabled(), priority, true);
+                auto fut = write_memtable_to_sstable(*old, newtab, *monitor, incremental_backups_enabled(), priority, true);
                 return fut.then_wrapped([this, newtab, old, &smb, permit = std::move(permit), monitor = std::move(monitor)] (future<> f) mutable {
                     if (!f.failed()) {
                         smb.sstables.push_back(monitored_sstable{std::move(monitor), newtab});
@@ -931,12 +942,7 @@ table::seal_active_memtable(flush_permit&& permit) {
 future<stop_iteration>
 table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
   return with_scheduling_group(_config.memtable_scheduling_group, [this, old = std::move(old), permit = std::move(permit)] () mutable {
-    auto gen = calculate_generation_for_new_table();
-
-    auto newtab = sstables::make_sstable(_schema,
-        _config.datadir, gen,
-        get_highest_supported_format(),
-        sstables::sstable::format_types::big);
+    auto newtab = make_sstable();
 
     newtab->set_unshared();
     tlogger.debug("Flushing to {}", newtab->get_filename());
@@ -954,7 +960,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
     database_sstable_write_monitor monitor(std::move(permit), newtab, _compaction_manager, _compaction_strategy, old->get_max_timestamp());
     return do_with(std::move(monitor), [this, old, newtab] (auto& monitor) {
         auto&& priority = service::get_local_memtable_flush_priority();
-        auto f = write_memtable_to_sstable(*old, newtab, monitor, get_large_data_handler(), incremental_backups_enabled(), priority, false);
+        auto f = write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false);
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
         // priority inversion.
@@ -1032,9 +1038,7 @@ table::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
             if (work.all_generations.count(comps.generation) != 0) {
                 return make_ready_future<>();
             }
-            auto sst = sstables::make_sstable(_schema,
-                                                         _config.datadir, comps.generation,
-                                                         comps.version, comps.format);
+            auto sst = make_sstable(_config.datadir, comps.generation, comps.version, comps.format);
             work.sstables.emplace(comps.generation, std::move(sst));
             work.descriptors.emplace(comps.generation, std::move(comps));
             // FIXME: This is the only place in which we actually issue disk activity aside from
@@ -1192,7 +1196,7 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
     // This is done in the background, so we can consider this compaction completed.
     seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
        return with_semaphore(_sstable_deletion_sem, 1, [this, sstables_to_remove = std::move(sstables_to_remove)] {
-        return sstables::delete_atomically(sstables_to_remove, *get_large_data_handler()).then_wrapped([this, sstables_to_remove] (future<> f) {
+        return sstables::delete_atomically(sstables_to_remove).then_wrapped([this, sstables_to_remove] (future<> f) {
             std::exception_ptr eptr;
             try {
                 f.get();
@@ -1269,10 +1273,7 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, bool cleanup
 
     return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor), cleanup] () mutable {
         auto create_sstable = [this] {
-                auto gen = this->calculate_generation_for_new_table();
-                auto sst = sstables::make_sstable(_schema, _config.datadir, gen,
-                        get_highest_supported_format(),
-                        sstables::sstable::format_types::big);
+                auto sst = make_sstable();
                 sst->set_unshared();
                 return sst;
         };
@@ -1543,7 +1544,8 @@ table::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager, _config.streaming_scheduling_group);
 }
 
-table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,
+             cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()))
@@ -1940,7 +1942,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         }).then([this, p]() mutable {
             return parallel_for_each(p->remove, [this](sstables::shared_sstable s) {
                 _compaction_strategy.get_backlog_tracker().remove_sstable(s);
-                return sstables::delete_atomically({s}, *get_large_data_handler());
+                return sstables::delete_atomically({s});
             }).then([p] {
                 return make_ready_future<db::replay_position>(p->rp);
             });
@@ -2283,22 +2285,21 @@ table::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
-                          sstables::write_monitor& monitor, db::large_data_handler* lp_handler,
+                          sstables::write_monitor& monitor,
                           bool backup, const io_priority_class& pc, bool leave_unsealed) {
     sstables::sstable_writer_config cfg;
     cfg.replay_position = mt.replay_position();
     cfg.backup = backup;
     cfg.leave_unsealed = leave_unsealed;
     cfg.monitor = &monitor;
-    cfg.large_data_handler = lp_handler;
     return sst->write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(),
         mt.schema(), cfg, mt.get_encoding_stats(), pc);
 }
 
 future<>
-write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, db::large_data_handler* lp_handler) {
-    return do_with(permit_monitor(sstable_write_permit::unconditional()), [&mt, sst, lp_handler] (auto& monitor) {
-        return write_memtable_to_sstable(mt, std::move(sst), monitor, lp_handler);
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
+    return do_with(permit_monitor(sstable_write_permit::unconditional()), [&mt, sst] (auto& monitor) {
+        return write_memtable_to_sstable(mt, std::move(sst), monitor);
     });
 }
 

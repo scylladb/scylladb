@@ -26,13 +26,12 @@
 #include "cell_locking.hh"
 #include "mutation_reader.hh"
 #include "tests/sstable_utils.hh"
+#include "tests/test_services.hh"
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics.hpp>
 #include <boost/range/irange.hpp>
 
 using namespace sstables;
-
-static db::nop_large_data_handler nop_lp_handler;
 
 class perf_sstable_test_env {
     test_env _env;
@@ -172,9 +171,7 @@ public:
                 cache_tracker tracker;
                 cell_locker_stats cl_stats;
                 auto cm = make_lw_shared<compaction_manager>();
-                column_family::config cfg;
-                cfg.large_data_handler = &nop_lp_handler;
-                auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, tracker);
+                auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(), *cm, cl_stats, tracker);
 
                 auto start = perf_sstable_test_env::now();
                 auto ret = sstables::compact_sstables(sstables::compaction_descriptor(std::move(ssts)), *cf, sst_gen, sstables::replacer_fn_no_op()).get0();

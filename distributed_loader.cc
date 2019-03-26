@@ -108,35 +108,14 @@ static future<bool> worth_resharding(distributed<database>& db, global_column_fa
 }
 
 static future<std::vector<sstables::shared_sstable>>
-load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, schema_ptr s, sstring dir,
-        noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred);
-
-// make a set of sstables available at another shard.
-static future<> forward_sstables_to(shard_id shard, sstring directory, std::vector<sstables::shared_sstable> sstables, global_column_family_ptr cf,
-        std::function<future<> (std::vector<sstables::shared_sstable>)> func) {
-    return seastar::async([sstables = std::move(sstables), directory, shard, cf, func = std::move(func)] () mutable {
-        auto infos = boost::copy_range<std::vector<sstables::foreign_sstable_open_info>>(sstables
-            | boost::adaptors::transformed([] (auto&& sst) { return sst->get_open_info().get0(); }));
-
-        smp::submit_to(shard, [cf, func, infos = std::move(infos), directory] () mutable {
-            return load_sstables_with_open_info(std::move(infos), cf->schema(), directory, [] (auto& p) {
-                return true;
-            }).then([func] (std::vector<sstables::shared_sstable> sstables) {
-                return func(std::move(sstables));
-            });
-        }).get();
-    });
-}
-
-static future<std::vector<sstables::shared_sstable>>
-load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, schema_ptr s, sstring dir,
+load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, global_column_family_ptr cf, sstring dir,
         noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred) {
-    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), s, dir, pred = std::move(pred)] (auto& ssts) mutable {
-        return parallel_for_each(std::move(ssts_info), [&ssts, s, dir, pred = std::move(pred)] (auto& info) mutable {
+    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), cf, dir, pred = std::move(pred)] (auto& ssts) mutable {
+        return parallel_for_each(std::move(ssts_info), [&ssts, cf, dir, pred = std::move(pred)] (auto& info) mutable {
             if (!pred(info)) {
                 return make_ready_future<>();
             }
-            auto sst = sstables::make_sstable(s, dir, info.generation, info.version, info.format);
+            auto sst = cf->make_sstable(dir, info.generation, info.version, info.format);
             return sst->load(std::move(info)).then([&ssts, sst] {
                 ssts.push_back(std::move(sst));
                 return make_ready_future<>();
@@ -147,17 +126,34 @@ load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ss
     });
 }
 
+// make a set of sstables available at another shard.
+static future<> forward_sstables_to(shard_id shard, sstring directory, std::vector<sstables::shared_sstable> sstables, global_column_family_ptr cf,
+        std::function<future<> (std::vector<sstables::shared_sstable>)> func) {
+    return seastar::async([sstables = std::move(sstables), directory, shard, cf, func = std::move(func)] () mutable {
+        auto infos = boost::copy_range<std::vector<sstables::foreign_sstable_open_info>>(sstables
+            | boost::adaptors::transformed([] (auto&& sst) { return sst->get_open_info().get0(); }));
+
+        smp::submit_to(shard, [cf, func, infos = std::move(infos), directory] () mutable {
+            return load_sstables_with_open_info(std::move(infos), cf, directory, [] (auto& p) {
+                return true;
+            }).then([func] (std::vector<sstables::shared_sstable> sstables) {
+                return func(std::move(sstables));
+            });
+        }).get();
+    });
+}
+
 // Return all sstables that need resharding in the system. Only one instance of a shared sstable is returned.
 static future<std::vector<sstables::shared_sstable>> get_all_shared_sstables(distributed<database>& db, sstring sstdir, global_column_family_ptr cf) {
     class all_shared_sstables {
-        schema_ptr _schema;
         sstring _dir;
+        global_column_family_ptr _cf;
         std::unordered_map<int64_t, sstables::shared_sstable> _result;
     public:
-        all_shared_sstables(const sstring& sstdir, global_column_family_ptr cf) : _schema(cf->schema()), _dir(sstdir) {}
+        all_shared_sstables(const sstring& sstdir, global_column_family_ptr cf) : _dir(sstdir), _cf(cf) {}
 
         future<> operator()(std::vector<sstables::foreign_sstable_open_info> ssts_info) {
-            return load_sstables_with_open_info(std::move(ssts_info), _schema, _dir, [this] (auto& info) {
+            return load_sstables_with_open_info(std::move(ssts_info), _cf, _dir, [this] (auto& info) {
                 // skip loading of shared sstable that is already stored in _result.
                 return !_result.count(info.generation);
             }).then([this] (std::vector<sstables::shared_sstable> sstables) {
@@ -215,8 +211,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::
             auto descriptors = db.invoke_on(column_family::calculate_shard_from_sstable_generation(generation), [&sys_dist_ks, ks_name, cf_name, comps] (database& db) {
                 return seastar::async([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name), comps = std::move(comps)] () mutable {
                     auto& cf = db.find_column_family(ks_name, cf_name);
-                    auto sst = sstables::make_sstable(cf.schema(), cf._config.datadir + "/upload", comps.generation,
-                        comps.version, comps.format, gc_clock::now(),
+                    auto sst = cf.make_sstable(cf._config.datadir + "/upload", comps.generation, comps.version, comps.format,
                         [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
                     auto gen = cf.calculate_generation_for_new_table();
 
@@ -269,7 +264,10 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
         return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func), &pc] {
             auto& cf = local.find_column_family(comps.ks, comps.cf);
 
-            auto f = sstables::sstable::load_shared_components(cf.schema(), comps.sstdir, comps.generation, comps.version, comps.format, pc);
+            auto sst = cf.make_sstable(comps.sstdir, comps.generation, comps.version, comps.format);
+            auto f = sst->load(pc).then([sst = std::move(sst)] {
+                return sst->load_shared_components();
+            });
             return f.then([&db, comps = std::move(comps), func = std::move(func)] (sstables::sstable_open_info info) {
                 // shared components loaded, now opening sstable in all shards that own it with shared components
                 return do_with(std::move(info), [&db, comps = std::move(comps), func = std::move(func)] (auto& info) {
@@ -362,10 +360,8 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                             return cf->calculate_generation_for_new_table();
                         }).get0();
 
-                        auto sst = sstables::make_sstable(cf->schema(), directory, gen,
-                            get_highest_supported_format(), sstables::sstable::format_types::big,
-                            gc_clock::now(), default_io_error_handler_gen());
-                        return sst;
+                        return cf->make_sstable(directory, gen,
+                            get_highest_supported_format(), sstables::sstable::format_types::big);
                     };
                     auto f = sstables::reshard_sstables(sstables, *cf, creator, max_sstable_bytes, level);
 
@@ -412,7 +408,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                             }
                         }).then([&cf, sstables] {
                             // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
-                            sstables::delete_atomically(std::move(sstables), *cf->get_large_data_handler()).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
+                            sstables::delete_atomically(std::move(sstables)).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
                                 try {
                                     std::rethrow_exception(eptr);
                                 } catch (...) {

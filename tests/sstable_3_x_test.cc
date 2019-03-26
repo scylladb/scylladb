@@ -3101,15 +3101,13 @@ static void compare_sstables(const seastar::compat::filesystem::path& result_pat
 }
 
 static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2) {
-    static db::nop_large_data_handler nop_lp_handler;
     storage_service_for_tests ssft;
     tmpdir tmp;
     auto sst = env.make_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
-    sstable_writer_config cfg;
-    cfg.large_data_handler = &nop_lp_handler;
+
     sst->write_components(make_combined_reader(s,
         mt1->make_flat_reader(s),
-        mt2->make_flat_reader(s)), 1, s, cfg, mt1->get_encoding_stats()).get();
+        mt2->make_flat_reader(s)), 1, s, sstable_writer_config{}, mt1->get_encoding_stats()).get();
     return tmp;
 }
 
@@ -4943,7 +4941,6 @@ SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
-    db::nop_large_data_handler nop_lp_handler;
     api::timestamp_type write_timestamp = 1525385507816568;
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     storage_service_for_tests ssft;
@@ -4979,7 +4976,6 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = index_block_size;
-        cfg.large_data_handler = &nop_lp_handler;
         test_env env;
         auto sst = env.make_sstable(write_schema,
             dir.path().string(),
@@ -5039,11 +5035,6 @@ struct large_row_handler : public db::large_data_handler {
 
 static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const partition_key& pk,
         std::vector<clustering_key*> expected, uint64_t threshold) {
-    tmpdir dir;
-    test_env env;
-    auto sst = env.make_sstable(
-            s, dir.path().string(), 1 /* generation */, sstable_version_types::mc, sstables::sstable::format_types::big);
-
     unsigned i = 0;
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
                      const clustering_key_prefix* clustering_key, uint64_t row_size) {
@@ -5060,14 +5051,16 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     };
 
     large_row_handler handler(threshold, f);
-    sstable_writer_config cfg;
-    cfg.large_data_handler = &handler;
+    auto env = test_env(&handler);
+    tmpdir dir;
+    auto sst = env.make_sstable(
+            s, dir.path().string(), 1 /* generation */, sstable_version_types::mc, sstables::sstable::format_types::big);
 
     // The test provides thresholds values for the large row handler. Whether the handler gets
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s), 1, s, std::move(cfg), encoding_stats{}).get();
+    sst->write_components(mt.make_flat_reader(s), 1, s, sstable_writer_config{}, encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
 }
 

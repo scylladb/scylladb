@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 ScyllaDB
+ * Copyright (C) 2019 ScyllaDB
  *
  */
 
@@ -20,27 +20,21 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
-// Glue logic for writing memtables to sstables
-
 #pragma once
 
-#include "memtable.hh"
-#include "sstables/shared_sstable.hh"
-#include "sstables/progress_monitor.hh"
-#include <seastar/core/future.hh>
-#include <seastar/core/file.hh>
-#include <seastar/core/thread.hh>
-#include <seastar/core/shared_ptr.hh>
+#include "compress.hh"
+#include "sstables/types.hh"
+#include "utils/i_filter.hh"
 
-future<>
-write_memtable_to_sstable(memtable& mt,
-        sstables::shared_sstable sst,
-        sstables::write_monitor& mon,
-        bool backup = false,
-        const io_priority_class& pc = default_priority_class(),
-        bool leave_unsealed = false);
+namespace sstables {
 
-future<>
-write_memtable_to_sstable(memtable& mt,
-        sstables::shared_sstable sst);
+// Immutable components that can be shared among shards.
+struct shareable_components {
+    sstables::compression compression;
+    utils::filter_ptr filter;
+    sstables::summary summary;
+    sstables::statistics statistics;
+    std::optional<sstables::scylla_metadata> scylla_metadata;
+};
+
+}   // namespace sstables

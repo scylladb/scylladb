@@ -71,8 +71,6 @@ using namespace sstables;
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
-static db::nop_large_data_handler nop_lp_handler;
-
 atomic_cell make_atomic_cell(data_type dt, bytes_view value, uint32_t ttl = 0, uint32_t expiration = 0) {
     if (ttl) {
         return atomic_cell::make_live(*dt, 0, value,
@@ -396,7 +394,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
         mt->apply(std::move(m));
 
         auto now = to_gc_clock(db_clock::from_time_t(0));
-        auto sst = env.make_sstable(s, tmpdir_path, 5, la, big, default_sstable_buffer_size(), now);
+        auto sst = env.make_sstable(s, tmpdir_path, 5, la, big, default_sstable_buffer_size, now);
 
         return write_memtable_to_sstable_for_test(*mt, sst).then([mt, sst, s, tmpdir_path] {
             auto fname = sstable::filename(tmpdir_path, "ks", "cf", la, 5, big, component_type::Data);
@@ -1042,11 +1040,10 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
     cm->start();
 
     auto tmp = tmpdir();
-    column_family::config cfg;
+    column_family::config cfg = column_family_test_config();
     cfg.datadir = tmp.path().string();
     cfg.enable_commitlog = false;
     cfg.enable_incremental_backups = false;
-    cfg.large_data_handler = &nop_lp_handler;
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
     auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
@@ -3679,7 +3676,6 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 100;
-        cfg.large_data_handler = &nop_lp_handler;
         auto mut = mutation(table.schema(), table.make_pkey("key"));
         for (auto&& mf : fragments) {
             mut.apply(mf);
@@ -3734,7 +3730,6 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
-        cfg.large_data_handler = &nop_lp_handler;
         auto sst = make_sstable_easy(env, dir.path(), flat_mutation_reader_from_mutations(partitions), cfg, version);
 
         auto ms = as_mutation_source(sst);
@@ -3853,7 +3848,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         BOOST_REQUIRE(!file_exists(tmp.path().string() +  "/la-1-big-UNKNOWN.txt").get0());
         BOOST_REQUIRE(file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
 
-        sstables::delete_atomically({sstp}, nop_lp_handler).get();
+        sstables::delete_atomically({sstp}).get();
         // assure unknown component is deleted
         BOOST_REQUIRE(!file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
     });
@@ -4717,7 +4712,6 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
         auto tmp = tmpdir();
         sstable_writer_config cfg;
         cfg.run_identifier = utils::make_random_uuid();
-        cfg.large_data_handler = &nop_lp_handler;
         auto sst = make_sstable_easy(env, tmp.path(),  flat_mutation_reader_from_mutations({ std::move(mut) }), cfg, la);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);

@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2017 ScyllaDB
- *
+ * Copyright (C) 2019 ScyllaDB
  */
 
 /*
@@ -20,27 +19,23 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "log.hh"
+#include "sstables/sstables_manager.hh"
+#include "sstables/sstables.hh"
 
-// Glue logic for writing memtables to sstables
+namespace sstables {
 
-#pragma once
+logging::logger smlogger("sstables_manager");
 
-#include "memtable.hh"
-#include "sstables/shared_sstable.hh"
-#include "sstables/progress_monitor.hh"
-#include <seastar/core/future.hh>
-#include <seastar/core/file.hh>
-#include <seastar/core/thread.hh>
-#include <seastar/core/shared_ptr.hh>
+shared_sstable sstables_manager::make_sstable(schema_ptr schema,
+        sstring dir,
+        int64_t generation,
+        sstable_version_types v,
+        sstable_format_types f,
+        gc_clock::time_point now,
+        io_error_handler_gen error_handler_gen,
+        size_t buffer_size) {
+    return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), now, std::move(error_handler_gen), buffer_size);
+}
 
-future<>
-write_memtable_to_sstable(memtable& mt,
-        sstables::shared_sstable sst,
-        sstables::write_monitor& mon,
-        bool backup = false,
-        const io_priority_class& pc = default_priority_class(),
-        bool leave_unsealed = false);
-
-future<>
-write_memtable_to_sstable(memtable& mt,
-        sstables::shared_sstable sst);
+}   // namespace sstables

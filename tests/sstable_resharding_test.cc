@@ -23,8 +23,6 @@
 
 using namespace sstables;
 
-static db::nop_large_data_handler nop_lp_handler;
-
 static inline std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(shard_id shard, unsigned tokens_to_generate) {
     unsigned tokens = 0;
     unsigned key_id = 0;
@@ -71,9 +69,7 @@ void run_sstable_resharding_test() {
     auto s = get_schema();
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
-    column_family::config cfg;
-    cfg.large_data_handler = &nop_lp_handler;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, tracker);
+    auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(), *cm, *cl_stats, tracker);
     cf->mark_ready_for_writes();
     std::unordered_map<shard_id, std::vector<mutation>> muts;
     static constexpr auto keys_per_shard = 1000u;

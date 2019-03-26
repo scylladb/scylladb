@@ -30,10 +30,9 @@
 #include "tests/cql_assertions.hh"
 #include "schema_builder.hh"
 #include "service/priority_manager.hh"
+#include "test_services.hh"
 
 using namespace std::literals::chrono_literals;
-
-static db::nop_large_data_handler nop_lp_handler;
 
 schema_ptr test_table_schema() {
     static thread_local auto s = [] {
@@ -426,7 +425,6 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
         auto sst = t->make_streaming_staging_sstable();
         sstables::sstable_writer_config sst_cfg;
-        sst_cfg.large_data_handler = &nop_lp_handler;
         auto& pc = service::get_local_streaming_write_priority();
         sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
         sst->open_data().get();

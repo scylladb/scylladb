@@ -87,9 +87,9 @@
 #include "db/timeout_clock.hh"
 #include "querier.hh"
 #include "mutation_query.hh"
-#include "db/large_data_handler.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>
+#include "disk-error-handler.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -112,6 +112,7 @@ class sstable;
 class entry_descriptor;
 class compaction_descriptor;
 class foreign_sstable_open_info;
+class sstables_manager;
 
 }
 
@@ -128,6 +129,7 @@ class config;
 class extensions;
 class rp_handle;
 class data_listeners;
+class large_data_handler;
 
 namespace system_keyspace {
 void make(database& db, bool durable, bool volatile_testing_only);
@@ -334,7 +336,7 @@ public:
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
-        db::large_data_handler* large_data_handler;
+        sstables::sstables_manager* sstables_manager;
         db::timeout_semaphore* view_update_concurrency_semaphore;
         size_t view_update_concurrency_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
@@ -514,6 +516,11 @@ public:
         auto it = _sstables_staging.find(generation);
         return it != _sstables_staging.end() ? it->second : nullptr;
     }
+    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
+            io_error_handler_gen error_handler_gen);
+    sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
+    sstables::shared_sstable make_sstable(sstring dir);
+    sstables::shared_sstable make_sstable();
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
@@ -908,9 +915,9 @@ public:
         return _index_manager;
     }
 
-    db::large_data_handler* get_large_data_handler() const {
-        assert(_config.large_data_handler);
-        return _config.large_data_handler;
+    sstables::sstables_manager& get_sstables_manager() const {
+        assert(_config.sstables_manager);
+        return *_config.sstables_manager;
     }
 
     future<> populate_views(
@@ -1280,6 +1287,9 @@ private:
     std::unique_ptr<db::large_data_handler> _large_data_handler;
     std::unique_ptr<db::large_data_handler> _nop_large_data_handler;
 
+    std::unique_ptr<sstables::sstables_manager> _user_sstables_manager;
+    std::unique_ptr<sstables::sstables_manager> _system_sstables_manager;
+
     query::result_memory_limiter _result_memory_limiter;
 
     friend db::data_listeners;
@@ -1435,6 +1445,16 @@ public:
 
     db::large_data_handler* get_nop_large_data_handler() const {
         return _nop_large_data_handler.get();
+    }
+
+    sstables::sstables_manager& get_user_sstables_manager() const {
+        assert(_user_sstables_manager);
+        return *_user_sstables_manager;
+    }
+
+    sstables::sstables_manager& get_system_sstables_manager() const {
+        assert(_system_sstables_manager);
+        return *_system_sstables_manager;
     }
 
     future<> flush_all_memtables();

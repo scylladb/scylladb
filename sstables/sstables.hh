@@ -61,6 +61,7 @@
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
+#include "sstables/shareable_components.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -119,26 +120,24 @@ struct sstable_writer_config {
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
     bool correctly_serialize_static_compact_in_mc = supports_correct_static_compact_in_mc();
-    db::large_data_handler* large_data_handler;
     utils::UUID run_identifier = utils::make_random_uuid();
 };
-
-static constexpr inline size_t default_sstable_buffer_size() {
-    return 128 * 1024;
-}
-
-shared_sstable make_sstable(schema_ptr schema, sstring dir, int64_t generation, sstable_version_types v, sstable_format_types f, gc_clock::time_point now = gc_clock::now(),
-            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_sstable_buffer_size());
 
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
 public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
-    static const size_t default_buffer_size = default_sstable_buffer_size();
 public:
-    sstable(schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now(),
-            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_buffer_size)
+    sstable(schema_ptr schema,
+            sstring dir,
+            int64_t generation,
+            version_types v,
+            format_types f,
+            db::large_data_handler& large_data_handler,
+            gc_clock::time_point now,
+            io_error_handler_gen error_handler_gen,
+            size_t buffer_size)
         : sstable_buffer_size(buffer_size)
         , _schema(std::move(schema))
         , _dir(std::move(dir))
@@ -148,6 +147,7 @@ public:
         , _now(now)
         , _read_error_handler(error_handler_gen(sstable_read_error))
         , _write_error_handler(error_handler_gen(sstable_write_error))
+        , _large_data_handler(large_data_handler)
     { }
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
@@ -431,6 +431,10 @@ public:
     // Delete the sstable by unlinking all sstable files
     future<> unlink();
 
+    db::large_data_handler& get_large_data_handler() {
+        return _large_data_handler;
+    }
+
     /**
      * Note. This is using the Origin definition of
      * max_data_age, which is load time. This could maybe
@@ -449,17 +453,8 @@ public:
     auto sstable_write_io_check(Func&& func, Args&&... args) const {
         return do_io_check(_write_error_handler, func, std::forward<Args>(args)...);
     }
-
-    // Immutable components that can be shared among shards.
-    struct shareable_components {
-        sstables::compression compression;
-        utils::filter_ptr filter;
-        sstables::summary summary;
-        sstables::statistics statistics;
-        std::optional<sstables::scylla_metadata> scylla_metadata;
-    };
 private:
-    size_t sstable_buffer_size = default_buffer_size;
+    size_t sstable_buffer_size;
 
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
@@ -536,6 +531,8 @@ private:
 
     io_error_handler _read_error_handler;
     io_error_handler _write_error_handler;
+
+    db::large_data_handler& _large_data_handler;
 
     sstables_stats _stats;
 
@@ -810,8 +807,7 @@ public:
     future<foreign_sstable_open_info> get_open_info() &;
 
     // returns all info needed for a sstable to be shared with other shards.
-    static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f,
-        const io_priority_class& pc = default_priority_class());
+    future<sstable_open_info> load_shared_components();
 
     sstables_stats& get_stats() {
         return _stats;
@@ -843,22 +839,17 @@ struct entry_descriptor {
     sstring sstdir;
     sstring ks;
     sstring cf;
-    sstable::version_types version;
     int64_t generation;
+    sstable::version_types version;
     sstable::format_types format;
     component_type component;
 
     static entry_descriptor make_descriptor(sstring sstdir, sstring fname);
 
-    entry_descriptor(sstring sstdir, sstring ks, sstring cf, sstable::version_types version,
-                     int64_t generation, sstable::format_types format,
+    entry_descriptor(sstring sstdir, sstring ks, sstring cf, int64_t generation,
+                     sstable::version_types version, sstable::format_types format,
                      component_type component)
-        : sstdir(sstdir), ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
-
-    entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
-                     int64_t generation, sstable::format_types format,
-                     component_type component)
-        : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
+        : sstdir(sstdir), ks(ks), cf(cf), generation(generation), version(version), format(format), component(component) {}
 };
 
 // Waits for all prior tasks started on current shard related to sstable management to finish.
@@ -883,7 +874,7 @@ future<> await_background_jobs_on_all_shards();
 // until all shards agree it can be deleted.
 //
 // This function only solves the second problem for now.
-future<> delete_atomically(std::vector<shared_sstable> ssts, db::large_data_handler& large_data_handler);
+future<> delete_atomically(std::vector<shared_sstable> ssts);
 future<> replay_pending_delete_log(sstring log_file);
 
 struct index_sampling_state {
@@ -922,7 +913,7 @@ public:
 // contains data for loading a sstable using components shared by a single shard;
 // can be moved across shards
 struct foreign_sstable_open_info {
-    foreign_ptr<lw_shared_ptr<sstable::shareable_components>> components;
+    foreign_ptr<lw_shared_ptr<shareable_components>> components;
     std::vector<shard_id> owners;
     seastar::file_handle data;
     seastar::file_handle index;
@@ -933,7 +924,7 @@ struct foreign_sstable_open_info {
 
 // can only be used locally
 struct sstable_open_info {
-    lw_shared_ptr<sstable::shareable_components> components;
+    lw_shared_ptr<shareable_components> components;
     std::vector<shard_id> owners;
     file data;
     file index;
