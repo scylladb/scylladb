@@ -120,7 +120,7 @@ private:
             const vint_size_type len = VintType::serialized_size_from_first_byte(*data.begin());
             if (data.size() >= len) {
                 dest = VintType::deserialize(
-                        bytes_view(reinterpret_cast<bytes::value_type*>(data.get_write()), len)).value;
+                        bytes_view(reinterpret_cast<bytes::value_type*>(data.get_write()), data.size()));
                 data.trim_front(len);
                 return read_status::ready;
             } else {
@@ -142,7 +142,7 @@ private:
         _pos += n;
         if (_pos == _read_bytes.size()) {
             dest = VintType::deserialize(
-                    bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size())).value;
+                    bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size()));
             _prestate = prestate::NONE;
         }
     };
@@ -241,7 +241,7 @@ protected:
             const vint_size_type len = unsigned_vint::serialized_size_from_first_byte(*data.begin());
             if (data.size() >= len) {
                 _u64 = unsigned_vint::deserialize(
-                    bytes_view(reinterpret_cast<bytes::value_type*>(data.get_write()), len)).value;
+                    bytes_view(reinterpret_cast<bytes::value_type*>(data.get_write()), data.size()));
                 data.trim_front(len);
                 return read_bytes(data, static_cast<uint32_t>(_u64), where);
             } else {
@@ -312,7 +312,7 @@ private:
             _pos += n;
             if (_pos == _read_bytes.size()) {
                 _u64 = unsigned_vint::deserialize(
-                        bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size())).value;
+                        bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size()));
                 if (read_bytes(data, _u64, *_read_bytes_where) == read_status::ready) {
                     _prestate = prestate::NONE;
                 }

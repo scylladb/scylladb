@@ -1998,14 +1998,15 @@ private:
 
     static std::tuple<counter_type, counter_type, counter_type> deserialize_counters(bytes_view v) {
         auto deserialize_and_advance = [&v](auto&& i) {
+            auto len = signed_vint::serialized_size_from_first_byte(v.front());
             const auto d = signed_vint::deserialize(v);
-            v.remove_prefix(d.size);
+            v.remove_prefix(len);
 
             if (v.empty() && (i != 2)) {
                 throw marshal_exception("Cannot deserialize duration");
             }
 
-            return static_cast<counter_type>(d.value);
+            return static_cast<counter_type>(d);
         };
 
         return generate_tuple_from_index(std::make_index_sequence<3>(), std::move(deserialize_and_advance));

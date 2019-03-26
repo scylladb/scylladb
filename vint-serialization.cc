@@ -82,9 +82,9 @@ vint_size_type signed_vint::serialized_size(int64_t value) noexcept {
     return unsigned_vint::serialized_size(encode_zigzag(value));
 }
 
-signed_vint::deserialized_type signed_vint::deserialize(bytes_view v) {
+int64_t signed_vint::deserialize(bytes_view v) {
     const auto un = unsigned_vint::deserialize(v);
-    return deserialized_type{decode_zigzag(un.value), un.size};
+    return decode_zigzag(un);
 }
 
 vint_size_type signed_vint::serialized_size_from_first_byte(bytes::value_type first_byte) {
@@ -135,26 +135,41 @@ vint_size_type unsigned_vint::serialized_size(uint64_t value) noexcept {
     return vint_size_type(9) - vint_size_type((magnitude - 1) / 7);
 }
 
-unsigned_vint::deserialized_type unsigned_vint::deserialize(bytes_view v) {
-    const int8_t first_byte = v[0];
+uint64_t unsigned_vint::deserialize(bytes_view v) {
+    auto src = v.data();
+    auto len = v.size();
+    const int8_t first_byte = *src;
 
     // No additional bytes, since the most significant bit is not set.
     if (first_byte >= 0) {
-        return deserialized_type{uint64_t(first_byte), 1};
+        return uint64_t(first_byte);
     }
 
     const auto extra_bytes_size = count_extra_bytes(first_byte);
-    const auto total_size = extra_bytes_size + 1;
 
     // Extract the bits not used for counting bytes.
     auto result = uint64_t(first_byte) & first_byte_value_mask(extra_bytes_size);
 
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    uint64_t value;
+    // If we can overread do that. It is cheaper to have a single 64-bit read and
+    // then mask out the unneeded part than to do 8x 1 byte reads.
+    if (__builtin_expect(len >= sizeof(uint64_t) + 1, true)) {
+        std::copy_n(src + 1, sizeof(uint64_t), reinterpret_cast<int8_t*>(&value));
+    } else {
+        value = 0;
+        std::copy_n(src + 1, extra_bytes_size, reinterpret_cast<int8_t*>(&value));
+    }
+    value = be_to_cpu(value << (64 - (extra_bytes_size * 8)));
+    result <<= (extra_bytes_size * 8) % 64;
+    result |= value;
+#else
     for (vint_size_type index = 0; index < extra_bytes_size; ++index) {
         result <<= 8;
         result |= (uint64_t(v[index + 1]) & uint64_t(0xff));
     }
-
-    return deserialized_type{result, total_size};
+#endif
+    return result;
 }
 
 vint_size_type unsigned_vint::serialized_size_from_first_byte(bytes::value_type first_byte) {
