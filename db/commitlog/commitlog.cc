@@ -273,7 +273,7 @@ public:
         if (size > max_mutation_size) {
             return make_exception_ptr(std::invalid_argument(
                             "Mutation of " + std::to_string(size)
-                                    + " bytes is too large for the maxiumum size of "
+                                    + " bytes is too large for the maximum size of "
                                     + std::to_string(max_mutation_size)));
         }
         return nullptr;
