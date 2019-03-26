@@ -46,7 +46,6 @@
 
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
-#include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "service/storage_service.hh"
@@ -75,8 +74,7 @@ future<> await_background_jobs_on_all_shards();
 
 static const sstring testing_superuser = "tester";
 
-static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
-    return gms::get_failure_detector().start().then([seed_provider, cluster_name, &features] () mutable {
+static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, db::config& cfg, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
         // Init gossiper
         std::set<gms::inet_address> seeds;
         if (seed_provider.parameters.count("seeds") > 0) {
@@ -91,12 +89,11 @@ static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features,
         if (seeds.empty()) {
             seeds.emplace(gms::inet_address("127.0.0.1"));
         }
-        return gms::get_gossiper().start(std::ref(features)).then([seeds, cluster_name] {
+        return gms::get_gossiper().start(std::ref(features), std::ref(cfg)).then([seeds, cluster_name] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
             gossiper.set_cluster_name(cluster_name);
         });
-    });
 }
 // END TODO
 
@@ -365,6 +362,9 @@ public:
             feature_service->start().get();
             auto stop_feature_service = defer([&] { feature_service->stop().get(); });
 
+            // FIXME: split
+            tst_init_ms_fd_gossiper(*feature_service, *cfg, db::config::seed_provider_type()).get();
+
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
@@ -372,7 +372,7 @@ public:
             auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_generator>>();
 
             auto& ss = service::get_storage_service();
-            ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), cfg_in.disabled_features).get();
+            ss.start(std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), cfg_in.disabled_features).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
@@ -386,11 +386,8 @@ public:
                 db.get_compaction_manager().start();
             }).get();
 
-            // FIXME: split
-            tst_init_ms_fd_gossiper(*feature_service, db::config::seed_provider_type()).get();
             auto stop_ms_fd_gossiper = defer([] {
                 gms::get_gossiper().stop().get();
-                gms::get_failure_detector().stop().get();
             });
 
             ss.invoke_on_all([] (auto&& ss) {
@@ -503,7 +500,9 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
 
 class storage_service_for_tests::impl {
     sharded<gms::feature_service> _feature_service;
+    sharded<gms::gossiper> _gossiper;
     distributed<database> _db;
+    db::config _cfg;
     sharded<auth::service> _auth_service;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
     sharded<db::view::view_update_generator> _view_update_generator;
@@ -511,9 +510,12 @@ public:
     impl() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
+        utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+        utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
         _feature_service.start().get();
+        _gossiper.start(std::ref(_feature_service), std::ref(_cfg)).get();
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false).get();
-        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service)).get();
+        service::get_storage_service().start(std::ref(_db), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service)).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
@@ -522,6 +524,7 @@ public:
         service::get_storage_service().stop().get();
         netw::get_messaging_service().stop().get();
         _db.stop().get();
+        _gossiper.stop().get();
         _feature_service.stop().get();
     }
 };

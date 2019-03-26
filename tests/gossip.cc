@@ -34,6 +34,7 @@
 #include "log.hh"
 #include <seastar/core/thread.hh>
 #include <chrono>
+#include "db/config.hh"
 
 namespace bpo = boost::program_options;
 
@@ -71,19 +72,19 @@ int main(int ac, char ** av) {
         utils::fb_utilities::set_broadcast_rpc_address(listen);
         auto vv = std::make_shared<gms::versioned_value::factory>();
         return async([&] {
+            db::config cfg;
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             sharded<gms::feature_service> feature_service;
             feature_service.start().get();
             sharded<db::system_distributed_keyspace> sys_dist_ks;
             sharded<db::view::view_update_generator> view_update_generator;
-            service::init_storage_service(db, auth_service, sys_dist_ks, view_update_generator, feature_service).get();
+            service::init_storage_service(db, gms::get_gossiper(), auth_service, sys_dist_ks, view_update_generator, feature_service).get();
             netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();
             auto listen = server.listen_address();
             fmt::print("Messaging server listening on ip {} port {:d} ...\n", listen, port);
-            gms::get_failure_detector().start().get();
-            gms::get_gossiper().start(std::ref(feature_service)).get();
+            gms::get_gossiper().start(std::ref(feature_service), std::ref(cfg)).get();
             std::set<gms::inet_address> seeds;
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 seeds.emplace(std::move(s));

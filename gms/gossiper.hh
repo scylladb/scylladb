@@ -45,6 +45,7 @@
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
 #include "gms/i_failure_detection_event_listener.hh"
+#include "gms/failure_detector.hh"
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
@@ -60,6 +61,10 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/metrics_registration.hh>
 
+namespace db {
+class config;
+}
+
 namespace gms {
 
 class gossip_digest_syn;
@@ -68,7 +73,6 @@ class gossip_digest_ack2;
 class gossip_digest;
 class inet_address;
 class i_endpoint_state_change_subscriber;
-class i_failure_detector;
 
 class feature_service;
 
@@ -160,7 +164,7 @@ public:
     static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
     std::chrono::milliseconds fat_client_timeout;
 
-    static std::chrono::milliseconds quarantine_delay();
+    std::chrono::milliseconds quarantine_delay();
 private:
 
     std::default_random_engine _random_engine{std::random_device{}()};
@@ -239,7 +243,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(feature_service& features);
+    explicit gossiper(feature_service& features, db::config& cfg);
 
     void set_last_processed_message_at();
     void set_last_processed_message_at(clk::time_point tp);
@@ -574,6 +578,8 @@ private:
 private:
     condition_variable _features_condvar;
     feature_service& _feature_service;
+    db::config& _cfg;
+    failure_detector _fd;
     friend class feature;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
@@ -584,6 +590,16 @@ public:
     void maybe_enable_features();
 private:
     seastar::metrics::metric_groups _metrics;
+    gms::versioned_value::factory _value_factory;
+public:
+    void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
+public:
+    sstring get_all_endpoint_states();
+    std::map<sstring, sstring> get_simple_states();
+    int get_down_endpoint_count();
+    int get_up_endpoint_count();
+    sstring get_endpoint_state(sstring address);
+    failure_detector& fd() { return _fd; }
 };
 
 extern distributed<gossiper> _the_gossiper;
@@ -597,5 +613,54 @@ inline distributed<gossiper>& get_gossiper() {
 }
 
 future<> stop_gossiping();
+
+inline future<sstring> get_all_endpoint_states() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().get_all_endpoint_states();
+    });
+}
+
+inline future<sstring> get_endpoint_state(sstring address) {
+    return smp::submit_to(0, [address] {
+        return get_local_gossiper().get_endpoint_state(address);
+    });
+}
+
+inline future<std::map<sstring, sstring>> get_simple_states() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().get_simple_states();
+    });
+}
+
+inline future<int> get_down_endpoint_count() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().get_down_endpoint_count();
+    });
+}
+
+inline future<int> get_up_endpoint_count() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().get_up_endpoint_count();
+    });
+}
+
+inline future<> set_phi_convict_threshold(double phi) {
+    return smp::submit_to(0, [phi] {
+        get_local_gossiper().fd().set_phi_convict_threshold(phi);
+    });
+}
+
+inline future<double> get_phi_convict_threshold() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().fd().get_phi_convict_threshold();
+    });
+}
+
+inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().fd().arrival_samples();
+    });
+}
+
 
 } // namespace gms

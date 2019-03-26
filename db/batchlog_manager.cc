@@ -349,7 +349,7 @@ std::unordered_set<gms::inet_address> db::batchlog_manager::endpoint_filter(cons
 
     auto is_valid = [](gms::inet_address input) {
         return input != utils::fb_utilities::get_broadcast_address()
-            && gms::get_local_failure_detector().is_alive(input)
+            && gms::get_local_gossiper().is_alive(input)
             ;
     };
 

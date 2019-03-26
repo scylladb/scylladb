@@ -522,8 +522,12 @@ int main(int ac, char** av) {
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
+            auto& gossiper = gms::get_gossiper();
+            gossiper.start(std::ref(feature_service), std::ref(*cfg)).get();
+            // #293 - do not stop anything
+            //engine().at_exit([]{ return gms::get_gossiper().stop(); });
             supervisor::notify("initializing storage service");
-            init_storage_service(db, auth_service, sys_dist_ks, view_update_generator, feature_service);
+            init_storage_service(db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service);
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
@@ -622,7 +626,9 @@ int main(int ac, char** av) {
             scfg.statement = dbcfg.statement_scheduling_group;
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
-            init_ms_fd_gossiper(feature_service
+            init_ms_fd_gossiper(gossiper
+                    , feature_service
+                    , *cfg
                     , listen_address
                     , storage_port
                     , ssl_storage_port

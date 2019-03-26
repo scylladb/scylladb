@@ -39,13 +39,14 @@ class view_update_generator;
 
 namespace gms {
 class feature_service;
+class gossiper;
 }
 
 extern logging::logger startlog;
 
 class bad_configuration_error : public std::exception {};
 
-void init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+void init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service);
 
 struct init_scheduling_config {
@@ -54,7 +55,9 @@ struct init_scheduling_config {
     scheduling_group gossip;
 };
 
-void init_ms_fd_gossiper(sharded<gms::feature_service>& features
+void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
+                , sharded<gms::feature_service>& features
+                , db::config& cfg
                 , sstring listen_address
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port

@@ -44,7 +44,6 @@
 #include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
-#include "gms/i_failure_detector.hh"
 #include "range.hh"
 #include <seastar/core/distributed.hh>
 #include <unordered_map>
@@ -62,7 +61,6 @@ public:
     using token_metadata = locator::token_metadata;
     using stream_plan = streaming::stream_plan;
     using stream_state = streaming::stream_state;
-    using i_failure_detector = gms::i_failure_detector;
     static bool use_strict_consistency();
 public:
     /**
@@ -80,10 +78,10 @@ public:
      */
     class failure_detector_source_filter : public i_source_filter {
     private:
-        gms::i_failure_detector& _fd;
+        std::set<gms::inet_address> _down_nodes;
     public:
-        failure_detector_source_filter(i_failure_detector& fd) : _fd(fd) { }
-        virtual bool should_include(inet_address endpoint) override { return _fd.is_alive(endpoint); }
+        failure_detector_source_filter(std::set<gms::inet_address> down_nodes) : _down_nodes(std::move(down_nodes)) { }
+        virtual bool should_include(inet_address endpoint) override { return !_down_nodes.count(endpoint); }
     };
 
     /**

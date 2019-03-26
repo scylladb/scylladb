@@ -73,6 +73,7 @@ class boot_strapper;
 
 namespace gms {
 class feature_service;
+class gossiper;
 };
 
 namespace service {
@@ -126,6 +127,7 @@ private:
 #endif
     gms::feature_service& _feature_service;
     distributed<database>& _db;
+    gms::gossiper& _gossiper;
     sharded<auth::service>& _auth_service;
     int _update_jobs{0};
     // Note that this is obviously only valid for the current shard. Users of
@@ -145,7 +147,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     std::set<sstring> _disabled_features;
 public:
-    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, /* only for tests */ std::set<sstring> disabled_features = {});
+    storage_service(distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, /* only for tests */ std::set<sstring> disabled_features = {});
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -2311,7 +2313,7 @@ private:
     void notify_cql_change(inet_address endpoint, bool ready);
 };
 
-future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+future<> init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service);
 future<> deinit_storage_service();
 
