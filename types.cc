@@ -1553,7 +1553,7 @@ public:
             }
             b.push_back(v);
         }
-        std::copy(b.crbegin(), b.crend(), out);
+        out = std::copy(b.crbegin(), b.crend(), out);
     }
     virtual size_t serialized_size(const void* value) const override {
         if (!value) {
