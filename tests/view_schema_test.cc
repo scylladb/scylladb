@@ -4296,7 +4296,6 @@ SEASTAR_TEST_CASE(test_conflicting_batch) {
 
         BOOST_TEST_PASSPOINT();
 
-        std::cout << "lets see\n";
         e.execute_cql(
             "begin unlogged batch \n"
             "  DELETE FROM t WHERE p = 1; \n"
