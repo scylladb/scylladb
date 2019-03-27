@@ -3683,3 +3683,42 @@ SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
     b.add_fetch(1, backlog(100));
     BOOST_REQUIRE(b.load() == backlog(100));
 }
+
+SEASTAR_TEST_CASE(test_conflicting_batch) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+
+        e.execute_cql("CREATE TABLE t (p int, c int, v int, primary key(p, c))").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t "
+                      "WHERE p IS NOT NULL AND c IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, c, p)").get();
+
+        BOOST_TEST_PASSPOINT();
+
+        e.execute_cql("INSERT INTO t (p, c, v) VALUES (0, 0, 0)");
+        eventually([&] {
+            auto msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(0), int32_type->decompose(0), int32_type->decompose(0) },
+            });
+        });
+
+        BOOST_TEST_PASSPOINT();
+
+        e.execute_cql(
+            "begin unlogged batch \n"
+            "  DELETE FROM t WHERE p = 1; \n"
+            "  INSERT INTO t (p, c, v) VALUES (1, 1, 1); \n"
+            "  DELETE FROM t WHERE p = 0 AND c = 0; \n"
+            "apply batch;").get();
+
+        auto msg = e.execute_cql("SELECT * FROM t").get0();
+        assert_that(msg).is_rows().is_empty();
+
+        BOOST_TEST_PASSPOINT();
+
+        eventually([&] {
+            auto msg = e.execute_cql("SELECT * FROM mv").get0();
+            assert_that(msg).is_rows().is_empty();
+        });
+    });
+}
+
