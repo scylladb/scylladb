@@ -158,7 +158,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
             {
                 auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
                 auto muts = db::schema_tables::make_update_table_mutations(keyspace, s0, s2,
-                    api::new_timestamp(), false).get0();
+                    api::new_timestamp(), false);
                 mm.announce(std::move(muts), true).get();
             }
 
@@ -284,7 +284,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
             // Drop v1
             {
                 auto muts = db::schema_tables::make_update_table_mutations(keyspace, s1, s2,
-                    api::new_timestamp(), false).get0();
+                    api::new_timestamp(), false);
                 mm.announce(std::move(muts), true).get();
             }
 
@@ -301,7 +301,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
                         .build();
 
                 auto muts = db::schema_tables::make_update_table_mutations(keyspace, s3, s4,
-                    api::new_timestamp(), false).get0();
+                    api::new_timestamp(), false);
                 mm.announce(std::move(muts), true).get();
             }
 
@@ -329,7 +329,7 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
                 return e.db().local().find_column_family("ks", "table1");
             };
 
-            auto muts1 = db::schema_tables::make_create_table_mutations(keyspace, s0, api::new_timestamp()).get0();
+            auto muts1 = db::schema_tables::make_create_table_mutations(keyspace, s0, api::new_timestamp());
             mm.announce(muts1).get();
 
             auto s1 = find_table().schema();
