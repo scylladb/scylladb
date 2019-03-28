@@ -1940,6 +1940,8 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             p->prune(truncated_at);
             tlogger.debug("cleaning out row cache");
         }).then([this, p]() mutable {
+            rebuild_statistics();
+
             return parallel_for_each(p->remove, [this](sstables::shared_sstable s) {
                 _compaction_strategy.get_backlog_tracker().remove_sstable(s);
                 return sstables::delete_atomically({s});
