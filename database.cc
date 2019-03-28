@@ -208,7 +208,7 @@ database::database(const db::config& cfg, database_config dbcfg)
         max_inactive_queue_length(),
         [this] {
             ++_stats->sstable_read_queue_overloaded;
-            return std::make_exception_ptr(std::runtime_error("sstable inactive read queue overloaded"));
+            return std::make_exception_ptr(std::runtime_error("sstable read queue overloaded"));
         })
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
