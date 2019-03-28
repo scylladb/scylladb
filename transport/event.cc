@@ -79,22 +79,27 @@ event::status_change event::status_change::node_down(const gms::inet_address& ho
     return status_change{status_type::DOWN, socket_address{host, port}};
 }
 
-event::schema_change::schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::optional<sstring>& table_or_type_or_function_)
-    : event{event_type::SCHEMA_CHANGE}
-    , change{change_}
-    , target{target_}
-    , keyspace{keyspace_}
-    , table_or_type_or_function{table_or_type_or_function_}
+event::schema_change::schema_change(change_type change, target_type target, sstring keyspace, std::vector<sstring> arguments)
+    : event(event_type::SCHEMA_CHANGE)
+    , change(change)
+    , target(target)
+    , keyspace(std::move(keyspace))
+    , arguments(std::move(arguments))
 {
-    if (target != target_type::KEYSPACE) {
-        if (!table_or_type_or_function_) {
-            throw std::invalid_argument("Table or type should be set for non-keyspace schema change events");
-        }
+    switch (target) {
+    case event::schema_change::target_type::KEYSPACE:
+        assert(this->arguments.empty());
+        break;
+    case event::schema_change::target_type::TYPE:
+    case event::schema_change::target_type::TABLE:
+        // just the name
+        assert(this->arguments.size() == 1);
+        break;
+    case event::schema_change::target_type::FUNCTION:
+    case event::schema_change::target_type::AGGREGATE:
+        // at least the name
+        assert(this->arguments.size() >= 1);
+        break;
     }
 }
-
-event::schema_change::schema_change(const change_type change_, const sstring keyspace_)
-    : schema_change{change_, target_type::KEYSPACE, keyspace_, std::optional<sstring>{}}
-{ }
-
 }

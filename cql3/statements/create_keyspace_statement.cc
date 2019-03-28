@@ -118,6 +118,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statemen
             using namespace cql_transport;
             return make_shared<event::schema_change>(
                     event::schema_change::change_type::CREATED,
+                    event::schema_change::target_type::KEYSPACE,
                     this->keyspace());
         } catch (const exceptions::already_exists_exception& e) {
             if (_if_not_exists) {

@@ -77,6 +77,14 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     auto string_unordered_map = std::unordered_map<sstring, sstring>(string_map.begin(), string_map.end());
 
     static constexpr auto version = 4;
+
+    using sc = cql_transport::event::schema_change;
+    res.serialize({sc::change_type::CREATED, sc::target_type::KEYSPACE, "foo"}, version);
+    res.serialize({sc::change_type::CREATED, sc::target_type::TABLE, "foo", "bar"}, version);
+    res.serialize({sc::change_type::CREATED, sc::target_type::TYPE, "foo", "bar"}, version);
+    res.serialize({sc::change_type::CREATED, sc::target_type::FUNCTION, "foo", "bar", "zed"}, version);
+    res.serialize({sc::change_type::CREATED, sc::target_type::AGGREGATE, "foo", "bar", "zed"}, version);
+
     auto msg = res.make_message(version, cql_transport::cql_compression::none).release();
     auto total_length = msg.len();
     auto fbufs = fragmented_temporary_buffer(msg.release(), total_length);
@@ -112,4 +120,32 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
 
     auto received_string_map = req.read_string_map();
     BOOST_CHECK_EQUAL(received_string_map, string_unordered_map);
+
+    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string(), "KEYSPACE");
+    BOOST_CHECK_EQUAL(req.read_string(), "foo");
+
+    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string(), "TABLE");
+    BOOST_CHECK_EQUAL(req.read_string(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string(), "bar");
+
+    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string(), "TYPE");
+    BOOST_CHECK_EQUAL(req.read_string(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string(), "bar");
+
+    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string(), "FUNCTION");
+    BOOST_CHECK_EQUAL(req.read_string(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string(), "bar");
+    BOOST_CHECK_EQUAL(req.read_short(), 1);
+    BOOST_CHECK_EQUAL(req.read_string(), "zed");
+
+    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string(), "AGGREGATE");
+    BOOST_CHECK_EQUAL(req.read_string(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string(), "bar");
+    BOOST_CHECK_EQUAL(req.read_short(), 1);
+    BOOST_CHECK_EQUAL(req.read_string(), "zed");
 }
