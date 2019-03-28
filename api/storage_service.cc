@@ -702,7 +702,14 @@ void set_storage_service(http_context& ctx, routes& r) {
         auto coordinator = std::hash<sstring>()(cf) % smp::count;
         return service::get_storage_service().invoke_on(coordinator, [ks = std::move(ks), cf = std::move(cf)] (service::storage_service& s) {
             return s.load_new_sstables(ks, cf);
-        }).then([] {
+        }).then_wrapped([] (auto&& f) {
+            if (f.failed()) {
+                // Avoid `Exceptional future ignored`
+                // Unfortunately incorporating the exception string in httpd::server_error_exception
+                // results in `java.io.NotSerializableException`
+                f.ignore_ready_future();
+                throw httpd::server_error_exception("Failed to load new sstables");
+            }
             return make_ready_future<json::json_return_type>(json_void());
         });
     });

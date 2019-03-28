@@ -304,6 +304,8 @@ public:
     }
 
     static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in) {
+        using namespace std::filesystem;
+
         return seastar::async([cfg_in = std::move(cfg_in), func] {
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             bool old_active = false;
@@ -339,13 +341,13 @@ public:
             cfg->ring_delay_ms() = 500;
             cfg->experimental() = true;
             cfg->shutdown_announce_in_ms() = 0;
-            boost::filesystem::create_directories((data_dir_path + "/system").c_str());
-            boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
-            boost::filesystem::create_directories(cfg->hints_directory().c_str());
-            boost::filesystem::create_directories(cfg->view_hints_directory().c_str());
+            create_directories((data_dir_path + "/system").c_str());
+            create_directories(cfg->commitlog_directory().c_str());
+            create_directories(cfg->hints_directory().c_str());
+            create_directories(cfg->view_hints_directory().c_str());
             for (unsigned i = 0; i < smp::count; ++i) {
-                boost::filesystem::create_directories((cfg->hints_directory() + "/" + std::to_string(i)).c_str());
-                boost::filesystem::create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
+                create_directories((cfg->hints_directory() + "/" + std::to_string(i)).c_str());
+                create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
 
             const gms::inet_address listen("127.0.0.1");

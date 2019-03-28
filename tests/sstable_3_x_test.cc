@@ -3086,7 +3086,7 @@ static sstring get_write_test_path(sstring table_name) {
 }
 
 // This method should not be called for compressed sstables because compression is not deterministic
-static void compare_sstables(const seastar::compat::filesystem::path& result_path, sstring table_name) {
+static void compare_sstables(const std::filesystem::path& result_path, sstring table_name) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Digest,
@@ -3136,7 +3136,7 @@ static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> m
     return tmp;
 }
 
-static sstable_assertions validate_read(schema_ptr s, const seastar::compat::filesystem::path& path, std::vector<mutation> mutations) {
+static sstable_assertions validate_read(schema_ptr s, const std::filesystem::path& path, std::vector<mutation> mutations) {
     sstable_assertions sst(s, path.string(), 1);
     sst.load();
 

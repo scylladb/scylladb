@@ -27,7 +27,6 @@
 #include "disk-error-handler.hh"
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
-#include <boost/filesystem.hpp>
 
 namespace db {
 namespace hints {
@@ -198,7 +197,7 @@ future<> resource_manager::prepare_per_device_limits() {
                 // Since we possibly deferred, we need to recheck the _per_device_limits_map.
                 if (inserted) {
                     // By default, give each group of managers 10% of the available disk space. Give each shard an equal share of the available space.
-                    it->second.max_shard_disk_space_size = boost::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
+                    it->second.max_shard_disk_space_size = std::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
                     // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
                     // Then, reserve 90% of all space instead of 10% above.
                     if (is_mountpoint) {

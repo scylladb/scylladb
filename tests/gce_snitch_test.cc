@@ -38,8 +38,11 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/net/inet_address.hh>
+#include <seastar/util/std-compat.hh>
 
-static boost::filesystem::path test_files_subdir("tests/snitch_property_files");
+namespace fs = std::filesystem;
+
+static fs::path test_files_subdir("tests/snitch_property_files");
 static constexpr const char* DUMMY_META_SERVER_IP = "DUMMY_META_SERVER_IP";
 static constexpr const char* USE_GCE_META_SERVER = "USE_GCE_META_SERVER";
 
@@ -60,10 +63,9 @@ class gce_meta_get_handler : public seastar::httpd::handler_base {
 future<> one_test(const std::string& property_fname, bool exp_result) {
     return seastar::async([property_fname, exp_result] () {
         using namespace locator;
-        using namespace boost::filesystem;
 
-        path fname(test_files_subdir);
-        fname /= path(property_fname);
+        fs::path fname(test_files_subdir);
+        fname /= fs::path(property_fname);
 
         utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
         utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));

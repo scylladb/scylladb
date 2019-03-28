@@ -56,7 +56,7 @@ production_snitch_base::production_snitch_base(const sstring& prop_file_name)
     if (!prop_file_name.empty()) {
         _prop_file_name = prop_file_name;
     } else {
-        using namespace boost::filesystem;
+        using namespace db::fs;
 
         path def_prop_file(db::config::get_conf_dir());
         def_prop_file /= path(snitch_properties_filename);

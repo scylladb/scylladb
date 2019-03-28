@@ -33,7 +33,6 @@
 #include <seastar/core/distributed.hh>
 #include <unordered_set>
 #include <unordered_map>
-#include <experimental/filesystem>
 #include "types.hh"
 #include "clustering_key_filter.hh"
 #include <seastar/core/enum.hh>
@@ -75,7 +74,7 @@ namespace mc {
 class writer;
 }
 
-namespace fs = std::experimental::filesystem;
+namespace fs = std::filesystem;
 
 extern logging::logger sstlog;
 class key;

@@ -22,14 +22,14 @@
 #pragma once
 
 #include <unordered_set>
+#include <filesystem>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/enum.hh>
-#include <experimental/filesystem>
 
 #include "seastarx.hh"
 
-namespace fs = std::experimental::filesystem;
+namespace fs = std::filesystem;
 
 class lister final {
 public:

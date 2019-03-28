@@ -23,7 +23,6 @@
 #pragma once
 
 #include <boost/program_options.hpp>
-#include <boost/filesystem.hpp>
 #include <unordered_map>
 
 #include <seastar/core/sstring.hh>
@@ -38,6 +37,8 @@
 namespace seastar { class file; struct logging_settings; }
 
 namespace db {
+
+namespace fs = std::filesystem;
 
 class extensions;
 
@@ -74,7 +75,7 @@ public:
      * @return path of the directory where configuration files are located
      *         according the environment variables definitions.
      */
-    static boost::filesystem::path get_conf_dir();
+    static fs::path get_conf_dir();
 
     using string_map = std::unordered_map<sstring, sstring>;
                     //program_options::string_map;

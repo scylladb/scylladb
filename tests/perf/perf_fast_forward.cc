@@ -24,7 +24,6 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm_ext.hpp>
 #include <boost/range/adaptors.hpp>
-#include <boost/filesystem.hpp>
 #include <json/json.h>
 #include "tests/cql_test_env.hh"
 #include "tests/perf/perf.hh"

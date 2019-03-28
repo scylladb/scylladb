@@ -134,8 +134,8 @@ db::config::add_options(boost::program_options::options_description_easy_init& i
     return init;
 }
 
-boost::filesystem::path db::config::get_conf_dir() {
-    using namespace boost::filesystem;
+db::fs::path db::config::get_conf_dir() {
+    using namespace db::fs;
 
     path confdir;
     auto* cd = std::getenv("SCYLLA_CONF");
