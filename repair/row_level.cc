@@ -1050,6 +1050,10 @@ public:
     repair_row_level_start_handler(gms::inet_address from, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
             dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size,
             uint64_t seed, shard_config master_node_shard_config) {
+        if (!_sys_dist_ks->local_is_initialized() || !_view_update_generator->local_is_initialized()) {
+            return make_exception_future<>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
+                    utils::fb_utilities::get_broadcast_address())));
+        }
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}",
             utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, range);
         insert_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config));
