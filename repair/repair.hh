@@ -74,6 +74,8 @@ future<std::vector<int>> get_active_repairs(seastar::sharded<database>& db);
 // stop them abruptly).
 future<> repair_shutdown(seastar::sharded<database>& db);
 
+void check_in_shutdown();
+
 // Abort all the repairs
 future<> repair_abort_all(seastar::sharded<database>& db);
 

@@ -321,7 +321,7 @@ public:
 
 static tracker repair_tracker;
 
-static void check_in_shutdown() {
+void check_in_shutdown() {
     repair_tracker.check_in_shutdown();
 }
 
@@ -1235,6 +1235,7 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
         // repair all the ranges in limited parallelism
         return parallel_for_each(ri->ranges, [ri] (auto&& range) {
             return with_semaphore(ranges_parallelism_semaphore, 1, [ri, &range] {
+                check_in_shutdown();
                 ri->check_in_abort();
                 ri->ranges_index++;
                 rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
