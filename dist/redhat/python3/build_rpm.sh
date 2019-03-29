@@ -19,6 +19,9 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
+
+PRODUCT=scylla
+
 print_usage() {
     echo "${0} --reloc-pkg build/release/scylla-python3-package.tar.gz"
     echo "  --reloc-pkg specify relocatable package path"
@@ -87,5 +90,5 @@ RPMBUILD=$(readlink -f ../)
 mkdir -p "$RPMBUILD"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
 ln -fv "$RELOC_PKG" "$RPMBUILD"/SOURCES/
-pystache dist/redhat/python3/python.spec.mustache "{ \"version\": \"${SCYLLA_VERSION}\", \"release\": \"${SCYLLA_RELEASE}\", \"reloc_pkg\": \"${RELOC_PKG_BASENAME}\", \"name\": \"scylla-python3\", \"target\": \"/opt/scylladb/python3\" }" > "$RPMBUILD"/SPECS/python.spec
+pystache dist/redhat/python3/python.spec.mustache "{ \"version\": \"${SCYLLA_VERSION}\", \"release\": \"${SCYLLA_RELEASE}\", \"reloc_pkg\": \"${RELOC_PKG_BASENAME}\", \"name\": \"$PRODUCT-python3\", \"target\": \"/opt/scylladb/python3\" }" > "$RPMBUILD"/SPECS/python.spec
 rpmbuild --nodebuginfo -ba --define "_build_id_links none" --define "_topdir ${RPMBUILD}" --define "dist .el7" "$RPMBUILD"/SPECS/python.spec
