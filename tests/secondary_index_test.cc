@@ -1195,3 +1195,31 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
       });
     });
 }
+
+SEASTAR_TEST_CASE(test_computed_columns) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE t (p1 int, p2 int, c1 int, c2 int, v int, PRIMARY KEY ((p1,p2),c1,c2))").get();
+        e.execute_cql("CREATE INDEX local1 ON t ((p1,p2),v)").get();
+        e.execute_cql("CREATE INDEX global1 ON t (v)").get();
+        e.execute_cql("CREATE INDEX global2 ON t (c2)").get();
+        e.execute_cql("CREATE INDEX local2 ON t ((p1,p2),c2)").get();
+
+        auto local1 = e.local_db().find_schema("ks", "local1_index");
+        auto local2 = e.local_db().find_schema("ks", "local2_index");
+        auto global1 = e.local_db().find_schema("ks", "global1_index");
+        auto global2 = e.local_db().find_schema("ks", "global2_index");
+
+        bytes token_column_name("idx_token");
+        data_value token_computation(token_column_computation().serialize());
+        BOOST_REQUIRE_EQUAL(local1->get_column_definition(token_column_name), nullptr);
+        BOOST_REQUIRE_EQUAL(local2->get_column_definition(token_column_name), nullptr);
+        BOOST_REQUIRE(global1->get_column_definition(token_column_name)->is_computed());
+        BOOST_REQUIRE(global2->get_column_definition(token_column_name)->is_computed());
+
+        auto msg = e.execute_cql("SELECT computation FROM system_schema.computed_columns WHERE keyspace_name='ks'").get0();
+        assert_that(msg).is_rows().with_rows({
+            {{bytes_type->decompose(token_computation)}},
+            {{bytes_type->decompose(token_computation)}}
+        });
+    });
+}
