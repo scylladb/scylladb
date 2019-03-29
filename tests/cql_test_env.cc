@@ -136,7 +136,7 @@ public:
             ::shared_ptr<sharded<auth::service>> auth_service,
             ::shared_ptr<sharded<db::view::view_builder>> view_builder,
             ::shared_ptr<sharded<db::view::view_update_generator>> view_update_generator)
-            : _feature_service(std::move(_feature_service))
+            : _feature_service(std::move(feature_service))
             , _db(db)
             , _auth_service(std::move(auth_service))
             , _view_builder(std::move(view_builder))
