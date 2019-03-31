@@ -179,20 +179,28 @@ static future<std::vector<sstables::shared_sstable>> get_all_shared_sstables(dis
     });
 }
 
+template <typename... Args>
+static inline
+future<> verification_error(fs::path path, const char* fstr, Args&&... args) {
+    auto emsg = fmt::format(fstr, std::forward<Args>(args)...);
+    dblog.error("{}: {}", path.string(), emsg);
+    return make_exception_future<>(std::runtime_error(emsg));
+}
+
 // Verify that all files and directories are owned by current uid
 // and that files can be read and directories can be read, written, and looked up (execute)
 // No other file types may exist.
 future<> distributed_loader::verify_owner_and_mode(fs::path path) {
     return file_stat(path.string()).then([path = std::move(path)] (stat_data sd) {
         if (sd.uid != geteuid()) {
-            throw std::runtime_error(fmt::format(FMT_STRING("{} not owned by current euid: {}, owner: {}"), path, geteuid(), sd.uid));
+            return verification_error(std::move(path), "File not owned by current euid: {}. Owner is: {}", geteuid(), sd.uid);
         }
         switch (sd.type) {
         case directory_entry_type::regular: {
             auto f = file_accessible(path.string(), access_flags::read);
             return f.then([path = std::move(path)] (bool can_access) {
                 if (!can_access) {
-                    throw std::runtime_error(fmt::format(FMT_STRING("File {} cannot be accessed for read"), path));
+                    return verification_error(std::move(path), "File cannot be accessed for read");
                 }
                 return make_ready_future<>();
             });
@@ -202,7 +210,7 @@ future<> distributed_loader::verify_owner_and_mode(fs::path path) {
             auto f = file_accessible(path.string(), access_flags::read | access_flags::write | access_flags::execute);
             return f.then([path = std::move(path)] (bool can_access) {
                 if (!can_access) {
-                    throw std::runtime_error(fmt::format(FMT_STRING("Directory {} cannot be accessed for read, write, and execute"), path));
+                    return verification_error(std::move(path), "Directory cannot be accessed for read, write, and execute");
                 }
                 return lister::scan_dir(path, {}, [] (fs::path dir, directory_entry de) {
                     return verify_owner_and_mode(dir / de.name);
@@ -211,7 +219,7 @@ future<> distributed_loader::verify_owner_and_mode(fs::path path) {
             break;
         }
         default:
-            throw std::runtime_error(fmt::format(FMT_STRING("{} must be either a regular file or a directory (type={})"), path, int(sd.type)));
+            return verification_error(std::move(path), "Must be either a regular file or a directory (type={})", static_cast<int>(sd.type));
         }
     });
 };
@@ -233,19 +241,15 @@ distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::
         std::vector<sstables::entry_descriptor> flushed;
 
         auto& cf = db.local().find_column_family(ks_name, cf_name);
-        lister::scan_dir(fs::path(cf._config.datadir) / "upload", { directory_entry_type::regular },
-                [&descriptors] (fs::path parent_dir, directory_entry de) {
-          return verify_owner_and_mode(parent_dir / de.name).then([&descriptors, parent_dir = std::move(parent_dir), de = std::move(de)] {
-            auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
-            if (comps.component != component_type::TOC) {
-                return make_ready_future<>();
-            }
-            descriptors.emplace(comps.generation, std::move(comps));
-            return make_ready_future<>();
-          }).handle_exception([parent_dir = std::move(parent_dir), de = std::move(de)] (auto ep) {
-              dblog.error("Failed owner and mode verification: {}", ep);
-              std::rethrow_exception(ep);
-          });
+        auto upload_dir = fs::path(cf._config.datadir) / "upload";
+        verify_owner_and_mode(upload_dir).get();
+        lister::scan_dir(upload_dir, { directory_entry_type::regular }, [&descriptors] (fs::path parent_dir, directory_entry de) {
+              auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
+              if (comps.component != component_type::TOC) {
+                  return make_ready_future<>();
+              }
+              descriptors.emplace(comps.generation, std::move(comps));
+              return make_ready_future<>();
         }, &column_family::manifest_json_filter).get();
 
         flushed.reserve(descriptors.size());
@@ -264,6 +268,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::
                         if (db.get_config().enable_dangerous_direct_import_of_cassandra_counters()) {
                             dblog.info("{} But trying to continue on user's request.", error);
                         } else {
+                            dblog.error("{} Use sstableloader instead.", error);
                             throw std::runtime_error(fmt::format("{} Use sstableloader instead.", error));
                         }
                     }

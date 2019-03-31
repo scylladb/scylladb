@@ -704,11 +704,8 @@ void set_storage_service(http_context& ctx, routes& r) {
             return s.load_new_sstables(ks, cf);
         }).then_wrapped([] (auto&& f) {
             if (f.failed()) {
-                // Avoid `Exceptional future ignored`
-                // Unfortunately incorporating the exception string in httpd::server_error_exception
-                // results in `java.io.NotSerializableException`
-                f.ignore_ready_future();
-                throw httpd::server_error_exception("Failed to load new sstables");
+                auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
+                return make_exception_future<json::json_return_type>(httpd::server_error_exception(msg));
             }
             return make_ready_future<json::json_return_type>(json_void());
         });
