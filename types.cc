@@ -3927,6 +3927,8 @@ data_value::data_value(seastar::net::inet_address v) : data_value(make_new(inet_
 
 data_value::data_value(seastar::net::ipv4_address v) : data_value(seastar::net::inet_address(v)) {
 }
+data_value::data_value(seastar::net::ipv6_address v) : data_value(seastar::net::inet_address(v)) {
+}
 
 data_value::data_value(simple_date_native_type v) : data_value(make_new(simple_date_type, v.days)) {
 }
