@@ -208,7 +208,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                         _options.get_cql_serialization_format()),
                 [this, page_size, now, timeout](auto& builder) {
                     return this->fetch_page(builder, page_size, now, timeout).then([&builder] {
-                       return builder.build();
+                        return builder.build();
                     });
                 });
     }
