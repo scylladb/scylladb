@@ -17,6 +17,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
+# When a CLI tool is not installed, use relocatable CLI tool provided by Scylla
+export PATH=$PATH:/opt/scylladb/bin
 
 ##Variables##
 REPORT="./`hostname`-health-check-report.txt"
@@ -143,24 +145,6 @@ else
     echo "--------------------------------------------------"
 fi
 
-
-#Install 'net-tools' pkg, to be used for netstat command#
-echo "Installing 'net-tools' Package (for 'netstat' command)"
-echo "--------------------------------------------------"
-
-if [ "$IS_FEDORA" == "0" ]; then
-    sudo yum install net-tools -y -q
-fi
-
-if [ "$IS_DEBIAN" == "0" ]; then
-#    sudo apt-get update -qq
-    sudo apt-get install net-tools -y | grep already
-fi
-
-if [ "$IS_GENTOO" == "0" ]; then
-    sudo emerge -1uq sys-apps/ethtool sys-apps/net-tools
-fi
-
 #Create dir structure to save output_files#
 echo "--------------------------------------------------"
 echo "Creating Output Files Directory"
@@ -282,7 +266,11 @@ for i in `ls -I lo /sys/class/net/`; do echo "--$i"; cat /sys/class/net/$i/queue
 for i in `ls -I lo /sys/class/net/`; do echo "--$i"; cat /sys/class/net/$i/queues/rx-*/rps_flow_cnt; echo ""; done > $OUTPUT_PATH5/rfs-conf.txt
 ps -elf | grep irqbalance > $OUTPUT_PATH5/irqbalance-conf.txt
 sudo sysctl -a > $OUTPUT_PATH5/sysctl.txt 2>&1
-sudo iptables -L -v > $OUTPUT_PATH5/iptables.txt
+if [ -e /usr/sbin/iptables ]; then
+    sudo iptables -L -v > $OUTPUT_PATH5/iptables.txt
+else
+    touch $OUTPUT_PATH5/iptables.txt
+fi
 netstat -an | grep tcp > $OUTPUT_PATH5/netstat-tcp.txt
 
 

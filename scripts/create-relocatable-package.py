@@ -60,7 +60,15 @@ ap.add_argument('--mode', dest='mode', default='release',
 args = ap.parse_args()
 
 executables = ['build/{}/scylla'.format(args.mode),
-               'build/{}/iotune'.format(args.mode)]
+               'build/{}/iotune'.format(args.mode),
+               '/usr/bin/lscpu',
+               '/usr/bin/gawk',
+               '/usr/bin/gzip',
+               '/usr/sbin/ifconfig',
+               '/usr/sbin/ethtool',
+               '/usr/bin/netstat',
+               '/usr/bin/hwloc-distrib',
+               '/usr/bin/hwloc-calc']
 
 output = args.dest
 
