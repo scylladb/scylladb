@@ -79,7 +79,7 @@ struct view_update_backlog_timestamped {
     api::timestamp_type ts;
 };
 
-class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber /*implements StorageProxyMBean*/ {
+class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
     struct config {
@@ -175,10 +175,6 @@ private:
             bool> _mutate_stage;
     db::view::node_update_backlog& _max_view_update_backlog;
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
-
-    //NOTICE(sarna): This opaque pointer is here just to avoid moving write handler class definitions from .cc to .hh. It's slow path.
-    class view_update_handlers_list;
-    std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
 
 private:
     void uninit_messaging_service();
@@ -294,10 +290,6 @@ public:
         return _db;
     }
 
-    view_update_handlers_list& get_view_update_handlers_list() {
-        return *_view_update_handlers_list;
-    }
-
     response_id_type get_next_response_id() {
         auto next = _next_response_id++;
         if (next == 0) { // 0 is reserved for unique_response_handler
@@ -410,18 +402,13 @@ public:
 
 
     future<> stop();
+    future<> stop_hints_manager();
     future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     void allow_replaying_hints() noexcept;
-    future<> drain_on_shutdown();
 
     const stats& get_stats() const {
         return _stats;
     }
-
-    virtual void on_join_cluster(const gms::inet_address& endpoint) override;
-    virtual void on_leave_cluster(const gms::inet_address& endpoint) override;
-    virtual void on_up(const gms::inet_address& endpoint) override;
-    virtual void on_down(const gms::inet_address& endpoint) override;
 
     friend class abstract_read_executor;
     friend class abstract_write_response_handler;

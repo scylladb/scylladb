@@ -75,7 +75,6 @@
 #include <boost/range/empty.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/intrusive/list.hpp>
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
@@ -85,8 +84,6 @@
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
 #include "multishard_mutation_query.hh"
-
-namespace bi = boost::intrusive;
 
 namespace service {
 
@@ -468,27 +465,6 @@ public:
     }
 };
 
-class view_update_write_response_handler : public write_response_handler, public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
-public:
-    view_update_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl,
-            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
-            const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state,
-            storage_proxy::write_stats& stats):
-                write_response_handler(p, ks, cl, db::write_type::VIEW, std::move(mh),
-                        std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats) {
-        register_in_intrusive_list(*p);
-    }
-private:
-    void register_in_intrusive_list(storage_proxy& p);
-};
-
-class storage_proxy::view_update_handlers_list : public bi::list<view_update_write_response_handler, bi::base_hook<view_update_write_response_handler>, bi::constant_time_size<false>> {
-};
-
-void view_update_write_response_handler::register_in_intrusive_list(storage_proxy& p) {
-    p.get_view_update_handlers_list().push_back(*this);
-}
-
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
     struct dc_info {
         size_t acks;
@@ -672,8 +648,6 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
         h = ::make_shared<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats);
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
         h = ::make_shared<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats);
-    } else if (type == db::write_type::VIEW) {
-        h = ::make_shared<view_update_write_response_handler>(shared_from_this(), ks, cl, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats);
     } else {
         h = ::make_shared<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats);
     }
@@ -799,8 +773,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
-    , _max_view_update_backlog(max_view_update_backlog)
-    , _view_update_handlers_list(std::make_unique<view_update_handlers_list>()) {
+    , _max_view_update_backlog(max_view_update_backlog) {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"), [this]{ return _stats.estimated_read.get_histogram(16, 20);}),
@@ -4432,31 +4405,8 @@ void storage_proxy::allow_replaying_hints() noexcept {
     return _hints_resource_manager.allow_replaying();
 }
 
-void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
-
-void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint) {};
-
-void storage_proxy::on_up(const gms::inet_address& endpoint) {};
-
-void storage_proxy::on_down(const gms::inet_address& endpoint) {
-    for (auto it = _view_update_handlers_list->begin(); it != _view_update_handlers_list->end(); ++it) {
-        auto guard = it->shared_from_this();
-        if (it->get_targets().count(endpoint) > 0) {
-            it->timeout_cb();
-        }
-        seastar::thread::yield();
-    }
-};
-
-future<> storage_proxy::drain_on_shutdown() {
-    return do_with(::shared_ptr<abstract_write_response_handler>(), [this] (::shared_ptr<abstract_write_response_handler>& intrusive_list_guard) {
-        return do_for_each(*_view_update_handlers_list, [&intrusive_list_guard] (abstract_write_response_handler& handler) {
-            intrusive_list_guard = handler.shared_from_this();
-            handler.timeout_cb();
-        });
-    }).then([this] {
-        return _hints_resource_manager.stop();
-    });
+future<> storage_proxy::stop_hints_manager() {
+    return _hints_resource_manager.stop();
 }
 
 future<>
