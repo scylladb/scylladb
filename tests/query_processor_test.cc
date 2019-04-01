@@ -24,6 +24,7 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
+#include <iterator>
 #include <stdint.h>
 
 #include <seastar/testing/test_case.hh>
@@ -31,6 +32,7 @@
 #include "tests/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
+#include <seastar/core/metrics_api.hh>
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -171,5 +173,123 @@ SEASTAR_TEST_CASE(test_querying_with_consumer) {
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }).get();
         BOOST_CHECK_EQUAL(counter, 1010);
+    });
+}
+
+namespace {
+
+using clevel = db::consistency_level;
+using seastar::metrics::impl::value_vector;
+
+constexpr auto level_count = size_t(clevel::MAX_VALUE) - size_t(clevel::MIN_VALUE) + 1;
+
+/// Retrieves query processor's query metrics as a map from each label to its value.
+std::unordered_map<sstring, uint64_t> get_query_metrics() {
+    auto all_metrics = seastar::metrics::impl::get_values();
+    const auto& all_metadata = *all_metrics->metadata;
+    const auto qp_group = find_if(cbegin(all_metadata), cend(all_metadata),
+        [](const auto& x) { return x.mf.name == "query_processor_queries"; });
+    BOOST_REQUIRE(qp_group != cend(all_metadata));
+    const auto values = all_metrics->values[distance(cbegin(all_metadata), qp_group)];
+    std::vector<sstring> labels;
+    for (const auto& metric : qp_group->metrics) {
+        const auto found = metric.id.labels().find("consistency_level");
+        BOOST_REQUIRE(found != metric.id.labels().cend());
+        labels.push_back(found->second);
+    }
+    BOOST_REQUIRE(values.size() == level_count);
+    BOOST_REQUIRE(labels.size() == level_count);
+    std::unordered_map<sstring, uint64_t> label_to_value;
+    for (size_t i = 0; i < labels.size(); ++i) {
+        label_to_value[labels[i]] = values[i].ui();
+    }
+    return label_to_value;
+}
+
+/// Creates query_options with cl, infinite timeout, and no named values.
+auto make_options(clevel cl) {
+    return std::make_unique<cql3::query_options>(
+        cl, infinite_timeout_config, std::vector<cql3::raw_value>());
+}
+
+} // anonymous namespace
+
+SEASTAR_TEST_CASE(test_query_counters) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // Executes a query and waits for it to complete.
+        auto process_query = [&e](const sstring& query, clevel cl) mutable {
+            e.execute_cql(query, make_options(cl)).get();
+        };
+
+        // Executes a prepared statement and waits for it to complete.
+        auto process_prepared = [&e](const sstring& query, clevel cl) mutable {
+            e.prepare(query).then([&e, cl](const auto& id) {
+                return e.execute_prepared(id, {}, cl);})
+            .get();
+        };
+
+        // Executes a batch of (modifying) statements and waits for it to complete.
+        auto process_batch = [&e](const std::vector<sstring_view>& queries, clevel cl) mutable {
+            e.execute_batch(queries, make_options(cl)).get();
+        };
+
+        auto expected = get_query_metrics();
+
+        process_query("create table ks.cf (k text, v int, primary key (k))", clevel::ANY);
+        ++expected["ANY"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_query("select * from ks.cf", clevel::QUORUM);
+        ++expected["QUORUM"];
+        process_query("select * from ks.cf", clevel::QUORUM);
+        ++expected["QUORUM"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_query("select * from ks.cf", clevel::ONE);
+        ++expected["ONE"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_query("select * from ks.cf", clevel::ALL);
+        ++expected["ALL"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+        process_prepared("select * from ks.cf", clevel::ALL);
+        ++expected["ALL"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_query("select * from ks.cf", clevel::LOCAL_QUORUM);
+        ++expected["LOCAL_QUORUM"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_prepared("insert into ks.cf (k, v) values ('0', 0)", clevel::EACH_QUORUM);
+        ++expected["EACH_QUORUM"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_query("select * from ks.cf", clevel::SERIAL);
+        ++expected["SERIAL"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+        process_prepared("select * from ks.cf", clevel::SERIAL);
+        ++expected["SERIAL"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+        process_query("select * from ks.cf", clevel::SERIAL);
+        ++expected["SERIAL"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_query("select * from ks.cf", clevel::LOCAL_SERIAL);
+        ++expected["LOCAL_SERIAL"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_prepared("select * from ks.cf", clevel::LOCAL_ONE);
+        ++expected["LOCAL_ONE"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_batch({"insert into ks.cf (k, v) values ('1', 1)"}, clevel::EACH_QUORUM);
+        ++expected["EACH_QUORUM"];
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
+
+        process_batch(
+            {"insert into ks.cf (k, v) values ('2', 2)", "insert into ks.cf (k, v) values ('3', 3)"},
+            clevel::ANY);
+        expected["ANY"] += 2;
+        BOOST_CHECK_EQUAL(expected, get_query_metrics());
     });
 }

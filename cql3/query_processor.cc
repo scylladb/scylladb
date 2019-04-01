@@ -103,14 +103,23 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
                                      std::chrono::milliseconds(_db.get_config().permissions_update_interval_in_ms()),
                                      mcfg.authorized_prepared_cache_size, authorized_prepared_statements_cache_log) {
     namespace sm = seastar::metrics;
+    using clevel = db::consistency_level;
+    sm::label cl_label("consistency_level");
 
-    _metrics.add_group(
-            "query_processor",
-            {
-                    sm::make_derive(
-                            "statements_prepared",
-                            _stats.prepare_invocations,
-                            sm::description("Counts a total number of parsed CQL requests."))});
+    std::vector<sm::metric_definition> qp_group;
+    qp_group.push_back(sm::make_derive(
+        "statements_prepared",
+        _stats.prepare_invocations,
+        sm::description("Counts a total number of parsed CQL requests.")));
+    for (auto cl = size_t(clevel::MIN_VALUE); cl <= size_t(clevel::MAX_VALUE); ++cl) {
+        qp_group.push_back(
+            sm::make_derive(
+                "queries",
+                _stats.queries_by_cl[cl],
+                sm::description("Counts queries by consistency level."),
+                {cl_label(clevel(cl))}));
+    }
+    _metrics.add_group("query_processor", qp_group);
 
     _metrics.add_group(
             "cql",
@@ -324,6 +333,8 @@ query_processor::process_statement_prepared(
 future<::shared_ptr<result_message>>
 query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options) {
     auto& client_state = query_state.get_client_state();
+
+    ++_stats.queries_by_cl[size_t(options.get_consistency())];
 
     statement->validate(_proxy, client_state);
 
@@ -670,6 +681,7 @@ query_processor::process_batch(
         }).then([this, &query_state, &options, batch] {
             batch->validate();
             batch->validate(_proxy, query_state.get_client_state());
+            _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
             return batch->execute(_proxy, query_state, options);
         });
     });

@@ -81,10 +81,16 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
         const sstring& text, std::unique_ptr<cql3::query_options> qo) = 0;
 
+    /// Processes queries (which must be modifying queries) as a batch.
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_batch(
+        const std::vector<sstring_view>& queries, std::unique_ptr<cql3::query_options> qo) = 0;
+
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) = 0;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
-        cql3::prepared_cache_key_type id, std::vector<cql3::raw_value> values) = 0;
+        cql3::prepared_cache_key_type id,
+        std::vector<cql3::raw_value> values,
+        db::consistency_level cl = db::consistency_level::ONE) = 0;
 
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) = 0;
 

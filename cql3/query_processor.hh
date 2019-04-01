@@ -112,6 +112,7 @@ private:
 
     struct stats {
         uint64_t prepare_invocations = 0;
+        uint64_t queries_by_cl[size_t(db::consistency_level::MAX_VALUE) + 1] = {};
     } _stats;
 
     cql_stats _cql_stats;
