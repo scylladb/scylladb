@@ -1606,6 +1606,7 @@ future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value
 template future<> update_peer_info<sstring>(gms::inet_address ep, sstring column_name, sstring);
 template future<> update_peer_info<utils::UUID>(gms::inet_address ep, sstring column_name, utils::UUID);
 template future<> update_peer_info<net::ipv4_address>(gms::inet_address ep, sstring column_name, net::ipv4_address);
+template future<> update_peer_info<net::inet_address>(gms::inet_address ep, sstring column_name, net::inet_address);
 
 future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value) {
     // with 30 day TTL

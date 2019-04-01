@@ -21,8 +21,12 @@
 
 #pragma once
 
+#include <utility>
+
 #include <seastar/core/print.hh>
 #include <seastar/net/ip.hh>
+#include <seastar/net/inet_address.hh>
+#include <seastar/net/socket_defs.hh>
 #include "utils/serialization.hh"
 #include <sstream>
 
@@ -34,48 +38,44 @@ namespace gms {
 
 class inet_address {
 private:
-    // FIXME: ipv6
-    net::ipv4_address _addr;
+    net::inet_address _addr;
 public:
     inet_address() = default;
     inet_address(int32_t ip)
-        : _addr(uint32_t(ip)) {
+        : inet_address(uint32_t(ip)) {
     }
     explicit inet_address(uint32_t ip)
-        : _addr(ip) {
+        : _addr(net::ipv4_address(ip)) {
     }
-    inet_address(net::ipv4_address&& addr) : _addr(std::move(addr)) {}
+    inet_address(const net::inet_address& addr) : _addr(addr) {}
 
-    inet_address(const socket_address& sa) {
-        if (sa.u.in.sin_family == AF_INET) {
-            _addr = net::ipv4_address(ipv4_addr(sa));
-        } else {
-            // Not supported
-            throw std::invalid_argument("IPv6 socket addresses are not supported.");
-        }
-    }
-    // Note: for now, will throw if given an ipv6 address
-    inet_address(const seastar::net::inet_address&);
-
-    const net::ipv4_address& addr() const {
+    inet_address(const socket_address& sa)
+        : inet_address(sa.addr())
+    {}
+    const net::inet_address& addr() const {
         return _addr;
     }
 
-    operator seastar::net::inet_address() const;
+    inet_address(const inet_address&) = default;
+
+    operator const seastar::net::inet_address&() const {
+        return _addr;
+    }
 
     inet_address(const sstring& addr) {
         // FIXME: We need a real DNS resolver
         if (addr == "localhost") {
             _addr = net::ipv4_address("127.0.0.1");
         } else {
-            _addr = net::ipv4_address(addr);
+            _addr = net::inet_address(addr);
         }
     }
-    uint32_t raw_addr() const {
-        return _addr.ip;
+    bytes_view bytes() const {
+        return bytes_view(reinterpret_cast<const int8_t*>(_addr.data()), _addr.size());
     }
-    bool is_broadcast_address() {
-        return _addr == net::ipv4::broadcast_address();
+    // TODO remove
+    uint32_t raw_addr() const {
+        return addr().as_ipv4_address().ip;
     }
     sstring to_sstring() const {
         return format("{}", *this);
@@ -84,10 +84,11 @@ public:
         return x._addr == y._addr;
     }
     friend inline bool operator!=(const inet_address& x, const inet_address& y) {
+        using namespace std::rel_ops;
         return x._addr != y._addr;
     }
     friend inline bool operator<(const inet_address& x, const inet_address& y) {
-        return x._addr.ip < y._addr.ip;
+        return x.bytes() < y.bytes();
     }
     friend inline std::ostream& operator<<(std::ostream& os, const inet_address& x) {
         return os << x._addr;
@@ -104,6 +105,6 @@ std::ostream& operator<<(std::ostream& os, const inet_address& x);
 namespace std {
 template<>
 struct hash<gms::inet_address> {
-    size_t operator()(gms::inet_address a) const { return std::hash<net::ipv4_address>()(a._addr); }
+    size_t operator()(gms::inet_address a) const { return std::hash<net::inet_address>()(a._addr); }
 };
 }
