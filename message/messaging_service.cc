@@ -146,10 +146,10 @@ class messaging_service::rpc_protocol_client_wrapper {
     std::unique_ptr<rpc_protocol::client> _p;
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
 public:
-    rpc_protocol_client_wrapper(rpc_protocol& proto, rpc::client_options opts, ipv4_addr addr, ipv4_addr local = ipv4_addr())
+    rpc_protocol_client_wrapper(rpc_protocol& proto, rpc::client_options opts, socket_address addr, socket_address local = {})
             : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), addr, local)) {
     }
-    rpc_protocol_client_wrapper(rpc_protocol& proto, rpc::client_options opts, ipv4_addr addr, ipv4_addr local, ::shared_ptr<seastar::tls::server_credentials> c)
+    rpc_protocol_client_wrapper(rpc_protocol& proto, rpc::client_options opts, socket_address addr, socket_address local, ::shared_ptr<seastar::tls::server_credentials> c)
             : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), seastar::tls::socket(c), addr, local))
             , _credentials(c)
     {}
@@ -296,7 +296,7 @@ void messaging_service::start_listen() {
     auto limits = rpc_resource_limits(_mcfg.rpc_memory_limit);
     if (!_server[0]) {
         auto listen = [&] (const gms::inet_address& a) {
-            auto addr = ipv4_addr{a.raw_addr(), _port};
+            auto addr = socket_address{a, _port};
             return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
                     so, addr, limits));
         };
@@ -316,7 +316,7 @@ void messaging_service::start_listen() {
                 listen_options lo;
                 lo.reuse_address = true;
                 lo.lba =  server_socket::load_balancing_algorithm::port;
-                auto addr = make_ipv4_address(ipv4_addr{a.raw_addr(), _ssl_port});
+                auto addr = socket_address{a, _ssl_port};
                 return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
                         so, seastar::tls::listen(_credentials, addr, lo), limits);
             }());
@@ -601,7 +601,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return true;
     }();
 
-    auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
+    auto remote_addr = socket_address(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
 
     rpc::client_options opts;
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
@@ -613,7 +613,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
-                                    remote_addr, ipv4_addr(), _credentials) :
+                                    remote_addr, socket_address(), _credentials) :
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
                                     remote_addr);
 

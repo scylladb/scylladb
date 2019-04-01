@@ -215,16 +215,16 @@ future<> cql_server::stop() {
 }
 
 future<>
-cql_server::listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool keepalive) {
+cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool keepalive) {
     listen_options lo;
     lo.reuse_address = true;
     server_socket ss;
     try {
         ss = creds
-          ? seastar::tls::listen(creds->build_server_credentials(), make_ipv4_address(addr), lo)
-          : engine().listen(make_ipv4_address(addr), lo);
+          ? seastar::tls::listen(creds->build_server_credentials(), addr, lo)
+          : engine().listen(addr, lo);
     } catch (...) {
-        throw std::runtime_error(format("CQLServer error while listening on {} -> {}", make_ipv4_address(addr), std::current_exception()));
+        throw std::runtime_error(format("CQLServer error while listening on {} -> {}", addr, std::current_exception()));
     }
     _listeners.emplace_back(std::move(ss));
     _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
@@ -232,7 +232,7 @@ cql_server::listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_bui
 }
 
 future<>
-cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
+cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     return repeat([this, which, keepalive, server_addr] {
         ++_connections_being_accepted;
         return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<connected_socket, socket_address> f_cs_sa) mutable {
@@ -478,7 +478,7 @@ future<cql_server::connection::processing_result>
     });
 }
 
-cql_server::connection::connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr)
+cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
     : _server(server)
     , _server_addr(server_addr)
     , _fd(std::move(fd))
@@ -1443,14 +1443,13 @@ void cql_server::response::write_short_bytes(bytes b)
     _body.write(b);
 }
 
-void cql_server::response::write_inet(ipv4_addr inet)
+void cql_server::response::write_inet(socket_address inet)
 {
-    write_byte(4);
-    write_byte(((inet.ip & 0xff000000) >> 24));
-    write_byte(((inet.ip & 0x00ff0000) >> 16));
-    write_byte(((inet.ip & 0x0000ff00) >> 8 ));
-    write_byte(((inet.ip & 0x000000ff)      ));
-    write_int(inet.port);
+    auto addr = inet.addr();
+    write_byte(uint8_t(addr.size()));
+    auto * p = static_cast<const int8_t*>(addr.data());
+    write_bytes(bytes(p, p + addr.size()));
+    write_int(inet.port());
 }
 
 void cql_server::response::write_consistency(db::consistency_level c)

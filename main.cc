@@ -535,7 +535,7 @@ int main(int ac, char** av) {
                 }));
                 prometheus::start(prometheus_server, pctx);
                 with_scheduling_group(maintenance_scheduling_group, [&] {
-                  return prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
+                  return prometheus_server.listen(socket_address{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
                     startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
                     return make_exception_future<>(ep);
                   });
@@ -618,7 +618,7 @@ int main(int ac, char** av) {
             ctx.http_server.start("API").get();
             api::set_server_init(ctx).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ctx.http_server.listen(ipv4_addr{ip, api_port});
+                return ctx.http_server.listen(socket_address{ip, api_port});
             }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
             static sharded<auth::service> auth_service;

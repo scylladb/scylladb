@@ -63,7 +63,7 @@ future<> ec2_snitch::start() {
 }
 
 future<sstring> ec2_snitch::aws_api_call(sstring addr, sstring cmd) {
-    return engine().net().connect(make_ipv4_address(ipv4_addr{addr}))
+    return engine().net().connect(socket_address(inet_address{addr}))
     .then([this, addr, cmd] (connected_socket fd) {
         _sd = std::move(fd);
         _in = std::move(_sd.input());

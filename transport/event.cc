@@ -47,7 +47,7 @@ event::event(const event_type& type_)
     : type{type_}
 { }
 
-event::topology_change::topology_change(change_type change, const ipv4_addr& node)
+event::topology_change::topology_change(change_type change, const socket_address& node)
     : event{event_type::TOPOLOGY_CHANGE}
     , change{change}
     , node{node}
@@ -55,15 +55,15 @@ event::topology_change::topology_change(change_type change, const ipv4_addr& nod
 
 event::topology_change event::topology_change::new_node(const gms::inet_address& host, uint16_t port)
 {
-    return topology_change{change_type::NEW_NODE, ipv4_addr{host.raw_addr(), port}};
+    return topology_change{change_type::NEW_NODE, socket_address{host, port}};
 }
 
 event::topology_change event::topology_change::removed_node(const gms::inet_address& host, uint16_t port)
 {
-    return topology_change{change_type::REMOVED_NODE, ipv4_addr{host.raw_addr(), port}};
+    return topology_change{change_type::REMOVED_NODE, socket_address{host, port}};
 }
 
-event::status_change::status_change(status_type status, const ipv4_addr& node)
+event::status_change::status_change(status_type status, const socket_address& node)
     : event{event_type::STATUS_CHANGE}
     , status{status}
     , node{node}
@@ -71,12 +71,12 @@ event::status_change::status_change(status_type status, const ipv4_addr& node)
 
 event::status_change event::status_change::node_up(const gms::inet_address& host, uint16_t port)
 {
-    return status_change{status_type::UP, ipv4_addr{host.raw_addr(), port}};
+    return status_change{status_type::UP, socket_address{host, port}};
 }
 
 event::status_change event::status_change::node_down(const gms::inet_address& host, uint16_t port)
 {
-    return status_change{status_type::DOWN, ipv4_addr{host.raw_addr(), port}};
+    return status_change{status_type::DOWN, socket_address{host, port}};
 }
 
 event::schema_change::schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::optional<sstring>& table_or_type_or_function_)

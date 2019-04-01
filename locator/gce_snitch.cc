@@ -111,7 +111,7 @@ future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
         using namespace boost::algorithm;
 
         net::inet_address a = seastar::net::dns::resolve_name(addr, net::inet_address::family::INET).get0();
-        connected_socket sd(connect(make_ipv4_address(ipv4_addr(a, 80))).get0());
+        connected_socket sd(connect(socket_address(a, 80)).get0());
         input_stream<char> in(sd.input());
         output_stream<char> out(sd.output());
         sstring zone_req(seastar::format("GET {} HTTP/1.1\r\nHost: metadata\r\nMetadata-Flavor: Google\r\n\r\n", cmd));

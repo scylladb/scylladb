@@ -216,10 +216,10 @@ thrift_server::connection::shutdown() {
 }
 
 future<>
-thrift_server::listen(ipv4_addr addr, bool keepalive) {
+thrift_server::listen(socket_address addr, bool keepalive) {
     listen_options lo;
     lo.reuse_address = true;
-    _listeners.push_back(engine().listen(make_ipv4_address(addr), lo));
+    _listeners.push_back(engine().listen(addr, lo));
     do_accepts(_listeners.size() - 1, keepalive);
     return make_ready_future<>();
 }

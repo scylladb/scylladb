@@ -69,9 +69,9 @@ public:
     enum class change_type { NEW_NODE, REMOVED_NODE, MOVED_NODE };
 
     const change_type change;
-    const ipv4_addr node;
+    const socket_address node;
 
-    topology_change(change_type change, const ipv4_addr& node);
+    topology_change(change_type change, const socket_address& node);
 
     static topology_change new_node(const gms::inet_address& host, uint16_t port);
 
@@ -83,9 +83,9 @@ public:
     enum class status_type { UP, DOWN };
 
     const status_type status;
-    const ipv4_addr node;
+    const socket_address node;
 
-    status_change(status_type status, const ipv4_addr& node);
+    status_change(status_type status, const socket_address& node);
 
     static status_change node_up(const gms::inet_address& host, uint16_t port);
 
