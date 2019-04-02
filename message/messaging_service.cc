@@ -200,7 +200,7 @@ std::ostream& operator<<(std::ostream& os, const msg_addr& x) {
 
 size_t msg_addr::hash::operator()(const msg_addr& id) const {
     // Ignore cpu id for now since we do not really support // shard to shard connections
-    return std::hash<uint32_t>()(id.addr.raw_addr());
+    return std::hash<bytes_view>()(id.addr.bytes());
 }
 
 messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client)
@@ -601,7 +601,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return true;
     }();
 
-    auto remote_addr = socket_address(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
+    auto remote_addr = socket_address(get_preferred_ip(id.addr), must_encrypt ? _ssl_port : _port);
 
     rpc::client_options opts;
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
