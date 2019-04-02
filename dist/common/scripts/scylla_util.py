@@ -29,7 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import yaml
-
+import psutil
 
 def curl(url, byte=False):
     max_retries = 5
@@ -69,14 +69,24 @@ class aws_instance:
         dev = self.__instance_metadata('block-device-mapping/' + devname)
         return dev.replace("sd", "xvd")
 
+    def _non_root_nvmes(self):
+        nvme_re = re.compile(r"nvme\d+n\d+$")
+
+        root_dev_candidates = [ x for x in psutil.disk_partitions() if x.mountpoint == "/" ]
+        if len(root_dev_candidates) != 1:
+            raise Exception("found more than one disk mounted at root'".format(root_dev_candidates))
+
+        root_dev = root_dev_candidates[0].device
+        nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
+        return {"root": [ root_dev ], "ephemeral": [ x for x in nvmes_present if not root_dev.startswith(os.path.join("/dev/", x)) ] }
+
     def __populate_disks(self):
         devmap = self.__instance_metadata("block-device-mapping")
         self._disks = {}
         devname = re.compile("^\D+")
-        nvme_re = re.compile(r"nvme\d+n\d+$")
-        nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
-        if nvmes_present:
-            self._disks["ephemeral"] = nvmes_present
+        nvmes_present = self._non_root_nvmes()
+        for k,v in nvmes_present.items():
+            self._disks[k] = v
 
         for dev in devmap.splitlines():
             t = devname.match(dev).group()
