@@ -29,10 +29,7 @@
 #include <seastar/net/socket_defs.hh>
 #include "utils/serialization.hh"
 #include <sstream>
-
-namespace seastar::net {
-    class inet_address;
-}
+#include <optional>
 
 namespace gms {
 
@@ -48,7 +45,6 @@ public:
         : _addr(net::ipv4_address(ip)) {
     }
     inet_address(const net::inet_address& addr) : _addr(addr) {}
-
     inet_address(const socket_address& sa)
         : inet_address(sa.addr())
     {}
@@ -95,7 +91,9 @@ public:
     }
     friend struct std::hash<inet_address>;
 
-    static future<inet_address> lookup(sstring);
+    using opt_family = std::optional<net::inet_address::family>;
+
+    static future<inet_address> lookup(sstring, opt_family = {});
 };
 
 std::ostream& operator<<(std::ostream& os, const inet_address& x);

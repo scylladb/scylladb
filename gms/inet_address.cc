@@ -43,8 +43,8 @@
 
 using namespace seastar;
 
-future<gms::inet_address> gms::inet_address::lookup(sstring name) {
-    return seastar::net::inet_address::find(name, net::inet_address::family::INET).then([](seastar::net::inet_address&& a) {
+future<gms::inet_address> gms::inet_address::lookup(sstring name, opt_family family) {
+    return seastar::net::inet_address::find(name, family.value_or(net::inet_address::family::INET)).then([](seastar::net::inet_address&& a) {
         return make_ready_future<gms::inet_address>(a);
     });
 }
