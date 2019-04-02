@@ -65,7 +65,8 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
                 , double phi
                 , bool sltba)
 {
-    const auto listen = gms::inet_address::lookup(listen_address_in).get0();
+    auto family = cfg.enable_ipv6_dns_lookup() ? std::nullopt : std::make_optional(net::inet_address::family::INET);
+    const auto listen = gms::inet_address::lookup(listen_address_in, family).get0();
 
     using encrypt_what = netw::messaging_service::encrypt_what;
     using compress_what = netw::messaging_service::compress_what;
@@ -138,7 +139,7 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
         while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
             auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
             try {
-                seeds.emplace(gms::inet_address::lookup(seed).get0());
+                seeds.emplace(gms::inet_address::lookup(seed, family).get0());
             } catch (...) {
                 startlog.error("Bad configuration: invalid value in 'seeds': '{}': {}", seed, std::current_exception());
                 throw bad_configuration_error();

@@ -37,6 +37,7 @@
  */
 
 #include <seastar/net/inet_address.hh>
+#include <seastar/net/dns.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/future.hh>
 #include "inet_address.hh"
@@ -44,7 +45,7 @@
 using namespace seastar;
 
 future<gms::inet_address> gms::inet_address::lookup(sstring name, opt_family family) {
-    return seastar::net::inet_address::find(name, family.value_or(net::inet_address::family::INET)).then([](seastar::net::inet_address&& a) {
+    return seastar::net::dns::resolve_name(name, family).then([](seastar::net::inet_address&& a) {
         return make_ready_future<gms::inet_address>(a);
     });
 }
