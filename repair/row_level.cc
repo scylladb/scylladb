@@ -646,6 +646,18 @@ public:
         });
     }
 
+    static future<>
+    remove_repair_meta() {
+        rlogger.debug("Remove all repair_meta for all nodes");
+        auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(
+                boost::copy_range<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(repair_meta_map()
+                | boost::adaptors::map_values));
+        repair_meta_map().clear();
+        return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
+            return rm->stop();
+        });
+    }
+
     static future<uint32_t> get_next_repair_meta_id() {
         return smp::submit_to(0, [] {
             static uint32_t next_id = 0;
@@ -1675,6 +1687,12 @@ future<> repair_cf_range_row_level(repair_info& ri,
     }
     return do_with(row_level_repair(ri, std::move(cf_name), std::move(range), std::move(all_live_peer_nodes)), [] (row_level_repair& repair) {
         return repair.run();
+    });
+}
+
+future<> shutdown_all_row_level_repair() {
+    return smp::invoke_on_all([] {
+        return repair_meta::remove_repair_meta();
     });
 }
 
