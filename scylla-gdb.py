@@ -11,6 +11,7 @@ from collections import defaultdict
 import sys
 import struct
 import random
+import bisect
 
 
 def template_arguments(gdb_type):
@@ -732,6 +733,104 @@ def find_instances(type_name):
         name = resolve(vtable_addr)
         if name and name.startswith(vtable_name):
             yield gdb.Value(obj_addr).cast(ptr_type)
+
+
+class span(object):
+    """
+    Represents seastar allocator's memory span
+    """
+
+    def __init__(self, index, start, page):
+        """
+        :param index: index into cpu_mem.pages of the first page of the span
+        :param start: memory address of the first page of the span
+        :param page: seastar::memory::page* for the first page of the span
+        """
+        self.index = index
+        self.start = start
+        self.page = page
+
+    def is_free(self):
+        return self.page['free']
+
+    def pool(self):
+        """
+        Returns seastar::memory::small_pool* of this span.
+        Valid only when is_small().
+        """
+        return self.page['pool']
+
+    def is_small(self):
+        return not self.is_free() and self.page['pool']
+
+    def is_large(self):
+        return not self.is_free() and not self.page['pool']
+
+    def size(self):
+        return int(self.page['span_size'])
+
+    def used_span_size(self):
+        """
+        Returns the number of pages at the front of the span which are used by the allocator.
+
+        Due to https://github.com/scylladb/seastar/issues/625 there may be some
+        pages at the end of the span which are not used by the small pool.
+        We try to detect this. It's not 100% accurrate but should work in most cases.
+
+        Returns 0 for free spans.
+        """
+        n_pages = 0
+        pool = self.page['pool']
+        if self.page['free']:
+            return 0
+        if not pool:
+            return self.page['span_size']
+        for idx in range(int(self.page['span_size'])):
+            page = self.page.address + idx
+            if not page['pool'] or page['pool'] != pool or page['offset_in_span'] != idx:
+                break
+            n_pages += 1
+        return n_pages
+
+
+def spans():
+    cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+    page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
+    nr_pages = int(cpu_mem['nr_pages'])
+    pages = cpu_mem['pages']
+    mem_start = int(cpu_mem['memory'])
+    idx = 1
+    while idx < nr_pages:
+        page = pages[idx]
+        span_size = int(page['span_size'])
+        if span_size == 0:
+            idx += 1
+            continue
+        last_page = pages[idx + span_size - 1]
+        addr = mem_start + idx * page_size
+        yield span(idx, addr, page)
+        idx += span_size
+
+
+class span_checker(object):
+    def __init__(self):
+        self._page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
+        span_list = list(spans())
+        self._start_to_span = dict((s.start, s) for s in span_list)
+        self._starts = list(s.start for s in span_list)
+
+    def spans(self):
+        return self._start_to_span.values()
+
+    def get_span(self, ptr):
+        idx = bisect.bisect_right(self._starts, ptr)
+        if idx == 0:
+            return None
+        span_start = self._starts[idx - 1]
+        s = self._start_to_span[span_start]
+        if span_start + s.page['span_size'] * self._page_size <= ptr:
+            return None
+        return s
 
 
 class scylla_memory(gdb.Command):
