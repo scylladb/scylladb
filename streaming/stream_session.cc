@@ -165,6 +165,10 @@ void stream_session::init_messaging_service_handler() {
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
         table& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
+        if (!_sys_dist_ks->local_is_initialized() || !_view_update_generator->local_is_initialized()) {
+            return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
+                    utils::fb_utilities::get_broadcast_address())));
+        }
         return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(), [from, estimated_partitions, plan_id, schema_id, &cf, source, reason] () mutable {
                 return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
                     auto sink = ms().make_sink_for_stream_mutation_fragments(source);
