@@ -895,6 +895,7 @@ class scylla_memory(gdb.Command):
         gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {wasted_percent:>5}\n'
                   .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory', wasted_percent='wst%'))
         total_small_bytes = 0
+        sc = span_checker()
         for i in range(int(nr)):
             sp = small_pools['_u']['a'][i]
             object_size = int(sp['_object_size'])
@@ -911,18 +912,11 @@ class scylla_memory(gdb.Command):
                       .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, wasted_percent=wasted_percent))
         gdb.write('Small allocations: %d [B]\n' % total_small_bytes)
 
-        idx = 0
         large_allocs = defaultdict(int) # key: span size [B], value: span count
-        nr_pages = int(cpu_mem['nr_pages'])
-        pages = cpu_mem['pages']
-        while idx < nr_pages:
-            page = pages[idx]
-            span_size = int(page['span_size'])
-            if span_size == 0:
-                span_size = 1
-            if not page['pool'] and not page['free']:
+        for s in sc.spans():
+            span_size = s.size()
+            if s.is_large():
                 large_allocs[span_size * page_size] += 1
-            idx += span_size
 
         gdb.write('Page spans:\n')
         gdb.write('{index:5} {size:>13} {total:>13} {allocated_size:>13} {allocated_count:>7}\n'.format(
