@@ -1274,6 +1274,8 @@ class scylla_ptr(gdb.Command):
                 ptr_meta.offset_in_object = offset_in_object
         else:
             ptr_meta.is_small = False
+            ptr_meta.is_live = not span.is_free()
+            ptr_meta.offset_in_object = ptr - span.start
 
         # FIXME: handle debug-mode build
         index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr))
