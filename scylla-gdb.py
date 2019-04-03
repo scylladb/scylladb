@@ -892,8 +892,9 @@ class scylla_memory(gdb.Command):
         gdb.write('Small pools:\n')
         small_pools = cpu_mem['small_pools']
         nr = small_pools['nr_small_pools']
-        gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {wasted_percent:>5}\n'
-                  .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory', wasted_percent='wst%'))
+        gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {unused:>12} {wasted_percent:>5}\n'
+                  .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory',
+                          unused='unused', wasted_percent='wst%'))
         total_small_bytes = 0
         sc = span_checker()
         for i in range(int(nr)):
@@ -911,9 +912,11 @@ class scylla_memory(gdb.Command):
             total_small_bytes += memory
             use_count -= free_count
             wasted = free_count * object_size
+            unused = memory - use_count * object_size
             wasted_percent = wasted * 100.0 / memory if memory else 0
-            gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {wasted_percent:5.1f}\n'
-                      .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, wasted_percent=wasted_percent))
+            gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {unused:12} {wasted_percent:5.1f}\n'
+                      .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, unused=unused,
+                              wasted_percent=wasted_percent))
         gdb.write('Small allocations: %d [B]\n' % total_small_bytes)
 
         large_allocs = defaultdict(int) # key: span size [B], value: span count
