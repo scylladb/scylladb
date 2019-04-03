@@ -901,11 +901,15 @@ class scylla_memory(gdb.Command):
             object_size = int(sp['_object_size'])
             span_size = int(sp['_span_sizes']['preferred']) * page_size
             free_count = int(sp['_free_count'])
-            pages_in_use = int(sp['_pages_in_use'])
+            pages_in_use = 0
+            use_count = 0
+            for s in sc.spans():
+                if s.pool() == sp.address:
+                    pages_in_use += s.size()
+                    use_count += int(s.used_span_size() * page_size / object_size)
             memory = pages_in_use * page_size
             total_small_bytes += memory
-            # use_count can be off if we used fallback spans rather than preferred spans
-            use_count = int(memory / span_size) * int(span_size / object_size) - free_count
+            use_count -= free_count
             wasted = free_count * object_size
             wasted_percent = wasted * 100.0 / memory if memory else 0
             gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {wasted_percent:5.1f}\n'
