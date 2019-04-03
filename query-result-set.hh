@@ -75,10 +75,19 @@ public:
         }
         return std::optional<T>{value_cast<T>(value)};
     }
+    template<typename T>
+    const T*
+    get_ptr(const sstring& column_name) const {
+        auto&& value = get_data_value(column_name);
+        if (value.is_null()) {
+            return nullptr;
+        }
+        return &value_cast<T>(value);
+    }
     // throws no_such_column or null_column_value on error
     template<typename T>
     T get_nonnull(const sstring& column_name) const {
-        auto v = get<T>(column_name);
+        auto v = get_ptr<std::remove_reference_t<T>>(column_name);
         if (v) {
             return *v;
         }
