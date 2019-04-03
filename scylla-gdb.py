@@ -526,20 +526,23 @@ class scylla_task_histogram(gdb.Command):
                 text_end = int(items[2], 16)
                 break
 
+        sc = span_checker()
         vptr_count = defaultdict(int)
         scanned_pages = 0
         limit = 20000
         for idx in random.sample(range(0, nr_pages), nr_pages):
-            pool = pages[idx]['pool']
-            if not pool or pages[idx]['offset_in_span'] != 0:
+            span = sc.get_span(mem_start + idx * page_size)
+            if not span or span.index != idx or not span.is_small():
                 continue
+            pool = span.pool()
             if int(pool.dereference()['_object_size']) != size and size != 0:
                 continue
             scanned_pages += 1
             objsize = size if size != 0 else int(pool.dereference()['_object_size'])
-            span_size = pages[idx]['span_size'] * page_size
+            span_size = span.used_span_size() * page_size
             for idx2 in range(0, int(span_size / objsize)):
-                addr = (mem_start + idx * page_size + idx2 * objsize).reinterpret_cast(vptr_type).dereference()
+                obj_addr = span.start + idx2 * objsize
+                addr = gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference()
                 if addr >= text_start and addr <= text_end:
                     vptr_count[int(addr)] += 1
             if scanned_pages >= limit or len(vptr_count) >= limit:
