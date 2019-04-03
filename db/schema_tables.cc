@@ -1382,7 +1382,7 @@ template<typename V>
 static std::vector<V> get_list(const query::result_set_row& row, const sstring& name) {
     std::vector<V> list;
 
-    auto values = row.get_nonnull<list_type_impl::native_type>(name);
+    const auto& values = row.get_nonnull<const list_type_impl::native_type&>(name);
     for (auto&& v : values) {
         list.emplace_back(value_cast<V>(v));
     };
