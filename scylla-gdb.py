@@ -1238,25 +1238,12 @@ class scylla_ptr(gdb.Command):
         pages = cpu_mem['pages']
         page = pages[ptr_page_idx]
 
-        def is_page_free(page_index):
-            for index in range(int(cpu_mem['nr_span_lists'])):
-                span_list = cpu_mem['free_spans'][index]
-                span_page_idx = span_list['_front']
-                while span_page_idx:
-                    span_page = pages[span_page_idx]
-                    if span_page_idx <= page_index < span_page_idx + span_page['span_size']:
-                        return True
-                    span_page_idx = span_page['link']['_next']
-            return False
-
-        if is_page_free(ptr_page_idx):
+        span = span_checker().get_span(ptr)
+        offset_in_span = ptr - span.start
+        if offset_in_span >= span.used_span_size() * page_size:
             ptr_meta.is_containing_page_free = True
-            return ptr_meta
-
-        pool = page['pool']
-        offset_in_span = int(page['offset_in_span']) * page_size + ptr % page_size
-        first_page_in_span = cpu_mem['pages'][offset / page_size - page['offset_in_span']]
-        if pool:
+        elif span.is_small():
+            pool = span.pool()
             object_size = int(pool['_object_size'])
             ptr_meta.size = object_size
             ptr_meta.is_small = True
@@ -1273,6 +1260,7 @@ class scylla_ptr(gdb.Command):
                 next_free = next_free.reinterpret_cast(free_object_ptr).dereference()
             if not free:
                 # span's free list
+                first_page_in_span = span.page
                 next_free = first_page_in_span['freelist']
                 while next_free:
                     if ptr >= next_free and ptr < next_free.reinterpret_cast(char_ptr) + object_size:
