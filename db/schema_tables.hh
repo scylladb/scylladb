@@ -42,6 +42,7 @@
 
 #include "service/storage_proxy.hh"
 #include "mutation.hh"
+#include "cql3/functions/user_function.hh"
 #include "schema.hh"
 #include "schema_features.hh"
 #include "hashing.hh"
@@ -174,6 +175,12 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
 std::vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp);
 
 std::vector<user_type> create_types_from_schema_partition(keyspace_metadata& ks, lw_shared_ptr<query::result_set> result);
+
+std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_schema_partition(database& db, lw_shared_ptr<query::result_set> result);
+
+std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp);
+
+std::vector<mutation> make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp);
 
 std::vector<mutation> make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp);
 

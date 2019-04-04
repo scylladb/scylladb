@@ -31,6 +31,7 @@
 #include "to_string.hh"
 #include "query-result-writer.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/functions/functions.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/rwlock.hh>
@@ -599,6 +600,14 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
             for (auto&& type : user_types) {
                 ks.add_user_type(type);
+            }
+            return make_ready_future<>();
+        });
+    }).then([&proxy, this] {
+        return do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, [this, &proxy] (schema_result_value_type& v) {
+            auto&& user_functions = create_functions_from_schema_partition(*this, v.second);
+            for (auto&& func : user_functions) {
+                cql3::functions::functions::add_function(func);
             }
             return make_ready_future<>();
         });

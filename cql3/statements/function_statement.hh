@@ -22,6 +22,7 @@
 #pragma once
 
 #include "cql3/statements/schema_altering_statement.hh"
+#include "cql3/functions/user_function.hh"
 
 namespace cql3 {
 namespace statements {
@@ -29,15 +30,22 @@ namespace statements {
 class function_statement : public schema_altering_statement {
 protected:
     virtual future<> check_access(const service::client_state& state) override;
+    virtual void prepare_keyspace(const service::client_state& state) override;
     functions::function_name _name;
     std::vector<shared_ptr<cql3_type::raw>> _raw_arg_types;
+    std::vector<data_type> _arg_types;
+    static shared_ptr<cql_transport::event::schema_change> create_schema_change(
+            const functions::function& func, bool created);
     function_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types);
+    void create_arg_types(service::storage_proxy& proxy);
+    data_type prepare_type(service::storage_proxy& proxy, cql3_type::raw &t);
 };
 
 // common logic for creating UDF and UDA
 class create_function_statement_base : public function_statement {
 protected:
     virtual void validate(service::storage_proxy& proxy, const service::client_state& state) override;
+    virtual void create(service::storage_proxy& proxy, functions::function* old) = 0;
 
     bool _or_replace;
     bool _if_not_exists;
@@ -53,6 +61,8 @@ protected:
 
     bool _args_present;
     bool _if_exists;
+
+    shared_ptr<functions::function> _func{};
 
     drop_function_statement_base(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
             bool args_present, bool if_exists);

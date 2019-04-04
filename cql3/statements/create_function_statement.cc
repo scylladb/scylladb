@@ -20,11 +20,30 @@
  */
 
 #include "cql3/statements/create_function_statement.hh"
+#include "cql3/functions/functions.hh"
 #include "prepared_statement.hh"
+#include "service/migration_manager.hh"
 
 namespace cql3 {
 
 namespace statements {
+
+void create_function_statement::create(service::storage_proxy& proxy, functions::function* old) {
+    if (old && !dynamic_cast<functions::user_function*>(old)) {
+        throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
+    }
+    if (_language != "lua") {
+        throw exceptions::invalid_request_exception(format("Language '{}' is not supported", _language));
+    }
+    data_type return_type = prepare_type(proxy, *_return_type);
+    std::vector<sstring> arg_names;
+    for (const auto& arg_name : _arg_names) {
+        arg_names.push_back(arg_name->to_string());
+    }
+    _func = ::make_shared<functions::user_function>(
+            _name, _arg_types, std::move(arg_names), _body, _language, std::move(return_type), _called_on_null_input);
+    return;
+}
 
 std::unique_ptr<prepared_statement> create_function_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared>(make_shared<create_function_statement>(*this));
@@ -32,7 +51,12 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(database&
 
 future<shared_ptr<cql_transport::event::schema_change>> create_function_statement::announce_migration(
         service::storage_proxy& proxy, bool is_local_only) {
-    return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
+    if (!_func) {
+        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
+    }
+    return service::get_local_migration_manager().announce_new_function(_func, is_local_only).then([this] {
+        return create_schema_change(*_func, true);
+    });
 }
 
 create_function_statement::create_function_statement(functions::function_name name, sstring language, sstring body,

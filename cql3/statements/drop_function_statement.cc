@@ -20,7 +20,9 @@
  */
 
 #include "cql3/statements/drop_function_statement.hh"
+#include "cql3/functions/functions.hh"
 #include "prepared_statement.hh"
+#include "service/migration_manager.hh"
 
 namespace cql3 {
 
@@ -32,7 +34,16 @@ std::unique_ptr<prepared_statement> drop_function_statement::prepare(database& d
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement::announce_migration(
         service::storage_proxy& proxy, bool is_local_only) {
-    return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
+    if (!_func) {
+        return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
+    }
+    auto user_func = dynamic_pointer_cast<functions::user_function>(_func);
+    if (!user_func) {
+        throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", _func));
+    }
+    return service::get_local_migration_manager().announce_function_drop(user_func, is_local_only).then([this] {
+        return create_schema_change(*_func, false);
+    });
 }
 
 drop_function_statement::drop_function_statement(functions::function_name name,

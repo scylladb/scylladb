@@ -61,6 +61,8 @@
 #include "system_keyspace.hh"
 #include "cql3/cql3_type.hh"
 #include "cdc/cdc.hh"
+#include "cql3/functions/functions.hh"
+#include "cql3/util.hh"
 
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"
@@ -155,6 +157,8 @@ struct user_types_to_drop final {
 [[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy,
     schema_result before,
     schema_result after);
+
+static void merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
 
 static future<> do_merge_schema(distributed<service::storage_proxy>&, std::vector<mutation>, bool do_flush);
 
@@ -866,8 +870,8 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
        auto&& old_column_families = read_tables_for_keyspaces(proxy, keyspaces, tables());
        auto&& old_types = read_schema_for_keyspaces(proxy, TYPES, keyspaces).get0();
        auto&& old_views = read_tables_for_keyspaces(proxy, keyspaces, views());
+       auto old_functions = read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
 #if 0 // not in 2.1.8
-       /*auto& old_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
        /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 #endif
 
@@ -887,8 +891,8 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
        auto&& new_column_families = read_tables_for_keyspaces(proxy, keyspaces, tables());
        auto&& new_types = read_schema_for_keyspaces(proxy, TYPES, keyspaces).get0();
        auto&& new_views = read_tables_for_keyspaces(proxy, keyspaces, views());
+       auto new_functions = read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
 #if 0 // not in 2.1.8
-       /*auto& new_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
        /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 #endif
 
@@ -897,8 +901,8 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
        merge_tables_and_views(proxy,
             std::move(old_column_families), std::move(new_column_families),
             std::move(old_views), std::move(new_views));
+       merge_functions(proxy, std::move(old_functions), std::move(new_functions));
 #if 0
-       mergeFunctions(oldFunctions, newFunctions);
        mergeAggregates(oldAggregates, newAggregates);
 #endif
        types_to_drop.drop();
@@ -1217,60 +1221,15 @@ static std::vector<user_type> create_types(database& db, const std::vector<const
     }};
 }
 
-#if 0
-    // see the comments for mergeKeyspaces()
-    private static void mergeFunctions(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
-    {
-        List<UDFunction> created = new ArrayList<>();
-        List<UDFunction> altered = new ArrayList<>();
-        List<UDFunction> dropped = new ArrayList<>();
-
-        MapDifference<DecoratedKey, ColumnFamily> diff = Maps.difference(before, after);
-
-        // New keyspace with functions
-        for (Map.Entry<DecoratedKey, ColumnFamily> entry : diff.entriesOnlyOnRight().entrySet())
-            if (entry.getValue().hasColumns())
-                created.addAll(createFunctionsFromFunctionsPartition(new Row(entry.getKey(), entry.getValue())).values());
-
-        for (Map.Entry<DecoratedKey, MapDifference.ValueDifference<ColumnFamily>> entry : diff.entriesDiffering().entrySet())
-        {
-            ColumnFamily pre = entry.getValue().leftValue();
-            ColumnFamily post = entry.getValue().rightValue();
-
-            if (pre.hasColumns() && post.hasColumns())
-            {
-                MapDifference<ByteBuffer, UDFunction> delta =
-                    Maps.difference(createFunctionsFromFunctionsPartition(new Row(entry.getKey(), pre)),
-                                    createFunctionsFromFunctionsPartition(new Row(entry.getKey(), post)));
-
-                dropped.addAll(delta.entriesOnlyOnLeft().values());
-                created.addAll(delta.entriesOnlyOnRight().values());
-                Iterables.addAll(altered, Iterables.transform(delta.entriesDiffering().values(), new Function<MapDifference.ValueDifference<UDFunction>, UDFunction>()
-                {
-                    public UDFunction apply(MapDifference.ValueDifference<UDFunction> pair)
-                    {
-                        return pair.rightValue();
-                    }
-                }));
-            }
-            else if (pre.hasColumns())
-            {
-                dropped.addAll(createFunctionsFromFunctionsPartition(new Row(entry.getKey(), pre)).values());
-            }
-            else if (post.hasColumns())
-            {
-                created.addAll(createFunctionsFromFunctionsPartition(new Row(entry.getKey(), post)).values());
-            }
-        }
-
-        for (UDFunction udf : created)
-            Schema.instance.addFunction(udf);
-        for (UDFunction udf : altered)
-            Schema.instance.updateFunction(udf);
-        for (UDFunction udf : dropped)
-            Schema.instance.dropFunction(udf);
+static std::vector<data_type> read_arg_types(const query::result_set_row& row, const sstring& keyspace) {
+    std::vector<data_type> arg_types;
+    for (const auto& arg : get_list<sstring>(row, "argument_types")) {
+        arg_types.push_back(db::cql_type_parser::parse(keyspace, arg));
     }
+    return arg_types;
+}
 
+#if 0
     // see the comments for mergeKeyspaces()
     private static void mergeAggregates(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
     {
@@ -1324,6 +1283,39 @@ static std::vector<user_type> create_types(database& db, const std::vector<const
             Schema.instance.dropAggregate(udf);
     }
 #endif
+
+static shared_ptr<cql3::functions::user_function> create_func(database& db, const query::result_set_row& row) {
+    cql3::functions::function_name name{
+            row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
+    auto arg_types = read_arg_types(row, name.keyspace);
+    data_type return_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("return_type"));
+    return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types),
+            get_list<sstring>(row, "argument_names"), row.get_nonnull<sstring>("body"),
+            row.get_nonnull<sstring>("language"), std::move(return_type),
+            row.get_nonnull<bool>("called_on_null_input"));
+}
+
+static void merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after,
+        std::function<shared_ptr<cql3::functions::function>(database& db, const query::result_set_row& row)> create) {
+    auto diff = diff_rows(proxy, before, after);
+
+    proxy.local().get_db().invoke_on_all([&diff, create] (database& db) {
+        for (const auto& val : diff.created) {
+            cql3::functions::functions::add_function(create(db, *val));
+        }
+        for (const auto& val : diff.dropped) {
+            auto func = create(db, *val);
+            cql3::functions::functions::remove_function(func->name(), func->arg_types());
+        }
+        for (const auto& val : diff.altered) {
+            cql3::functions::functions::replace_function(create(db, *val));
+        }
+    }).get();
+}
+
+static void merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
+    return merge_functions(proxy, before, after, create_func);
+}
 
 template<typename... Args>
 void set_cell_or_clustered(mutation& m, const clustering_key & ckey, Args && ...args) {
@@ -1476,6 +1468,15 @@ std::vector<user_type> create_types_from_schema_partition(
     return create_types(ks, result->rows());
 }
 
+std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_schema_partition(
+        database& db, lw_shared_ptr<query::result_set> result) {
+    std::vector<shared_ptr<cql3::functions::user_function>> ret;
+    for (const auto& row : result->rows()) {
+        ret.emplace_back(create_func(db, row));
+    }
+    return ret;
+}
+
 /*
  * User type metadata serialization/deserialization
  */
@@ -1553,6 +1554,56 @@ std::vector<mutation> make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> 
     mutations.emplace_back(std::move(m));
 
     return mutations;
+}
+
+/*
+ * UDF metadata serialization/deserialization.
+ */
+
+static std::pair<mutation, clustering_key> get_mutation(schema_ptr s, const cql3::functions::function& func) {
+    auto name = func.name();
+    auto pkey = partition_key::from_singular(*s, name.keyspace);
+
+    list_type_impl::native_type arg_types;
+    for (const auto& arg_type : func.arg_types()) {
+        arg_types.emplace_back(arg_type->as_cql3_type().to_string());
+    }
+    auto arg_list_type = list_type_impl::get_instance(utf8_type, false);
+    data_value arg_types_val = make_list_value(arg_list_type, std::move(arg_types));
+    auto ckey = clustering_key::from_exploded(
+            *s, {utf8_type->decompose(name.name), arg_list_type->decompose(arg_types_val)});
+    mutation m{s, pkey};
+    return {std::move(m), std::move(ckey)};
+}
+
+std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions::user_function> func,
+        api::timestamp_type timestamp) {
+    schema_ptr s = functions();
+    auto p = get_mutation(s, *func);
+    mutation& m = p.first;
+    clustering_key& ckey = p.second;
+    auto argument_names_column = s->get_column_definition("argument_names");
+    auto argument_names = make_list_mutation(func->arg_names(), *argument_names_column, timestamp, [] (auto&& name) {
+        return name;
+    });
+    m.set_clustered_cell(ckey, *argument_names_column, std::move(argument_names));
+    m.set_clustered_cell(ckey, "body", func->body(), timestamp);
+    m.set_clustered_cell(ckey, "language", func->language(), timestamp);
+    m.set_clustered_cell(ckey, "return_type", func->return_type()->as_cql3_type().to_string(), timestamp);
+    m.set_clustered_cell(ckey, "called_on_null_input", func->called_on_null_input(), timestamp);
+    return {m};
+}
+
+std::vector<mutation> make_drop_function_mutations(schema_ptr s, const cql3::functions::function& func, api::timestamp_type timestamp) {
+    auto p = get_mutation(s, func);
+    mutation& m = p.first;
+    clustering_key& ckey = p.second;
+    m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+    return {std::move(m)};
+}
+
+std::vector<mutation> make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp) {
+    return make_drop_function_mutations(functions(), *func, timestamp);
 }
 
 /*
@@ -2618,98 +2669,6 @@ std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> 
             triggers.add(new TriggerDefinition(name, classOption));
         }
         return triggers;
-    }
-
-    /*
-     * UDF metadata serialization/deserialization.
-     */
-
-    public static Mutation makeCreateFunctionMutation(KSMetaData keyspace, UDFunction function, long timestamp)
-    {
-        // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
-        addFunctionToSchemaMutation(function, timestamp, mutation);
-        return mutation;
-    }
-
-    private static void addFunctionToSchemaMutation(UDFunction function, long timestamp, Mutation mutation)
-    {
-        ColumnFamily cells = mutation.addOrGet(Functions);
-        Composite prefix = Functions.comparator.make(function.name().name, UDHelper.calculateSignature(function));
-        CFRowAdder adder = new CFRowAdder(cells, prefix, timestamp);
-
-        adder.resetCollection("argument_names");
-        adder.resetCollection("argument_types");
-
-        for (int i = 0; i < function.argNames().size(); i++)
-        {
-            adder.addListEntry("argument_names", function.argNames().get(i).bytes);
-            adder.addListEntry("argument_types", function.argTypes().get(i).toString());
-        }
-
-        adder.add("body", function.body());
-        adder.add("is_deterministic", function.isDeterministic());
-        adder.add("language", function.language());
-        adder.add("return_type", function.returnType().toString());
-    }
-
-    public static Mutation makeDropFunctionMutation(KSMetaData keyspace, UDFunction function, long timestamp)
-    {
-        // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
-
-        ColumnFamily cells = mutation.addOrGet(Functions);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
-
-        Composite prefix = Functions.comparator.make(function.name().name, UDHelper.calculateSignature(function));
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
-
-        return mutation;
-    }
-
-    private static Map<ByteBuffer, UDFunction> createFunctionsFromFunctionsPartition(Row partition)
-    {
-        Map<ByteBuffer, UDFunction> functions = new HashMap<>();
-        String query = String.format("SELECT * FROM %s.%s", SystemKeyspace.NAME, FUNCTIONS);
-        for (UntypedResultSet.Row row : QueryProcessor.resultify(query, partition))
-        {
-            UDFunction function = createFunctionFromFunctionRow(row);
-            functions.put(UDHelper.calculateSignature(function), function);
-        }
-        return functions;
-    }
-
-    private static UDFunction createFunctionFromFunctionRow(UntypedResultSet.Row row)
-    {
-        String ksName = row.getString("keyspace_name");
-        String functionName = row.getString("function_name");
-        FunctionName name = new FunctionName(ksName, functionName);
-
-        List<ColumnIdentifier> argNames = new ArrayList<>();
-        if (row.has("argument_names"))
-            for (String arg : row.getList("argument_names", UTF8Type.instance))
-                argNames.add(new ColumnIdentifier(arg, true));
-
-        List<AbstractType<?>> argTypes = new ArrayList<>();
-        if (row.has("argument_types"))
-            for (String type : row.getList("argument_types", UTF8Type.instance))
-                argTypes.add(parseType(type));
-
-        AbstractType<?> returnType = parseType(row.getString("return_type"));
-
-        boolean isDeterministic = row.getBoolean("is_deterministic");
-        String language = row.getString("language");
-        String body = row.getString("body");
-
-        try
-        {
-            return UDFunction.create(name, argNames, argTypes, returnType, language, body, isDeterministic);
-        }
-        catch (InvalidRequestException e)
-        {
-            slogger.error(String.format("Cannot load function '%s' from schema: this function won't be available (on this node)", name), e);
-            return UDFunction.createBrokenFunction(name, argNames, argTypes, returnType, language, body, e);
-        }
     }
 
     /*

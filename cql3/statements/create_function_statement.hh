@@ -22,6 +22,7 @@
 #pragma once
 
 #include "cql3/statements/function_statement.hh"
+#include "cql3/functions/user_function.hh"
 
 namespace cql3 {
 namespace statements {
@@ -29,11 +30,17 @@ class create_function_statement final : public create_function_statement_base {
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(
             service::storage_proxy& proxy, bool is_local_only) override;
+    virtual void create(service::storage_proxy& proxy, functions::function* old) override;
     sstring _language;
     sstring _body;
     std::vector<shared_ptr<column_identifier>> _arg_names;
     shared_ptr<cql3_type::raw> _return_type;
     bool _called_on_null_input;
+
+    // To support "IF NOT EXISTS" we create the function during the verify stage and use it in announce_migration. In
+    // this case it is possible that there is no error but no function is created. We could duplicate some logic in
+    // announce_migration or have a _should_create boolean, but creating the function early is probably the simplest.
+    shared_ptr<functions::user_function> _func{};
 
 public:
     create_function_statement(functions::function_name name, sstring language, sstring body,
