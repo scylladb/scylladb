@@ -43,6 +43,9 @@
 #include <optional>
 #include <boost/range/adaptors.hpp>
 #include "../db/view/view_update_generator.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
+#include "gms/gossiper.hh"
+#include "repair/row_level.hh"
 
 extern logging::logger rlogger;
 
@@ -490,6 +493,8 @@ private:
     std::optional<repair_sync_boundary> _current_sync_boundary;
     // Contains the hashes of rows in the _working_row_buffor for all peer nodes
     std::vector<std::unordered_set<repair_hash>> _peer_row_hash_sets;
+    // Gate used to make sure pending operation of meta data is done
+    seastar::gate _gate;
 public:
     repair_stats& stats() {
         return _stats;
@@ -551,8 +556,10 @@ public:
     }
 
 public:
-    future<> wait_for_writer_done() {
-        return _repair_writer.wait_for_writer_done();
+    future<> stop() {
+        auto gate_future = _gate.close();
+        auto writer_future = _repair_writer.wait_for_writer_done();
+        return when_all_succeed(std::move(gate_future), std::move(writer_future));
     }
 
     static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map() {
@@ -601,7 +608,7 @@ public:
         }
     }
 
-    static void
+    static future<>
     remove_repair_meta(const gms::inet_address& from,
             uint32_t repair_meta_id,
             sstring ks_name,
@@ -611,10 +618,44 @@ public:
         auto it = repair_meta_map().find(id);
         if (it == repair_meta_map().end()) {
             rlogger.warn("remove_repair_meta: repair_meta_id {} for node {} does not exist", id.repair_meta_id, id.ip);
+            return make_ready_future<>();
         } else {
-            rlogger.debug("remove_repair_meta: Removed repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
+            auto rm = it->second;
             repair_meta_map().erase(it);
+            rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} started", id.repair_meta_id, id.ip);
+            return rm->stop().then([rm, id] {
+                rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
+            });
         }
+    }
+
+    static future<>
+    remove_repair_meta(gms::inet_address from) {
+        rlogger.debug("Remove all repair_meta for single node {}", from);
+        auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>();
+        for (auto it = repair_meta_map().begin(); it != repair_meta_map().end();) {
+            if (it->first.ip == from) {
+                repair_metas->push_back(it->second);
+                it = repair_meta_map().erase(it);
+            } else {
+                it++;
+            }
+        }
+        return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
+            return rm->stop();
+        });
+    }
+
+    static future<>
+    remove_repair_meta() {
+        rlogger.debug("Remove all repair_meta for all nodes");
+        auto repair_metas = make_lw_shared<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(
+                boost::copy_range<utils::chunked_vector<lw_shared_ptr<repair_meta>>>(repair_meta_map()
+                | boost::adaptors::map_values));
+        repair_meta_map().clear();
+        return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
+            return rm->stop();
+        });
     }
 
     static future<uint32_t> get_next_repair_meta_id() {
@@ -692,6 +733,7 @@ private:
     }
 
     future<uint64_t> get_estimated_partitions() {
+      return with_gate(_gate, [this] {
         if (_repair_master || _same_sharding_config) {
             return do_estimate_partitions_on_local_shard();
         } else {
@@ -711,11 +753,13 @@ private:
                 });
             });
         }
+      });
     }
 
     future<> set_estimated_partitions(uint64_t estimated_partitions) {
-        _estimated_partitions = estimated_partitions;
-        return make_ready_future<>();
+        return with_gate(_gate, [this, estimated_partitions] {
+            _estimated_partitions = estimated_partitions;
+        });
     }
 
     std::unique_ptr<dht::i_partitioner> make_remote_partitioner() {
@@ -791,6 +835,7 @@ private:
                 if (cur_size >= _max_row_buf_size) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
+                _gate.check();
                 return _repair_reader.read_mutation_fragment().then([this, &cur_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
                     return handle_mutation_fragment(std::move(mfopt), cur_size, cur_rows);
                 });
@@ -990,7 +1035,7 @@ public:
     future<std::unordered_set<repair_hash>>
     get_full_row_hashes(gms::inet_address remote_node) {
         if (remote_node == _myip) {
-            return make_ready_future<std::unordered_set<repair_hash>>(get_full_row_hashes_handler());
+            return get_full_row_hashes_handler();
         }
         return netw::get_local_messaging_service().send_repair_get_full_row_hashes(msg_addr(remote_node),
                 _repair_meta_id).then([this, remote_node] (std::unordered_set<repair_hash> hashes) {
@@ -1003,9 +1048,11 @@ public:
     }
 
     // RPC handler
-    std::unordered_set<repair_hash>
+    future<std::unordered_set<repair_hash>>
     get_full_row_hashes_handler() {
-        return get_full_row_hashes();
+        return with_gate(_gate, [this] {
+            return get_full_row_hashes();
+        });
     }
 
     // RPC API
@@ -1030,7 +1077,9 @@ public:
         // We can not call this function twice. The good thing is we do not use
         // retransmission at messaging_service level, so no message will be retransmited.
         rlogger.trace("Calling get_combined_row_hash_handler");
-        return request_row_hashes(common_sync_boundary);
+        return with_gate(_gate, [this, common_sync_boundary = std::move(common_sync_boundary)] () mutable {
+            return request_row_hashes(common_sync_boundary);
+        });
     }
 
     // RPC API
@@ -1063,7 +1112,7 @@ public:
     // RPC API
     future<> repair_row_level_stop(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range) {
         if (remote_node == _myip) {
-            return wait_for_writer_done();
+            return stop();
         }
         stats().rpc_call_nr++;
         return netw::get_local_messaging_service().send_repair_row_level_stop(msg_addr(remote_node),
@@ -1076,9 +1125,7 @@ public:
         rlogger.debug("<<< Finished Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}",
             utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, range);
         auto rm = get_repair_meta(from, repair_meta_id);
-        return rm->wait_for_writer_done().then([rm, from, repair_meta_id, ks_name, cf_name, range] () mutable {
-            remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range));
-        });
+        return remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range));
     }
 
     // RPC API
@@ -1127,7 +1174,9 @@ public:
     // RPC handler
     future<get_sync_boundary_response>
     get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
-        return get_sync_boundary(std::move(skipped_sync_boundary));
+        return with_gate(_gate, [this, skipped_sync_boundary = std::move(skipped_sync_boundary)] () mutable {
+            return get_sync_boundary(std::move(skipped_sync_boundary));
+        });
     }
 
     // RPC API
@@ -1172,8 +1221,10 @@ public:
 
     // RPC handler
     future<repair_rows_on_wire> get_row_diff_handler(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows) {
-        std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
-        return to_repair_rows_on_wire(std::move(row_diff));
+        return with_gate(_gate, [this, &set_diff, needs_all_rows] {
+            std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
+            return to_repair_rows_on_wire(std::move(row_diff));
+        });
     }
 
     // RPC API
@@ -1200,11 +1251,13 @@ public:
 
     // RPC handler
     future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
-        return apply_rows(std::move(rows), from, update_working_row_buf::no, update_peer_row_hash_sets::no);
+        return with_gate(_gate, [this, rows = std::move(rows), from] () mutable {
+            return apply_rows(std::move(rows), from, update_working_row_buf::no, update_peer_row_hash_sets::no);
+        });
     }
 };
 
-future<> repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
+future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
     return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
@@ -1213,9 +1266,10 @@ future<> repair_init_messaging_service_handler(distributed<db::system_distribute
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                std::unordered_set<repair_hash> hashes = rm->get_full_row_hashes_handler();
-                _metrics.tx_hashes_nr += hashes.size();
-                return make_ready_future<std::unordered_set<repair_hash>>(std::move(hashes));
+                return rm->get_full_row_hashes_handler().then([] (std::unordered_set<repair_hash> hashes) {
+                    _metrics.tx_hashes_nr += hashes.size();
+                    return hashes;
+                });
             }) ;
         });
         ms.register_repair_get_combined_row_hash([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
@@ -1374,6 +1428,7 @@ private:
 
     // Step A: Negotiate sync boundary to use
     op_status negotiate_sync_boundary(repair_meta& master) {
+        check_in_shutdown();
         _ri.check_in_abort();
         _sync_boundaries.clear();
         _combined_hashes.clear();
@@ -1430,6 +1485,7 @@ private:
 
     // Step B: Get missing rows from peer nodes so that local node contains all the rows
     op_status get_missing_rows_from_follower_nodes(repair_meta& master) {
+        check_in_shutdown();
         _ri.check_in_abort();
         // `combined_hashes` contains the combined hashes for the
         // `_working_row_buf`. Like `_row_buf`, `_working_row_buf` contains
@@ -1528,6 +1584,7 @@ private:
     void send_missing_rows_to_follower_nodes(repair_meta& master) {
         // At this time, repair master contains all the rows between (_last_sync_boundary, _current_sync_boundary]
         // So we can figure out which rows peer node are missing and send the missing rows to them
+        check_in_shutdown();
         _ri.check_in_abort();
         std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes();
         parallel_for_each(boost::irange(size_t(0), _all_live_peer_nodes.size()), [&, this] (size_t idx) {
@@ -1541,6 +1598,7 @@ private:
 public:
     future<> run() {
         return seastar::async([this] {
+            check_in_shutdown();
             _ri.check_in_abort();
             auto repair_meta_id = repair_meta::get_next_repair_meta_id().get0();
             auto algorithm = get_common_diff_detect_algorithm(_all_live_peer_nodes);
@@ -1634,4 +1692,66 @@ future<> repair_cf_range_row_level(repair_info& ri,
     return do_with(row_level_repair(ri, std::move(cf_name), std::move(range), std::move(all_live_peer_nodes)), [] (row_level_repair& repair) {
         return repair.run();
     });
+}
+
+future<> shutdown_all_row_level_repair() {
+    return smp::invoke_on_all([] {
+        return repair_meta::remove_repair_meta();
+    });
+}
+
+class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subscriber {
+    void remove_row_level_repair(gms::inet_address node) {
+        rlogger.debug("Started to remove row level repair on all shards for node {}", node);
+        smp::invoke_on_all([node] {
+            return repair_meta::remove_repair_meta(node);
+        }).then([node] {
+            rlogger.debug("Finished to remove row level repair on all shards for node {}", node);
+        }).handle_exception([node] (std::exception_ptr ep) {
+            rlogger.warn("Failed to remove row level repair for node {}: {}", node, ep);
+        }).get();
+    }
+    virtual void on_join(
+            gms::inet_address endpoint,
+            gms::endpoint_state ep_state) override {
+    }
+    virtual void before_change(
+            gms::inet_address endpoint,
+            gms::endpoint_state current_state,
+            gms::application_state new_state_key,
+            const gms::versioned_value& new_value) override {
+    }
+    virtual void on_change(
+            gms::inet_address endpoint,
+            gms::application_state state,
+            const gms::versioned_value& value) override {
+    }
+    virtual void on_alive(
+            gms::inet_address endpoint,
+            gms::endpoint_state state) override {
+    }
+    virtual void on_dead(
+            gms::inet_address endpoint,
+            gms::endpoint_state state) override {
+        remove_row_level_repair(endpoint);
+    }
+    virtual void on_remove(
+            gms::inet_address endpoint) override {
+        remove_row_level_repair(endpoint);
+    }
+    virtual void on_restart(
+            gms::inet_address endpoint,
+            gms::endpoint_state ep_state) override {
+        remove_row_level_repair(endpoint);
+    }
+};
+
+repair_service::repair_service(distributed<gms::gossiper>& gossiper)
+    : _gossiper(gossiper)
+    , _gossip_helper(make_shared<row_level_repair_gossip_helper>()) {
+    _gossiper.local().register_(_gossip_helper);
+}
+
+repair_service::~repair_service() {
+    _gossiper.local().unregister_(_gossip_helper);
 }

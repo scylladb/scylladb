@@ -795,7 +795,8 @@ int main(int ac, char** av) {
                     });
                 });
             }).get();
-            repair_init_messaging_service_handler(sys_dist_ks, view_update_generator).get();
+            repair_service rs(gossiper);
+            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator).get();
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
