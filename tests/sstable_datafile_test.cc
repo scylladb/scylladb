@@ -2216,22 +2216,23 @@ SEASTAR_TEST_CASE(check_overlapping) {
 }
 
 SEASTAR_TEST_CASE(check_read_indexes) {
-  test_env env;
-  return for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
-    auto builder = schema_builder("test", "summary_test")
-        .with_column("a", int32_type, column_kind::partition_key);
-    builder.set_min_index_interval(256);
-    auto s = builder.build();
+  return test_env::do_with_async([] (test_env& env) {
+      for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+        auto builder = schema_builder("test", "summary_test")
+            .with_column("a", int32_type, column_kind::partition_key);
+        builder.set_min_index_interval(256);
+        auto s = builder.build();
 
-    auto sst = env.make_sstable(s, get_test_dir("summary_test", s), 1, version, big);
+        auto sst = env.make_sstable(s, get_test_dir("summary_test", s), 1, version, big);
 
-    auto fut = sst->load();
-    return fut.then([sst] {
-        return sstables::test(sst).read_indexes().then([sst] (index_list list) {
-            BOOST_REQUIRE(list.size() == 130);
-            return make_ready_future<>();
+        auto fut = sst->load();
+        return fut.then([sst] {
+            return sstables::test(sst).read_indexes().then([sst] (index_list list) {
+                BOOST_REQUIRE(list.size() == 130);
+                return make_ready_future<>();
+            });
         });
-    });
+      }).get();
   });
 }
 
