@@ -53,5 +53,5 @@ if __name__ == '__main__':
             print('Please upgrade to a newer kernel version by executing \'apt-get install linux-image-generic-lts-vivid && reboot\'.')
         else:
             print('Please upgrade to a newer kernel version.')
-            print(' see http://www.scylladb.com/kb/kb-fs-not-qualified-aio/ for details')
+            print(' see https://docs.scylladb.com/troubleshooting/error_messages/kb_fs_not_qualified_aio/ for details')
     sys.exit(ret)
