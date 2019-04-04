@@ -2452,37 +2452,38 @@ SEASTAR_TEST_CASE(check_multi_schema) {
     //        d int,
     //        e blob
     //);
-    test_env env;
-    return for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
-        auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
-        auto builder = schema_builder("test", "test_multi_schema")
-            .with_column("a", int32_type, column_kind::partition_key)
-            .with_column("c", set_of_ints_type)
-            .with_column("d", int32_type)
-            .with_column("e", bytes_type);
-        auto s = builder.build();
+    return test_env::do_with_async([] (test_env& env) {
+        return for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+            auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+            auto builder = schema_builder("test", "test_multi_schema")
+                .with_column("a", int32_type, column_kind::partition_key)
+                .with_column("c", set_of_ints_type)
+                .with_column("d", int32_type)
+                .with_column("e", bytes_type);
+            auto s = builder.build();
 
-        auto sst = env.make_sstable(s, get_test_dir("multi_schema_test", s), 1, version, big);
-        auto f = sst->load();
-        return f.then([sst, s] {
-            auto reader = make_lw_shared(sstable_reader(sst, s));
-            return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s] (mutation_opt m) {
-                BOOST_REQUIRE(m);
-                BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
-                auto& rows = m->partition().clustered_rows();
-                BOOST_REQUIRE_EQUAL(rows.calculate_size(), 1);
-                auto& row = rows.begin()->row();
-                BOOST_REQUIRE(!row.deleted_at());
-                auto& cells = row.cells();
-                BOOST_REQUIRE_EQUAL(cells.size(), 1);
-                auto& cdef = *s->get_column_definition("e");
-                BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), int32_type->decompose(5));
-                return (*reader)(db::no_timeout);
-            }).then([reader, s] (mutation_fragment_opt m) {
-                BOOST_REQUIRE(!m);
+            auto sst = env.make_sstable(s, get_test_dir("multi_schema_test", s), 1, version, big);
+            auto f = sst->load();
+            return f.then([sst, s] {
+                auto reader = make_lw_shared(sstable_reader(sst, s));
+                return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s] (mutation_opt m) {
+                    BOOST_REQUIRE(m);
+                    BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
+                    auto& rows = m->partition().clustered_rows();
+                    BOOST_REQUIRE_EQUAL(rows.calculate_size(), 1);
+                    auto& row = rows.begin()->row();
+                    BOOST_REQUIRE(!row.deleted_at());
+                    auto& cells = row.cells();
+                    BOOST_REQUIRE_EQUAL(cells.size(), 1);
+                    auto& cdef = *s->get_column_definition("e");
+                    BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), int32_type->decompose(5));
+                    return (*reader)(db::no_timeout);
+                }).then([reader, s] (mutation_fragment_opt m) {
+                    BOOST_REQUIRE(!m);
+                });
             });
-        });
-        return make_ready_future<>();
+            return make_ready_future<>();
+        }).get();
     });
 }
 
