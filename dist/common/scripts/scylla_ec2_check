@@ -44,7 +44,7 @@ if __name__ == '__main__':
     driver = match.group(1)
 
     if not en:
-        colorprint('{red}{instance_class} doesn\'t support enahanced networking!{nocolor}', instance_class=instance_class)
+        colorprint('{red}{instance_class} doesn\'t support enhanced networking!{nocolor}', instance_class=instance_class)
         print('''To enable enhanced networking, please use the instance type which supports it.
 More documentation available at:
 http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html#enabling_enhanced_networking''')
