@@ -392,15 +392,7 @@ functions::match_arguments(database& db, const sstring& keyspace,
 
 bool
 functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2) {
-#if 0
-    if (t1.size() != t2.size())
-        return false;
-    for (int i = 0; i < t1.size(); i ++)
-        if (!typeEquals(t1.get(i), t2.get(i)))
-            return false;
-    return true;
-#endif
-    abort();
+    return t1 == t2;
 }
 
 bool
