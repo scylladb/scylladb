@@ -28,6 +28,7 @@ operate are shipped with it.
 %install
 mkdir -p %{buildroot}/{{target}}
 cp -a ./ %{buildroot}/{{target}}
+rm -rf %{buildroot}/{{target}}/dist
 
 %files
 %dir {{target}}
