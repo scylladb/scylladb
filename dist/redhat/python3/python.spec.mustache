@@ -29,6 +29,7 @@ operate are shipped with it.
 mkdir -p %{buildroot}/{{target}}
 cp -a ./ %{buildroot}/{{target}}
 rm -rf %{buildroot}/{{target}}/dist
+rm %{buildroot}/{{target}}/SCYLLA-*-FILE
 
 %files
 %dir {{target}}
