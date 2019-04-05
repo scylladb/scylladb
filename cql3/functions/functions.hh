@@ -60,7 +60,8 @@ namespace cql3 {
 namespace functions {
 
 class functions {
-    static thread_local std::unordered_multimap<function_name, shared_ptr<function>> _declared;
+    using declared_t = std::unordered_multimap<function_name, shared_ptr<function>>;
+    static thread_local declared_t _declared;
 private:
     static std::unordered_multimap<function_name, shared_ptr<function>> init();
 public:
@@ -86,7 +87,8 @@ public:
         const std::vector<shared_ptr<assignment_testable>> args(std::begin(provided_args), std::end(provided_args));
         return get(db, keyspace, name, args, receiver_ks, receiver_cf, receiver);
     }
-    static std::vector<shared_ptr<function>> find(const function_name& name);
+    static boost::iterator_range<declared_t::iterator> find(const function_name& name);
+    static declared_t::iterator find_iter(const function_name& name, const std::vector<data_type>& arg_types);
     static shared_ptr<function> find(const function_name& name, const std::vector<data_type>& arg_types);
 private:
     // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common

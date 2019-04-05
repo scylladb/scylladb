@@ -306,23 +306,30 @@ functions::get(database& db,
     return std::move(compatibles[0]);
 }
 
-std::vector<shared_ptr<function>>
+boost::iterator_range<functions::declared_t::iterator>
 functions::find(const function_name& name) {
-    auto range = _declared.equal_range(name);
-    std::vector<shared_ptr<function>> ret;
-    for (auto i = range.first; i != range.second; ++i) {
-        ret.push_back(i->second);
+    assert(name.has_keyspace()); // : "function name not fully qualified";
+    auto pair = _declared.equal_range(name);
+    return boost::make_iterator_range(pair.first, pair.second);
+}
+
+functions::declared_t::iterator
+functions::find_iter(const function_name& name, const std::vector<data_type>& arg_types) {
+    auto range = find(name);
+    auto i = std::find_if(range.begin(), range.end(), [&] (const std::pair<const function_name, shared_ptr<function>>& d) {
+        return type_equals(d.second->arg_types(), arg_types);
+    });
+    if (i == range.end()) {
+        return _declared.end();
     }
-    return ret;
+    return i;
 }
 
 shared_ptr<function>
 functions::find(const function_name& name, const std::vector<data_type>& arg_types) {
-    assert(name.has_keyspace()); // : "function name not fully qualified";
-    for (auto&& f : find(name)) {
-        if (type_equals(f->arg_types(), arg_types)) {
-            return f;
-        }
+    auto i = find_iter(name, arg_types);
+    if (i != _declared.end()) {
+        return i->second;
     }
     return {};
 }
