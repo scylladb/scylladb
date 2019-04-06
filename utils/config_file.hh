@@ -30,6 +30,7 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
+#include <seastar/util/defer.hh>
 
 #include "seastarx.hh"
 
@@ -62,6 +63,12 @@ template <typename T>
 extern const config_type config_type_for;
 
 class config_file {
+    static thread_local unsigned s_shard_id;
+    struct any_value {
+        virtual ~any_value() = default;
+        virtual std::unique_ptr<any_value> clone() const = 0;
+    };
+    std::vector<std::vector<std::unique_ptr<any_value>>> _per_shard_values { 1 };
 public:
     typedef std::unordered_map<sstring, sstring> string_map;
     typedef std::vector<sstring> string_list;
@@ -79,13 +86,16 @@ public:
     };
 
     struct config_src {
+        config_file* _cf;
         std::string_view _name, _desc;
         const config_type* _type;
+        size_t _per_shard_values_offset;
     protected:
         virtual const void* current_value() const = 0;
     public:
-        config_src(std::string_view name, const config_type* type, std::string_view desc)
-            : _name(name)
+        config_src(config_file* cf, std::string_view name, const config_type* type, std::string_view desc)
+            : _cf(cf)
+            , _name(name)
             , _desc(desc)
             , _type(type)
         {}
@@ -115,12 +125,25 @@ public:
     private:
         friend class config;
         std::string_view _name, _desc;
-        T _value = T();
         config_source _source = config_source::None;
         value_status _value_status;
+        struct the_value_type final : any_value {
+            the_value_type(T value) : value(std::move(value)) {}
+            T value;
+            virtual std::unique_ptr<any_value> clone() const override {
+                return std::make_unique<the_value_type>(value);
+            }
+        };
     protected:
+        T& the_value() {
+            any_value* av =_cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
+            return static_cast<the_value_type*>(av)->value;
+        }
+        const T& the_value() const {
+            return const_cast<named_value*>(this)->the_value();
+        }
         virtual const void* current_value() const override {
-            return &_value;
+            return &the_value();
         }
     public:
         typedef T type;
@@ -128,11 +151,10 @@ public:
 
         named_value(config_file* file, std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
-            : config_src(name, &config_type_for<T>, desc)
-            , _value(t)
+            : config_src(file, name, &config_type_for<T>, desc)
             , _value_status(vs)
         {
-            file->add(*this);
+            file->add(*this, std::make_unique<the_value_type>(std::move(t)));
         }
         value_status status() const override {
             return _value_status;
@@ -144,11 +166,11 @@ public:
             return _source > config_source::None;
         }
         MyType & operator()(const T& t) {
-            _value = t;
+            the_value() = t;
             return *this;
         }
         MyType & operator()(T&& t, config_source src = config_source::None) {
-            _value = std::move(t);
+            the_value() = std::move(t);
             if (src > config_source::None) {
                 _source = src;
             }
@@ -158,7 +180,7 @@ public:
             operator()(std::move(t), src);
         }
         const T& operator()() const {
-            return _value;
+            return the_value();
         }
 
         void add_command_line_option(bpo::options_description_easy_init&,
@@ -171,7 +193,7 @@ public:
     config_file(std::initializer_list<cfg_ref> = {});
     config_file(const config_file&) = delete;
 
-    void add(cfg_ref);
+    void add(cfg_ref, std::unique_ptr<any_value> value);
     void add(std::initializer_list<cfg_ref>);
     void add(const std::vector<cfg_ref> &);
 
@@ -208,6 +230,7 @@ public:
     const configs& values() const {
         return _cfgs;
     }
+    future<> broadcast_to_all_shards();
 private:
     configs
         _cfgs;
