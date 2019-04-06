@@ -521,7 +521,7 @@ int main(int ac, char** av) {
             } else {
                 ceo["enabled"] = "false";
             }
-            cfg->client_encryption_options(ceo);
+            cfg->client_encryption_options(std::move(ceo), cfg->client_encryption_options.source());
 
             using namespace locator;
             // Re-apply strict-dma after we've read the config file, this time
