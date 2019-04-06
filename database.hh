@@ -1329,7 +1329,6 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&);
-    database();
     database(const db::config&, database_config dbcfg);
     database(database&&) = delete;
     ~database();

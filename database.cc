@@ -179,9 +179,6 @@ void keyspace::remove_user_type(const user_type ut) {
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
-database::database() : database(db::config(), database_config())
-{}
-
 database::database(const db::config& cfg, database_config dbcfg)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
