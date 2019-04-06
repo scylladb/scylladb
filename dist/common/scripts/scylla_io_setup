@@ -108,7 +108,7 @@ if __name__ == "__main__":
             if cpudata.cpuset():
                 iotune_args += [ "--cpuset", ",".join(map(str, cpudata.cpuset())) ]
             elif cpudata.smp():
-                iotune_args += [ "--smp", cpudata.smp() ]
+                iotune_args += [ "--smp", str(cpudata.smp()) ]
 
             try:
                 subprocess.check_call(["iotune",
