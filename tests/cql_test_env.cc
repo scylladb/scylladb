@@ -26,6 +26,7 @@
 #include <sstables/sstables.hh>
 #include <seastar/core/do_with.hh>
 #include "cql_test_env.hh"
+#include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/batch_statement.hh"
@@ -326,6 +327,13 @@ public:
                 bool old_active = true;
                 auto success = active.compare_exchange_strong(old_active, false);
                 assert(success);
+            });
+
+            // FIXME: make the function storage non static
+            auto clear_funcs = defer([] {
+                smp::invoke_on_all([] () {
+                    cql3::functions::functions::clear_functions();
+                }).get();
             });
 
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));

@@ -54,6 +54,10 @@ static logging::logger log("cql3_fuctions");
 
 thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
 
+void functions::clear_functions() {
+    functions::_declared = init();
+}
+
 std::unordered_multimap<function_name, shared_ptr<function>>
 functions::init() {
     std::unordered_multimap<function_name, shared_ptr<function>> ret;
