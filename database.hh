@@ -1233,7 +1233,7 @@ private:
     lw_shared_ptr<db_stats> _stats;
     std::unique_ptr<cell_locker_stats> _cl_stats;
 
-    std::unique_ptr<db::config> _cfg;
+    const db::config* _cfg;
 
     dirty_memory_manager _system_dirty_memory_manager;
     dirty_memory_manager _dirty_memory_manager;

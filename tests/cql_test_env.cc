@@ -335,7 +335,7 @@ public:
             auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
 
             auto db = ::make_shared<distributed<database>>();
-            auto cfg = make_lw_shared<db::config>(*cfg_in.db_config);
+            auto cfg = cfg_in.db_config;
             tmpdir data_dir;
             auto data_dir_path = data_dir.path().string();
             if (!cfg->data_file_directories.is_set()) {
@@ -388,7 +388,7 @@ public:
 
             database_config dbcfg;
             dbcfg.available_memory = memory::stats().total_memory();
-            db->start(std::move(*cfg), dbcfg).get();
+            db->start(std::ref(*cfg), dbcfg).get();
             auto stop_db = defer([db] {
                 db->stop().get();
             });
