@@ -44,6 +44,7 @@ class view_update_generator;
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
         distributed<database> db;
+        database_config dbcfg;
         db::config cfg;
         sharded<auth::service> auth_service;
         sharded<db::system_distributed_keyspace> sys_dist_ks;
@@ -65,7 +66,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         service::get_storage_service().start(std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
-        db.start().get();
+        db.start(std::ref(cfg), dbcfg).get();
         auto stop_db = defer([&] { db.stop().get(); });
         auto stop_database_d = defer([&db] {
             stop_database(db).get();
