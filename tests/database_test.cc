@@ -41,7 +41,7 @@
 
 SEASTAR_TEST_CASE(test_safety_after_truncate) {
     auto cfg = make_shared<db::config>();
-    cfg->auto_snapshot() = false;
+    cfg->auto_snapshot.set(false);
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
         auto& db = e.local_db();

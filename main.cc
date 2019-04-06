@@ -511,7 +511,7 @@ int main(int ac, char** av) {
             // (through db) directly. Lets fixup default valued right here instead then, so it in turn can be
             // kept simple
             // TODO: make intrinsic part of config defaults instead
-            auto& ceo = cfg->client_encryption_options();
+            auto ceo = cfg->client_encryption_options();
             if (is_true(get_or_default(ceo, "enabled", "false"))) {
                 ceo["enabled"] = "true";
                 ceo["certificate"] = get_or_default(ceo, "certificate", relative_conf_dir("scylla.crt").string());
@@ -520,6 +520,7 @@ int main(int ac, char** av) {
             } else {
                 ceo["enabled"] = "false";
             }
+            cfg->client_encryption_options(ceo);
 
             using namespace locator;
             // Re-apply strict-dma after we've read the config file, this time

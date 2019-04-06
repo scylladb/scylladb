@@ -154,10 +154,10 @@ public:
             }
             return *this;
         }
-        const T& operator()() const {
-            return _value;
+        void set(T&& t, config_source src = config_source::None) {
+            operator()(std::move(t), src);
         }
-        T& operator()() {
+        const T& operator()() const {
             return _value;
         }
 

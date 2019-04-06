@@ -47,11 +47,11 @@ static const auto bob = std::string_view("bob");
 static shared_ptr<db::config> db_config_with_auth() {
     shared_ptr<db::config> config_ptr = make_shared<db::config>();
     auto& config = *config_ptr;
-    config.authorizer("CassandraAuthorizer");
-    config.authenticator("PasswordAuthenticator");
+    config.authorizer.set("CassandraAuthorizer");
+    config.authenticator.set("PasswordAuthenticator");
 
     // Disable time-based caching so that changing permissions of a user is reflected immediately.
-    config.permissions_validity_in_ms(0);
+    config.permissions_validity_in_ms.set(0);
 
     return config_ptr;
 }
