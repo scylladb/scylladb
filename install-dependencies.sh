@@ -42,5 +42,5 @@ elif [ "$ID" = "fedora" ]; then
     yum install -y yaml-cpp-devel thrift-devel antlr3-tool antlr3-C++-devel jsoncpp-devel snappy-devel
 elif [ "$ID" = "centos" ]; then
     yum install -y yaml-cpp-devel thrift-devel scylla-antlr35-tool scylla-antlr35-C++-devel jsoncpp-devel snappy-devel scylla-boost163-static scylla-python34-pyparsing20 systemd-devel
-    echo -e "Configure example:\n\tpython3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64 --cflags=-I/opt/scylladb/include --with-antlr3=/opt/scylladb/bin/antlr3"
+    echo -e "Configure example:\n\tpython3.6 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.3 --python python3.6 --ldflag=-Wl,-rpath=/opt/scylladb/lib64 --cflags=-I/opt/scylladb/include --with-antlr3=/opt/scylladb/bin/antlr3"
 fi
