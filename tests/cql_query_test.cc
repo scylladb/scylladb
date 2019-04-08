@@ -1346,6 +1346,13 @@ SEASTAR_TEST_CASE(test_tuples) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_type_nested) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create type ut1 (f1 int);").get();
+        e.execute_cql("create type ut2 (f2 frozen<ut1>);").get();
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_type) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create type ut1 (my_int int, my_bigint bigint, my_text text);").discard_result().then([&e] {
