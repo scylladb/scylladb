@@ -160,7 +160,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
 
 std::vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp);
 
-std::vector<user_type> create_types_from_schema_partition(const schema_result_value_type& result);
+std::vector<user_type> create_types_from_schema_partition(keyspace_metadata& ks, lw_shared_ptr<query::result_set> result);
 
 std::vector<mutation> make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp);
 

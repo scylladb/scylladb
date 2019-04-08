@@ -585,8 +585,8 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         return create_keyspace(ksm);
     }).then([&proxy, this] {
         return do_parse_schema_tables(proxy, db::schema_tables::TYPES, [this, &proxy] (schema_result_value_type &v) {
-            auto&& user_types = create_types_from_schema_partition(v);
             auto& ks = this->find_keyspace(v.first);
+            auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
             for (auto&& type : user_types) {
                 ks.add_user_type(type);
             }

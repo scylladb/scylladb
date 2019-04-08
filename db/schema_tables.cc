@@ -1038,11 +1038,12 @@ struct naked_user_type {
     const sstring qualified_name;
 };
 
-static inline void collect_types(std::set<sstring>& keys, schema_result& result, std::vector<naked_user_type>& to)
-{
+static inline void collect_types(
+        database& db, std::set<sstring>& keys, schema_result& result, std::vector<naked_user_type>& to) {
     for (auto&& key : keys) {
         auto&& value = result[key];
-        auto types = create_types_from_schema_partition(schema_result_value_type{key, std::move(value)});
+        auto ks = db.find_keyspace(key).metadata();
+        auto types = create_types_from_schema_partition(*ks, std::move(value));
         boost::transform(types, std::back_inserter(to), [] (user_type type) {
             return naked_user_type{std::move(type->_keyspace), std::move(type->name())};
         });
@@ -1056,14 +1057,16 @@ static inline void collect_types(std::set<sstring>& keys, schema_result& result,
 
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
-    collect_types(diff.entries_only_on_left, before, dropped); // Keyspaces with no more types
-    collect_types(diff.entries_only_on_right, after, created); // New keyspaces with types
+    auto& db = proxy.local().get_db().local();
+    collect_types(db, diff.entries_only_on_left, before, dropped); // Keyspaces with no more types
+    collect_types(db, diff.entries_only_on_right, after, created); // New keyspaces with types
 
     for (auto&& keyspace : diff.entries_differing) {
         // The user types of this keyspace differ, so diff the current types with the updated ones
-        auto current_types = proxy.local().get_db().local().find_keyspace(keyspace).metadata()->user_types()->get_all_types();
+        auto ks = db.find_keyspace(keyspace).metadata();
+        auto current_types = ks->user_types()->get_all_types();
         decltype(current_types) updated_types;
-        auto ts = create_types_from_schema_partition(schema_result_value_type{keyspace, std::move(after[keyspace])});
+        auto ts = create_types_from_schema_partition(*ks, std::move(after[keyspace]));
         updated_types.reserve(ts.size());
         for (auto&& type : ts) {
             updated_types[type->_name] = std::move(type);
@@ -1380,10 +1383,10 @@ static std::vector<V> get_list(const query::result_set_row& row, const sstring& 
     return list;
 }
 
-std::vector<user_type> create_types_from_schema_partition(const schema_result_value_type& result)
-{
-    cql_type_parser::raw_builder builder(result.first);
-    for (auto&& row : result.second->rows()) {
+std::vector<user_type> create_types_from_schema_partition(
+        keyspace_metadata& ks, lw_shared_ptr<query::result_set> result) {
+    cql_type_parser::raw_builder builder(ks);
+    for (auto&& row : result->rows()) {
         builder.add(row.get_nonnull<sstring>("type_name"),
                         get_list<sstring>(row, "field_names"),
                         get_list<sstring>(row, "field_types"));

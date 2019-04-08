@@ -56,7 +56,7 @@ data_type parse(const sstring& keyspace, const sstring& type);
 
 class raw_builder {
 public:
-    raw_builder(sstring ks_name);
+    raw_builder(keyspace_metadata &ks);
     ~raw_builder();
 
     void add(sstring name, std::vector<sstring> field_names, std::vector<sstring> field_types);
