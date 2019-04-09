@@ -1198,7 +1198,7 @@ class pointer_metadata(object):
         if self.is_small:
             msg += ', small (size <= %d)' % self.size
         else:
-            msg += ', large'
+            msg += ', large (size=%d)' % self.size
 
         if self.is_live:
             msg += ', live (0x%x +%d)' % (self.ptr - self.offset_in_object, self.offset_in_object)
@@ -1274,6 +1274,7 @@ class scylla_ptr(gdb.Command):
         else:
             ptr_meta.is_small = False
             ptr_meta.is_live = not span.is_free()
+            ptr_meta.size = span.size() * page_size
             ptr_meta.offset_in_object = ptr - span.start
 
         # FIXME: handle debug-mode build
