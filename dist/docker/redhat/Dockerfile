@@ -33,7 +33,7 @@ RUN curl http://downloads.scylladb.com/rpm/centos/scylla-2.3.repo -o /etc/yum.re
     yum -y remove boost-thread boost-system && \
     yum -y install scylla hostname supervisor && \
     yum clean all && \
-    yum -y install python34 python34-PyYAML && \
+    yum -y install python36 python36-PyYAML && \
     cat /scylla_bashrc >> /etc/bashrc && \
     mkdir -p /etc/supervisor.conf.d && \
     mkdir -p /var/log/scylla && \
