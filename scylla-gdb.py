@@ -1181,8 +1181,7 @@ class pointer_metadata(object):
     def is_containing_page_free(self):
         return self._is_containing_page_free
 
-    @is_containing_page_free.setter
-    def is_containing_page_free(self):
+    def mark_free(self):
         self._is_containing_page_free = True
         self._is_live = False
 
@@ -1241,7 +1240,7 @@ class scylla_ptr(gdb.Command):
         span = span_checker().get_span(ptr)
         offset_in_span = ptr - span.start
         if offset_in_span >= span.used_span_size() * page_size:
-            ptr_meta.is_containing_page_free = True
+            ptr_meta.mark_free()
         elif span.is_small():
             pool = span.pool()
             object_size = int(pool['_object_size'])
