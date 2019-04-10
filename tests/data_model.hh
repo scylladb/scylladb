@@ -34,12 +34,24 @@ static constexpr const api::timestamp_type column_removal_timestamp = 300;
 class mutation_description {
 public:
     using key = std::vector<bytes>;
+    struct atomic_value {
+        bytes value;
+        api::timestamp_type timestamp;
+
+        atomic_value(bytes value, api::timestamp_type timestamp = data_timestamp);
+    };
     struct collection_element {
         bytes key;
-        bytes value;
+        atomic_value value;
     };
-    using collection = std::vector<collection_element>;
-    using atomic_value = bytes;
+    struct collection {
+        tombstone tomb;
+        std::vector<collection_element> elements;
+
+        collection() = default;
+        collection(std::initializer_list<collection_element> elements);
+        collection(std::vector<collection_element> elements);
+    };
     using value = std::variant<atomic_value, collection>;
     struct expiry_info {
         gc_clock::duration ttl;
@@ -53,15 +65,17 @@ public:
     using row = std::vector<cell>;
     struct clustered_row {
         api::timestamp_type marker;
+        row_tombstone tomb;
         row cells;
     };
     struct range_tombstone {
-        key first;
-        key last;
+        nonwrapping_range<key> range;
+        tombstone tomb;
     };
 
 private:
     key _partition_key;
+    tombstone _partition_tombstone;
     row _static_row;
     std::map<key, clustered_row> _clustered_rows;
     std::vector<range_tombstone> _range_tombstones;
@@ -72,6 +86,8 @@ private:
 public:
     explicit mutation_description(key partition_key);
 
+    void set_partition_tombstone(tombstone partition_tombstone);
+
     void add_static_cell(const sstring& column, value v);
     void add_static_expiring_cell(const sstring& column, atomic_value v,
                                   gc_clock::duration ttl, gc_clock::time_point expiry_point);
@@ -79,11 +95,17 @@ public:
     void add_clustered_expiring_cell(const key& ck, const sstring& column, atomic_value v,
                                      gc_clock::duration ttl, gc_clock::time_point expiry_point);
     void add_clustered_row_marker(const key& ck, api::timestamp_type timestamp = data_timestamp);
+    void add_clustered_row_tombstone(const key& ck, row_tombstone tomb);
 
     void remove_static_column(const sstring& name);
     void remove_regular_column(const sstring& name);
 
-    void add_range_tombstone(const key& start, const key& end);
+    // Both overloads accept out-of-order ranges and will make sure the
+    // range-tombstone is created with start <= end.
+    void add_range_tombstone(const key& start, const key& end,
+            tombstone tomb = tombstone(previously_removed_column_timestamp, gc_clock::time_point()));
+    void add_range_tombstone(nonwrapping_range<key> range,
+            tombstone tomb = tombstone(previously_removed_column_timestamp, gc_clock::time_point()));
 
     mutation build(schema_ptr s) const;
 };
