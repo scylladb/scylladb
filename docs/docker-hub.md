@@ -135,7 +135,7 @@ $ docker run --name some-scylla -d scylladb/scylla --seeds 192.168.0.100,192.168
 
 ### `--listen-address ADDR`
 
-The `--listen-address` command line option configures the IP address the Scylla instance listens for client connections.
+The `--listen-address` command line option configures the IP address the Scylla instance listens on for connections from other Scylla nodes.
 
 For example, to configure Scylla to use listen address `10.0.0.5`:
 
