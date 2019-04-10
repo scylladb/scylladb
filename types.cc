@@ -589,7 +589,7 @@ public:
         return make_value(db_clock::time_point(db_clock::duration(tmp)));
     }
     virtual bool less(bytes_view b1, bytes_view b2) const override {
-        return compare_unsigned(b1, b2);
+        return compare_unsigned(b1, b2) < 0;
     }
     virtual bool is_byte_order_comparable() const override {
         return true;
