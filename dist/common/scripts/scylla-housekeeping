@@ -30,6 +30,7 @@ import configparser
 import uuid
 import re
 import glob
+import urllib.request
 from pkg_resources import parse_version
 
 VERSION = "1.0"
@@ -60,7 +61,7 @@ def sh_command(*args):
 
 
 def get_json_from_url(path):
-    data = sh_command("curl", "-s", "-X", "GET", path)
+    data = urllib.request.urlopen(path).read()
     return json.loads(data.decode('utf-8'))
 
 
