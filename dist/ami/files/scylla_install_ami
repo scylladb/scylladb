@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python2
 # -*- coding: utf-8 -*-
 #
 # Copyright 2018 ScyllaDB
@@ -109,7 +109,7 @@ if __name__ == '__main__':
     mlkver = get_kver('/boot/vmlinuz-*el7.elrepo.x86_64')
     run('grubby --grub2 --set-default /boot/vmlinuz-{mlkver}'.format(mlkver=mlkver))
     with open('/etc/yum.conf', 'a') as f:
-        f.write('exclude=kernel kernel-devel')
+        f.write(u'exclude=kernel kernel-devel')
 
     run('dracut --verbose --add-drivers "ixgbevf nvme ena" --force --kver {c7kver}'.format(c7kver=c7kver))
     run('dracut --verbose --add-drivers "ixgbevf nvme ena" --force --kver {mlkver}'.format(mlkver=mlkver))
