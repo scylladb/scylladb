@@ -246,6 +246,9 @@ if __name__ == "__main__":
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
+        if not test_to_run:
+            print("Test {} not found".format(args.name))
+            sys.exit(1)
 
     failed_tests = []
 
