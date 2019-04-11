@@ -71,6 +71,7 @@ public:
     template <typename Func>
     static inline auto do_with_async(Func&& func) {
         return seastar::async([func = std::move(func)] {
+            auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
             test_env env;
             func(env);
         });
