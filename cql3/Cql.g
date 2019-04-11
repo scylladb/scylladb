@@ -703,9 +703,11 @@ createFunctionStatement returns [shared_ptr<cql3::statements::create_function_st
         std::vector<shared_ptr<cql3_type::raw>> arg_types;
         bool called_on_null_input = false;
     }
-    : K_CREATE (K_OR K_REPLACE { or_replace = true; })?
-      K_FUNCTION
-      (K_IF K_NOT K_EXISTS { if_not_exists = true; })?
+    : K_CREATE
+        // "OR REPLACE" and "IF NOT EXISTS" cannot be used together
+        ((K_OR K_REPLACE { or_replace = true; } K_FUNCTION)
+         | (K_FUNCTION K_IF K_NOT K_EXISTS { if_not_exists = true; })
+         | K_FUNCTION)
       fn=functionName
       '('
         (
