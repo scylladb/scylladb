@@ -3871,6 +3871,9 @@ data_value::data_value(sstring v) : data_value(make_new(utf8_type, v)) {
 data_value::data_value(const char* v) : data_value(make_new(utf8_type, sstring(v))) {
 }
 
+data_value::data_value(ascii_native_type v) : data_value(make_new(ascii_type, v.string)) {
+}
+
 data_value::data_value(bool v) : data_value(make_new(boolean_type, v)) {
 }
 
