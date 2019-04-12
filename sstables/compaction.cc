@@ -179,8 +179,6 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         void remove_sstable(bool is_tracking) {
             if (is_tracking) {
                 _cf.get_compaction_strategy().get_backlog_tracker().remove_sstable(_sst);
-            } else if (_sst) {
-                _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
             }
             _sst = {};
         }
