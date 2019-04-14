@@ -369,7 +369,7 @@ public:
     /* Properties for advanced users or properties that are less commonly used. */  \
     /* Advanced initialization properties */    \
     val(auto_bootstrap, bool, true, Used,     \
-            "This setting has been removed from default configuration. It makes new (non-seed) nodes automatically migrate the right data to themselves. When initializing a fresh cluster with no data, add auto_bootstrap: false.\n"  \
+            "This setting has been removed from default configuration. It makes new (non-seed) nodes automatically migrate the right data to themselves. Do not set this to false unless you really know what you are doing.\n"  \
             "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers)."  \
     )   \
     val(batch_size_warn_threshold_in_kb, uint32_t, 5, Used,     \
