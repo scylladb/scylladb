@@ -345,16 +345,38 @@ public:
 
     typedef std::function<future<>(fragmented_temporary_buffer, replay_position)> commit_load_reader_func;
 
-    class segment_data_corruption_error: public std::runtime_error {
+    class segment_error : public std::exception {};
+
+    class segment_data_corruption_error: public segment_error {
+        std::string _msg;
     public:
         segment_data_corruption_error(std::string msg, uint64_t s)
-                : std::runtime_error(msg), _bytes(s) {
+                : _msg(std::move(msg)), _bytes(s) {
         }
         uint64_t bytes() const {
             return _bytes;
         }
+        virtual const char* what() const noexcept {
+            return _msg.c_str();
+        }
     private:
         uint64_t _bytes;
+    };
+
+    class invalid_segment_format : public segment_error {
+        static constexpr const char* _msg = "Not a scylla format commitlog file";
+    public:
+        virtual const char* what() const noexcept {
+            return _msg;
+        }
+    };
+
+    class header_checksum_error : public segment_error {
+        static constexpr const char* _msg = "Checksum error in file header";
+    public:
+        virtual const char* what() const noexcept {
+            return _msg;
+        }
     };
 
     static future<std::unique_ptr<subscription<fragmented_temporary_buffer, replay_position>>> read_log_file(
