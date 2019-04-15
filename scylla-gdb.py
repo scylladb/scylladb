@@ -1013,7 +1013,7 @@ class scylla_heapprof(gdb.Command):
                     for c in n.children:
                         print_node(c)
                     if not n.has_children():
-                        out.write("%s %d\n" % (';'.join(map(lambda x: '%s (#%d)' % (x, n.count), map(resolver, trace))), n.size))
+                        out.write("%s %d\n" % (';'.join(map(lambda x: '%s' % (x), map(resolver, trace))), n.size))
                     if n.key:
                         del trace[-1 - len(n.tail):]
                 print_node(root)
