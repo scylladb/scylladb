@@ -1690,9 +1690,9 @@ class random_mutation_generator::impl {
     }
 public:
     explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes) : _generate_counters(counters), _local_shard_only(lso) {
-        std::random_device rd;
-        // In case of errors, replace the seed with a fixed value to get a deterministic run.
-        auto seed = rd();
+        // In case of errors, replace the master seed in tests::random::get_seed()
+        // with a fixed value to get a deterministic run.
+        auto seed = tests::random::get_int<uint32_t>();
         std::cout << "Random seed: " << seed << "\n";
         _gen = std::mt19937(seed);
 
