@@ -2531,12 +2531,13 @@ future<> sstable::remove_temp_dir() {
     }
     sstlog.debug("Removing temp_dir={}", _temp_dir);
     return remove_file(*_temp_dir).then_wrapped([this] (future<> f) {
-        if (f.failed()) {
-            sstlog.error("Could not remove temporary directory: {}", f.get_exception());
-        } else {
+        if (!f.failed()) {
             _temp_dir.reset();
+            return make_ready_future<>();
         }
-        return f;
+        auto ep = f.get_exception();
+        sstlog.error("Could not remove temporary directory: {}", ep);
+        return make_exception_future<>(ep);
     });
 }
 
