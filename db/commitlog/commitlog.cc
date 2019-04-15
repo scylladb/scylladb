@@ -1757,7 +1757,7 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
                 }
 
                 if (magic != segment::segment_magic) {
-                    throw std::invalid_argument("Not a scylla format commitlog file");
+                    throw invalid_segment_format();
                 }
                 crc32_nbo crc;
                 crc.process(ver);
@@ -1766,7 +1766,7 @@ db::commitlog::read_log_file(const sstring& filename, seastar::io_priority_class
 
                 auto cs = crc.checksum();
                 if (cs != checksum) {
-                    throw std::runtime_error("Checksum error in file header");
+                    throw header_checksum_error();
                 }
 
                 this->id = id;
