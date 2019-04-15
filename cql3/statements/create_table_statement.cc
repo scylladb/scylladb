@@ -221,9 +221,9 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         stmt->_columns.emplace(id, pt.get_type()); // we'll remove what is not a column below
     }
     if (_key_aliases.empty()) {
-        throw exceptions::invalid_request_exception("No PRIMARY KEY specifed (exactly one required)");
+        throw exceptions::invalid_request_exception("No PRIMARY KEY specified (exactly one required)");
     } else if (_key_aliases.size() > 1) {
-        throw exceptions::invalid_request_exception("Multiple PRIMARY KEYs specifed (exactly one required)");
+        throw exceptions::invalid_request_exception("Multiple PRIMARY KEYs specified (exactly one required)");
     }
 
     stmt->_use_compact_storage = _properties.use_compact_storage();
