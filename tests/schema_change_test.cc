@@ -33,6 +33,7 @@
 #include "schema_builder.hh"
 #include "schema_registry.hh"
 #include "types/list.hh"
+#include "types/user.hh"
 
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
@@ -171,6 +172,28 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
             BOOST_REQUIRE(new_schema->version() != old_version);
             BOOST_REQUIRE(new_schema->version() != s2->version());
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_sort_type_in_update) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        service::migration_manager& mm = service::get_local_migration_manager();
+        auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
+
+        auto type1 = user_type_impl::get_instance("ks", to_bytes("type1"), {}, {});
+        auto muts1 = db::schema_tables::make_create_type_mutations(keyspace, type1, api::new_timestamp());
+
+        auto type3 = user_type_impl::get_instance("ks", to_bytes("type3"), {}, {});
+        auto muts3 = db::schema_tables::make_create_type_mutations(keyspace, type3, api::new_timestamp());
+
+        // type2 must be created after type1 and type3. This tests that announce sorts them.
+        auto type2 = user_type_impl::get_instance("ks", to_bytes("type2"), {"field1", "field3"}, {type1, type3});
+        auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, api::new_timestamp());
+
+        auto muts = muts2;
+        muts.insert(muts.end(), muts1.begin(), muts1.end());
+        muts.insert(muts.end(), muts3.begin(), muts3.end());
+        mm.announce(std::move(muts), false).get();
     });
 }
 

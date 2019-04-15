@@ -55,7 +55,7 @@ public:
     virtual ~function() {}
     virtual const function_name& name() const = 0;
     virtual const std::vector<data_type>& arg_types() const = 0;
-    virtual data_type return_type() const = 0;
+    virtual const data_type& return_type() const = 0;
 
     /**
      * Checks whether the function is a pure function (as in doesn't depend on, nor produce side effects) or not.

@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include "function.hh"
 #include "types.hh"
 #include "cql3/cql3_type.hh"
 #include <vector>
@@ -73,7 +74,7 @@ public:
         return _arg_types;
     }
 
-    virtual data_type return_type() const {
+    virtual const data_type& return_type() const {
         return _return_type;
     }
 
