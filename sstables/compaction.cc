@@ -762,6 +762,7 @@ class resharding_compaction final : public compaction {
         uint64_t estimated_partitions = 0;
     };
     std::vector<estimated_values> _estimation_per_shard;
+    std::vector<utils::UUID> _run_identifiers;
 private:
     // return estimated partitions per sstable for a given shard
     uint64_t partitions_per_sstable(shard_id s) const {
@@ -776,6 +777,7 @@ public:
         , _sstable_creator(std::move(creator))
         , _resharding_backlog_tracker(std::make_unique<resharding_backlog_tracker>())
         , _estimation_per_shard(smp::count)
+        , _run_identifiers(smp::count)
     {
         cf.get_compaction_manager().register_backlog_tracker(_resharding_backlog_tracker);
         for (auto& sst : _sstables) {
@@ -788,6 +790,9 @@ public:
                 _estimation_per_shard[s].estimated_size += std::max(uint64_t(1), uint64_t(ceil(double(size) / shards.size())));
                 _estimation_per_shard[s].estimated_partitions += std::max(uint64_t(1), uint64_t(ceil(double(estimated_partitions) / shards.size())));
             }
+        }
+        for (auto i : boost::irange(0u, smp::count)) {
+            _run_identifiers[i] = utils::make_random_uuid();
         }
         _info->type = compaction_type::Reshard;
     }
@@ -832,6 +837,8 @@ public:
 
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
+            // sstables generated for a given shard will share the same run identifier.
+            cfg.run_identifier = _run_identifiers.at(_shard);
             auto&& priority = service::get_local_compaction_priority();
             writer.emplace(sst->get_writer(*_schema, partitions_per_sstable(_shard), cfg, get_encoding_stats(), priority, _shard));
         }
