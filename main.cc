@@ -682,6 +682,7 @@ int main(int ac, char** av) {
             sstables::init_metrics().get();
 
             db::system_keyspace::minimal_setup(db, qp);
+            service::read_sstables_format(service::get_storage_service()).get();
 
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
@@ -714,7 +715,7 @@ int main(int ac, char** av) {
                 db.register_connection_drop_notifier(netw::get_local_messaging_service());
             }).get();
             supervisor::notify("setting up system keyspace");
-            db::system_keyspace::setup(db, qp).get();
+            db::system_keyspace::setup(db, qp, service::get_storage_service()).get();
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {

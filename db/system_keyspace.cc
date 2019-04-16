@@ -518,6 +518,30 @@ static schema_ptr large_cells() {
     return large_cells;
 }
 
+/*static*/ schema_ptr scylla_local() {
+    static thread_local auto scylla_local = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, SCYLLA_LOCAL), NAME, SCYLLA_LOCAL,
+        // partition key
+        {{"key", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+                {"value", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Scylla specific information about the local node"
+       )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return scylla_local;
+}
+
 namespace v3 {
 
 schema_ptr batches() {
@@ -682,6 +706,11 @@ schema_ptr size_estimates() {
 schema_ptr large_partitions() {
     // identical
     return db::system_keyspace::large_partitions();
+}
+
+schema_ptr scylla_local() {
+    // identical
+    return db::system_keyspace::scylla_local();
 }
 
 schema_ptr available_ranges() {
@@ -1161,7 +1190,9 @@ void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>
     qctx = std::make_unique<query_context>(db, qp);
 }
 
-future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
+future<> setup(distributed<database>& db,
+               distributed<cql3::query_processor>& qp,
+               distributed<service::storage_service>& ss) {
     minimal_setup(db, qp);
     return setup_version().then([&db] {
         return update_schema_version(db.local().get_version());
@@ -1582,6 +1613,21 @@ future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int
     return execute_cql(req, time_period, value, ep.addr()).discard_result();
 }
 
+future<> set_scylla_local_param(const sstring& key, const sstring& value) {
+    sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", SCYLLA_LOCAL);
+    return execute_cql(req, value, key).discard_result();
+}
+
+future<std::optional<sstring>> get_scylla_local_param(const sstring& key){
+    sstring req = format("SELECT value FROM system.{} WHERE key = ?", SCYLLA_LOCAL);
+    return execute_cql(req, key).then([] (::shared_ptr<cql3::untyped_result_set> res) {
+        if (res->empty() || !res->one().has("value")) {
+            return std::optional<sstring>();
+        }
+        return std::optional<sstring>(res->one().get_as<sstring>("value"));
+    });
+}
+
 future<> update_schema_version(utils::UUID version) {
     sstring req = format("INSERT INTO system.{} (key, schema_version) VALUES (?, ?)", LOCAL);
     return execute_cql(req, sstring(LOCAL), version).discard_result();
@@ -1712,7 +1758,7 @@ std::vector<schema_ptr> all_tables() {
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
-                    v3::views_builds_in_progress(), v3::built_views(),
+                    scylla_local(), v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
     });

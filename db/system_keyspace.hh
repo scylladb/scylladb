@@ -58,6 +58,7 @@
 namespace service {
 
 class storage_proxy;
+class storage_service;
 
 }
 
@@ -90,6 +91,7 @@ static constexpr auto SIZE_ESTIMATES = "size_estimates";
 static constexpr auto LARGE_PARTITIONS = "large_partitions";
 static constexpr auto LARGE_ROWS = "large_rows";
 static constexpr auto LARGE_CELLS = "large_cells";
+static constexpr auto SCYLLA_LOCAL = "scylla_local";
 
 namespace v3 {
 static constexpr auto BATCHES = "batches";
@@ -156,7 +158,9 @@ void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>
 
 future<> init_local_cache();
 future<> deinit_local_cache();
-future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
+future<> setup(distributed<database>& db,
+               distributed<cql3::query_processor>& qp,
+               distributed<service::storage_service>& ss);
 future<> update_schema_version(utils::UUID version);
 future<> update_tokens(std::unordered_set<dht::token> tokens);
 future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> tokens);
@@ -170,6 +174,9 @@ future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value
 future<> remove_endpoint(gms::inet_address ep);
 
 future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value);
+
+future<> set_scylla_local_param(const sstring& key, const sstring& value);
+future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable, bool volatile_testing_only = false);

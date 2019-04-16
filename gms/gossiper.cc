@@ -2290,6 +2290,7 @@ feature& feature::operator=(feature&& other) {
     _name = other._name;
     _enabled = other._enabled;
     _pr = std::move(other._pr);
+    _s = std::move(other._s);
     _service->register_feature(this);
     return *this;
 }
@@ -2301,6 +2302,7 @@ void feature::enable() {
         }
         _enabled = true;
         _pr.set_value();
+        _s();
     }
 }
 
