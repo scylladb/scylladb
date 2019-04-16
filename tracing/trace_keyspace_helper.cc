@@ -408,9 +408,9 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
 
                     // if session is finished - store a session and a session time index entries
                     tlogger.trace("{}: going to store a session event", records->session_id);
-                    return _sessions.insert(_dummy_query_state, make_session_mutation_data, *records).then([this, records] {
+                    return _sessions.insert(_dummy_query_state, make_session_mutation_data, std::ref(*records)).then([this, records] {
                         tlogger.trace("{}: going to store a {} entry", records->session_id, _sessions_time_idx.name());
-                        return _sessions_time_idx.insert(_dummy_query_state, make_session_time_idx_mutation_data, *records);
+                        return _sessions_time_idx.insert(_dummy_query_state, make_session_time_idx_mutation_data, std::ref(*records));
                     }).then([this, records] {
                         if (!records->do_log_slow_query) {
                             return now();
@@ -419,9 +419,9 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
                         // if slow query log is requested - store a slow query log and a slow query log time index entries
                         auto start_time_id = utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
                         tlogger.trace("{}: going to store a slow query event", records->session_id);
-                        return _slow_query_log.insert(_dummy_query_state, make_slow_query_mutation_data, *records, start_time_id).then([this, records, start_time_id] {
+                        return _slow_query_log.insert(_dummy_query_state, make_slow_query_mutation_data, std::ref(*records), start_time_id).then([this, records, start_time_id] {
                             tlogger.trace("{}: going to store a {} entry", records->session_id, _slow_query_log_time_idx.name());
-                            return _slow_query_log_time_idx.insert(_dummy_query_state, make_slow_query_time_idx_mutation_data, *records, start_time_id);
+                            return _slow_query_log_time_idx.insert(_dummy_query_state, make_slow_query_time_idx_mutation_data, std::ref(*records), start_time_id);
                         });
                     });
                 } else {
