@@ -66,6 +66,14 @@ public:
             _cm->deregister_compacting_sstables(_compacting);
         }
     }
+
+    // Explicitly release compacting sstables
+    void release_compacting(const std::vector<sstables::shared_sstable>& sstables) {
+        _cm->deregister_compacting_sstables(sstables);
+        for (auto& sst : sstables) {
+            _compacting.erase(boost::remove(_compacting, sst), _compacting.end());
+        }
+    }
 };
 
 compaction_weight_registration::compaction_weight_registration(compaction_manager* cm, int weight)
@@ -564,18 +572,24 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
         column_family& cf = *task->compacting_cf;
-        sstables::compaction_descriptor descriptor = sstables::compaction_descriptor(get_candidates(cf));
-        auto compacting = compacting_sstable_registration(this, descriptor.sstables);
+        auto sstables = get_candidates(cf);
+        auto compacting = make_lw_shared<compacting_sstable_registration>(this, sstables);
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
         task->compaction_running = true;
         compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
-        return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
-            return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
-                return cf.cleanup_sstables(std::move(descriptor));
+        return do_with(std::move(user_initiated), std::move(sstables), [this, &cf, compacting] (compaction_backlog_tracker& bt,
+                std::vector<sstables::shared_sstable>& sstables) mutable {
+            return with_scheduling_group(_scheduling_group, [this, &cf, &sstables, compacting] () mutable {
+                return do_for_each(sstables, [this, &cf, compacting] (auto& sst) {
+                    return cf.cleanup_sstables(sstables::compaction_descriptor({sst})).then([&sst, compacting] {
+                        // Releases reference to cleaned sstable such that respective used disk space can be freed.
+                        compacting->release_compacting({std::move(sst)});
+                    });
+                });
             });
-        }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
+        }).then_wrapped([this, task, compacting] (future<> f) mutable {
             task->compaction_running = false;
             _stats.active_tasks--;
             if (!can_proceed(task)) {
