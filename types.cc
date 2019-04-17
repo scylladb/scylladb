@@ -559,6 +559,9 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     }
 };
 
+// This is the old version of timestamp_type_impl, but has been replaced as it
+// wasn't comparing pre-epoch timestamps correctly. This is kept for backward
+// compatibility but shouldn't be used in new code.
 class date_type_impl : public concrete_type<db_clock::time_point> {
     static logging::logger _logger;
 public:
