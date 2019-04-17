@@ -117,11 +117,17 @@ lists::literal::to_string() const {
 
 lists::value
 lists::value::from_serialized(const fragmented_temporary_buffer::view& val, list_type type, cql_serialization_format sf) {
+    return with_linearized(val, [&] (bytes_view v) {
+        return from_serialized(v, type, sf);
+    });
+}
+
+lists::value
+lists::value::from_serialized(bytes_view v, list_type type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol()?!
-      return with_linearized(val, [&] (bytes_view v) {
         auto l = value_cast<list_type_impl::native_type>(type->deserialize(v, sf));
         std::vector<bytes_opt> elements;
         elements.reserve(l.size());
@@ -130,7 +136,6 @@ lists::value::from_serialized(const fragmented_temporary_buffer::view& val, list
             elements.push_back(element.is_null() ? bytes_opt() : bytes_opt(type->get_elements_type()->decompose(element)));
         }
         return value(std::move(elements));
-      });
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -220,7 +225,14 @@ lists::marker::bind(const query_options& options) {
     } else if (value.is_unset_value()) {
         return constants::UNSET_VALUE;
     } else {
-        return make_shared(value::from_serialized(*value, std::move(ltype), options.get_cql_serialization_format()));
+        try {
+            return with_linearized(*value, [&] (bytes_view v) {
+                ltype->validate(v, options.get_cql_serialization_format());
+                return make_shared(value::from_serialized(v, std::move(ltype), options.get_cql_serialization_format()));
+            });
+        } catch (marshal_exception& e) {
+            throw exceptions::invalid_request_exception(e.what());
+        }
     }
 }
 

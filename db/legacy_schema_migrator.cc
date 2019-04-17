@@ -375,7 +375,7 @@ public:
                         return column_name_type->from_string(name);
                     } catch (marshal_exception&) {
                         // #2597: Scylla < 2.0 writes names in serialized form, try to recover
-                        column_name_type->validate(to_bytes_view(name));
+                        column_name_type->validate(to_bytes_view(name), cql_serialization_format::latest());
                         return to_bytes(name);
                     }
                 }();

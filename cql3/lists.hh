@@ -73,6 +73,7 @@ public:
     };
 
     class value : public multi_item_terminal, collection_terminal {
+        static value from_serialized(bytes_view v, list_type type, cql_serialization_format sf);
     public:
         std::vector<bytes_opt> _elements;
     public:

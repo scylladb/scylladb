@@ -117,7 +117,7 @@ void validate_column(const Column& col, const column_definition& def) {
     if (!col.__isset.timestamp) {
         throw make_exception<InvalidRequestException>("Column timestamp is required");
     }
-    def.type->validate(to_bytes_view(col.value));
+    def.type->validate(to_bytes_view(col.value), cql_serialization_format::latest());
 }
 
 }

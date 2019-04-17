@@ -262,6 +262,13 @@ maps::marker::bind(const query_options& options) {
     if (val.is_unset_value()) {
         return constants::UNSET_VALUE;
     }
+    try {
+        with_linearized(*val, [&] (bytes_view value) {
+            _receiver->type->validate(value, options.get_cql_serialization_format());
+        });
+    } catch (marshal_exception& e) {
+        throw exceptions::invalid_request_exception(e.what());
+    }
     return ::make_shared<maps::value>(maps::value::from_serialized(*val, static_pointer_cast<const map_type_impl>(_receiver->type),
                                       options.get_cql_serialization_format()));
 }

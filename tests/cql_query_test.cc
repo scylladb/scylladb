@@ -185,6 +185,195 @@ SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
     });
 }
 
+SEASTAR_TEST_CASE(test_list_elements_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto test_inline = [&] (sstring value, bool should_throw) {
+            auto cql = sprint("INSERT INTO tbl (a, b) VALUES(1, ['%s'])", value);
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql).get());
+            }
+        };
+        e.execute_cql("CREATE TABLE tbl (a int, b list<date>, PRIMARY KEY (a))").get();
+        test_inline("definietly not a date value", true);
+        test_inline("2015-05-03", false);
+        e.execute_cql("CREATE TABLE tbl2 (a int, b list<text>, PRIMARY KEY (a))").get();
+        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
+        auto test_bind = [&] (sstring value, bool should_throw) {
+            auto my_list_type = list_type_impl::get_instance(utf8_type, true);
+            std::vector<cql3::raw_value> raw_values;
+            raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+            auto values = my_list_type->decompose(make_list_value(my_list_type, {value}));
+            raw_values.emplace_back(cql3::raw_value::make_value(values));
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(
+                    e.execute_prepared(id, raw_values).get(),
+                    exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
+            }
+        };
+        test_bind(sstring(1, '\255'), true);
+        test_bind("proper utf8 string", false);
+    });
+}
+
+SEASTAR_TEST_CASE(test_set_elements_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto test_inline = [&] (sstring value, bool should_throw) {
+            auto cql = sprint("INSERT INTO tbl (a, b) VALUES(1, {'%s'})", value);
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql).get());
+            }
+        };
+        e.execute_cql("CREATE TABLE tbl (a int, b set<date>, PRIMARY KEY (a))").get();
+        test_inline("definietly not a date value", true);
+        test_inline("2015-05-03", false);
+        e.execute_cql("CREATE TABLE tbl2 (a int, b set<text>, PRIMARY KEY (a))").get();
+        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
+        auto test_bind = [&] (sstring value, bool should_throw) {
+            auto my_set_type = set_type_impl::get_instance(utf8_type, true);
+            std::vector<cql3::raw_value> raw_values;
+            raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+            auto values = my_set_type->decompose(make_set_value(my_set_type, {value}));
+            raw_values.emplace_back(cql3::raw_value::make_value(values));
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(
+                    e.execute_prepared(id, raw_values).get(),
+                    exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
+            }
+        };
+        test_bind(sstring(1, '\255'), true);
+        test_bind("proper utf8 string", false);
+    });
+}
+
+SEASTAR_TEST_CASE(test_map_elements_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto test_inline = [&] (sstring value, bool should_throw) {
+            auto cql1 = sprint("INSERT INTO tbl (a, b) VALUES(1, {'10-10-2010' : '%s'})", value);
+            auto cql2 = sprint("INSERT INTO tbl (a, b) VALUES(1, {'%s' : '10-10-2010'})", value);
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(e.execute_cql(cql1).get(), exceptions::invalid_request_exception);
+                BOOST_REQUIRE_THROW(e.execute_cql(cql2).get(), exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql1).get());
+                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql2).get());
+            }
+        };
+        e.execute_cql("CREATE TABLE tbl (a int, b map<date, date>, PRIMARY KEY (a))").get();
+        test_inline("definietly not a date value", true);
+        test_inline("2015-05-03", false);
+        e.execute_cql("CREATE TABLE tbl2 (a int, b map<text, text>, PRIMARY KEY (a))").get();
+        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
+        auto test_bind = [&] (sstring value, bool should_throw) {
+            auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
+            std::vector<cql3::raw_value> raw_values;
+            raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+            auto values =
+                my_map_type->decompose(make_map_value(my_map_type,
+                                                      {std::make_pair(value, sstring("foo"))}));
+            raw_values.emplace_back(cql3::raw_value::make_value(values));
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(
+                    e.execute_prepared(id, raw_values).get(),
+                    exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
+            }
+            raw_values.pop_back();
+            values =
+                my_map_type->decompose(make_map_value(my_map_type,
+                                                      {std::make_pair(sstring("foo"), value)}));
+            raw_values.emplace_back(cql3::raw_value::make_value(values));
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(
+                    e.execute_prepared(id, raw_values).get(),
+                    exceptions::invalid_request_exception);
+            } else {
+                e.execute_prepared(id, raw_values).get();
+                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
+            }
+        };
+        test_bind(sstring(1, '\255'), true);
+        test_bind("proper utf8 string", false);
+    });
+}
+
+SEASTAR_TEST_CASE(test_in_clause_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto test_inline = [&] (sstring value, bool should_throw) {
+            auto cql = sprint("SELECT r1 FROM tbl WHERE (c1,r1) IN ((1, '%s')) ALLOW FILTERING", value);
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql).get());
+            }
+        };
+        e.execute_cql("CREATE TABLE tbl (p1 int, c1 int, r1 date, PRIMARY KEY (p1, c1,r1))").get();
+        test_inline("definietly not a date value", true);
+        test_inline("2015-05-03", false);
+        e.execute_cql("CREATE TABLE tbl2 (p1 int, c1 int, r1 text, PRIMARY KEY (p1, c1,r1))").get();
+        auto id = e.prepare("SELECT r1 FROM tbl2 WHERE (c1,r1) IN ? ALLOW FILTERING").get0();
+        auto test_bind = [&] (sstring value, bool should_throw) {
+            auto my_tuple_type = tuple_type_impl::get_instance({int32_type, utf8_type});
+            auto my_list_type = list_type_impl::get_instance(my_tuple_type, true);
+            std::vector<cql3::raw_value> raw_values;
+            auto values = make_tuple_value(my_tuple_type, tuple_type_impl::native_type({int32_t{2}, value}));
+            auto in_values_list = my_list_type->decompose(make_list_value(my_list_type, {values}));
+            raw_values.emplace_back(cql3::raw_value::make_value(in_values_list));
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(
+                    e.execute_prepared(id, raw_values).get(),
+                    exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
+            }
+        };
+        test_bind(sstring(1, '\255'), true);
+        test_bind("proper utf8 string", false);
+    });
+}
+
+SEASTAR_TEST_CASE(test_tuple_elements_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto test_inline = [&] (sstring value, bool should_throw) {
+            auto cql = sprint("INSERT INTO tbl (a, b) VALUES(1, (1, '%s'))", value);
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql).get());
+            }
+        };
+        e.execute_cql("CREATE TABLE tbl (a int, b tuple<int, date>, PRIMARY KEY (a))").get();
+        test_inline("definietly not a date value", true);
+        test_inline("2015-05-03", false);
+        e.execute_cql("CREATE TABLE tbl2 (a int, b tuple<int, text>, PRIMARY KEY (a))").get();
+        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
+        auto test_bind = [&] (sstring value, bool should_throw) {
+            auto my_tuple_type = tuple_type_impl::get_instance({int32_type, utf8_type});
+            std::vector<cql3::raw_value> raw_values;
+            raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+            auto values = my_tuple_type->decompose(make_tuple_value(my_tuple_type, tuple_type_impl::native_type({int32_t{2}, value})));
+            raw_values.emplace_back(cql3::raw_value::make_value(values));
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(
+                    e.execute_prepared(id, raw_values).get(),
+                    exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
+            }
+        };
+        test_bind(sstring(1, '\255'), true);
+        test_bind("proper utf8 string", false);
+    });
+}
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {

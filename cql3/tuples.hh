@@ -314,6 +314,13 @@ public:
                 throw exceptions::invalid_request_exception(format("Invalid unset value for tuple {}", _receiver->name->text()));
             } else {
                 auto as_tuple_type = static_pointer_cast<const tuple_type_impl>(_receiver->type);
+                try {
+                    with_linearized(*value, [&] (bytes_view v) {
+                        as_tuple_type->validate(v, options.get_cql_serialization_format());
+                    });
+                } catch (marshal_exception& e) {
+                    throw exceptions::invalid_request_exception(e.what());
+                }
                 return make_shared(value::from_serialized(*value, as_tuple_type));
             }
         }
