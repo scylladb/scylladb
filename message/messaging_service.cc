@@ -80,6 +80,7 @@
 #include "idl/cache_temperature.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
+#include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
 #include "idl/view.dist.impl.hh"
 #include "partition_range_compat.hh"
@@ -129,8 +130,12 @@ using gossip_digest_ack2 = gms::gossip_digest_ack2;
 using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
 using namespace std::chrono_literals;
 
+static rpc::lz4_fragmented_compressor::factory lz4_fragmented_compressor_factory;
 static rpc::lz4_compressor::factory lz4_compressor_factory;
-static rpc::multi_algo_compressor_factory compressor_factory(&lz4_compressor_factory);
+static rpc::multi_algo_compressor_factory compressor_factory {
+    &lz4_fragmented_compressor_factory,
+    &lz4_compressor_factory,
+};
 
 struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
 
