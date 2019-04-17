@@ -30,15 +30,14 @@ RUN curl http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.
     yum -y install epel-release && \
     yum -y clean expire-cache && \
     yum -y update && \
-    yum -y remove boost-thread boost-system && \
     yum -y install scylla hostname supervisor openssh-server openssh-clients && \
     yum clean all && \
-    yum -y install python34 python34-PyYAML && \
     cat /scylla_bashrc >> /etc/bashrc && \
     mkdir -p /etc/supervisor.conf.d && \
     mkdir -p /var/log/scylla && \
     chown -R scylla.scylla /var/lib/scylla
 
+ENV PATH $PATH:/opt/scylladb/python3/bin
 ENTRYPOINT ["/docker-entrypoint.py"]
 
 EXPOSE 10000 9042 9160 9180 7000 7001 22
