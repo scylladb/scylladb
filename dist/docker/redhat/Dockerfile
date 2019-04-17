@@ -37,7 +37,7 @@ RUN curl http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.
     mkdir -p /var/log/scylla && \
     chown -R scylla.scylla /var/lib/scylla
 
-ENV PATH $PATH:/opt/scylladb/python3/bin
+ENV PATH /opt/scylladb/python3/bin:$PATH
 ENTRYPOINT ["/docker-entrypoint.py"]
 
 EXPOSE 10000 9042 9160 9180 7000 7001 22
