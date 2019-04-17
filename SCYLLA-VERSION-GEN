@@ -1,5 +1,6 @@
 #!/bin/sh
 
+PRODUCT=scylla
 VERSION=666.development
 
 if test -f version
@@ -22,3 +23,4 @@ echo "$SCYLLA_VERSION-$SCYLLA_RELEASE"
 mkdir -p build
 echo "$SCYLLA_VERSION" > build/SCYLLA-VERSION-FILE
 echo "$SCYLLA_RELEASE" > build/SCYLLA-RELEASE-FILE
+echo "$PRODUCT" > build/SCYLLA-PRODUCT-FILE

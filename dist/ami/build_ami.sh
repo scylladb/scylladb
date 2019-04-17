@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-PRODUCT=scylla
+PRODUCT=$(cat SCYLLA-PRODUCT-FILE)
 
 if [ ! -e dist/ami/build_ami.sh ]; then
     echo "run build_ami.sh in top of scylla dir"

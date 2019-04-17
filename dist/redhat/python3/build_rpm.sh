@@ -20,7 +20,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-PRODUCT=scylla
+PRODUCT=$(cat SCYLLA-PRODUCT-FILE)
 
 print_usage() {
     echo "${0} --reloc-pkg build/release/scylla-python3-package.tar.gz"
