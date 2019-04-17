@@ -299,16 +299,24 @@ def out(cmd, shell=False, exception=True):
         return p.communicate()[0].strip().decode('utf-8')
 
 
+def parse_os_release_line(line):
+    id, data = line.split('=', 1)
+    val = shlex.split(data)[0]
+    return (id, val.split(' ') if id == 'ID' or id == 'ID_LIKE' else val)
+
+os_release = dict([parse_os_release_line(x) for x in open('/etc/os-release').read().splitlines()])
+
 def is_debian_variant():
-    return os.path.exists('/etc/debian_version')
+    d = os_release['ID_LIKE'] if 'ID_LIKE' in os_release else os_release['ID']
+    return ('debian' in d)
 
 
 def is_redhat_variant():
-    return os.path.exists('/etc/redhat-release')
-
+    d = os_release['ID_LIKE'] if 'ID_LIKE' in os_release else os_release['ID']
+    return ('rhel' in d) or ('fedora' in d)
 
 def is_gentoo_variant():
-    return os.path.exists('/etc/gentoo-release')
+    return ('gentoo' in os_release['ID'])
 
 
 def is_ec2():
