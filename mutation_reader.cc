@@ -1114,39 +1114,36 @@ flat_mutation_reader shard_reader::remote_reader::resume_or_create_reader() {
 }
 
 future<> shard_reader::remote_reader::do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout) {
-    future<> f = make_ready_future<>();
-    if (_drop_partition_start || _drop_static_row) {
-        f = repeat([this, &reader, timeout] {
-            return reader.fill_buffer(timeout).then([this, &reader] {
-                const auto eos = reader.is_end_of_stream();
-
-                if (reader.is_buffer_empty()) {
-                    return stop_iteration(eos);
-                }
-                if (_drop_partition_start) {
-                    _drop_partition_start = false;
-                    if (reader.peek_buffer().is_partition_start()) {
-                        reader.pop_mutation_fragment();
-                    }
-                }
-
-                if (reader.is_buffer_empty()) {
-                    return stop_iteration(eos);
-                }
-                if (_drop_static_row) {
-                    _drop_static_row = false;
-                    if (reader.peek_buffer().is_static_row()) {
-                        reader.pop_mutation_fragment();
-                    }
-                }
-
-                return stop_iteration(reader.is_buffer_full() || eos);
-            });
-        });
-    } else {
-        f = reader.fill_buffer(timeout);
+    if (!_drop_partition_start && !_drop_static_row) {
+        return reader.fill_buffer(timeout);
     }
-    return f;
+    return repeat([this, &reader, timeout] {
+        return reader.fill_buffer(timeout).then([this, &reader] {
+            const auto eos = reader.is_end_of_stream();
+
+            if (reader.is_buffer_empty()) {
+                return stop_iteration(eos);
+            }
+            if (_drop_partition_start) {
+                _drop_partition_start = false;
+                if (reader.peek_buffer().is_partition_start()) {
+                    reader.pop_mutation_fragment();
+                }
+            }
+
+            if (reader.is_buffer_empty()) {
+                return stop_iteration(eos);
+            }
+            if (_drop_static_row) {
+                _drop_static_row = false;
+                if (reader.peek_buffer().is_static_row()) {
+                    reader.pop_mutation_fragment();
+                }
+            }
+
+            return stop_iteration(reader.is_buffer_full() || eos);
+        });
+    });
 }
 
 shard_reader::remote_reader::remote_reader(
