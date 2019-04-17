@@ -292,7 +292,7 @@ void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) 
 }
 
 void stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state) {
-    if (has_peer(endpoint) && ep_state.is_shutdown()) {
+    if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_dead", endpoint);
         get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
