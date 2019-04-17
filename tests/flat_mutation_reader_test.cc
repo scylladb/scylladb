@@ -764,3 +764,37 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_as_mutation_source)
     };
     run_mutation_source_tests(populate);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source) {
+    auto populate = [] (schema_ptr, const std::vector<mutation>& muts) {
+        return mutation_source([=] (
+                schema_ptr schema,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class&,
+                tracing::trace_state_ptr,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding) mutable {
+            auto squashed_muts = squash_mutations(muts);
+            if (schema->version() != muts.front().schema()->version()) {
+                for (auto& mut : squashed_muts) {
+                    auto part = std::move(mut.partition());
+                    part.upgrade(*mut.schema(), *schema);
+                    mut = mutation(schema, std::move(mut.decorated_key()), std::move(part));
+                }
+            }
+            std::deque<mutation_fragment> fragments;
+            flat_mutation_reader_from_mutations(std::move(squashed_muts)).consume_pausable([&fragments] (mutation_fragment mf) {
+                fragments.emplace_back(std::move(mf));
+                return stop_iteration::no;
+            }, db::no_timeout).get();
+
+            auto rd = make_flat_mutation_reader_from_fragments(schema, std::move(fragments), range, slice);
+            if (fwd_sm) {
+                return make_forwardable(std::move(rd));
+            }
+            return rd;
+        });
+    };
+    run_mutation_source_tests(populate);
+}
