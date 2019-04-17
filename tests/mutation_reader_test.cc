@@ -2029,6 +2029,119 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
     }).get();
 }
 
+namespace {
+
+std::deque<mutation_fragment> make_fragments_with_non_monotonic_positions(simple_schema& s, dht::decorated_key pkey, size_t max_buffer_size) {
+    std::deque<mutation_fragment> fragments;
+
+    fragments.emplace_back(partition_start{std::move(pkey), {}});
+
+    int i = 0;
+    size_t mem_usage = fragments.back().memory_usage(*s.schema());
+    while (mem_usage <= max_buffer_size * 2) {
+        fragments.emplace_back(s.make_range_tombstone(query::clustering_range::make(s.make_ckey(0), s.make_ckey(i + 1))));
+        mem_usage += fragments.back().memory_usage(*s.schema());
+        ++i;
+    }
+
+    fragments.emplace_back(s.make_row(s.make_ckey(0), "v"));
+
+    return fragments;
+}
+
+} // anonymous namespace
+
+// Test that the multishard reader will not skip any rows when the position of
+// the mutation fragments in the stream is not strictly monotonous.
+// See the explanation in `shard_reader::remote_reader::fill_buffer()`.
+// To test this we need to craft a mutation such that after the first
+// `fill_buffer()` call, as well as after the second one, the last fragment is a
+// range tombstone, with the very same position-in-partition.
+// This is to check that the reader will not skip the row after the
+// range-tombstones and that it can make progress (doesn't assume that an additional
+// fill buffer call will bring in a fragment with a higher position).
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic_positions) {
+    const size_t max_buffer_size = 512;
+    const int pk = 0;
+    simple_schema s;
+
+    // Validate that the generated fragments are fit for the very strict
+    // requirement of this test.
+    // The test is meaningless if these requirements are not met.
+    {
+        auto fragments = make_fragments_with_non_monotonic_positions(s, s.make_pkey(pk), max_buffer_size);
+        auto rd = make_flat_mutation_reader_from_fragments(s.schema(), std::move(fragments));
+        rd.set_max_buffer_size(max_buffer_size);
+
+        rd.fill_buffer(db::no_timeout).get();
+
+        auto mf = rd.pop_mutation_fragment();
+        BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::partition_start);
+
+        mf = rd.pop_mutation_fragment();
+        BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::range_tombstone);
+        const auto ckey = mf.as_range_tombstone().start;
+
+        while (!rd.is_buffer_empty()) {
+            mf = rd.pop_mutation_fragment();
+            BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::range_tombstone);
+            BOOST_REQUIRE(mf.as_range_tombstone().start.equal(*s.schema(), ckey));
+        }
+
+        rd.fill_buffer(db::no_timeout).get();
+
+        while (!rd.is_buffer_empty()) {
+            mf = rd.pop_mutation_fragment();
+            BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::range_tombstone);
+            BOOST_REQUIRE(mf.as_range_tombstone().start.equal(*s.schema(), ckey));
+        }
+
+        rd.fill_buffer(db::no_timeout).get();
+
+        BOOST_REQUIRE(!rd.is_buffer_empty());
+
+        mf = rd.pop_mutation_fragment();
+        BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::clustering_row);
+        BOOST_REQUIRE(mf.as_clustering_row().key().equal(*s.schema(), ckey));
+    }
+
+    do_with_cql_env([=, s = std::move(s)] (cql_test_env& env) mutable -> future<> {
+        auto factory = [=, gs = global_simple_schema(s)] (
+                schema_ptr,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                mutation_reader::forwarding fwd_mr) {
+            auto s = gs.get();
+            auto pkey = s.make_pkey(pk);
+            if (dht::global_partitioner().shard_of(pkey.token()) != engine().cpu_id()) {
+                return make_empty_flat_reader(s.schema());
+            }
+            auto fragments = make_fragments_with_non_monotonic_positions(s, std::move(pkey), max_buffer_size);
+            auto rd = make_flat_mutation_reader_from_fragments(s.schema(), std::move(fragments), range, slice);
+            rd.set_max_buffer_size(max_buffer_size);
+            return rd;
+        };
+
+        auto fragments = make_fragments_with_non_monotonic_positions(s, s.make_pkey(pk), max_buffer_size);
+        auto rd = make_flat_mutation_reader_from_fragments(s.schema(), std::move(fragments));
+        auto mut_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
+        BOOST_REQUIRE(mut_opt);
+
+        assert_that(make_multishard_combining_reader(
+                    seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), true),
+                    dht::global_partitioner(),
+                    s.schema(),
+                    query::full_partition_range,
+                    s.schema()->full_slice(),
+                    service::get_local_sstable_query_read_priority()))
+                .produces_partition(*mut_opt);
+
+        return make_ready_future<>();
+    }).get();
+}
+
 // Test the multishard streaming reader in the context it was designed to work
 // in: as a mean to read data belonging to a shard according to a different
 // sharding configuration.
