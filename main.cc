@@ -70,6 +70,8 @@
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
 
+#include "alternator/server.hh"
+
 namespace fs = std::filesystem;
 
 seastar::metrics::metric_groups app_metrics;
@@ -1012,6 +1014,13 @@ int main(int ac, char** av) {
                     return service::get_local_storage_service().start_rpc_server();
                 }).get();
             }
+
+            static sharded<alternator::executor> alternator_executor;
+            alternator_executor.start(std::ref(proxy), std::ref(mm));
+            static alternator::server alternator_server(alternator_executor);
+            alternator_server.init(alternator::server::DEFAULT_PORT).get();
+            startlog.info("Alternator server listening on {}", alternator::server::DEFAULT_PORT);
+
             if (cfg->defragment_memory_on_idle()) {
                 smp::invoke_on_all([] () {
                     engine().set_idle_cpu_handler([] (reactor::work_waiting_on_reactor check_for_work) {
