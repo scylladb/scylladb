@@ -344,8 +344,13 @@ public:
     void unregister_region(region::impl*) noexcept;
     size_t reclaim(size_t bytes);
     reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor check_for_work);
-    size_t compact_and_evict(size_t bytes);
-    size_t compact_and_evict_locked(size_t bytes);
+    // Releases whole segments back to the segment pool.
+    // After the call, if there is enough evictable memory, the amount of free segments in the pool
+    // will be at least reserve_segments + div_ceil(bytes, segment::size).
+    // Returns the amount by which segment_pool.total_memory_in_use() has decreased.
+    size_t compact_and_evict(size_t reserve_segments, size_t bytes);
+    // Like compact_and_evict() but assumes that reclaim_lock is held around the operation.
+    size_t compact_and_evict_locked(size_t reserve_segments, size_t bytes);
     void full_compaction();
     void reclaim_all_free_segments();
     occupancy_stats region_occupancy();
@@ -508,8 +513,6 @@ class segment_pool {
     //     - clear everywhere
 private:
     segment* allocate_segment(size_t reserve);
-    // reclamation_step is in segment units
-    segment* allocate_segment(size_t reserve, size_t reclamation_step);
     void deallocate_segment(segment* seg);
     friend void* segment::operator new(size_t);
     friend void segment::operator delete(void*);
@@ -639,11 +642,7 @@ size_t segment_pool::reclaim_segments(size_t target) {
     return reclaimed_segments;
 }
 
-segment* segment_pool::allocate_segment(size_t reserve) {
-    return allocate_segment(reserve, shard_tracker().reclamation_step());
-}
-
-segment* segment_pool::allocate_segment(size_t reserve, size_t reclamation_step)
+segment* segment_pool::allocate_segment(size_t reserve)
 {
     //
     // When allocating a segment we want to avoid:
@@ -677,11 +676,7 @@ segment* segment_pool::allocate_segment(size_t reserve, size_t reclamation_step)
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
         }
-    } while (shard_tracker().get_impl().compact_and_evict(reclamation_step * segment::size));
-    if (shard_tracker().should_abort_on_bad_alloc()) {
-        llogger.error("Aborting due to segment allocation failure");
-        abort();
-    }
+    } while (shard_tracker().get_impl().compact_and_evict(reserve, shard_tracker().reclamation_step()));
     return nullptr;
 }
 
@@ -694,7 +689,7 @@ void segment_pool::deallocate_segment(segment* seg)
 
 void segment_pool::refill_emergency_reserve() {
     while (_free_segments < _emergency_reserve_max) {
-        auto seg = allocate_segment(_emergency_reserve_max, _emergency_reserve_max - _free_segments);
+        auto seg = allocate_segment(_emergency_reserve_max);
         if (!seg) {
             throw std::bad_alloc();
         }
@@ -1928,7 +1923,7 @@ size_t tracker::impl::reclaim(size_t memory_to_release) {
             return memory_to_release;
         }
     }
-    auto compacted = compact_and_evict_locked(memory_to_release - mem_released);
+    auto compacted = compact_and_evict_locked(shard_segment_pool.current_emergency_reserve_goal(), memory_to_release - mem_released);
 
     // compact_and_evict_locked() will not return segments to the standard allocator,
     // so do it here:
@@ -1937,16 +1932,16 @@ size_t tracker::impl::reclaim(size_t memory_to_release) {
     return mem_released + nr_released * segment::size;
 }
 
-size_t tracker::impl::compact_and_evict(size_t memory_to_release) {
+size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_to_release) {
     if (!_reclaiming_enabled) {
         return 0;
     }
     reclaiming_lock rl(*this);
     reclaim_timer timing_guard;
-    return compact_and_evict_locked(memory_to_release);
+    return compact_and_evict_locked(reserve_segments, memory_to_release);
 }
 
-size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
+size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release) {
     //
     // Algorithm outline.
     //
@@ -1969,6 +1964,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
     size_t mem_released = 0;
 
     size_t mem_in_use = shard_segment_pool.total_memory_in_use();
+    memory_to_release += (reserve_segments - std::min(reserve_segments, shard_segment_pool.free_segments())) * segment::size;
     auto target_mem = mem_in_use - std::min(mem_in_use, memory_to_release - mem_released);
 
     llogger.debug("Compacting, requested {} bytes, {} bytes in use, target is {}",
