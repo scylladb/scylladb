@@ -21,9 +21,8 @@ if [[ "$1" = -* ]]; then
     shift
 fi
 
-container=$(
-    docker run \
-       --detach=true \
+docker run \
+       --sig-proxy=true \
        --rm \
        --network host \
        -u "$(id -u):$(id -g)" \
@@ -39,23 +38,3 @@ container=$(
        "${docker_args[@]}" \
        "$(<"$here/image")" \
        "$@"
-)
-
-kill_it() {
-    docker kill "$container" > /dev/null || :
-}
-
-trap kill_it SIGTERM SIGINT SIGHUP EXIT
-
-exitcode="$(docker wait "$container")"
-
-# Abnormal termination could result if "docker wait" was interrupted. Make extra sure
-# that the container is dead.
-kill_it
-
-trap - SIGTERM SIGINT SIGHUP EXIT
-
-# after "docker kill", docker wait will not print anything
-[[ -z "$exitcode" ]] && exitcode=1
-
-exit "$exitcode"
