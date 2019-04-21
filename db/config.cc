@@ -128,16 +128,16 @@ struct convert<db::config::seed_provider_type> {
 
 #define _mk_name(name, ...) name,
 #define str(x)  #x
-#define _mk_init(name, type, deflt, status, desc, ...)  , name(str(name), type(deflt), desc)
+#define _mk_init(name, type, deflt, status, desc, ...)  , name(str(name), value_status::status, type(deflt), desc)
 
 db::config::config(std::shared_ptr<db::extensions> exts)
     : utils::config_file({ _make_config_values(_mk_name)
         default_log_level, logger_log_level, log_to_stdout, log_to_syslog })
     _make_config_values(_mk_init)
-    , default_log_level("default_log_level")
-    , logger_log_level("logger_log_level")
-    , log_to_stdout("log_to_stdout")
-    , log_to_syslog("log_to_syslog")
+    , default_log_level("default_log_level", value_status::Used)
+    , logger_log_level("logger_log_level", value_status::Used)
+    , log_to_stdout("log_to_stdout", value_status::Used)
+    , log_to_syslog("log_to_syslog", value_status::Used)
     , _extensions(std::move(exts))
 {}
 
@@ -153,8 +153,7 @@ const sstring db::config::default_tls_priority("SECURE128:-VERS-TLS1.0");
 namespace utils {
 
 template<>
-void config_file::named_value<db::config::seed_provider_type,
-                db::config::value_status::Used>::add_command_line_option(
+void config_file::named_value<db::config::seed_provider_type>::add_command_line_option(
                 boost::program_options::options_description_easy_init& init,
                 const std::string_view& name, const std::string_view& desc) {
     init((hyphenate(name) + "-class-name").data(),
@@ -246,4 +245,4 @@ const db::extensions& db::config::extensions() const {
     return *_extensions;
 }
 
-template struct utils::config_file::named_value<seastar::log_level, utils::config_file::value_status::Used>;
+template struct utils::config_file::named_value<seastar::log_level>;

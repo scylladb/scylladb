@@ -96,23 +96,25 @@ public:
         virtual config_source source() const = 0;
     };
 
-    template<typename T, value_status S = value_status::Used>
+    template<typename T>
     struct named_value : public config_src {
     private:
         friend class config;
         std::string_view _name, _desc;
         T _value = T();
         config_source _source = config_source::None;
+        value_status _value_status;
     public:
         typedef T type;
-        typedef named_value<T, S> MyType;
+        typedef named_value<T> MyType;
 
-        named_value(std::string_view name, const T& t = T(), std::string_view desc = {})
+        named_value(std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {})
             : config_src(name, &config_type_for<T>, desc)
             , _value(t)
+            , _value_status(vs)
         {}
         value_status status() const override {
-            return S;
+            return _value_status;
         }
         config_source source() const override {
             return _source;
@@ -189,7 +191,7 @@ private:
         _cfgs;
 };
 
-extern template struct config_file::named_value<seastar::log_level, config_file::value_status::Used>;
+extern template struct config_file::named_value<seastar::log_level>;
 
 }
 

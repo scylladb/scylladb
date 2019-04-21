@@ -759,7 +759,7 @@ public:
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
-    named_value<type, value_status::status> name;
+    named_value<type> name;
 
     _make_config_values(_make_value_member)
 
@@ -773,8 +773,8 @@ public:
     static const sstring default_tls_priority;
 private:
     template<typename T>
-    struct log_legacy_value : public named_value<T, value_status::Used> {
-        using MyBase = named_value<T, value_status::Used>;
+    struct log_legacy_value : public named_value<T> {
+        using MyBase = named_value<T>;
 
         using MyBase::MyBase;
 

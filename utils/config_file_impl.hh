@@ -185,8 +185,8 @@ sstring hyphenate(const std::string_view&);
 
 }
 
-template<typename T, utils::config_file::value_status S>
-void utils::config_file::named_value<T, S>::add_command_line_option(
+template<typename T>
+void utils::config_file::named_value<T>::add_command_line_option(
                 boost::program_options::options_description_easy_init& init,
                 const std::string_view& name, const std::string_view& desc) {
     // NOTE. We are not adding default values. We could, but must in that case manually (in some way) geenrate the textual
@@ -195,8 +195,8 @@ void utils::config_file::named_value<T, S>::add_command_line_option(
     init(hyphenate(name).data(), value_ex(&_value)->notifier([this](auto&&) { _source = config_source::CommandLine; }), desc.data());
 }
 
-template<typename T, utils::config_file::value_status S>
-void utils::config_file::named_value<T, S>::set_value(const YAML::Node& node) {
+template<typename T>
+void utils::config_file::named_value<T>::set_value(const YAML::Node& node) {
     (*this)(node.as<T>());
     _source = config_source::SettingsFile;
 }
