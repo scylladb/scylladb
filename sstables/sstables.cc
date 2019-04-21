@@ -2383,7 +2383,7 @@ future<> sstable::seal_sstable(bool backup)
     return seal_sstable().then([this, backup] {
         if (backup) {
             auto dir = get_dir() + "/backups/";
-            return sstable_touch_directory_io_check(dir).then([this, dir = std::move(dir)] {
+            return sstable_touch_directory_io_check(dir).then([this, dir = std::move(dir)] () mutable {
                 return create_links(std::move(dir));
             });
         }
@@ -2517,11 +2517,10 @@ future<> sstable::touch_temp_dir() {
     if (_temp_dir) {
         return make_ready_future<>();
     }
-    return do_with(get_temp_dir(), [this] (auto& temp_dir) {
-        sstlog.debug("Touching temp_dir={}", temp_dir);
-        return sstable_touch_directory_io_check(temp_dir).then([this, &temp_dir] {
-            _temp_dir = std::move(temp_dir);
-        });
+    auto temp_dir = get_temp_dir();
+    sstlog.debug("Touching temp_dir={}", temp_dir);
+    return sstable_touch_directory_io_check(temp_dir).then([this, temp_dir = std::move(temp_dir)] () mutable {
+        _temp_dir = std::move(temp_dir);
     });
 }
 

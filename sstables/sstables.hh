@@ -455,7 +455,7 @@ public:
 
     // required since touch_directory has an optional parameter
     auto sstable_touch_directory_io_check(sstring name) const {
-        return do_io_check(_write_error_handler, [name = std::move(name)] {
+        return do_io_check(_write_error_handler, [name = std::move(name)] () mutable {
             return touch_directory(std::move(name));
         });
     }
