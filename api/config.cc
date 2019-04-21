@@ -44,14 +44,14 @@ json::json_return_type get_json_return_type(const db::seed_provider_type& val) {
     return json::json_return_type(val.class_name);
 }
 
-std::string format_type(const std::string& type) {
+std::string_view format_type(std::string_view type) {
     if (type == "int") {
         return "integer";
     }
     return type;
 }
 
-future<> get_config_swagger_entry(const std::string& name, const std::string& description, const std::string& type, bool& first, output_stream<char>& os) {
+future<> get_config_swagger_entry(std::string_view name, const std::string& description, std::string_view type, bool& first, output_stream<char>& os) {
     std::stringstream ss;
     if (first) {
         first=false;
@@ -88,23 +88,29 @@ future<> get_config_swagger_entry(const std::string& name, const std::string& de
 }
 
 namespace cs = httpd::config_json;
-#define _get_config_value(name, type, deflt, status, desc, ...) if (id == #name) {return get_json_return_type(ctx.db.local().get_config().name());}
-
-
-#define _get_config_description(name, type, deflt, status, desc, ...) f = f.then([&os, &first] {return get_config_swagger_entry(#name, desc, #type, first, os);});
 
 void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx, routes& r) {
-    rb->register_function(r, [] (output_stream<char>& os) {
-        return do_with(true, [&os] (bool& first) {
+    rb->register_function(r, [&ctx] (output_stream<char>& os) {
+        return do_with(true, [&os, &ctx] (bool& first) {
             auto f = make_ready_future();
-            _make_config_values(_get_config_description)
+            for (auto&& cfg_ref : ctx.db.local().get_config().values()) {
+                auto&& cfg = cfg_ref.get();
+                f = f.then([&os, &first, &cfg] {
+                    return get_config_swagger_entry(cfg.name(), std::string(cfg.desc()), cfg.type_name(), first, os);
+                });
+            }
             return f;
         });
     });
 
     cs::find_config_id.set(r, [&ctx] (const_req r) {
         auto id = r.param["id"];
-        _make_config_values(_get_config_value)
+        for (auto&& cfg_ref : ctx.db.local().get_config().values()) {
+            auto&& cfg = cfg_ref.get();
+            if (id == cfg.name()) {
+                return cfg.value_as_json();
+            }
+        }
         throw bad_param_exception(sstring("No such config entry: ") + id);
     });
 }
