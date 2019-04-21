@@ -35,6 +35,52 @@
 #include "log.hh"
 #include "utils/config_file_impl.hh"
 
+namespace utils {
+
+template <>
+const config_type config_type_for<bool> = config_type("bool");
+
+template <>
+const config_type config_type_for<uint16_t> = config_type("integer");
+
+template <>
+const config_type config_type_for<uint32_t> = config_type("integer");
+
+template <>
+const config_type config_type_for<uint64_t> = config_type("integer");
+
+template <>
+const config_type config_type_for<float> = config_type("float");
+
+template <>
+const config_type config_type_for<double> = config_type("double");
+
+template <>
+const config_type config_type_for<log_level> = config_type("string");
+
+template <>
+const config_type config_type_for<sstring> = config_type("string");
+
+template <>
+const config_type config_type_for<std::vector<sstring>> = config_type("string list");
+
+template <>
+const config_type config_type_for<std::unordered_map<sstring, sstring>> = config_type("string map");
+
+template <>
+const config_type config_type_for<std::unordered_map<sstring, log_level>> = config_type("string map");
+
+template <>
+const config_type config_type_for<int64_t> = config_type("integer");
+
+template <>
+const config_type config_type_for<int32_t> = config_type("integer");
+
+template <>
+const config_type config_type_for<db::seed_provider_type> = config_type("seed provider");
+
+}
+
 namespace YAML {
 
 // yaml-cpp conversion would do well to have some enable_if-stuff to make it possible

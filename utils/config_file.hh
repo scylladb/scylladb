@@ -40,6 +40,16 @@ namespace utils {
 
 namespace bpo = boost::program_options;
 
+class config_type {
+    std::string_view _name;
+public:
+    explicit config_type(std::string_view name) : _name(name) {}
+    std::string_view name() const { return _name; }
+};
+
+template <typename T>
+extern const config_type config_type_for;
+
 class config_file {
 public:
     typedef std::unordered_map<sstring, sstring> string_map;
@@ -59,10 +69,12 @@ public:
 
     struct config_src {
         std::string_view _name, _desc;
+        const config_type* _type;
     public:
-        config_src(std::string_view name, std::string_view desc)
+        config_src(std::string_view name, const config_type* type, std::string_view desc)
             : _name(name)
             , _desc(desc)
+            , _type(type)
         {}
         virtual ~config_src() {}
 
@@ -71,6 +83,9 @@ public:
         }
         const std::string_view & desc() const {
             return _desc;
+        }
+        std::string_view type_name() const {
+            return _type->name();
         }
 
         virtual void add_command_line_option(
@@ -93,7 +108,7 @@ public:
         typedef named_value<T, S> MyType;
 
         named_value(std::string_view name, const T& t = T(), std::string_view desc = {})
-            : config_src(name, desc)
+            : config_src(name, &config_type_for<T>, desc)
             , _value(t)
         {}
         value_status status() const override {
