@@ -807,7 +807,7 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
         const auto& cfg = db.local().get_config();
         for (auto& data_dir : cfg.data_file_directories()) {
             for (auto ksname : system_keyspaces) {
-                io_check(touch_directory, data_dir + "/" + ksname).get();
+                io_check([name = data_dir + "/" + ksname] { return touch_directory(name); }).get();
                 distributed_loader::populate_keyspace(db, data_dir, ksname).get();
             }
         }

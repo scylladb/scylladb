@@ -132,7 +132,7 @@ static future<> disk_sanity(sstring path, bool developer_mode) {
 class directories {
 public:
     future<> touch_and_lock(sstring path) {
-        return io_check(recursive_touch_directory, path).then_wrapped([this, path] (future<> f) {
+        return io_check([path] { return recursive_touch_directory(path); }).then_wrapped([this, path] (future<> f) {
             try {
                 f.get();
                 return utils::file_lock::acquire(path + "/.lock").then([this](utils::file_lock lock) {

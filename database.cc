@@ -931,10 +931,10 @@ keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid
     }
     return seastar::async([cfdirs = std::move(cfdirs)] {
         for (auto& cfdir : cfdirs) {
-            io_check(recursive_touch_directory, cfdir).get();
+            io_check([&cfdir] { return recursive_touch_directory(cfdir); }).get();
         }
-        io_check(touch_directory, cfdirs[0] + "/upload").get();
-        io_check(touch_directory, cfdirs[0] + "/staging").get();
+        io_check([name = cfdirs[0] + "/upload"] { return touch_directory(name); }).get();
+        io_check([name = cfdirs[0] + "/staging"] { return touch_directory(name); }).get();
     });
 }
 
@@ -1055,7 +1055,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     create_in_memory_keyspace(ksm);
     auto& datadir = _keyspaces.at(ksm->name()).datadir();
     if (datadir != "") {
-        return io_check(touch_directory, datadir);
+        return io_check([&datadir] { return touch_directory(datadir); });
     } else {
         return make_ready_future<>();
     }

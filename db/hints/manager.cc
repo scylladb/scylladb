@@ -310,7 +310,7 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
     return futurize_apply([this] {
-        return io_check(recursive_touch_directory, _hints_dir.c_str()).then([this] () {
+        return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this] () {
             commitlog::config cfg;
 
             cfg.commit_log_location = _hints_dir.c_str();
@@ -921,7 +921,7 @@ void manager::rebalance_segments_for(
         std::list<fs::path>& current_shard_segments = ep_segments[i];
 
         // Make sure that the shard_path_dir exists and if not - create it
-        io_check(recursive_touch_directory, shard_path_dir.c_str()).get();
+        io_check([name = shard_path_dir.c_str()] { return recursive_touch_directory(name); }).get();
 
         while (current_shard_segments.size() < segments_per_shard && !segments_to_move.empty()) {
             auto seg_path_it = segments_to_move.begin();

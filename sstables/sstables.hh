@@ -452,6 +452,13 @@ public:
     auto sstable_write_io_check(Func&& func, Args&&... args) const {
         return do_io_check(_write_error_handler, func, std::forward<Args>(args)...);
     }
+
+    // required since touch_directory has an optional parameter
+    auto sstable_touch_directory_io_check(sstring name) const {
+        return do_io_check(_write_error_handler, [name = std::move(name)] {
+            return touch_directory(std::move(name));
+        });
+    }
 private:
     size_t sstable_buffer_size;
 

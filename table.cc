@@ -1673,7 +1673,7 @@ seal_snapshot(sstring jsondir) {
 
     tlogger.debug("Storing manifest {}", jsonfile);
 
-    return io_check(recursive_touch_directory, jsondir).then([jsonfile, json = std::move(json)] {
+    return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([jsonfile, json = std::move(json)] {
         return open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
             return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
                 return out.write(json.c_str(), json.size()).then([&out] {
@@ -1697,10 +1697,10 @@ future<> table::snapshot(sstring name) {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
         return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
-            return io_check(recursive_touch_directory, jsondir).then([this, name, jsondir, &tables] {
+            return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([this, name, jsondir, &tables] {
                 return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
                     auto dir = sstable->get_dir() + "/snapshots/" + name;
-                    return io_check(recursive_touch_directory, dir).then([sstable, dir] {
+                    return io_check([dir] { return recursive_touch_directory(dir); }).then([sstable, dir] {
                         return sstable->create_links(dir).then_wrapped([] (future<> f) {
                             // If the SSTables are shared, one of the CPUs will fail here.
                             // That is completely fine, though. We only need one link.
