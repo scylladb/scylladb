@@ -126,7 +126,8 @@ public:
         typedef T type;
         typedef named_value<T> MyType;
 
-        named_value(config_file* file, std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {})
+        named_value(config_file* file, std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {},
+                std::initializer_list<T> allowed_values = {})
             : config_src(name, &config_type_for<T>, desc)
             , _value(t)
             , _value_status(vs)
