@@ -30,6 +30,8 @@
 
 #include "config_file.hh"
 
+#include <seastar/json/json_elements.hh>
+
 namespace YAML {
 
 /*
@@ -200,3 +202,4 @@ void utils::config_file::named_value<T>::set_value(const YAML::Node& node) {
     (*this)(node.as<T>());
     _source = config_source::SettingsFile;
 }
+

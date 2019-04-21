@@ -34,6 +34,7 @@
 #include "seastarx.hh"
 
 namespace seastar { class file; }
+namespace seastar::json { class json_return_type; }
 namespace YAML { class Node; }
 
 namespace utils {
@@ -42,9 +43,19 @@ namespace bpo = boost::program_options;
 
 class config_type {
     std::string_view _name;
+    std::function<json::json_return_type (const void*)> _to_json;
+private:
+    template <typename NativeType>
+    std::function<json::json_return_type (const void*)> make_to_json(json::json_return_type (*func)(const NativeType&)) {
+        return [func] (const void* value) {
+            return func(*static_cast<const NativeType*>(value));
+        };
+    }
 public:
-    explicit config_type(std::string_view name) : _name(name) {}
+    template <typename NativeType>
+    config_type(std::string_view name, json::json_return_type (*to_json)(const NativeType&)) : _name(name), _to_json(make_to_json(to_json)) {}
     std::string_view name() const { return _name; }
+    json::json_return_type to_json(const void* value) const;
 };
 
 template <typename T>
@@ -70,6 +81,8 @@ public:
     struct config_src {
         std::string_view _name, _desc;
         const config_type* _type;
+    protected:
+        virtual const void* current_value() const = 0;
     public:
         config_src(std::string_view name, const config_type* type, std::string_view desc)
             : _name(name)
@@ -94,6 +107,7 @@ public:
         virtual void set_value(const YAML::Node&) = 0;
         virtual value_status status() const = 0;
         virtual config_source source() const = 0;
+        json::json_return_type value_as_json() const;
     };
 
     template<typename T>
@@ -104,6 +118,10 @@ public:
         T _value = T();
         config_source _source = config_source::None;
         value_status _value_status;
+    protected:
+        virtual const void* current_value() const override {
+            return &_value;
+        }
     public:
         typedef T type;
         typedef named_value<T> MyType;

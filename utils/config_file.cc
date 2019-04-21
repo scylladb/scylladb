@@ -36,6 +36,8 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/print.hh>
 
+#include <seastar/json/json_elements.hh>
+
 #include "config_file.hh"
 #include "config_file_impl.hh"
 
@@ -198,6 +200,16 @@ std::istream& std::operator>>(std::istream& is, std::vector<seastar::sstring>& r
    return is;
 }
 template std::istream& std::operator>>(std::istream&, std::unordered_map<seastar::sstring, seastar::sstring>&);
+
+json::json_return_type
+utils::config_type::to_json(const void* value) const {
+    return _to_json(value);
+}
+
+json::json_return_type
+utils::config_file::config_src::value_as_json() const {
+    return _type->to_json(current_value());
+}
 
 sstring utils::hyphenate(const std::string_view& v) {
     sstring result(v.begin(), v.end());
