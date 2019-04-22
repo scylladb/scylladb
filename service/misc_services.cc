@@ -92,7 +92,7 @@ cache_hitrate_calculator::cache_hitrate_calculator(seastar::sharded<database>& d
 {}
 
 void cache_hitrate_calculator::recalculate_timer() {
-    recalculate_hitrates().then_wrapped([p = shared_from_this()] (future<lowres_clock::duration> f) {
+    _done = recalculate_hitrates().then_wrapped([p = shared_from_this()] (future<lowres_clock::duration> f) {
         lowres_clock::duration d;
         if (f.failed()) {
             d = std::chrono::milliseconds(2000);
@@ -183,7 +183,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
 future<> cache_hitrate_calculator::stop() {
     _timer.cancel();
     _stopped = true;
-    return make_ready_future<>();
+    return std::move(_done);
 }
 
 
