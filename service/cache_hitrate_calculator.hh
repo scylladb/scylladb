@@ -35,6 +35,7 @@ class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hit
     timer<lowres_clock> _timer;
     bool _stopped = false;
     float _diff = 0;
+    future<> _done = make_ready_future();
 
     future<lowres_clock::duration> recalculate_hitrates();
     void recalculate_timer();
