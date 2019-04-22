@@ -233,6 +233,7 @@ ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
 ar.add('dist/redhat/python3')
 ar.add('build/python3/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
 ar.add('build/python3/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
+ar.add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
 
 for f in file_list:
     copy_file_to_python_env(ar, f)
