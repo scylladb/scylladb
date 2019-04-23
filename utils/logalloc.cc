@@ -677,7 +677,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
         }
-    } while (shard_tracker().get_impl().compact_and_evict(reserve, shard_tracker().reclamation_step()));
+    } while (shard_tracker().get_impl().compact_and_evict(reserve, shard_tracker().reclamation_step() * segment::size));
     return nullptr;
 }
 
