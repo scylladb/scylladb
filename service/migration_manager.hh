@@ -57,6 +57,8 @@ namespace service {
 class migration_manager : public seastar::async_sharded_service<migration_manager> {
     std::vector<migration_listener*> _listeners;
     std::unordered_map<netw::msg_addr, serialized_action, netw::msg_addr::hash> _schema_pulls;
+    std::vector<gms::feature::listener_registration> _feature_listeners;
+    seastar::gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
 public:
     migration_manager();

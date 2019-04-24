@@ -2708,10 +2708,17 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     // Don't forget to update this list when new schema tables are added.
     // The listed schema tables are the ones synchronized between nodes,
     // and forgetting one of them in this list can cause bugs like #4339.
-    return {
+    //
+    // This list must be kept backwards-compatible because it's used
+    // for schema digest calculation. Refs #4457.
+    std::vector<schema_ptr> result = {
         keyspaces(), tables(), scylla_tables(), columns(), dropped_columns(), triggers(),
-        views(), types(), functions(), aggregates(), indexes(), view_virtual_columns()
+        views(), types(), functions(), aggregates(), indexes()
     };
+    if (features.contains<schema_feature::VIEW_VIRTUAL_COLUMNS>()) {
+        result.emplace_back(view_virtual_columns());
+    }
+    return result;
 }
 
 std::vector<sstring> all_table_names(schema_features features) {
