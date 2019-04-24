@@ -21,9 +21,9 @@ if [[ "$1" = -* ]]; then
     shift
 fi
 
-docker run \
-       --sig-proxy=true \
-       --rm \
+container=$(
+    docker run \
+       --detach=true \
        --network host \
        -u "$(id -u):$(id -g)" \
        "${group_args[@]}" \
@@ -38,3 +38,30 @@ docker run \
        "${docker_args[@]}" \
        "$(<"$here/image")" \
        "$@"
+)
+
+kill_it() {
+    if [[ -n "$container" ]]; then
+        docker rm -f "$container" > /dev/null
+        container=
+    fi
+}
+
+trap kill_it SIGTERM SIGINT SIGHUP EXIT
+
+docker logs --follow "$container"
+
+if [[ -n "$container" ]]; then
+    exitcode="$(docker wait "$container")"
+else
+    exitcode=99
+fi
+
+kill_it
+
+trap - SIGTERM SIGINT SIGHUP EXIT
+
+# after "docker kill", docker wait will not print anything
+[[ -z "$exitcode" ]] && exitcode=1
+
+exit "$exitcode"
