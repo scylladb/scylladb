@@ -101,4 +101,6 @@ public:
     incremental_selector make_incremental_selector() const;
 };
 
+std::unique_ptr<sstable_set_impl> make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata = true);
+
 }

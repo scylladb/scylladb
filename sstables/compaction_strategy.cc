@@ -236,6 +236,7 @@ private:
     // Change counter on interval map for leveled sstables which is used by
     // incremental selector to determine whether or not to invalidate iterators.
     uint64_t _leveled_sstables_change_cnt = 0;
+    bool _use_level_metadata = false;
 private:
     static interval_type make_interval(const schema& s, const dht::partition_range& range) {
         return interval_type::closed(
@@ -271,6 +272,10 @@ private:
             return { _leveled_sstables.begin(), _leveled_sstables.end() };
         }
     }
+    // SSTables are stored separately to avoid interval map's fragmentation issue when level 0 falls behind.
+    bool store_as_unleveled(const shared_sstable& sst) const {
+        return _use_level_metadata && sst->get_sstable_level() == 0;
+    }
 public:
     static dht::ring_position to_ring_position(const compatible_ring_position_view& crpv) {
         // Ring position views, representing bounds of sstable intervals are
@@ -295,8 +300,9 @@ public:
         auto upper_bound = dht::partition_range::bound(to_ring_position(i.lower()), !boost::icl::is_left_closed(i.bounds()));
         return dht::partition_range::make(std::move(lower_bound), std::move(upper_bound));
     }
-    explicit partitioned_sstable_set(schema_ptr schema)
-            : _schema(std::move(schema)) {
+    explicit partitioned_sstable_set(schema_ptr schema, bool use_level_metadata = true)
+            : _schema(std::move(schema))
+            , _use_level_metadata(use_level_metadata) {
     }
     virtual std::unique_ptr<sstable_set_impl> clone() const override {
         return std::make_unique<partitioned_sstable_set>(*this);
@@ -314,7 +320,7 @@ public:
         return r;
     }
     virtual void insert(shared_sstable sst) override {
-        if (sst->get_sstable_level() == 0) {
+        if (store_as_unleveled(sst)) {
             _unleveled_sstables.push_back(std::move(sst));
         } else {
             _leveled_sstables_change_cnt++;
@@ -322,7 +328,7 @@ public:
         }
     }
     virtual void erase(shared_sstable sst) override {
-        if (sst->get_sstable_level() == 0) {
+        if (store_as_unleveled(sst)) {
             _unleveled_sstables.erase(std::remove(_unleveled_sstables.begin(), _unleveled_sstables.end(), sst), _unleveled_sstables.end());
         } else {
             _leveled_sstables_change_cnt++;
@@ -408,6 +414,10 @@ std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(sch
 
 std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(schema_ptr schema) const {
     return std::make_unique<partitioned_sstable_set>(std::move(schema));
+}
+
+std::unique_ptr<sstable_set_impl> make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata) {
+    return std::make_unique<partitioned_sstable_set>(std::move(schema), use_level_metadata);
 }
 
 std::vector<resharding_descriptor>
