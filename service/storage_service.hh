@@ -488,6 +488,7 @@ private:
     void prepare_to_join(std::vector<inet_address> loaded_endpoints, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
     void join_token_ring(int delay);
     void wait_for_feature_listeners_to_finish();
+    void maybe_start_sys_dist_ks();
 public:
     future<> join_ring();
     bool is_joined();

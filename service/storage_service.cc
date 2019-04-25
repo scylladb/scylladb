@@ -552,6 +552,14 @@ static auth::service_config auth_service_config_from_db_config(const db::config&
     return c;
 }
 
+void storage_service::maybe_start_sys_dist_ks() {
+    if (!_is_survey_mode) {
+        supervisor::notify("starting system distributed keyspace");
+        _sys_dist_ks.start(std::ref(cql3::get_query_processor()), std::ref(service::get_migration_manager())).get();
+        _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
+    }
+}
+
 // Runs inside seastar::async context
 void storage_service::join_token_ring(int delay) {
     // This function only gets called on shard 0, but we want to set _joined
@@ -559,13 +567,6 @@ void storage_service::join_token_ring(int delay) {
     get_storage_service().invoke_on_all([] (auto&& ss) {
         ss._joined = true;
     }).get();
-    if (!_is_survey_mode) {
-        supervisor::notify("starting system distributed keyspace");
-        _sys_dist_ks.start(
-                std::ref(cql3::get_query_processor()),
-                std::ref(service::get_migration_manager())).get();
-        _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
-    }
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
     // we'll skip streaming data from other nodes and jump directly into the ring.
@@ -666,6 +667,7 @@ void storage_service::join_token_ring(int delay) {
             ss << _bootstrap_tokens;
             set_mode(mode::JOINING, format("Replacing a node with token(s): {}", ss.str()), true);
         }
+        maybe_start_sys_dist_ks();
         mark_existing_views_as_built();
         bootstrap(_bootstrap_tokens);
         // bootstrap will block until finished
@@ -675,6 +677,7 @@ void storage_service::join_token_ring(int delay) {
             throw std::runtime_error(err);
         }
     } else {
+        maybe_start_sys_dist_ks();
         size_t num_tokens = _db.local().get_config().num_tokens();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
