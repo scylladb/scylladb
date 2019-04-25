@@ -25,6 +25,7 @@
 #include <boost/signals2/dummy_mutex.hpp>
 
 #include <seastar/core/shared_future.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 namespace bs2 = boost::signals2;
 
@@ -48,6 +49,7 @@ class feature final {
     mutable signal_type _s;
     friend class gossiper;
 public:
+    using listener_registration = std::any;
     class listener {
         friend class feature;
         bs2::scoped_connection _conn;
@@ -91,6 +93,18 @@ public:
         if (_enabled) {
             _s();
         }
+    }
+    // Will call the callback functor when this feature is enabled, unless
+    // the returned listener_registration is destroyed earlier.
+    listener_registration when_enabled(seastar::noncopyable_function<void()> callback) const {
+        struct wrapper : public listener {
+            seastar::noncopyable_function<void()> _func;
+            wrapper(seastar::noncopyable_function<void()> func) : _func(std::move(func)) {}
+            void on_enabled() override { _func(); }
+        };
+        auto holder = make_lw_shared<wrapper>(std::move(callback));
+        when_enabled(*holder);
+        return holder;
     }
 };
 
