@@ -86,7 +86,7 @@ public:
         return os << "{ gossip feature = " << f._name << " }";
     }
     future<> when_enabled() const { return _pr.get_shared_future(); }
-    void when_enabled(listener& callback) {
+    void when_enabled(listener& callback) const {
         callback.set_connection(_s.connect(callback.get_slot()));
         if (_enabled) {
             _s();
