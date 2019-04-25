@@ -830,7 +830,7 @@ std::ostream& operator<<(std::ostream& out, const clustering_key_prefix::with_sc
 template<>
 struct appending_hash<partition_key_view> {
     template<typename Hasher>
-    void operator()(Hasher& h, const partition_key& pk, const schema& s) const {
+    void operator()(Hasher& h, const partition_key_view& pk, const schema& s) const {
         for (bytes_view v : pk.components(s)) {
             ::feed_hash(h, v);
         }
