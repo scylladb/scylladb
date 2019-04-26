@@ -1415,7 +1415,7 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
 }
 
 SEASTAR_TEST_CASE(test_time_overflow_with_default_ttl) {
-    return do_with_cql_env([] (cql_test_env& e) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         auto verify = [&e] (int value, bool bypass_cache) -> future<> {
             auto sq = format("select i from cf where p1 = 'key1' {};", bypass_cache ? "bypass cache" : "");
             return e.execute_cql(sq).then([value] (shared_ptr<cql_transport::messages::result_message> msg) {
@@ -1428,27 +1428,20 @@ SEASTAR_TEST_CASE(test_time_overflow_with_default_ttl) {
         };
 
         auto cr = format("create table cf (p1 varchar primary key, i int) with default_time_to_live = {:d};", max_ttl.count());
-        return e.execute_cql(cr).discard_result().then([&e] {
-            auto q = format("insert into cf (p1, i) values ('key1', 1);");
-            return e.execute_cql(q).discard_result();
-        }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1);
-        }).then([&e, &verify] {
-            return verify(1, false);
-        }).then([&e, &verify] {
-            return verify(1, true);
-        }).then([&e] {
-            return e.execute_cql("update cf set i = 2 where p1 = 'key1';").discard_result();
-        }).then([&e, &verify] {
-            return verify(2, true);
-        }).then([&e, &verify] {
-            return verify(2, false);
-        });
+        e.execute_cql(cr).get();
+        auto q = format("insert into cf (p1, i) values ('key1', 1);");
+        e.execute_cql(q).get();
+        e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1).get();
+        verify(1, false).get();
+        verify(1, true).get();
+        e.execute_cql("update cf set i = 2 where p1 = 'key1';").get();
+        verify(2, true).get();
+        verify(2, false).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_time_overflow_using_ttl) {
-    return do_with_cql_env([] (cql_test_env& e) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         auto verify = [&e] (int value, bool bypass_cache) -> future<> {
             auto sq = format("select i from cf where p1 = 'key1' {};", bypass_cache ? "bypass cache" : "");
             return e.execute_cql(sq).then([value] (shared_ptr<cql_transport::messages::result_message> msg) {
@@ -1461,28 +1454,19 @@ SEASTAR_TEST_CASE(test_time_overflow_using_ttl) {
         };
 
         auto cr = "create table cf (p1 varchar primary key, i int);";
-        return e.execute_cql(cr).discard_result().then([&e] {
-            auto q = format("insert into cf (p1, i) values ('key1', 1) using ttl {:d};", max_ttl.count());
-            return e.execute_cql(q).discard_result();
-        }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1);
-        }).then([&e, &verify] {
-            return verify(1, true);
-        }).then([&e, &verify] {
-            return verify(1, false);
-        }).then([&e] {
-            auto q = format("insert into cf (p1, i) values ('key2', 0);");
-            return e.execute_cql(q).discard_result();
-        }).then([&e] {
-            auto q = format("update cf using ttl {:d} set i = 2 where p1 = 'key2';", max_ttl.count());
-            return e.execute_cql(q).discard_result();
-        }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key2")}, {}, "i", 2);
-        }).then([&e, &verify] {
-            return verify(1, false);
-        }).then([&e, &verify] {
-            return verify(1, true);
-        });
+        e.execute_cql(cr).get();
+        auto q = format("insert into cf (p1, i) values ('key1', 1) using ttl {:d};", max_ttl.count());
+        e.execute_cql(q).get();
+        e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1).get();
+        verify(1, true).get();
+        verify(1, false).get();
+        q = format("insert into cf (p1, i) values ('key2', 0);");
+        e.execute_cql(q).get();
+        q = format("update cf using ttl {:d} set i = 2 where p1 = 'key2';", max_ttl.count());
+        e.execute_cql(q).get();
+        e.require_column_has_value("cf", {sstring("key2")}, {}, "i", 2).get();
+        verify(1, false).get();
+        verify(1, true).get();
     });
 }
 
