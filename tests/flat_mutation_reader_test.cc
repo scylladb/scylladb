@@ -724,3 +724,34 @@ SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
         });
     });
 }
+
+static std::vector<mutation> squash_mutations(std::vector<mutation> mutations) {
+    if (mutations.empty()) {
+        return {};
+    }
+    std::map<dht::decorated_key, mutation, dht::ring_position_less_comparator> merged_muts{
+            dht::ring_position_less_comparator{*mutations.front().schema()}};
+    for (const auto& mut : mutations) {
+        auto [it, inserted] = merged_muts.try_emplace(mut.decorated_key(), mut);
+        if (!inserted) {
+            it->second.apply(mut);
+        }
+    }
+    return boost::copy_range<std::vector<mutation>>(merged_muts | boost::adaptors::map_values);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_as_mutation_source) {
+    auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
+        return mutation_source([=] (
+                schema_ptr schema,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class&,
+                tracing::trace_state_ptr,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding) mutable {
+            return flat_mutation_reader_from_mutations(squash_mutations(muts), range, slice, fwd_sm);
+        });
+    };
+    run_mutation_source_tests(populate);
+}
