@@ -416,7 +416,8 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
     }
 
     try {
-        if (!_gossiper.is_alive(end_point_key())) {
+        auto ep_state_ptr = _gossiper. get_endpoint_state_for_endpoint_ptr(end_point_key());
+        if (!ep_state_ptr || !ep_state_ptr->is_alive()) {
             if (!_state.contains(state::ep_state_is_not_normal)) {
                 _state.set_if<state::ep_state_is_not_normal>(_gossiper.get_gossip_status(end_point_key()) != sstring(gms::versioned_value::STATUS_NORMAL));
             }
