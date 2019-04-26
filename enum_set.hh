@@ -172,6 +172,14 @@ public:
         return enum_set(mask);
     }
 
+    static constexpr mask_type full_mask() {
+        return ~(std::numeric_limits<mask_type>::max() << (Enum::max_sequence + 1));
+    }
+
+    static constexpr enum_set full() {
+        return enum_set(full_mask());
+    }
+
     static inline mask_type mask_for(enum_type e) {
         return mask_type(1) << Enum::sequence_for(e);
     }
