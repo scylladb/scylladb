@@ -41,6 +41,7 @@
 #include "db/schema_tables.hh"
 
 #include "service/migration_manager.hh"
+#include "service/storage_service.hh"
 #include "partition_slice_builder.hh"
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
@@ -712,10 +713,10 @@ future<> merge_unlock() {
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations)
+future<> merge_schema(service::storage_service& ss, distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations)
 {
-    return merge_lock().then([&proxy, mutations = std::move(mutations)] () mutable {
-        return do_merge_schema(proxy, std::move(mutations), true).then([&proxy] {
+    return merge_lock().then([&ss, &proxy, mutations = std::move(mutations)] () mutable {
+        return do_merge_schema(proxy, std::move(mutations), true).then([&ss, &proxy] {
             return update_schema_version_and_announce(proxy);
         });
     }).finally([] {

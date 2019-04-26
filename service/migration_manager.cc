@@ -268,7 +268,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
         all.emplace_back(std::move(m));
         return std::move(all);
     }).then([](std::vector<mutation> schema) {
-        return db::schema_tables::merge_schema(get_storage_proxy(), std::move(schema));
+        return db::schema_tables::merge_schema(service::get_local_storage_service(), get_storage_proxy(), std::move(schema));
     });
 }
 
@@ -832,7 +832,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
-    auto f = db::schema_tables::merge_schema(get_storage_proxy(), schema);
+    auto f = db::schema_tables::merge_schema(service::get_local_storage_service(), get_storage_proxy(), schema);
 
     return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members()](auto && schema) {
         return parallel_for_each(live_members.begin(), live_members.end(), [&schema](auto& endpoint) {
