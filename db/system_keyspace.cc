@@ -1752,7 +1752,7 @@ future<> set_bootstrap_state(bootstrap_state state) {
 
 std::vector<schema_ptr> all_tables() {
     std::vector<schema_ptr> r;
-    auto schema_tables = db::schema_tables::all_tables();
+    auto schema_tables = db::schema_tables::all_tables(schema_features::full());
     std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),

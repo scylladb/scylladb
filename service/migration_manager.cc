@@ -99,7 +99,8 @@ void migration_manager::init_messaging_service()
             mlogger.debug("Ignoring schema request from incompatible node: {}", src);
             return make_ready_future<std::vector<frozen_mutation>>(std::vector<frozen_mutation>());
         }
-        return db::schema_tables::convert_schema_to_mutations(get_storage_proxy()).finally([p = get_local_shared_storage_proxy()] {
+        auto features = get_local_storage_service().cluster_schema_features();
+        return db::schema_tables::convert_schema_to_mutations(get_storage_proxy(), features).finally([p = get_local_shared_storage_proxy()] {
             // keep local proxy alive
         });
     });

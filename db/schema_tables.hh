@@ -43,6 +43,7 @@
 #include "service/storage_proxy.hh"
 #include "mutation.hh"
 #include "schema.hh"
+#include "schema_features.hh"
 #include "hashing.hh"
 #include "schema_mutations.hh"
 
@@ -135,8 +136,11 @@ using namespace v3;
 // Replication of schema between nodes with different version is inhibited.
 extern const sstring version;
 
-std::vector<schema_ptr> all_tables();
-const std::vector<sstring>& all_table_names();
+// Returns schema_ptrs for all schema tables supported by given schema_features.
+std::vector<schema_ptr> all_tables(schema_features);
+
+// Like all_tables(), but returns schema::cf_name() of each table.
+const std::vector<sstring>& all_table_names(schema_features);
 
 // saves/creates "ks" + all tables etc, while first deleting all old schema entries (will be rewritten)
 future<> save_system_schema(const sstring & ks);
@@ -144,9 +148,9 @@ future<> save_system_schema(const sstring & ks);
 // saves/creates "system_schema" keyspace
 future<> save_system_keyspace_schema();
 
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy);
+future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features);
 
-future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy);
+future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features);
 
 future<schema_result_value_type>
 read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
