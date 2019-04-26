@@ -418,7 +418,7 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
     try {
         if (!_gossiper.is_alive(end_point_key())) {
             if (!_state.contains(state::ep_state_is_not_normal)) {
-                _state.set_if<state::ep_state_is_not_normal>(_shard_manager.local_gossiper().get_gossip_status(end_point_key()) != sstring(gms::versioned_value::STATUS_NORMAL));
+                _state.set_if<state::ep_state_is_not_normal>(_gossiper.get_gossip_status(end_point_key()) != sstring(gms::versioned_value::STATUS_NORMAL));
             }
             // send the hints out if the destination Node is not in a NORMAL state - we will send to all new replicas in this case
             return _state.contains(state::ep_state_is_not_normal);
