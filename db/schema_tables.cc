@@ -592,8 +592,8 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
             feed_hash_for_schema_digest(hash, m);
         }
     };
-    return do_with(md5_hasher(), [features, map, reduce] (auto& hash) {
-        return do_for_each(all_table_names(features), [&hash, map, reduce] (auto& table) {
+    return do_with(md5_hasher(), all_table_names(features), [features, map, reduce] (auto& hash, auto& tables) {
+        return do_for_each(tables, [&hash, map, reduce] (auto& table) {
             return map(table).then([&hash, reduce] (auto&& mutations) {
                 reduce(hash, mutations);
             });
@@ -2714,11 +2714,9 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     };
 }
 
-const std::vector<sstring>& all_table_names(schema_features features) {
-    static thread_local std::vector<sstring> all =
-            boost::copy_range<std::vector<sstring>>(all_tables(features) |
-            boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
-    return all;
+std::vector<sstring> all_table_names(schema_features features) {
+    return boost::copy_range<std::vector<sstring>>(all_tables(features) |
+           boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
 }
 
 namespace legacy {

@@ -140,7 +140,7 @@ extern const sstring version;
 std::vector<schema_ptr> all_tables(schema_features);
 
 // Like all_tables(), but returns schema::cf_name() of each table.
-const std::vector<sstring>& all_table_names(schema_features);
+std::vector<sstring> all_table_names(schema_features);
 
 // saves/creates "ks" + all tables etc, while first deleting all old schema entries (will be rewritten)
 future<> save_system_schema(const sstring & ks);
