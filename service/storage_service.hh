@@ -55,6 +55,7 @@
 #include "utils/fb_utilities.hh"
 #include "utils/serialized_action.hh"
 #include "database_fwd.hh"
+#include "db/schema_features.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>
@@ -2333,6 +2334,8 @@ public:
     bool cluster_supports_unbounded_range_tombstones() const {
         return bool(_unbounded_range_tombstones_feature);
     }
+    // Returns schema features which all nodes in the cluster advertise as supported.
+    db::schema_features cluster_schema_features() const;
 private:
     future<> set_cql_ready(bool ready);
 private:

@@ -3472,5 +3472,9 @@ void storage_service::notify_cql_change(inet_address endpoint, bool ready)
     }
 }
 
+db::schema_features storage_service::cluster_schema_features() const {
+    return db::schema_features();
+}
+
 } // namespace service
 
