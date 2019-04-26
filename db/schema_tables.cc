@@ -2710,7 +2710,7 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     // and forgetting one of them in this list can cause bugs like #4339.
     return {
         keyspaces(), tables(), scylla_tables(), columns(), dropped_columns(), triggers(),
-        views(), indexes(), types(), functions(), aggregates(), view_virtual_columns()
+        views(), types(), functions(), aggregates(), indexes(), view_virtual_columns()
     };
 }
 
