@@ -936,3 +936,64 @@ SEASTAR_TEST_CASE(test_local_index_prefix_optimization) {
         });
     });
 }
+
+// A secondary index allows a query involving both the indexed column and
+// the primary key. The relation on the primary key cannot be an IN query
+// or we get the exception "Select on indexed columns and with IN clause for
+// the PRIMARY KEY are not supported". We inherited this limitation from
+// Cassandra, where I guess the thinking was that such query can just split
+// into several separate queries. But if the IN clause only lists a single
+// value, this is nothing more than an equality and can be supported anyway.
+// This test reproduces issue #4455.
+SEASTAR_TEST_CASE(test_secondary_index_single_value_in) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p int primary key, a int)").get();
+        e.execute_cql("create index on cf (a)").get();
+        e.execute_cql("insert into cf (p, a) VALUES (1, 2)").get();
+        e.execute_cql("insert into cf (p, a) VALUES (3, 4)").get();
+        // An ordinary "p=3 and a=4" query should work
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto res = e.execute_cql("select * from cf where p = 3 and a = 4").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(3)}, {int32_type->decompose(4)}}});
+        });
+        // Querying "p IN (3) and a=4" can do the same, even if a general
+        // IN with multiple values isn't yet supported. Before fixing
+        // #4455, this wasn't supported.
+        BOOST_TEST_PASSPOINT();
+        auto res = e.execute_cql("select * from cf where p IN (3) and a = 4").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(3)}, {int32_type->decompose(4)}}});
+
+        // Beyond the specific issue of #4455 involving a partition key,
+        // in general, any IN with a single value should be equivalent to
+        // a "=", so should be accepted in additional contexts where a
+        // multi-value IN is not currently supported. For example in
+        // queries over the indexed column: Since "a=4" works, so
+        // should "a IN (4)":
+        BOOST_TEST_PASSPOINT();
+        res = e.execute_cql("select * from cf where a = 4").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(3)}, {int32_type->decompose(4)}}});
+        BOOST_TEST_PASSPOINT();
+        res = e.execute_cql("select * from cf where a IN (4)").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(3)}, {int32_type->decompose(4)}}});
+
+        // The following test is not strictly related to secondary indexes,
+        // but since above we tested single-column restrictions, let's also
+        // exercise multi-column restrictions. In other words, that a multi-
+        // column EQ can be written as a single-value IN.
+        e.execute_cql("create table cf2 (p int, c1 int, c2 int, primary key (p, c1, c2))").get();
+        e.execute_cql("insert into cf2 (p, c1, c2) VALUES (1, 2, 3)").get();
+        e.execute_cql("insert into cf2 (p, c1, c2) VALUES (4, 5, 6)").get();
+        res = e.execute_cql("select * from cf2 where p = 1 and (c1, c2) = (2, 3)").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}}});
+        res = e.execute_cql("select * from cf2 where p = 1 and (c1, c2) IN ((2, 3))").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}}});
+
+    });
+}
