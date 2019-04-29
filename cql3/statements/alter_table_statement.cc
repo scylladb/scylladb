@@ -259,6 +259,20 @@ void alter_table_statement::drop_column(schema_ptr schema, const table& cf, sche
     if (def->is_primary_key()) {
         throw exceptions::invalid_request_exception(format("Cannot drop PRIMARY KEY part {}", column_name));
     } else {
+        // We refuse to drop a column from a base-table if one of its
+        // materialized views needs this column. This includes columns
+        // selected by one of the views, and in some cases even unselected
+        // columns needed to determine row liveness (in such case, the
+        // column exists in a view as a "virtual column").
+        for (const auto& view : cf.views()) {
+            for (const auto& column_def : view->all_columns()) {
+                if (column_def.name() == column_name->name()) {
+                    throw exceptions::invalid_request_exception(format("Cannot drop column {} from base table {}.{}: materialized view {} needs this column",
+                            column_name, keyspace(), column_family(), view->cf_name()));
+                }
+            }
+        }
+
         for (auto&& column_def : boost::range::join(schema->static_columns(), schema->regular_columns())) { // find
             if (column_def.name() == column_name->name()) {
                 cfm.remove_column(column_name->name());
@@ -314,10 +328,6 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         assert(_column_changes.size());
         if (!schema->is_cql3_table()) {
             throw exceptions::invalid_request_exception("Cannot drop columns from a non-CQL3 table");
-        }
-        if (!cf.views().empty()) {
-            throw exceptions::invalid_request_exception(format("Cannot drop columns from base table {}.{} with materialized views",
-                    keyspace(), column_family()));
         }
         invoke_column_change_fn(std::mem_fn(&alter_table_statement::drop_column));
         break;

@@ -4315,3 +4315,58 @@ SEASTAR_TEST_CASE(test_conflicting_batch) {
     });
 }
 
+// Test whether it is possible to drop columns from a base table which has
+// materialized views. This should be allowed, unless one of the views "needs"
+// the column, where needs means either this column was selected by the view,
+// or is a virtual column (i.e., the *liveness* of this column matters).
+// Reproduces issue #4448.
+// Because our secondary indexes are also implemented on top of materialized
+// views, the ability or inability to drop columns where secondary indexes
+// exist also needs to be tested - see the separate test case
+// test_secondary_index_allow_some_column_drops() in secondary_index_test.cc.
+SEASTAR_TEST_CASE(test_mv_allow_some_column_drops) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // When the view has a new key column that didn't exist in the base,
+        // virtual columns aren't needed, so unselected columns aren't needed
+        // by the view and may be dropped. Check that the drop is allowed and
+        // the view still works properly afterwards.
+        e.execute_cql("create table cf (p int primary key, a int, b int, c int)").get();
+        e.execute_cql("create materialized view mv as select c from cf where a is not null primary key (a, p)").get();
+        e.execute_cql("insert into cf (p, a, b, c) VALUES (1, 2, 3, 4)").get();
+        BOOST_TEST_PASSPOINT();
+        auto res = e.execute_cql("select * from cf").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}}});
+        e.execute_cql("alter table cf drop b").get();
+        BOOST_TEST_PASSPOINT();
+        res = e.execute_cql("select * from cf").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(4)}}});
+        eventually([&] {
+            auto res = e.execute_cql("select * from mv where a = 2").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(2)}, {int32_type->decompose(1)}, {int32_type->decompose(4)}}});
+        });
+        // Test that we cannot drop a selected column of a view. Both
+        // c and a are selected (one as a new key column, one as a regular
+        // column).
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf drop c").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf drop a").get(), exceptions::invalid_request_exception);
+        // We also cannot drop a base's primary key column, of course.
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf drop p").get(), exceptions::invalid_request_exception);
+        // Also cannot drop a non existent column :-)
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf drop xyz").get(), exceptions::invalid_request_exception);
+
+        // When a view has the same key columns as the base, virtual columns
+        // are added for all unselected columns, because the *liveness* is
+        // important for the view rows, even if the value isn't. In this case,
+        // we do not allow to drop any base columns.
+        e.execute_cql("create table cf2 (p int, c int, a int, b int, d int, primary key (p, c))").get();
+        e.execute_cql("create materialized view mv2 as select d from cf2 where c is not null primary key (c, p)").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop p").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop c").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop a").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop b").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop d").get(), exceptions::invalid_request_exception);
+    });
+}

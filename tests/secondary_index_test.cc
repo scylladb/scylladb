@@ -997,3 +997,68 @@ SEASTAR_TEST_CASE(test_secondary_index_single_value_in) {
 
     });
 }
+
+// Test that even though a table has a secondary index it is allowed to drop
+// unindexed columns.
+// However, if the index is on one of the primary key columns, we can't allow
+// dropping a drop any column from the base table. The problem is that such
+// column's value be responsible for keeping a base row alive, and therefore
+// (when the index is on a primary key column) also the view row.
+// Reproduces issue #4448.
+SEASTAR_TEST_CASE(test_secondary_index_allow_some_column_drops) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Test that if the index is on a non-pk column, we can drop any other
+        // non-pk column from the base table. Check that the drop is allowed and
+        // the index still works afterwards.
+        e.execute_cql("create table cf (p int primary key, a int, b int)").get();
+        e.execute_cql("create index on cf (a)").get();
+        e.execute_cql("insert into cf (p, a, b) VALUES (1, 2, 3)").get();
+        BOOST_TEST_PASSPOINT();
+        auto res = e.execute_cql("select * from cf").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}}});
+        e.execute_cql("alter table cf drop b").get();
+        BOOST_TEST_PASSPOINT();
+        res = e.execute_cql("select * from cf").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(1)}, {int32_type->decompose(2)}}});
+        eventually([&] {
+            auto res = e.execute_cql("select * from cf where a = 2").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}}});
+        });
+        // Test that we cannot drop the indexed column, because the index
+        // (or rather, its backing materialized-view) needs it:
+        // Expected exception: "exceptions::invalid_request_exception:
+        // Cannot drop column a from base table ks.cf with a materialized
+        // view cf_a_idx_index that needs this column".
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf drop a").get(), exceptions::invalid_request_exception);
+        // Also cannot drop a primary key column, of course. Exception is:
+        // "exceptions::invalid_request_exception: Cannot drop PRIMARY KEY part p"
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf drop p").get(), exceptions::invalid_request_exception);
+        // Also cannot drop a non existent column :-) Exception is:
+        // "exceptions::invalid_request_exception: Column xyz was not found in table cf"
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf drop xyz").get(), exceptions::invalid_request_exception);
+
+        // If the index is on a pk column, we don't allow dropping columns...
+        // In such case because the rows of the index are identical to those
+        // of the base, the unselected columns become "virtual columns"
+        // in the view, and we don't support deleting them.
+        e.execute_cql("create table cf2 (p int, c int, a int, b int, primary key (p, c))").get();
+        e.execute_cql("create index on cf2 (c)").get();
+        e.execute_cql("insert into cf2 (p, c, a, b) VALUES (1, 2, 3, 4)").get();
+        BOOST_TEST_PASSPOINT();
+        res = e.execute_cql("select * from cf2").get0();
+        assert_that(res).is_rows().with_rows({
+            {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}}});
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop b").get(), exceptions::invalid_request_exception);
+
+        // Verify that even if just one of many indexes needs a column, it
+        // still cannot be deleted.
+        e.execute_cql("create table cf3 (p int, c int, a int, b int, d int, primary key (p, c))").get();
+        e.execute_cql("create index on cf3 (b)").get();
+        e.execute_cql("create index on cf3 (d)").get();
+        e.execute_cql("create index on cf3 (a)").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop d").get(), exceptions::invalid_request_exception);
+    });
+}
