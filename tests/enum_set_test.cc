@@ -79,6 +79,13 @@ BOOST_AUTO_TEST_CASE(set_contains) {
     BOOST_REQUIRE(!fs.contains(fruit::pear));
 }
 
+BOOST_AUTO_TEST_CASE(full_set) {
+    const auto fs = fruit_set::full();
+    BOOST_REQUIRE(fs.contains(fruit::apple));
+    BOOST_REQUIRE(fs.contains(fruit::pear));
+    BOOST_REQUIRE(fs.contains(fruit::banana));
+}
+
 BOOST_AUTO_TEST_CASE(set_from_mask) {
     const auto fs = fruit_set::of<fruit::apple, fruit::banana>();
     BOOST_REQUIRE_EQUAL(fs.mask(), fruit_set::from_mask(fs.mask()).mask());

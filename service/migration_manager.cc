@@ -74,11 +74,21 @@ future<> migration_manager::stop()
     return parallel_for_each(_schema_pulls.begin(), _schema_pulls.end(), [] (auto&& e) {
         serialized_action& sp = e.second;
         return sp.join();
+    }).finally([this] {
+        return _background_tasks.close();
     });
 }
 
 void migration_manager::init_messaging_service()
 {
+    auto& ss = service::get_local_storage_service();
+    _feature_listeners.push_back(ss.cluster_supports_view_virtual_columns().when_enabled([this, &ss] {
+        with_gate(_background_tasks, [this, &ss] {
+            mlogger.debug("view_virtual_columns feature enabled, recalculating schema version");
+            return update_schema_version(get_storage_proxy(), ss.cluster_schema_features());
+        });
+    }));
+
     auto& ms = netw::get_local_messaging_service();
     ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> m) {
         auto src = netw::messaging_service::get_source(cinfo);
@@ -99,7 +109,8 @@ void migration_manager::init_messaging_service()
             mlogger.debug("Ignoring schema request from incompatible node: {}", src);
             return make_ready_future<std::vector<frozen_mutation>>(std::vector<frozen_mutation>());
         }
-        return db::schema_tables::convert_schema_to_mutations(get_storage_proxy()).finally([p = get_local_shared_storage_proxy()] {
+        auto features = get_local_storage_service().cluster_schema_features();
+        return db::schema_tables::convert_schema_to_mutations(get_storage_proxy(), features).finally([p = get_local_shared_storage_proxy()] {
             // keep local proxy alive
         });
     });
@@ -268,7 +279,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
         all.emplace_back(std::move(m));
         return std::move(all);
     }).then([](std::vector<mutation> schema) {
-        return db::schema_tables::merge_schema(get_storage_proxy(), std::move(schema));
+        return db::schema_tables::merge_schema(service::get_local_storage_service(), get_storage_proxy(), std::move(schema));
     });
 }
 
@@ -832,7 +843,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
-    auto f = db::schema_tables::merge_schema(get_storage_proxy(), schema);
+    auto f = db::schema_tables::merge_schema(service::get_local_storage_service(), get_storage_proxy(), schema);
 
     return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members()](auto && schema) {
         return parallel_for_each(live_members.begin(), live_members.end(), [&schema](auto& endpoint) {

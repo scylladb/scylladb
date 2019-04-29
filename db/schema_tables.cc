@@ -41,6 +41,7 @@
 #include "db/schema_tables.hh"
 
 #include "service/migration_manager.hh"
+#include "service/storage_service.hh"
 #include "partition_slice_builder.hh"
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
@@ -197,7 +198,7 @@ future<> save_system_schema(const sstring & ksname) {
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
-    return parallel_for_each(all_table_names(), [ksm] (sstring cf) {
+    return parallel_for_each(all_table_names(schema_features::full()), [ksm] (sstring cf) {
         auto deletion_timestamp = schema_creation_timestamp() - 1;
         return db::execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
             deletion_timestamp), ksm->name()).discard_result();
@@ -569,7 +570,7 @@ schema_ptr aggregates() {
  * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
  * will be converted into UUID which would act as content-based version of the schema.
  */
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy)
+future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features)
 {
     auto map = [&proxy] (sstring table) {
         return db::system_keyspace::query_mutations(proxy, NAME, table).then([&proxy, table] (auto rs) {
@@ -591,8 +592,8 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
             feed_hash_for_schema_digest(hash, m);
         }
     };
-    return do_with(md5_hasher(), [map, reduce] (auto& hash) {
-        return do_for_each(all_table_names(), [&hash, map, reduce] (auto& table) {
+    return do_with(md5_hasher(), all_table_names(features), [features, map, reduce] (auto& hash, auto& tables) {
+        return do_for_each(tables, [&hash, map, reduce] (auto& table) {
             return map(table).then([&hash, reduce] (auto&& mutations) {
                 reduce(hash, mutations);
             });
@@ -602,7 +603,7 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
     });
 }
 
-future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy)
+future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
 {
     auto map = [&proxy] (sstring table) {
         return db::system_keyspace::query_mutations(proxy, NAME, table).then([&proxy, table] (auto rs) {
@@ -623,7 +624,7 @@ future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<ser
         std::move(mutations.begin(), mutations.end(), std::back_inserter(result));
         return std::move(result);
     };
-    return map_reduce(all_table_names(), map, std::vector<frozen_mutation>{}, reduce);
+    return map_reduce(all_table_names(features), map, std::vector<frozen_mutation>{}, reduce);
 }
 
 future<schema_result>
@@ -712,11 +713,11 @@ future<> merge_unlock() {
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations)
+future<> merge_schema(service::storage_service& ss, distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations)
 {
-    return merge_lock().then([&proxy, mutations = std::move(mutations)] () mutable {
-        return do_merge_schema(proxy, std::move(mutations), true).then([&proxy] {
-            return update_schema_version_and_announce(proxy);
+    return merge_lock().then([&ss, &proxy, mutations = std::move(mutations)] () mutable {
+        return do_merge_schema(proxy, std::move(mutations), true).then([&ss, &proxy] {
+            return update_schema_version_and_announce(proxy, ss.cluster_schema_features());
         });
     }).finally([] {
         return merge_unlock();
@@ -1346,7 +1347,7 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
 std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
 {
     std::vector<mutation> mutations;
-    for (auto&& schema_table : all_tables()) {
+    for (auto&& schema_table : all_tables(schema_features::full())) {
         auto pkey = partition_key::from_exploded(*schema_table, {utf8_type->decompose(keyspace->name())});
         mutation m{schema_table, pkey};
         m.partition().apply(tombstone{timestamp, gc_clock::now()});
@@ -2703,21 +2704,26 @@ data_type parse_type(sstring str)
     return db::marshal::type_parser::parse(str);
 }
 
-std::vector<schema_ptr> all_tables() {
+std::vector<schema_ptr> all_tables(schema_features features) {
     // Don't forget to update this list when new schema tables are added.
     // The listed schema tables are the ones synchronized between nodes,
     // and forgetting one of them in this list can cause bugs like #4339.
-    return {
+    //
+    // This list must be kept backwards-compatible because it's used
+    // for schema digest calculation. Refs #4457.
+    std::vector<schema_ptr> result = {
         keyspaces(), tables(), scylla_tables(), columns(), dropped_columns(), triggers(),
-        views(), indexes(), types(), functions(), aggregates(), view_virtual_columns()
+        views(), types(), functions(), aggregates(), indexes()
     };
+    if (features.contains<schema_feature::VIEW_VIRTUAL_COLUMNS>()) {
+        result.emplace_back(view_virtual_columns());
+    }
+    return result;
 }
 
-const std::vector<sstring>& all_table_names() {
-    static thread_local std::vector<sstring> all =
-            boost::copy_range<std::vector<sstring>>(all_tables() |
-            boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
-    return all;
+std::vector<sstring> all_table_names(schema_features features) {
+    return boost::copy_range<std::vector<sstring>>(all_tables(features) |
+           boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
 }
 
 namespace legacy {

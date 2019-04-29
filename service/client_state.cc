@@ -192,7 +192,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
             tmp.insert(auth::make_data_resource(db::system_keyspace::NAME, cf));
         }
-        for (auto cf : db::schema_tables::all_table_names()) {
+        for (auto cf : db::schema_tables::all_table_names(db::schema_features::full())) {
             tmp.insert(auth::make_data_resource(db::schema_tables::NAME, cf));
         }
         return tmp;

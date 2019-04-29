@@ -599,7 +599,7 @@ public:
 
     future<> flush_schemas() {
         return _qp.proxy().get_db().invoke_on_all([this] (database& db) {
-            return parallel_for_each(db::schema_tables::all_table_names(), [this, &db](const sstring& cf_name) {
+            return parallel_for_each(db::schema_tables::all_table_names(schema_features::full()), [this, &db](const sstring& cf_name) {
                 auto& cf = db.find_column_family(db::schema_tables::NAME, cf_name);
                 return cf.flush();
             });

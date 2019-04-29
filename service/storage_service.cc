@@ -109,6 +109,7 @@ static const sstring ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
 static const sstring TRUNCATION_TABLE = "TRUNCATION_TABLE";
 static const sstring CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
 static const sstring UNBOUNDED_RANGE_TOMBSTONES_FEATURE = "UNBOUNDED_RANGE_TOMBSTONES";
+static const sstring VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
 
 static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
@@ -160,6 +161,7 @@ storage_service::storage_service(distributed<database>& db, gms::gossiper& gossi
         , _truncation_table(_feature_service, TRUNCATION_TABLE)
         , _correct_static_compact_in_mc(_feature_service, CORRECT_STATIC_COMPACT_IN_MC)
         , _unbounded_range_tombstones_feature(_feature_service, UNBOUNDED_RANGE_TOMBSTONES_FEATURE)
+        , _view_virtual_columns(_feature_service, VIEW_VIRTUAL_COLUMNS)
         , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
         , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
@@ -205,6 +207,7 @@ void storage_service::enable_all_features() {
         std::ref(_truncation_table),
         std::ref(_correct_static_compact_in_mc),
         std::ref(_unbounded_range_tombstones_feature),
+        std::ref(_view_virtual_columns),
     })
     {
         if (features.count(f.name())) {
@@ -307,6 +310,7 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
         ROW_LEVEL_REPAIR,
         TRUNCATION_TABLE,
         CORRECT_STATIC_COMPACT_IN_MC,
+        VIEW_VIRTUAL_COLUMNS,
     };
 
     // Do not respect config in the case database is not started
@@ -488,7 +492,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     auto& proxy = service::get_storage_proxy();
     // Ensure we know our own actual Schema UUID in preparation for updates
-    auto schema_version = update_schema_version(proxy).get0();
+    auto schema_version = update_schema_version(proxy, cluster_schema_features()).get0();
     app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
     app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
@@ -3470,6 +3474,12 @@ void storage_service::notify_cql_change(inet_address endpoint, bool ready)
     } else {
         notify_down(endpoint);
     }
+}
+
+db::schema_features storage_service::cluster_schema_features() const {
+    db::schema_features f;
+    f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(bool(_view_virtual_columns));
+    return f;
 }
 
 } // namespace service

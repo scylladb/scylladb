@@ -55,6 +55,7 @@
 #include "utils/fb_utilities.hh"
 #include "utils/serialized_action.hh"
 #include "database_fwd.hh"
+#include "db/schema_features.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>
@@ -321,6 +322,7 @@ private:
     gms::feature _truncation_table;
     gms::feature _correct_static_compact_in_mc;
     gms::feature _unbounded_range_tombstones_feature;
+    gms::feature _view_virtual_columns;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
     seastar::semaphore _feature_listeners_sem = {1};
@@ -2333,6 +2335,11 @@ public:
     bool cluster_supports_unbounded_range_tombstones() const {
         return bool(_unbounded_range_tombstones_feature);
     }
+    const gms::feature& cluster_supports_view_virtual_columns() const {
+        return _view_virtual_columns;
+    }
+    // Returns schema features which all nodes in the cluster advertise as supported.
+    db::schema_features cluster_schema_features() const;
 private:
     future<> set_cql_ready(bool ready);
 private:
