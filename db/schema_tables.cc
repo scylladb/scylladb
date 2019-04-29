@@ -1389,15 +1389,15 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
 }
 
 template<typename K, typename V>
-static std::map<K, V> get_map(const query::result_set_row& row, const sstring& name) {
-    std::map<K, V> map;
-
-    auto values = row.get_nonnull<map_type_impl::native_type>(name);
-    for (auto&& entry : values) {
-        map.emplace(value_cast<K>(entry.first), value_cast<V>(entry.second));
-    };
-
-    return map;
+static std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const sstring& name) {
+    if (auto values = row.get<map_type_impl::native_type>(name)) {
+        std::map<K, V> map;
+        for (auto&& entry : *values) {
+            map.emplace(value_cast<K>(entry.first), value_cast<V>(entry.second));
+        };
+        return map;
+    }
+    return std::nullopt;
 }
 
 template<typename V>
@@ -1925,24 +1925,22 @@ static future<schema_ptr> create_table_from_table_row(distributed<service::stora
 static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_builder& builder, const query::result_set_row& table_row)
 {
     // These row reads have been purposefully reordered to match the origin counterpart. For easier matching.
-    if (table_row.has("bloom_filter_fp_chance")) {
-        builder.set_bloom_filter_fp_chance(table_row.get_nonnull<double>("bloom_filter_fp_chance"));
+    if (auto val = table_row.get<double>("bloom_filter_fp_chance")) {
+        builder.set_bloom_filter_fp_chance(*val);
     } else {
         builder.set_bloom_filter_fp_chance(builder.get_bloom_filter_fp_chance());
     }
 
-    if (table_row.has("caching")) {
-        auto map = get_map<sstring, sstring>(table_row, "caching");
-        builder.set_caching_options(caching_options::from_map(map));
+    if (auto map = get_map<sstring, sstring>(table_row, "caching")) {
+        builder.set_caching_options(caching_options::from_map(*map));
     }
 
-    if (table_row.has("comment")) {
-        builder.set_comment(table_row.get_nonnull<sstring>("comment"));
+    if (auto val = table_row.get<sstring>("comment")) {
+        builder.set_comment(*val);
     }
 
-    if (table_row.has("compaction")) {
-        auto map = get_map<sstring, sstring>(table_row, "compaction");
-
+    if (auto opt_map = get_map<sstring, sstring>(table_row, "compaction")) {
+        auto &map = *opt_map;
         auto i = map.find("class");
         if (i != map.end()) {
             try {
@@ -1967,22 +1965,21 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
         builder.set_compaction_strategy_options(map);
     }
 
-    if (table_row.has("compression")) {
-        auto map = get_map<sstring, sstring>(table_row, "compression");
-        compression_parameters cp(map);
+    if (auto map = get_map<sstring, sstring>(table_row, "compression")) {
+        compression_parameters cp(*map);
         builder.set_compressor_params(cp);
     }
 
-    if (table_row.has("dclocal_read_repair_chance")) {
-        builder.set_dc_local_read_repair_chance(table_row.get_nonnull<double>("dclocal_read_repair_chance"));
+    if (auto val = table_row.get<double>("dclocal_read_repair_chance")) {
+        builder.set_dc_local_read_repair_chance(*val);
     }
 
-    if (table_row.has("default_time_to_live")) {
-        builder.set_default_time_to_live(gc_clock::duration(table_row.get_nonnull<int32_t>("default_time_to_live")));
+    if (auto val = table_row.get<int32_t>("default_time_to_live")) {
+        builder.set_default_time_to_live(gc_clock::duration(*val));
     }
 
-    if (table_row.has("extensions")) {
-        auto map = get_map<sstring, bytes>(table_row, "extensions");
+    if (auto val = get_map<sstring, bytes>(table_row, "extensions")) {
+        auto &map = *val;
         schema::extensions_map result;
         auto& exts = ctxt.extensions().schema_extensions();
         for (auto&p : map) {
@@ -2019,32 +2016,32 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
         builder.set_extensions(std::move(result));
     }
 
-    if (table_row.has("gc_grace_seconds")) {
-        builder.set_gc_grace_seconds(table_row.get_nonnull<int32_t>("gc_grace_seconds"));
+    if (auto val = table_row.get<int32_t>("gc_grace_seconds")) {
+        builder.set_gc_grace_seconds(*val);
     }
 
-    if (table_row.has("min_index_interval")) {
-        builder.set_min_index_interval(table_row.get_nonnull<int>("min_index_interval"));
+    if (auto val = table_row.get<int>("min_index_interval")) {
+        builder.set_min_index_interval(*val);
     }
 
-    if (table_row.has("memtable_flush_period_in_ms")) {
-        builder.set_memtable_flush_period(table_row.get_nonnull<int32_t>("memtable_flush_period_in_ms"));
+    if (auto val = table_row.get<int32_t>("memtable_flush_period_in_ms")) {
+        builder.set_memtable_flush_period(*val);
     }
 
-    if (table_row.has("max_index_interval")) {
-        builder.set_max_index_interval(table_row.get_nonnull<int>("max_index_interval"));
+    if (auto val = table_row.get<int>("max_index_interval")) {
+        builder.set_max_index_interval(*val);
     }
 
-    if (table_row.has("read_repair_chance")) {
-        builder.set_read_repair_chance(table_row.get_nonnull<double>("read_repair_chance"));
+    if (auto val = table_row.get<double>("read_repair_chance")) {
+        builder.set_read_repair_chance(*val);
     }
 
-    if (table_row.has("crc_check_chance")) {
-        builder.set_crc_check_chance(table_row.get_nonnull<double>("crc_check_chance"));
+    if (auto val = table_row.get<double>("crc_check_chance")) {
+        builder.set_crc_check_chance(*val);
     }
 
-    if (table_row.has("speculative_retry")) {
-        builder.set_speculative_retry(table_row.get_nonnull<sstring>("speculative_retry"));
+    if (auto val = table_row.get<sstring>("speculative_retry")) {
+        builder.set_speculative_retry(*val);
     }
 }
 
@@ -2259,8 +2256,8 @@ static std::vector<column_definition> create_columns_from_column_rows(const quer
         auto name_bytes = row.get_nonnull<bytes>("column_name_bytes");
         column_id position = row.get_nonnull<int32_t>("position");
 
-        if (row.has("clustering_order")) {
-            auto order = row.get_nonnull<sstring>("clustering_order");
+        if (auto val = row.get<sstring>("clustering_order")) {
+            auto order = *val;
             std::transform(order.begin(), order.end(), order.begin(), ::toupper);
             if (order == "DESC") {
                 type = reversed_type_impl::get_instance(type);

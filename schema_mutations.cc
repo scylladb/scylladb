@@ -61,11 +61,9 @@ table_schema_version schema_mutations::digest() const {
         auto rs = query::result_set(*_scylla_tables);
         if (!rs.empty()) {
             auto&& row = rs.row(0);
-            if (row.has("version")) {
-                auto val = row.get<utils::UUID>("version");
-                if (val) {
-                    return *val;
-                }
+            auto val = row.get<utils::UUID>("version");
+            if (val) {
+                return *val;
             }
         }
     }

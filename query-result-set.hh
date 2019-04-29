@@ -48,9 +48,6 @@ public:
         : _schema{schema}
         , _cells{std::move(cells)}
     { }
-    bool has(const sstring& column_name) const {
-        return _cells.count(column_name) > 0;
-    }
     // Look up a deserialized row cell value by column name
     const data_value*
     get_data_value(const sstring& column_name) const {
