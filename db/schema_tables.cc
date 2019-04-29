@@ -1033,8 +1033,8 @@ static std::map<std::vector<bytes>, const query::result_set_row*> build_row_map(
     for (const auto& row: rows) {
         std::vector<bytes> key;
         for (const auto& column : primary_key) {
-            const data_value &val = row.get_data_value(column.name_as_text());
-            key.push_back(val.serialize());
+            const data_value *val = row.get_data_value(column.name_as_text());
+            key.push_back(val->serialize());
         }
         ret.insert(std::pair(std::move(key), &row));
     }
@@ -1376,7 +1376,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
     // We get called from multiple shards with result set originating on only one of them.
     // Cannot use copying accessors for "deep" types like map, because we will hit shared_ptr asserts
     // (or screw up shared pointers)
-    const auto& replication = value_cast<map_type_impl::native_type>(row.get_data_value("replication"));
+    const auto& replication = value_cast<map_type_impl::native_type>(*row.get_data_value("replication"));
 
     std::map<sstring, sstring> strategy_options;
     for (auto& p : replication) {

@@ -38,13 +38,13 @@ row_assertion::matches(const query::result_set_row& row) const {
         // FIXME: result_set_row works on sstring column names instead of more general "bytes".
         auto ss_name = to_sstring(name);
 
-        if (!row.has(ss_name)) {
+        const data_value* val = row.get_data_value(ss_name);
+        if (val == nullptr) {
             if (!value.is_null()) {
                 return false;
             }
         } else {
-            const data_value& val = row.get_data_value(ss_name);
-            if (val != value) {
+            if (*val != value) {
                 return false;
             }
         }
