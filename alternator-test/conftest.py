@@ -62,7 +62,13 @@ def test_table(dynamodb):
             },
         ],
     )
-    table.meta.client.get_waiter('table_exists').wait(TableName=name)
+    waiter = table.meta.client.get_waiter('table_exists')
+    # recheck every second instead of the default, lower, frequency. This can
+    # save a few seconds on AWS with its very slow table creation, but can
+    # more on tests on Scylla with its faster table creation turnaround.
+    waiter.config.delay = 1
+    waiter.config.max_attempts = 60
+    waiter.wait(TableName=name)
     yield table
     # We get back here when this fixture is torn down. We ask Dynamo to delete
     # this table, but not wait for the deletion to complete. The next time
