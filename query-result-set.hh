@@ -33,12 +33,7 @@
 
 namespace query {
 
-class no_such_column : public std::runtime_error {
-public:
-    using runtime_error::runtime_error;
-};
-
-class null_column_value : public std::runtime_error {
+class no_value : public std::runtime_error {
 public:
     using runtime_error::runtime_error;
 };
@@ -53,45 +48,41 @@ public:
         : _schema{schema}
         , _cells{std::move(cells)}
     { }
-    bool has(const sstring& column_name) const {
-        return _cells.count(column_name) > 0;
-    }
-    // Look up a deserialized row cell value by column name; throws no_such_column on error
-    const data_value&
+    // Look up a deserialized row cell value by column name
+    const data_value*
     get_data_value(const sstring& column_name) const {
         auto it = _cells.find(column_name);
         if (it == _cells.end()) {
-            throw no_such_column(column_name);
+            return nullptr;
         }
-        return it->second;
+        return &it->second;
     }
-    // Look up a deserialized row cell value by column name; throws no_such_column on error.
+    // Look up a deserialized row cell value by column name
     template<typename T>
     std::optional<T>
     get(const sstring& column_name) const {
-        auto&& value = get_data_value(column_name);
-        if (value.is_null()) {
-            return std::nullopt;
+        if (const auto *value = get_ptr<T>(column_name)) {
+            return std::optional(*value);
         }
-        return std::optional<T>{value_cast<T>(value)};
+        return std::nullopt;
     }
     template<typename T>
     const T*
     get_ptr(const sstring& column_name) const {
-        auto&& value = get_data_value(column_name);
-        if (value.is_null()) {
+        const auto *value = get_data_value(column_name);
+        if (value == nullptr || value->is_null()) {
             return nullptr;
         }
-        return &value_cast<T>(value);
+        return &value_cast<T>(*value);
     }
-    // throws no_such_column or null_column_value on error
+    // throws no_value on error
     template<typename T>
-    T get_nonnull(const sstring& column_name) const {
+    const T& get_nonnull(const sstring& column_name) const {
         auto v = get_ptr<std::remove_reference_t<T>>(column_name);
         if (v) {
             return *v;
         }
-        throw null_column_value(column_name);
+        throw no_value(column_name);
     }
     const std::unordered_map<sstring, data_value>& cells() const { return _cells; }
     friend inline bool operator==(const result_set_row& x, const result_set_row& y);
