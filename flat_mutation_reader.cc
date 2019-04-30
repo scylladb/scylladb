@@ -22,6 +22,7 @@
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
 #include "seastar/util/reference_wrapper.hh"
+#include "clustering_ranges_walker.hh"
 #include <algorithm>
 
 #include <boost/range/adaptor/transformed.hpp>
@@ -347,6 +348,7 @@ flat_mutation_reader make_empty_flat_reader(schema_ptr s) {
 
 flat_mutation_reader
 flat_mutation_reader_from_mutations(std::vector<mutation> ms,
+                                    const dht::partition_range& pr,
                                     const query::partition_slice& slice,
                                     streamed_mutation::forwarding fwd) {
     std::vector<mutation> sliced_ms;
@@ -355,7 +357,12 @@ flat_mutation_reader_from_mutations(std::vector<mutation> ms,
         auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
         sliced_ms.emplace_back(m.schema(), m.decorated_key(), std::move(mp));
     }
-    return flat_mutation_reader_from_mutations(sliced_ms, query::full_partition_range, fwd);
+    return flat_mutation_reader_from_mutations(sliced_ms, pr, fwd);
+}
+
+flat_mutation_reader
+flat_mutation_reader_from_mutations(std::vector<mutation> ms, const query::partition_slice& slice, streamed_mutation::forwarding fwd) {
+    return flat_mutation_reader_from_mutations(std::move(ms), query::full_partition_range, slice, fwd);
 }
 
 flat_mutation_reader
@@ -780,15 +787,32 @@ make_flat_multi_range_reader(
 
 flat_mutation_reader
 make_flat_mutation_reader_from_fragments(schema_ptr schema, std::deque<mutation_fragment> fragments) {
+    return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(fragments), query::full_partition_range);
+}
+
+flat_mutation_reader
+make_flat_mutation_reader_from_fragments(schema_ptr schema, std::deque<mutation_fragment> fragments, const dht::partition_range& pr) {
     class reader : public flat_mutation_reader::impl {
         std::deque<mutation_fragment> _fragments;
+        const dht::partition_range* _pr;
+        dht::ring_position_comparator _cmp;
+
+    private:
+        bool end_of_range() const {
+            return _fragments.empty() ||
+                (_fragments.front().is_partition_start() && _pr->after(_fragments.front().as_partition_start().key(), _cmp));
+        }
+
     public:
-        reader(schema_ptr schema, std::deque<mutation_fragment> fragments)
+        reader(schema_ptr schema, std::deque<mutation_fragment> fragments, const dht::partition_range& pr)
                 : flat_mutation_reader::impl(std::move(schema))
-                , _fragments(std::move(fragments)) {
+                , _fragments(std::move(fragments))
+                , _pr(&pr)
+                , _cmp(*_schema) {
+            fast_forward_to(*_pr, db::no_timeout);
         }
         virtual future<> fill_buffer(db::timeout_clock::time_point) override {
-            while (!(_end_of_stream = _fragments.empty()) && !is_buffer_full()) {
+            while (!(_end_of_stream = end_of_range()) && !is_buffer_full()) {
                 push_mutation_fragment(std::move(_fragments.front()));
                 _fragments.pop_front();
             }
@@ -797,7 +821,7 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, std::deque<mutation_
         virtual void next_partition() override {
             clear_buffer_to_next_partition();
             if (is_buffer_empty()) {
-                while (!(_end_of_stream = _fragments.empty()) && !_fragments.front().is_partition_start()) {
+                while (!(_end_of_stream = end_of_range()) && !_fragments.front().is_partition_start()) {
                     _fragments.pop_front();
                 }
             }
@@ -806,12 +830,47 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, std::deque<mutation_
             throw std::runtime_error("This reader can't be fast forwarded to another range.");
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
-            throw std::runtime_error("This reader can't be fast forwarded to another position.");
+            clear_buffer();
+            _pr = &pr;
+            _fragments.erase(_fragments.begin(), std::find_if(_fragments.begin(), _fragments.end(), [this] (const mutation_fragment& mf) {
+                return mf.is_partition_start() && !_pr->before(mf.as_partition_start().key(), _cmp);
+            }));
+            _end_of_stream = end_of_range();
+            return make_ready_future<>();
         }
     };
-    return make_flat_mutation_reader<reader>(std::move(schema), std::move(fragments));
+    return make_flat_mutation_reader<reader>(std::move(schema), std::move(fragments), pr);
 }
 
+flat_mutation_reader
+make_flat_mutation_reader_from_fragments(schema_ptr schema, std::deque<mutation_fragment> fragments, const dht::partition_range& pr, const query::partition_slice& slice) {
+    std::optional<clustering_ranges_walker> ranges_walker;
+    for (auto it = fragments.begin(); it != fragments.end();) {
+        switch (it->mutation_fragment_kind()) {
+            case mutation_fragment::kind::partition_start:
+                ranges_walker.emplace(*schema, slice.row_ranges(*schema, it->as_partition_start().key().key()), false);
+            case mutation_fragment::kind::static_row: // fall-through
+            case mutation_fragment::kind::partition_end: // fall-through
+                ++it;
+                break;
+            case mutation_fragment::kind::clustering_row:
+                if (ranges_walker->advance_to(it->position())) {
+                    ++it;
+                } else {
+                    it = fragments.erase(it);
+                }
+                break;
+            case mutation_fragment::kind::range_tombstone:
+                if (ranges_walker->advance_to(it->as_range_tombstone().position(), it->as_range_tombstone().end_position())) {
+                    ++it;
+                } else {
+                    it = fragments.erase(it);
+                }
+                break;
+        }
+    }
+    return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(fragments), pr);
+}
 
 /*
  * This reader takes a get_next_fragment generator that produces mutation_fragment_opt which is returned by

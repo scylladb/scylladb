@@ -617,6 +617,11 @@ flat_mutation_reader
 flat_mutation_reader_from_mutations(std::vector<mutation> ms,
                                     const query::partition_slice& slice,
                                     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+flat_mutation_reader
+flat_mutation_reader_from_mutations(std::vector<mutation> ms,
+                                    const dht::partition_range& pr,
+                                    const query::partition_slice& slice,
+                                    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
 /// Make a reader that enables the wrapped reader to work with multiple ranges.
 ///
@@ -649,6 +654,12 @@ make_flat_multi_range_reader(
 
 flat_mutation_reader
 make_flat_mutation_reader_from_fragments(schema_ptr, std::deque<mutation_fragment>);
+
+flat_mutation_reader
+make_flat_mutation_reader_from_fragments(schema_ptr, std::deque<mutation_fragment>, const dht::partition_range& pr);
+
+flat_mutation_reader
+make_flat_mutation_reader_from_fragments(schema_ptr, std::deque<mutation_fragment>, const dht::partition_range& pr, const query::partition_slice& slice);
 
 // Calls the consumer for each element of the reader's stream until end of stream
 // is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
