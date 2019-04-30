@@ -184,6 +184,7 @@ using stats_values = std::tuple<
     double, // frags_per_second mad
     double, // frags_per_second max
     double, // frags_per_second min
+    double, // average aio
     uint64_t, // aio
     uint64_t, // kb
     uint64_t, // blocked
@@ -223,6 +224,7 @@ std::array<sstring, std::tuple_size<stats_values>::value> stats_formats =
     "{:.0f}",
     "{:.0f}",
     "{:.0f}",
+    "{:.1f}", // average aio
     "{}",
     "{}",
     "{}",
@@ -573,6 +575,7 @@ private:
     double _fragment_rate_mad = 0;
     double _fragment_rate_max = 0;
     double _fragment_rate_min = 0;
+    double _average_aio_operations = 0;
     sstring_vec _params;
     std::optional<sstring> _error;
 public:
@@ -601,6 +604,9 @@ public:
         _fragment_rate_max = max;
         _fragment_rate_min = min;
     }
+
+    double average_aio_operations() const { return _average_aio_operations; }
+    void set_average_aio_operations(double aio) { _average_aio_operations = aio; }
 
     uint64_t aio_reads() const { return after.io.aio_reads - before.io.aio_reads; }
     uint64_t aio_read_bytes() const { return after.io.aio_read_bytes - before.io.aio_read_bytes; }
@@ -632,6 +638,7 @@ public:
             {"mad f/s",  "{:>10}"},
             {"max f/s",  "{:>10}"},
             {"min f/s",  "{:>10}"},
+            {"avg aio",  "{:>10}"},
             {"aio",      "{:>6}"},
             {"(KiB)",    "{:>10}"},
             {"blocked",  "{:>7}"},
@@ -661,6 +668,7 @@ public:
             fragment_rate_mad(),
             fragment_rate_max(),
             fragment_rate_min(),
+            average_aio_operations(),
             aio_reads() + aio_writes(),
             (aio_read_bytes() + aio_written_bytes()) / 1024,
             reads_blocked(),
@@ -1138,6 +1146,11 @@ public:
     void done() {
         for (auto&& result : results) {
             print_all(result);
+
+            auto average_aio = boost::accumulate(result, 0., [&] (double a, const test_result& b) {
+                return a + b.aio_reads() + b.aio_writes();
+            }) / (result.empty() ? 1 : result.size());
+
             boost::sort(result, [] (const test_result& a, const test_result& b) {
                 return a.fragment_rate() < b.fragment_rate();
             });
@@ -1153,6 +1166,7 @@ public:
             auto fragment_rate_mad = deviation[deviation.size() / 2];
             median.set_fragment_rate_stats(fragment_rate_mad, fragment_rate_max, fragment_rate_min);
             median.set_iteration_count(result.size());
+            median.set_average_aio_operations(average_aio);
             print(median);
         }
     }
