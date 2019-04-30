@@ -1376,7 +1376,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
     // We get called from multiple shards with result set originating on only one of them.
     // Cannot use copying accessors for "deep" types like map, because we will hit shared_ptr asserts
     // (or screw up shared pointers)
-    const auto& replication = value_cast<map_type_impl::native_type>(*row.get_data_value("replication"));
+    const auto& replication = row.get_nonnull<map_type_impl::native_type>("replication");
 
     std::map<sstring, sstring> strategy_options;
     for (auto& p : replication) {

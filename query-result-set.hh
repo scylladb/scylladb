@@ -77,7 +77,7 @@ public:
     }
     // throws no_value on error
     template<typename T>
-    T get_nonnull(const sstring& column_name) const {
+    const T& get_nonnull(const sstring& column_name) const {
         auto v = get_ptr<std::remove_reference_t<T>>(column_name);
         if (v) {
             return *v;
