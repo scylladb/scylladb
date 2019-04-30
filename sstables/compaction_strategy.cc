@@ -420,11 +420,6 @@ public:
             auto itw = writes_per_window.find(bound);
             if (itw != writes_per_window.end()) {
                 ow_this_window = &itw->second;
-                // We will erase here so we can keep track of which
-                // writes belong to existing windows. Writes that don't belong to any window
-                // are writes in progress to new windows and will be accounted in the final
-                // loop before we return
-                writes_per_window.erase(itw);
             }
             auto* oc_this_window = &no_oc;
             auto itc = compactions_per_window.find(bound);
@@ -432,6 +427,13 @@ public:
                 oc_this_window = &itc->second;
             }
             b += windows.second.backlog(*ow_this_window, *oc_this_window);
+            if (itw != writes_per_window.end()) {
+                // We will erase here so we can keep track of which
+                // writes belong to existing windows. Writes that don't belong to any window
+                // are writes in progress to new windows and will be accounted in the final
+                // loop before we return
+                writes_per_window.erase(itw);
+            }
         }
 
         // Partial writes that don't belong to any window are accounted here.
