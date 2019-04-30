@@ -63,4 +63,9 @@ def test_table(dynamodb):
         ],
     )
     table.meta.client.get_waiter('table_exists').wait(TableName=name)
-    return table
+    yield table
+    # We get back here when this fixture is torn down. We ask Dynamo to delete
+    # this table, but not wait for the deletion to complete. The next time
+    # we create a test_table fixture, we'll choose a different table name
+    # anyway.
+    table.delete()
