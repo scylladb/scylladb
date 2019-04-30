@@ -5,8 +5,6 @@
 # require the same fixture, it can be set up only once - while still allowing
 # the user to run individual tests and automatically set up the fixtures they need.
 
-
-
 import pytest
 import boto3
 import time
