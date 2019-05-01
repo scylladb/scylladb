@@ -9,13 +9,23 @@ import pytest
 import boto3
 import time
 
+# Run tests with "--local" to run against a local Scylla installation on localhost:8080/
+# instead of AWS.
+# TODO: allow other URLs, not just "--local".
+def pytest_addoption(parser):
+    parser.addoption("--local", action="store_true",
+        help="run against local Scylla installation instead of AWS")
+
 # "dynamodb" fixture: set up client object for communicating with the DynamoDB
 # API. Currently, this connects to the real Amazon on us-east-1, but we should
 # make it optional whether to connect to AWS or a local Scylla installation.
 # We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
-def dynamodb():
-    return boto3.resource('dynamodb',region_name='us-east-1') 
+def dynamodb(request):
+    if request.config.getoption('local'):
+        return boto3.resource('dynamodb',endpoint_url='http://localhost:8000')
+    else:
+        return boto3.resource('dynamodb',region_name='us-east-1')
 
 test_table_prefix = 'alternator_test_'
 def test_table_name():
