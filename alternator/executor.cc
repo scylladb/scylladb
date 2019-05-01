@@ -113,7 +113,7 @@ static void add_column(schema_builder& builder, sstring name, sstring type, colu
 }
 
 static void supplement_table_info(Json::Value& descr, const schema& schema) {
-    descr[CREATION_DATE_TIME] = std::chrono::duration_cast<std::chrono::milliseconds>(gc_clock::now().time_since_epoch()).count();
+    descr[CREATION_DATE_TIME] = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
     descr[TABLE_STATUS] = ACTIVE;
     descr[TABLE_ID] = schema.id().to_sstring().c_str();
 }
