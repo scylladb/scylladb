@@ -616,6 +616,15 @@ SEASTAR_TEST_CASE(test_secondary_index_contains_virtual_columns) {
             auto res = e.execute_cql("select * from cf where c = 1").get0();
             assert_that(res).is_rows().with_rows({{{int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}}});
         });
+        // Similar test to the above, just indexing a partition-key column
+        // instead of a clustering key-column in the test above.
+        e.execute_cql("create table cf2 (p1 int, p2 int, c int, v int, primary key((p1, p2), c))").get();
+        e.execute_cql("create index on cf2 (p1)").get();
+        e.execute_cql("update cf2 set v = 1 where p1 = 1 and p2 = 1 and c = 1").get();
+        eventually([&] {
+            auto res = e.execute_cql("select * from cf2 where p1 = 1").get0();
+            assert_that(res).is_rows().with_rows({{{int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}}});
+        });
     });
 }
 
