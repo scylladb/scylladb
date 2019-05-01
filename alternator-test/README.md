@@ -20,3 +20,5 @@ region = us-east-1
 * Running "pytest" runs all tests.
 * To run all tests in a single file, do `pytest test_table.py`.
 * To run a single specific test, do `pytest test_table.py::test_create_table_unsupported_names`.
+* To run tests against a local Scylla installation at http://localhost:8000, add "--local".
+  For example - `pytest --local test_item.py`.
