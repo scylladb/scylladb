@@ -395,10 +395,8 @@ std::unordered_set<gms::inet_address> db::batchlog_manager::endpoint_filter(cons
 
     // grab a random member of up to two racks
     for (auto& rack : racks) {
-        auto rack_members = validated.bucket(rack);
-        auto n = validated.bucket_size(rack_members);
         auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
-        std::uniform_int_distribution<size_t> rdist(0, n - 1);
+        std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
         result.emplace(cpy[rdist(_e1)]);
     }
 
