@@ -252,22 +252,22 @@ if __name__ == '__main__':
     if not os.path.exists('/etc/scylla.d/housekeeping.cfg'):
         version_check = interactive_ask_service('Do you want to enable Scylla to check if there is a newer version of Scylla available?', 'Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step.', version_check)
         args.no_version_check = not version_check
-    if version_check:
-        with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
-            f.write('[housekeeping]\ncheck-version: True\n')
-        if is_systemd():
-            systemd_unit('scylla-housekeeping-daily.timer').unmask()
-            systemd_unit('scylla-housekeeping-restart.timer').unmask()
-    else:
-        with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
-            f.write('[housekeeping]\ncheck-version: False\n')
-        if is_systemd():
-            hk_daily = systemd_unit('scylla-housekeeping-daily.timer')
-            hk_daily.mask()
-            hk_daily.stop()
-            hk_restart = systemd_unit('scylla-housekeeping-restart.timer')
-            hk_restart.mask()
-            hk_restart.stop()
+        if version_check:
+            with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
+                f.write('[housekeeping]\ncheck-version: True\n')
+            if is_systemd():
+                systemd_unit('scylla-housekeeping-daily.timer').unmask()
+                systemd_unit('scylla-housekeeping-restart.timer').unmask()
+        else:
+            with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
+                f.write('[housekeeping]\ncheck-version: False\n')
+            if is_systemd():
+                hk_daily = systemd_unit('scylla-housekeeping-daily.timer')
+                hk_daily.mask()
+                hk_daily.stop()
+                hk_restart = systemd_unit('scylla-housekeeping-restart.timer')
+                hk_restart.mask()
+                hk_restart.stop()
 
     cur_version=out('scylla --version', exception=False)
     if len(cur_version) > 0:
