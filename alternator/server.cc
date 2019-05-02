@@ -103,6 +103,8 @@ void server::set_routes(routes& r) {
         slogger.warn("Got Request <{}>", op);
         if (op == "CreateTable") {
             return _executor.local().create_table(req->content);
+        } else if (op == "DescribeTable") {
+            return _executor.local().describe_table(req->content);
         } else if (op == "PutItem") {
             return _executor.local().put_item(req->content);
         } else if (op == "GetItem") {
