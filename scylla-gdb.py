@@ -11,6 +11,7 @@ from collections import defaultdict
 import sys
 import struct
 import random
+import bisect
 
 
 def template_arguments(gdb_type):
@@ -525,20 +526,23 @@ class scylla_task_histogram(gdb.Command):
                 text_end = int(items[2], 16)
                 break
 
+        sc = span_checker()
         vptr_count = defaultdict(int)
         scanned_pages = 0
         limit = 20000
         for idx in random.sample(range(0, nr_pages), nr_pages):
-            pool = pages[idx]['pool']
-            if not pool or pages[idx]['offset_in_span'] != 0:
+            span = sc.get_span(mem_start + idx * page_size)
+            if not span or span.index != idx or not span.is_small():
                 continue
+            pool = span.pool()
             if int(pool.dereference()['_object_size']) != size and size != 0:
                 continue
             scanned_pages += 1
             objsize = size if size != 0 else int(pool.dereference()['_object_size'])
-            span_size = pages[idx]['span_size'] * page_size
+            span_size = span.used_span_size() * page_size
             for idx2 in range(0, int(span_size / objsize)):
-                addr = (mem_start + idx * page_size + idx2 * objsize).reinterpret_cast(vptr_type).dereference()
+                obj_addr = span.start + idx2 * objsize
+                addr = gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference()
                 if addr >= text_start and addr <= text_end:
                     vptr_count[int(addr)] += 1
             if scanned_pages >= limit or len(vptr_count) >= limit:
@@ -734,6 +738,104 @@ def find_instances(type_name):
             yield gdb.Value(obj_addr).cast(ptr_type)
 
 
+class span(object):
+    """
+    Represents seastar allocator's memory span
+    """
+
+    def __init__(self, index, start, page):
+        """
+        :param index: index into cpu_mem.pages of the first page of the span
+        :param start: memory address of the first page of the span
+        :param page: seastar::memory::page* for the first page of the span
+        """
+        self.index = index
+        self.start = start
+        self.page = page
+
+    def is_free(self):
+        return self.page['free']
+
+    def pool(self):
+        """
+        Returns seastar::memory::small_pool* of this span.
+        Valid only when is_small().
+        """
+        return self.page['pool']
+
+    def is_small(self):
+        return not self.is_free() and self.page['pool']
+
+    def is_large(self):
+        return not self.is_free() and not self.page['pool']
+
+    def size(self):
+        return int(self.page['span_size'])
+
+    def used_span_size(self):
+        """
+        Returns the number of pages at the front of the span which are used by the allocator.
+
+        Due to https://github.com/scylladb/seastar/issues/625 there may be some
+        pages at the end of the span which are not used by the small pool.
+        We try to detect this. It's not 100% accurrate but should work in most cases.
+
+        Returns 0 for free spans.
+        """
+        n_pages = 0
+        pool = self.page['pool']
+        if self.page['free']:
+            return 0
+        if not pool:
+            return self.page['span_size']
+        for idx in range(int(self.page['span_size'])):
+            page = self.page.address + idx
+            if not page['pool'] or page['pool'] != pool or page['offset_in_span'] != idx:
+                break
+            n_pages += 1
+        return n_pages
+
+
+def spans():
+    cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+    page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
+    nr_pages = int(cpu_mem['nr_pages'])
+    pages = cpu_mem['pages']
+    mem_start = int(cpu_mem['memory'])
+    idx = 1
+    while idx < nr_pages:
+        page = pages[idx]
+        span_size = int(page['span_size'])
+        if span_size == 0:
+            idx += 1
+            continue
+        last_page = pages[idx + span_size - 1]
+        addr = mem_start + idx * page_size
+        yield span(idx, addr, page)
+        idx += span_size
+
+
+class span_checker(object):
+    def __init__(self):
+        self._page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
+        span_list = list(spans())
+        self._start_to_span = dict((s.start, s) for s in span_list)
+        self._starts = list(s.start for s in span_list)
+
+    def spans(self):
+        return self._start_to_span.values()
+
+    def get_span(self, ptr):
+        idx = bisect.bisect_right(self._starts, ptr)
+        if idx == 0:
+            return None
+        span_start = self._starts[idx - 1]
+        s = self._start_to_span[span_start]
+        if span_start + s.page['span_size'] * self._page_size <= ptr:
+            return None
+        return s
+
+
 class scylla_memory(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -790,37 +892,38 @@ class scylla_memory(gdb.Command):
         gdb.write('Small pools:\n')
         small_pools = cpu_mem['small_pools']
         nr = small_pools['nr_small_pools']
-        gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {wasted_percent:>5}\n'
-                  .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory', wasted_percent='wst%'))
+        gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {unused:>12} {wasted_percent:>5}\n'
+                  .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory',
+                          unused='unused', wasted_percent='wst%'))
         total_small_bytes = 0
+        sc = span_checker()
         for i in range(int(nr)):
             sp = small_pools['_u']['a'][i]
             object_size = int(sp['_object_size'])
             span_size = int(sp['_span_sizes']['preferred']) * page_size
             free_count = int(sp['_free_count'])
-            pages_in_use = int(sp['_pages_in_use'])
+            pages_in_use = 0
+            use_count = 0
+            for s in sc.spans():
+                if s.pool() == sp.address:
+                    pages_in_use += s.size()
+                    use_count += int(s.used_span_size() * page_size / object_size)
             memory = pages_in_use * page_size
             total_small_bytes += memory
-            # use_count can be off if we used fallback spans rather than preferred spans
-            use_count = int(memory / span_size) * int(span_size / object_size) - free_count
+            use_count -= free_count
             wasted = free_count * object_size
+            unused = memory - use_count * object_size
             wasted_percent = wasted * 100.0 / memory if memory else 0
-            gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {wasted_percent:5.1f}\n'
-                      .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, wasted_percent=wasted_percent))
+            gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {unused:12} {wasted_percent:5.1f}\n'
+                      .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, unused=unused,
+                              wasted_percent=wasted_percent))
         gdb.write('Small allocations: %d [B]\n' % total_small_bytes)
 
-        idx = 0
         large_allocs = defaultdict(int) # key: span size [B], value: span count
-        nr_pages = int(cpu_mem['nr_pages'])
-        pages = cpu_mem['pages']
-        while idx < nr_pages:
-            page = pages[idx]
-            span_size = int(page['span_size'])
-            if span_size == 0:
-                span_size = 1
-            if not page['pool'] and not page['free']:
+        for s in sc.spans():
+            span_size = s.size()
+            if s.is_large():
                 large_allocs[span_size * page_size] += 1
-            idx += span_size
 
         gdb.write('Page spans:\n')
         gdb.write('{index:5} {size:>13} {total:>13} {allocated_size:>13} {allocated_count:>7}\n'.format(
@@ -1078,8 +1181,7 @@ class pointer_metadata(object):
     def is_containing_page_free(self):
         return self._is_containing_page_free
 
-    @is_containing_page_free.setter
-    def is_containing_page_free(self):
+    def mark_free(self):
         self._is_containing_page_free = True
         self._is_live = False
 
@@ -1096,7 +1198,7 @@ class pointer_metadata(object):
         if self.is_small:
             msg += ', small (size <= %d)' % self.size
         else:
-            msg += ', large'
+            msg += ', large (size=%d)' % self.size
 
         if self.is_live:
             msg += ', live (0x%x +%d)' % (self.ptr - self.offset_in_object, self.offset_in_object)
@@ -1135,25 +1237,12 @@ class scylla_ptr(gdb.Command):
         pages = cpu_mem['pages']
         page = pages[ptr_page_idx]
 
-        def is_page_free(page_index):
-            for index in range(int(cpu_mem['nr_span_lists'])):
-                span_list = cpu_mem['free_spans'][index]
-                span_page_idx = span_list['_front']
-                while span_page_idx:
-                    span_page = pages[span_page_idx]
-                    if span_page_idx <= page_index < span_page_idx + span_page['span_size']:
-                        return True
-                    span_page_idx = span_page['link']['_next']
-            return False
-
-        if is_page_free(ptr_page_idx):
-            ptr_meta.is_containing_page_free = True
-            return ptr_meta
-
-        pool = page['pool']
-        offset_in_span = int(page['offset_in_span']) * page_size + ptr % page_size
-        first_page_in_span = cpu_mem['pages'][offset / page_size - page['offset_in_span']]
-        if pool:
+        span = span_checker().get_span(ptr)
+        offset_in_span = ptr - span.start
+        if offset_in_span >= span.used_span_size() * page_size:
+            ptr_meta.mark_free()
+        elif span.is_small():
+            pool = span.pool()
             object_size = int(pool['_object_size'])
             ptr_meta.size = object_size
             ptr_meta.is_small = True
@@ -1170,6 +1259,7 @@ class scylla_ptr(gdb.Command):
                 next_free = next_free.reinterpret_cast(free_object_ptr).dereference()
             if not free:
                 # span's free list
+                first_page_in_span = span.page
                 next_free = first_page_in_span['freelist']
                 while next_free:
                     if ptr >= next_free and ptr < next_free.reinterpret_cast(char_ptr) + object_size:
@@ -1183,6 +1273,9 @@ class scylla_ptr(gdb.Command):
                 ptr_meta.offset_in_object = offset_in_object
         else:
             ptr_meta.is_small = False
+            ptr_meta.is_live = not span.is_free()
+            ptr_meta.size = span.size() * page_size
+            ptr_meta.offset_in_object = ptr - span.start
 
         # FIXME: handle debug-mode build
         index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr))
