@@ -8,6 +8,8 @@
  * See the LICENSE.PROPRIETARY file in the top-level directory for licensing information.
  */
 
+#include <regex>
+
 #include "alternator/executor.hh"
 #include "log.hh"
 #include "json.hh"
@@ -150,11 +152,31 @@ future<json::json_return_type> executor::describe_table(sstring content) {
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
+// The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
+// specifies that table names "names must be between 3 and 255 characters long
+// and can contain only the following characters: a-z, A-Z, 0-9, _ (underscore), - (dash), . (dot)
+// validate_table_name throws the appropriate api_error if this validation fails.
+static void validate_table_name(const sstring& name) {
+    if (name.length() < 3 || name.length() > 255) {
+        throw api_error(reply::status_type::bad_request, "ValidationException",
+                "TableName must be at least 3 characters long and at most 255 characters long");
+    }
+    static std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
+    if (!std::regex_match(name.c_str(), valid_table_name_chars)) {
+        throw api_error(reply::status_type::bad_request, "ValidationException",
+                "TableName must satisfy regular expression pattern: [a-zA-Z0-9_.-]+");
+    }
+}
+
 future<json::json_return_type> executor::create_table(sstring content) {
     Json::Value table_info = json::to_json_value(content);
     elogger.warn("Creating table {}", table_info.toStyledString());
 
     sstring table_name = table_info[TABLE_NAME].asString();
+    validate_table_name(table_name);
+    // FIXME: the table name's being valid in Dynamo doesn't make it valid
+    // in Scylla. May need to quote or shorten table names.
+
     const Json::Value& key_schema = table_info[KEY_SCHEMA];
     const Json::Value& attribute_definitions = table_info[ATTRIBUTE_DEFINITIONS];
 
