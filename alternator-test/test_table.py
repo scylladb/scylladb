@@ -72,7 +72,7 @@ def test_create_table_unsupported_names(dynamodb):
         create_table(dynamodb, 'nn')
     with pytest.raises(ClientError, match='at most 255 characters long'):
         create_table(dynamodb, 'n' * 256)
-    with pytest.raises(ClientError, match='validation error detected'):
+    with pytest.raises(ClientError, match='ValidationException'):
         create_table(dynamodb, 'nyh@test')
 
 # On the other hand, names following the above rules should be accepted. Even
