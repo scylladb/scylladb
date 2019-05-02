@@ -1,6 +1,8 @@
 # Tests for the basic table operations: CreateTable, DeleteTable, DescribeTable.
 
 import pytest
+from botocore.exceptions import ClientError
+import re
 
 # Utility function for create a table with a given name and some valid
 # schema.. This function initiates the table's creation, but doesn't
@@ -78,4 +80,16 @@ def test_create_table_unsupported_names(dynamodb):
 def test_create_and_delete_table_non_scylla_name(dynamodb):
     create_and_delete_table(dynamodb, '.alternator_test')
 
-# TODO: check case sensitivity
+
+# DescribeTable error path: trying to describe a non-existent table should
+# result in a ResourceNotFoundException.
+def test_describe_table_non_existent_table(dynamodb):
+    with pytest.raises(ClientError, match='ResourceNotFoundException') as einfo:
+        dynamodb.meta.client.describe_table(TableName='non_existent_table')
+    # As one of the first error-path tests that we wrote, let's test in more
+    # detail that the error reply has the appropriate fields:
+    response = einfo.value.response
+    print(response)
+    err = response['Error']
+    assert err['Code'] == 'ResourceNotFoundException'
+    assert re.match(err['Message'], 'Requested resource not found: Table: non_existent_table not found')
