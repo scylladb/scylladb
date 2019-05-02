@@ -23,6 +23,8 @@
 #include "cql3/functions/functions.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
+#include "lua.hh"
+#include "database.hh"
 
 namespace cql3 {
 
@@ -40,8 +42,15 @@ void create_function_statement::create(service::storage_proxy& proxy, functions:
     for (const auto& arg_name : _arg_names) {
         arg_names.push_back(arg_name->to_string());
     }
-    _func = ::make_shared<functions::user_function>(
-            _name, _arg_types, std::move(arg_names), _body, _language, std::move(return_type), _called_on_null_input);
+
+    auto&& db = proxy.get_db().local();
+    lua::runtime_config cfg = lua::make_runtime_config(db.get_config());
+
+    // Checking that the function compiles also produces bitcode
+    auto bitcode = lua::compile(cfg, arg_names, _body);
+
+    _func = ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
+        std::move(return_type), _called_on_null_input, std::move(bitcode), std::move(cfg));
     return;
 }
 

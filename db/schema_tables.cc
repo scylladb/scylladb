@@ -89,6 +89,7 @@
 
 #include "index/target_parser.hh"
 #include "service/storage_service.hh"
+#include "lua.hh"
 
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;
@@ -1289,10 +1290,23 @@ static shared_ptr<cql3::functions::user_function> create_func(database& db, cons
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
     auto arg_types = read_arg_types(row, name.keyspace);
     data_type return_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("return_type"));
-    return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types),
-            get_list<sstring>(row, "argument_names"), row.get_nonnull<sstring>("body"),
-            row.get_nonnull<sstring>("language"), std::move(return_type),
-            row.get_nonnull<bool>("called_on_null_input"));
+
+    // FIXME: We already computed the bitcode in
+    // create_function_statement, but it is not clear how to get it
+    // here. In this point in the code we only get what was saved in
+    // system_schema.functions, and we don't want to store the bitcode
+    // If this was not the replica that the client connected to we do
+    // have to produce bitcode in at least one shard. Right now this
+    // gets run in each shard.
+
+    auto arg_names = get_list<sstring>(row, "argument_names");
+    auto body = row.get_nonnull<sstring>("body");
+    lua::runtime_config cfg = lua::make_runtime_config(db.get_config());
+    auto bitcode = lua::compile(cfg, arg_names, body);
+
+    return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
+            std::move(body), row.get_nonnull<sstring>("language"), std::move(return_type),
+            row.get_nonnull<bool>("called_on_null_input"), std::move(bitcode), std::move(cfg));
 }
 
 static void merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after,
