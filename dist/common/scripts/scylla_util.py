@@ -304,7 +304,7 @@ def parse_os_release_line(line):
     val = shlex.split(data)[0]
     return (id, val.split(' ') if id == 'ID' or id == 'ID_LIKE' else val)
 
-os_release = dict([parse_os_release_line(x) for x in open('/etc/os-release').read().splitlines()])
+os_release = dict([parse_os_release_line(x) for x in open('/etc/os-release').read().splitlines() if re.match(r'\w+=', x) ])
 
 def is_debian_variant():
     d = os_release['ID_LIKE'] if 'ID_LIKE' in os_release else os_release['ID']
