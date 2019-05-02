@@ -23,6 +23,7 @@
 #include "cql3/result_set.hh"
 #include "bytes.hh"
 #include "cql3/update_parameters.hh"
+#include "server.hh"
 
 static logging::logger elogger("alternator-executor");
 
@@ -116,6 +117,37 @@ static void supplement_table_info(Json::Value& descr, const schema& schema) {
     descr[CREATION_DATE_TIME] = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
     descr[TABLE_STATUS] = ACTIVE;
     descr[TABLE_ID] = schema.id().to_sstring().c_str();
+}
+future<json::json_return_type> executor::describe_table(sstring content) {
+    Json::Value request = json::to_json_value(content);
+    elogger.trace("Describing table {}", request.toStyledString());
+
+    // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
+    sstring table_name = request["TableName"].asString();
+    if (!_proxy.get_db().local().has_schema(KEYSPACE, table_name)) {
+        throw api_error(reply::status_type::bad_request, "ResourceNotFoundException",
+                format("Requested resource not found: Table: {} not found", table_name));
+    }
+
+    Json::Value table_description(Json::objectValue);
+    table_description["TableName"] = table_name.c_str();
+    // FIXME: take the tables creation time, not the current time!
+    table_description["CreationDateTime"] = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
+    // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
+    // the table may be in "Creating" state until creating is finished.
+    // We don't currently do this in Alternator - instead CreateTable waits
+    // until the table is really available. So/ DescribeTable returns either
+    // ACTIVE or doesn't exist at all (and DescribeTable returns an error).
+    // The other states (CREATING, UPDATING, DELETING) are not currently
+    // returned.
+    table_description["TableStatus"] = "ACTIVE";
+    // FIXME: more attributes! Check https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableDescription.html#DDB-Type-TableDescription-TableStatus but also run a test to see what DyanmoDB really fills
+    // maybe for TableId or TableArn use  schema.id().to_sstring().c_str();
+    // Of course, the whole schema is missing!
+    Json::Value response(Json::objectValue);
+    response["TableDescription"] = std::move(table_description);
+    elogger.trace("returning {}", response.toStyledString());
+    return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
 future<json::json_return_type> executor::create_table(sstring content) {
