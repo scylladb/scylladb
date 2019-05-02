@@ -80,6 +80,11 @@ def test_create_table_unsupported_names(dynamodb):
 def test_create_and_delete_table_non_scylla_name(dynamodb):
     create_and_delete_table(dynamodb, '.alternator_test')
 
+# names with 255 characters are allowed in Dynamo. But it's not easy to
+# support - CQL is limited to NAME_LENGTH=48 characters and if we bypass
+# it we run into a problem to create a directory with a very long name.
+def test_create_and_delete_table_very_long_name(dynamodb):
+    create_and_delete_table(dynamodb, 'n' * 255)
 
 # DescribeTable error path: trying to describe a non-existent table should
 # result in a ResourceNotFoundException.
