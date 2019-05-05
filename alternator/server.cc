@@ -101,6 +101,7 @@ void server::set_routes(routes& r) {
         sstring op = split_target.empty() ? sstring() : split_target.back();
 
         slogger.warn("Got Request <{}>", op);
+        // FIXME: this should be a table lookup, not a long list of else.
         if (op == "CreateTable") {
             return _executor.local().create_table(req->content);
         } else if (op == "DescribeTable") {
@@ -110,7 +111,8 @@ void server::set_routes(routes& r) {
         } else if (op == "GetItem") {
             return _executor.local().get_item(req->content);
         }
-        throw std::runtime_error(format("Operation not supported: {}", req->content));
+        throw api_error(reply::status_type::bad_request, "UnknownOperationException",
+                format("Unsupported operation {}", op));
     });
 
     r.add(operation_type::POST, url("/"), handler);
