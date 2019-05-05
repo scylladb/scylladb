@@ -147,7 +147,7 @@ future<json::json_return_type> executor::describe_table(sstring content) {
     // maybe for TableId or TableArn use  schema.id().to_sstring().c_str();
     // Of course, the whole schema is missing!
     Json::Value response(Json::objectValue);
-    response["TableDescription"] = std::move(table_description);
+    response["Table"] = std::move(table_description);
     elogger.trace("returning {}", response.toStyledString());
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
