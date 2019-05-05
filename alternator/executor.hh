@@ -31,6 +31,7 @@ public:
 
     future<json::json_return_type> create_table(sstring content);
     future<json::json_return_type> describe_table(sstring content);
+    future<json::json_return_type> delete_table(sstring content);
     future<json::json_return_type> put_item(sstring content);
     future<json::json_return_type> get_item(sstring content);
 

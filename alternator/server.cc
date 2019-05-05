@@ -106,6 +106,8 @@ void server::set_routes(routes& r) {
             return _executor.local().create_table(req->content);
         } else if (op == "DescribeTable") {
             return _executor.local().describe_table(req->content);
+        } else if (op == "DeleteTable") {
+            return _executor.local().delete_table(req->content);
         } else if (op == "PutItem") {
             return _executor.local().put_item(req->content);
         } else if (op == "GetItem") {
