@@ -148,9 +148,18 @@ db::commitlog::descriptor::descriptor(const sstring& filename, const std::string
         : descriptor([&filename, &fname_prefix]() {
             std::smatch m;
             // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
-                std::regex rx("(?:.*/)?(?:Recycled-)?" + fname_prefix + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
+                std::regex rx("(?:Recycled-)?" + fname_prefix + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
                 std::string sfilename = filename;
-                if (!std::regex_match(sfilename, m, rx)) {
+                auto cbegin = sfilename.cbegin();
+                // skip the leading path
+                // Note: we're using rfind rather than the regex above
+                // since it may run out of stack in debug builds.
+                // See https://github.com/scylladb/scylla/issues/4464
+                auto pos = std::string(filename).rfind('/');
+                if (pos != std::string::npos) {
+                    cbegin += pos + 1;
+                }
+                if (!std::regex_match(cbegin, sfilename.cend(), m, rx)) {
                     throw std::domain_error("Cannot parse the version of the file: " + filename);
                 }
                 if (m[3].length() == 0) {
