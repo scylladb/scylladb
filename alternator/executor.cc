@@ -306,8 +306,7 @@ future<json::json_return_type> executor::put_item(sstring content) {
 }
 
 static Json::Value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<sstring>&& attrs_to_get) {
-    Json::Value item_descr(Json::objectValue);
-    item_descr[ITEM] = Json::Value(Json::objectValue);
+    Json::Value item(Json::objectValue);
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
     query::result_view::consume(*query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
@@ -319,8 +318,8 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
         for (const bytes_opt& cell : result_row) {
             sstring column_name = (*column_it)->name_as_text();
             if (column_name != ATTRS) {
-                if (attrs_to_get.count(column_name) > 0) {
-                    Json::Value& field = item_descr[ITEM][column_name.c_str()];
+                if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
+                    Json::Value& field = item[column_name.c_str()];
                     field[type_to_sstring((*column_it)->type)] = json::to_json_value((*column_it)->type->to_json_string(cell));
                 }
             } else if (cell) {
@@ -328,14 +327,16 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
                 auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
                 for (auto entry : keys_and_values) {
                     sstring attr_name = value_cast<sstring>(entry.first);
-                    if (attrs_to_get.count(attr_name) > 0) {
-                        item_descr[ITEM][attr_name] = json::to_json_value(value_cast<sstring>(entry.second));
+                    if (attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
+                        item[attr_name] = json::to_json_value(value_cast<sstring>(entry.second));
                     }
                 }
             }
             ++column_it;
         }
     }
+    Json::Value item_descr(Json::objectValue);
+    item_descr[ITEM] = item;
     return item_descr;
 }
 
