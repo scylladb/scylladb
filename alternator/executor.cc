@@ -297,7 +297,10 @@ future<json::json_return_type> executor::put_item(sstring content) {
     elogger.warn("Applying mutation {}", m);
 
     return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr(), empty_service_permit()).then([] () {
-        return make_ready_future<json::json_return_type>("{}");
+        // The Boto3 gets confused if we return just an empty structure {},
+        // thinking it isn't JSON at all. I don't know why, but putting an
+        // empty Attributes field in the result solves the problem.
+        return make_ready_future<json::json_return_type>("{ \"Attributes\": {} }");
     });
 
 }
