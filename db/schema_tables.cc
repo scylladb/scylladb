@@ -783,7 +783,7 @@ static void delete_schema_version(mutation& m) {
     if (m.column_family_id() != scylla_tables()->id()) {
         return;
     }
-    const column_definition& version_col = *scylla_tables()->get_column_definition(to_bytes("version"));
+    const column_definition& version_col = *m.schema()->get_column_definition(to_bytes("version"));
     for (auto&& row : m.partition().clustered_rows()) {
         auto&& cells = row.row().cells();
         auto&& cell = cells.find_cell(version_col.id);
