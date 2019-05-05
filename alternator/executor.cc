@@ -120,12 +120,30 @@ static void supplement_table_info(Json::Value& descr, const schema& schema) {
     descr[TABLE_STATUS] = ACTIVE;
     descr[TABLE_ID] = schema.id().to_sstring().c_str();
 }
+
+// The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
+// specifies that table names "names must be between 3 and 255 characters long
+// and can contain only the following characters: a-z, A-Z, 0-9, _ (underscore), - (dash), . (dot)
+// validate_table_name throws the appropriate api_error if this validation fails.
+static void validate_table_name(const sstring& name) {
+    if (name.length() < 3 || name.length() > 255) {
+        throw api_error(reply::status_type::bad_request, "ValidationException",
+                "TableName must be at least 3 characters long and at most 255 characters long");
+    }
+    static std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
+    if (!std::regex_match(name.c_str(), valid_table_name_chars)) {
+        throw api_error(reply::status_type::bad_request, "ValidationException",
+                "TableName must satisfy regular expression pattern: [a-zA-Z0-9_.-]+");
+    }
+}
+
 future<json::json_return_type> executor::describe_table(sstring content) {
     Json::Value request = json::to_json_value(content);
     elogger.trace("Describing table {}", request.toStyledString());
 
     // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
     sstring table_name = request["TableName"].asString();
+    validate_table_name(table_name);
     if (!_proxy.get_db().local().has_schema(KEYSPACE, table_name)) {
         throw api_error(reply::status_type::bad_request, "ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
@@ -152,20 +170,28 @@ future<json::json_return_type> executor::describe_table(sstring content) {
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
-// The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
-// specifies that table names "names must be between 3 and 255 characters long
-// and can contain only the following characters: a-z, A-Z, 0-9, _ (underscore), - (dash), . (dot)
-// validate_table_name throws the appropriate api_error if this validation fails.
-static void validate_table_name(const sstring& name) {
-    if (name.length() < 3 || name.length() > 255) {
-        throw api_error(reply::status_type::bad_request, "ValidationException",
-                "TableName must be at least 3 characters long and at most 255 characters long");
+future<json::json_return_type> executor::delete_table(sstring content) {
+    Json::Value request = json::to_json_value(content);
+    elogger.trace("Deleting table {}", request.toStyledString());
+
+    // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
+    sstring table_name = request["TableName"].asString();
+    validate_table_name(table_name);
+    if (!_proxy.get_db().local().has_schema(KEYSPACE, table_name)) {
+        throw api_error(reply::status_type::bad_request, "ResourceNotFoundException",
+                format("Requested resource not found: Table: {} not found", table_name));
     }
-    static std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
-    if (!std::regex_match(name.c_str(), valid_table_name_chars)) {
-        throw api_error(reply::status_type::bad_request, "ValidationException",
-                "TableName must satisfy regular expression pattern: [a-zA-Z0-9_.-]+");
-    }
+
+    return _mm.announce_column_family_drop(KEYSPACE, table_name).then([table_name = std::move(table_name)] {
+        // FIXME: need more attributes?
+        Json::Value table_description(Json::objectValue);
+        table_description["TableName"] = table_name.c_str();
+        table_description["TableStatus"] = "DELETING";
+        Json::Value response(Json::objectValue);
+        response["TableDescription"] = std::move(table_description);
+        elogger.trace("returning {}", response.toStyledString());
+        return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
+    });
 }
 
 future<json::json_return_type> executor::create_table(sstring content) {
