@@ -19,8 +19,10 @@ def test_basic_string_put_and_get(test_table):
     p = random_string()
     c = random_string()
     val = random_string()
-    test_table.put_item(Item={'p': p, 'c': c, 'attribute': val})
+    val2 = random_string()
+    test_table.put_item(Item={'p': p, 'c': c, 'attribute': val, 'another': val2})
     item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
     assert item['p'] == p
     assert item['c'] == c
     assert item['attribute'] == val
+    assert item['another'] == val2
