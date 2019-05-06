@@ -9,8 +9,24 @@ for gid in $(id -G); do
     group_args+=(--group-add "$gid")
 done
 
+interactive=
+
 if [[ "$1" = -* ]]; then
     while [[ "$1" != "--" && $# != 0 ]]; do
+	case "$1" in
+	    --*)
+		if [[ "$1" = --interactive || "$1" = --interactive=true ]]; then
+		    interactive=y
+		fi
+		;;
+	    -*)
+		if [[ "$1" = -*i* ]]; then
+		    interactive=y
+		fi
+		;;
+	    *)
+		;;
+	esac
 	docker_args+=("$1")
 	shift
     done
@@ -21,9 +37,7 @@ if [[ "$1" = -* ]]; then
     shift
 fi
 
-container=$(
-    docker run \
-       --detach=true \
+docker_common_args=(
        --network host \
        -u "$(id -u):$(id -g)" \
        "${group_args[@]}" \
@@ -38,6 +52,18 @@ container=$(
        "${docker_args[@]}" \
        "$(<"$here/image")" \
        "$@"
+)
+
+if [[ -n "$interactive" ]]; then
+    # If --interactive was given on the command line, we can't run in detached mode
+    # as it will be impossible to interact with the container.
+    exec docker run --rm "${docker_common_args[@]}"
+fi
+
+container=$(
+    docker run \
+       "--detach=true" \
+       "${docker_common_args[@]}"
 )
 
 kill_it() {
