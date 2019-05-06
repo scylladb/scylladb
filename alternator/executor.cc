@@ -139,12 +139,12 @@ static void validate_table_name(const sstring& name) {
     // are limited to 255 bytes, we need to limit table names to 222 bytes,
     // instead of 255.
     if (name.length() < 3 || name.length() > 222) {
-        throw api_error(reply::status_type::bad_request, "ValidationException",
+        throw api_error("ValidationException",
                 "TableName must be at least 3 characters long and at most 222 characters long");
     }
     static std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
     if (!std::regex_match(name.c_str(), valid_table_name_chars)) {
-        throw api_error(reply::status_type::bad_request, "ValidationException",
+        throw api_error("ValidationException",
                 "TableName must satisfy regular expression pattern: [a-zA-Z0-9_.-]+");
     }
 }
@@ -157,7 +157,7 @@ future<json::json_return_type> executor::describe_table(sstring content) {
     sstring table_name = request["TableName"].asString();
     validate_table_name(table_name);
     if (!_proxy.get_db().local().has_schema(KEYSPACE, table_name)) {
-        throw api_error(reply::status_type::bad_request, "ResourceNotFoundException",
+        throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
     }
 
@@ -190,7 +190,7 @@ future<json::json_return_type> executor::delete_table(sstring content) {
     sstring table_name = request["TableName"].asString();
     validate_table_name(table_name);
     if (!_proxy.get_db().local().has_schema(KEYSPACE, table_name)) {
-        throw api_error(reply::status_type::bad_request, "ResourceNotFoundException",
+        throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
     }
 
@@ -216,7 +216,7 @@ static data_type parse_key_type(const std::string& type) {
         case 'N': return long_type; // FIXME: this actually needs to be a new number type, not long
         }
     }
-    throw api_error(reply::status_type::bad_request, "ValidationException",
+    throw api_error("ValidationException",
             format("Invalid key type '{}', can only be S, B or N.", type));
 }
 
@@ -229,7 +229,7 @@ static void add_column(schema_builder& builder, const std::string& name, const J
             return;
         }
     }
-    throw api_error(reply::status_type::bad_request, "ValidationException",
+    throw api_error("ValidationException",
             format("KeySchema key '{}' missing in AttributeDefinitions", name));
 }
 
@@ -251,17 +251,17 @@ future<json::json_return_type> executor::create_table(sstring content) {
     // first must be a HASH, the optional second one can be a RANGE.
     // These key names must also be present in the attributes_definitions.
     if (!key_schema.isArray() || key_schema.size() < 1 || key_schema.size() > 2) {
-        throw api_error(reply::status_type::bad_request, "ValidationException",
+        throw api_error("ValidationException",
                 "KeySchema must list exactly one or two key columns");
     }
     if (key_schema[0]["KeyType"] != "HASH") {
-        throw api_error(reply::status_type::bad_request, "ValidationException",
+        throw api_error("ValidationException",
                 "First key in KeySchema must be a HASH key");
     }
     add_column(builder, key_schema[0]["AttributeName"].asString(), attribute_definitions, column_kind::partition_key);
     if (key_schema.size() == 2) {
         if (key_schema[1]["KeyType"] != "RANGE") {
-            throw api_error(reply::status_type::bad_request, "ValidationException",
+            throw api_error("ValidationException",
                     "Second key in KeySchema must be a RANGE key");
         }
         add_column(builder, key_schema[1]["AttributeName"].asString(), attribute_definitions, column_kind::partition_key);
@@ -277,7 +277,7 @@ future<json::json_return_type> executor::create_table(sstring content) {
         return make_ready_future<json::json_return_type>(make_jsonable(std::move(status)));
     }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
         return make_exception_future<json::json_return_type>(
-                api_error(reply::status_type::bad_request, "ResourceInUseException",
+                api_error("ResourceInUseException",
                         format("Table {} already exists", table_name)));
     });
 }
@@ -314,7 +314,7 @@ future<json::json_return_type> executor::put_item(sstring content) {
     try {
         schema = _proxy.get_db().local().find_schema(KEYSPACE, table_name);
     } catch(no_such_column_family&) {
-        throw api_error(reply::status_type::bad_request, "ResourceNotFoundException",
+        throw api_error("ResourceNotFoundException",
                  format("Requested resource not found: Table: {} not found", table_name));
     }
     partition_key pk = pk_from_json(item, schema);
@@ -426,6 +426,8 @@ future<> executor::start() {
         return make_ready_future<>();
     }
 
+    // FIXME: the RF of this keyspace should be configurable: RF=1 makes
+    // sense on test setups, but not on real clusters.
     auto ksm = keyspace_metadata::new_keyspace(KEYSPACE, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", "1"}}, true);
     return _mm.announce_new_keyspace(ksm, api::min_timestamp, false).handle_exception_type([] (exceptions::already_exists_exception& ignored) {});
 }
