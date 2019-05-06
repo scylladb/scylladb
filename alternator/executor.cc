@@ -273,8 +273,13 @@ future<json::json_return_type> executor::put_item(sstring content) {
 
     sstring table_name = update_info[TABLE_NAME].asString();
     const Json::Value& item = update_info[ITEM];
-    schema_ptr schema = _proxy.get_db().local().find_schema(KEYSPACE, table_name);
-
+    schema_ptr schema;
+    try {
+        schema = _proxy.get_db().local().find_schema(KEYSPACE, table_name);
+    } catch(no_such_column_family&) {
+        throw api_error(reply::status_type::bad_request, "ResourceNotFoundException",
+                 format("Requested resource not found: Table: {} not found", table_name));
+    }
     partition_key pk = pk_from_json(item, schema);
     clustering_key ck = (schema->clustering_key_size() > 0) ? ck_from_json(item, schema) : clustering_key::make_empty();
 
