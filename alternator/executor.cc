@@ -124,9 +124,14 @@ static void supplement_table_info(Json::Value& descr, const schema& schema) {
 // and can contain only the following characters: a-z, A-Z, 0-9, _ (underscore), - (dash), . (dot)
 // validate_table_name throws the appropriate api_error if this validation fails.
 static void validate_table_name(const sstring& name) {
-    if (name.length() < 3 || name.length() > 255) {
+    // FIXME: Although we would like to support table names up to 255
+    // bytes, like DynamoDB, Scylla creates a directory whose name is the
+    // table's name plus 33 bytes (dash and UUID), and since directory names
+    // are limited to 255 bytes, we need to limit table names to 222 bytes,
+    // instead of 255.
+    if (name.length() < 3 || name.length() > 222) {
         throw api_error(reply::status_type::bad_request, "ValidationException",
-                "TableName must be at least 3 characters long and at most 255 characters long");
+                "TableName must be at least 3 characters long and at most 222 characters long");
     }
     static std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
     if (!std::regex_match(name.c_str(), valid_table_name_chars)) {
