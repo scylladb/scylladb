@@ -32,6 +32,7 @@ import re
 import glob
 import urllib.request
 from pkg_resources import parse_version
+import multiprocessing as mp
 
 VERSION = "1.0"
 quiet = False
@@ -59,11 +60,23 @@ def sh_command(*args):
         raise Exception(err)
     return out
 
+def get_url(path):
+    return urllib.request.urlopen(path).read().decode('utf-8')
 
 def get_json_from_url(path):
-    data = urllib.request.urlopen(path).read()
-    return json.loads(data.decode('utf-8'))
-
+    pool = mp.Pool(processes=1)
+    # Unfortunately the timeout parameter to urlopen seems to be something internal and is not close or
+    # near a wallclock timeout. In my experiments, I could see a factor of up to 4, with a 5-second timeout
+    # passed to urlopen timing out in 20s, which creates a bad user experience. We will then use multiprocessing
+    # to enforce a wallclock timeout.
+    result = pool.apply_async(get_url, args=(path,))
+    try:
+        retval = result.get(timeout=5)
+    except mp.TimeoutError as err:
+        pool.terminate()
+        pool.join()
+        raise
+    return json.loads(retval)
 
 def get_api(path):
     return get_json_from_url("http://" + api_address + path)
