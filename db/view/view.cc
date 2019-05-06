@@ -143,10 +143,9 @@ void view_info::initialize_base_dependent_fields(const schema& base) {
 }
 
 bool view_info::is_index() const {
-    if (!_is_index) {
-        _is_index = service::get_local_storage_service().db().local().find_column_family(base_id()).get_index_manager().is_index(_schema);
-    }
-    return *_is_index;
+    //TODO(sarna): result of this call can be cached instead of calling index_manager::is_index every time
+    column_family& base_cf = service::get_local_storage_service().db().local().find_column_family(base_id());
+    return base_cf.get_index_manager().is_index(view_ptr(_schema.shared_from_this()));
 }
 
 namespace db {
