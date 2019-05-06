@@ -137,12 +137,12 @@ static void validate_table_name(const sstring& name) {
     // bytes, like DynamoDB, Scylla creates a directory whose name is the
     // table's name plus 33 bytes (dash and UUID), and since directory names
     // are limited to 255 bytes, we need to limit table names to 222 bytes,
-    // instead of 255.
+    // instead of 255. See https://github.com/scylladb/scylla/issues/4480
     if (name.length() < 3 || name.length() > 222) {
         throw api_error("ValidationException",
                 "TableName must be at least 3 characters long and at most 222 characters long");
     }
-    static std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
+    static const std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
     if (!std::regex_match(name.c_str(), valid_table_name_chars)) {
         throw api_error("ValidationException",
                 "TableName must satisfy regular expression pattern: [a-zA-Z0-9_.-]+");
