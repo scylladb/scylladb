@@ -35,7 +35,7 @@ inline std::vector<sstring> split(const sstring& text, const char* separator) {
 // DynamoDB HTTP error responses are structured as follows
 // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html
 // Our handlers throw an exception to report an error. If the exception
-// is of type alternator_api_error, it unwrapped and properly reported to
+// is of type alternator::api_error, it unwrapped and properly reported to
 // the user directly. Other exceptions are unexpected, and reported as
 // Internal Server Error.
 class api_handler : public handler_base {
@@ -54,9 +54,10 @@ public:
                  } catch (api_error &ae) {
                      ret = ae;
                  } catch (...) {
-                     ret = api_error(reply::status_type::internal_server_error,
+                     ret = api_error(
                              "Internal Server Error",
-                             format("Internal server error: {}", std::current_exception()));
+                             format("Internal server error: {}", std::current_exception()),
+                             reply::status_type::internal_server_error);
                  }
                  // FIXME: what is this version number?
                  rep->_content += "{\"__type\":\"com.amazonaws.dynamodb.v20120810#" + ret._type + "\"," +
@@ -113,7 +114,7 @@ void server::set_routes(routes& r) {
         } else if (op == "GetItem") {
             return _executor.local().get_item(req->content);
         }
-        throw api_error(reply::status_type::bad_request, "UnknownOperationException",
+        throw api_error("UnknownOperationException",
                 format("Unsupported operation {}", op));
     });
 
