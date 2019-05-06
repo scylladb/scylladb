@@ -43,6 +43,7 @@
 #include "types/set.hh"
 #include "db/config.hh"
 #include "sstables/compaction_manager.hh"
+#include "exception_utils.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -1568,22 +1569,30 @@ SEASTAR_TEST_CASE(test_user_type) {
     });
 }
 
+namespace {
+
+using std::experimental::source_location;
+
+auto validate_request_failure(
+        cql_test_env& env,
+        const sstring& request,
+        const sstring& expected_message,
+        const source_location& loc = source_location::current()) {
+    return futurize_apply([&] { return env.execute_cql(request); })
+        .then_wrapped([expected_message, loc] (future<shared_ptr<cql_transport::messages::result_message>> f) {
+                          BOOST_REQUIRE_EXCEPTION(f.get(),
+                                                  exceptions::invalid_request_exception,
+                                                  exception_predicate::message_equals(expected_message, loc));
+                      });
+};
+
+} // anonymous namespace
+
 //
 // Since durations don't have a well-defined ordering on their semantic value, a number of restrictions exist on their
 // use.
 //
 SEASTAR_TEST_CASE(test_duration_restrictions) {
-    auto validate_request_failure = [] (cql_test_env& env, const sstring& request, const sstring& expected_message) {
-        return futurize_apply([&] { return env.execute_cql(request); }).then_wrapped([expected_message] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            BOOST_REQUIRE_EXCEPTION(f.get(),
-                exceptions::invalid_request_exception,
-                [&expected_message](const exceptions::invalid_request_exception& ire) {
-                    BOOST_REQUIRE_EQUAL(expected_message, ire.what());
-                    return true;
-                });
-        });
-    };
-
     return do_with_cql_env([&] (cql_test_env& env) {
         return make_ready_future<>().then([&] {
             // Disallow "direct" use of durations in ordered collection types to avoid user confusion when their

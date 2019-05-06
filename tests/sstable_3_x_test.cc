@@ -51,6 +51,7 @@
 #include "encoding_stats.hh"
 #include "sstables/mc/writer.hh"
 #include "simple_schema.hh"
+#include "exception_utils.hh"
 
 using namespace sstables;
 
@@ -1261,6 +1262,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_static_row_read) {
 // INSERT INTO test_ks.test_table(pk, ck, v) VALUES(2, 20, 200);
 // INSERT INTO test_ks.test_table(pk, ck, v) VALUES(3, 30, 300);
 
+using exception_predicate::message_equals;
+
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_random_partitioner) {
     auto abj = defer([] { await_background_jobs().get(); });
     const sstring uncompressed_random_partitioner_path =
@@ -1275,11 +1278,11 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_random_partitioner) {
 
     sstable_assertions sst(uncompressed_random_partitioner_schema,
                            uncompressed_random_partitioner_path);
-    auto check = [] (const std::runtime_error& e) {
-        using namespace std::string_literals;
-        return e.what() == "SSTable tests/sstables/3.x/uncompressed/random_partitioner/mc-1-big-Data.db uses org.apache.cassandra.dht.RandomPartitioner partitioner which is different than org.apache.cassandra.dht.Murmur3Partitioner partitioner used by the database"s;
-    };
-    BOOST_REQUIRE_EXCEPTION(sst.load(), std::runtime_error, check);
+    using namespace std::string_literals;
+    BOOST_REQUIRE_EXCEPTION(sst.load(), std::runtime_error,
+        message_equals("SSTable tests/sstables/3.x/uncompressed/random_partitioner/mc-1-big-Data.db uses "
+                       "org.apache.cassandra.dht.RandomPartitioner partitioner which is different than "
+                       "org.apache.cassandra.dht.Murmur3Partitioner partitioner used by the database"s));
 }
 // Following tests run on files in tests/sstables/3.x/uncompressed/compound_static_row
 // They were created using following CQL statements:
@@ -4994,9 +4997,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
                 .produces_partition_end()
                 .produces_end_of_stream(),
             std::exception,
-            [&] (const std::exception& e) {
-                return e.what() == "Column val1 missing in current schema in sstable " + sst->get_filename();
-            });
+            message_equals("Column val1 missing in current schema in sstable " + sst->get_filename()));
     }
 }
 

@@ -26,6 +26,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <string_view>
+#include "exception_utils.hh"
 
 namespace {
 
@@ -68,45 +69,38 @@ BOOST_AUTO_TEST_CASE(parse_standard) {
     BOOST_REQUIRE_EQUAL(make_duration(15, 0, 130 * ns_per_m), cql_duration("1y3mo2h10m"));
 }
 
+using exception_predicate::message_equals;
+
 BOOST_AUTO_TEST_CASE(parse_standard_syntax_error) {
     // Read the entire input.
-    BOOST_REQUIRE_EXCEPTION(cql_duration("1y500"), cql_duration_error, [](auto&& exn) {
-        return std::string_view(exn.what()) == "Unable to convert '1y500' to a duration";
-    });
+    BOOST_REQUIRE_EXCEPTION(cql_duration("1y500"), cql_duration_error,
+                            message_equals("Unable to convert '1y500' to a duration"));
 
     // Do not skip invalid characters in the middle.
-    BOOST_REQUIRE_EXCEPTION(cql_duration("1y  xxx  500d"), cql_duration_error, [](auto&& exn) {
-        return std::string_view(exn.what()) == "Unable to convert '1y  xxx  500d' to a duration";
-    });
+    BOOST_REQUIRE_EXCEPTION(cql_duration("1y  xxx  500d"), cql_duration_error,
+                            message_equals("Unable to convert '1y  xxx  500d' to a duration"));
 
     // Do not skip invalid characters at the beginning.
-    BOOST_REQUIRE_EXCEPTION(cql_duration("xxx1y500d"), cql_duration_error, [](auto&& exn) {
-        return std::string_view(exn.what()) == "Unable to convert 'xxx1y500d' to a duration";
-    });
+    BOOST_REQUIRE_EXCEPTION(cql_duration("xxx1y500d"), cql_duration_error,
+                            message_equals("Unable to convert 'xxx1y500d' to a duration"));
 }
 
 BOOST_AUTO_TEST_CASE(parse_standard_order_error) {
-    BOOST_REQUIRE_EXCEPTION(cql_duration("20s1h3m"), cql_duration_error, [](auto &&exn) {
-        return std::string_view(exn.what()) == "Invalid duration. The seconds should be after hours";
-    });
+    BOOST_REQUIRE_EXCEPTION(cql_duration("20s1h3m"), cql_duration_error,
+                            message_equals("Invalid duration. The seconds should be after hours"));
 }
 
 BOOST_AUTO_TEST_CASE(parse_standard_repeated_error) {
-    BOOST_REQUIRE_EXCEPTION(cql_duration("1h2h3m"), cql_duration_error, [](auto &&exn) {
-        return std::string_view(exn.what()) == "Invalid duration. The hours are specified multiple times";
-    });
+    BOOST_REQUIRE_EXCEPTION(cql_duration("1h2h3m"), cql_duration_error,
+        message_equals("Invalid duration. The hours are specified multiple times"));
 }
 
 BOOST_AUTO_TEST_CASE(parse_standard_overflow_error) {
-    BOOST_REQUIRE_EXCEPTION(cql_duration("178956971y"), cql_duration_error, [](auto &&exn) {
-        return std::string_view(exn.what())
-               == "Invalid duration. The number of years must be less than or equal to 178956970";
-    });
+    BOOST_REQUIRE_EXCEPTION(cql_duration("178956971y"), cql_duration_error,
+        message_equals("Invalid duration. The number of years must be less than or equal to 178956970"));
 
-    BOOST_REQUIRE_EXCEPTION(cql_duration("178956970y14mo"), cql_duration_error, [](auto &&exn) {
-        return std::string_view(exn.what())
-               == "Invalid duration. The number of months must be less than or equal to 7";
-    });
+    BOOST_REQUIRE_EXCEPTION(cql_duration("178956970y14mo"), cql_duration_error,
+        message_equals("Invalid duration. The number of months must be less than or equal to 7"));
 }
 
 BOOST_AUTO_TEST_CASE(parse_iso8601) {
@@ -124,9 +118,8 @@ BOOST_AUTO_TEST_CASE(parse_iso8601) {
 }
 
 BOOST_AUTO_TEST_CASE(parse_iso8601_syntax_error) {
-    BOOST_REQUIRE_EXCEPTION(cql_duration("P2003T23s"), cql_duration_error, [](auto&& exn) {
-        return std::string_view(exn.what()) == "Unable to convert 'P2003T23s' to a duration";
-    });
+  BOOST_REQUIRE_EXCEPTION(cql_duration("P2003T23s"), cql_duration_error,
+                          message_equals("Unable to convert 'P2003T23s' to a duration"));
 }
 
 BOOST_AUTO_TEST_CASE(parse_iso8601_alternative) {
@@ -143,19 +136,16 @@ BOOST_AUTO_TEST_CASE(parse_iso8601_alternative) {
 }
 
 BOOST_AUTO_TEST_CASE(parse_iso8601_alternative_syntax_error) {
-    BOOST_REQUIRE_EXCEPTION(cql_duration("P0001-00-02T000000"), cql_duration_error, [](auto&& exn) {
-        return std::string_view(exn.what()) == "Unable to convert 'P0001-00-02T000000' to a duration";
-    });
+  BOOST_REQUIRE_EXCEPTION(cql_duration("P0001-00-02T000000"), cql_duration_error,
+                          message_equals("Unable to convert 'P0001-00-02T000000' to a duration"));
 }
 
 BOOST_AUTO_TEST_CASE(parse_component_overflow) {
-    BOOST_REQUIRE_EXCEPTION(cql_duration("10000000000000000000000000000000000m"), cql_duration_error, [](auto&& exn) {
-        return std::string_view(exn.what()) == "Invalid duration. The count for the minutes is out of range";
-    });
+  BOOST_REQUIRE_EXCEPTION(cql_duration("10000000000000000000000000000000000m"), cql_duration_error,
+                          message_equals("Invalid duration. The count for the minutes is out of range"));
 
-    BOOST_REQUIRE_EXCEPTION(cql_duration("P10000000000000000000000000000000000Y5D"), cql_duration_error, [](auto&& exn) {
-        return std::string_view(exn.what()) == "Invalid duration. The count for the years is out of range";
-    });
+  BOOST_REQUIRE_EXCEPTION(cql_duration("P10000000000000000000000000000000000Y5D"), cql_duration_error,
+                          message_equals("Invalid duration. The count for the years is out of range"));
 }
 
 BOOST_AUTO_TEST_CASE(pretty_print) {

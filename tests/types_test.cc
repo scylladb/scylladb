@@ -34,6 +34,7 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "exception_utils.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -566,26 +567,22 @@ BOOST_AUTO_TEST_CASE(test_uuid_type_validation) {
 
 BOOST_AUTO_TEST_CASE(test_duration_type_validation) {
     duration_type->validate(duration_type->from_string("1m23us"), cql_serialization_format::latest());
+    using exception_predicate::message_equals;
+    BOOST_REQUIRE_EXCEPTION(
+            duration_type->validate(from_hex("ff"), cql_serialization_format::latest()),
+            marshal_exception,
+            message_equals("marshaling error: Expected at least 3 bytes for a duration, got 1"));
 
-    BOOST_REQUIRE_EXCEPTION(duration_type->validate(from_hex("ff"), cql_serialization_format::latest()), marshal_exception, [](auto&& exn) {
-        BOOST_REQUIRE_EQUAL("marshaling error: Expected at least 3 bytes for a duration, got 1", exn.what());
-        return true;
-    });
+    BOOST_REQUIRE_EXCEPTION(
+            duration_type->validate(from_hex("fffffffffffffffffe0202"), cql_serialization_format::latest()),
+            marshal_exception,
+            message_equals("marshaling error: The duration months (9223372036854775807) must be a 32 bit integer"));
 
-    BOOST_REQUIRE_EXCEPTION(duration_type->validate(from_hex("fffffffffffffffffe0202"), cql_serialization_format::latest()),
-                            marshal_exception,
-                            [](auto&& exn) {
-                                BOOST_REQUIRE_EQUAL("marshaling error: The duration months (9223372036854775807) must be a 32 bit integer", exn.what());
-                                return true;
-                            });
-
-    BOOST_REQUIRE_EXCEPTION(duration_type->validate(from_hex("010201"), cql_serialization_format::latest()), marshal_exception, [](auto&& exn) {
-        BOOST_REQUIRE_EQUAL(
-                "marshaling error: The duration months, days, and nanoseconds must be all of the same sign (-1, 1, -1)",
-                exn.what());
-
-        return true;
-    });
+    BOOST_REQUIRE_EXCEPTION(
+            duration_type->validate(from_hex("010201"), cql_serialization_format::latest()),
+            marshal_exception,
+            message_equals("marshaling error: The duration months, days, and "
+                           "nanoseconds must be all of the same sign (-1, 1, -1)"));
 }
 
 BOOST_AUTO_TEST_CASE(test_duration_deserialization) {
