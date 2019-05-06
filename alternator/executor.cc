@@ -275,6 +275,10 @@ future<json::json_return_type> executor::create_table(sstring content) {
         supplement_table_info(table_info, *schema);
         status[TABLE_DESCRIPTION] = std::move(table_info);
         return make_ready_future<json::json_return_type>(make_jsonable(std::move(status)));
+    }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
+        return make_exception_future<json::json_return_type>(
+                api_error(reply::status_type::bad_request, "ResourceInUseException",
+                        format("Table {} already exists", table_name)));
     });
 }
 
