@@ -70,7 +70,7 @@ def test_create_table_unsupported_names(dynamodb):
         create_table(dynamodb, 'n')
     with pytest.raises(ParamValidationError):
         create_table(dynamodb, 'nn')
-    with pytest.raises(ClientError, match='at most 255 characters long'):
+    with pytest.raises(ClientError, match='ValidationException'):
         create_table(dynamodb, 'n' * 256)
     with pytest.raises(ClientError, match='ValidationException'):
         create_table(dynamodb, 'nyh@test')
@@ -80,11 +80,19 @@ def test_create_table_unsupported_names(dynamodb):
 def test_create_and_delete_table_non_scylla_name(dynamodb):
     create_and_delete_table(dynamodb, '.alternator_test')
 
-# names with 255 characters are allowed in Dynamo. But it's not easy to
-# support - CQL is limited to NAME_LENGTH=48 characters and if we bypass
-# it we run into a problem to create a directory with a very long name.
+# names with 255 characters are allowed in Dynamo, but they are not currently
+# supported in Scylla because we create a directory whose name is the table's
+# name followed by 33 bytes (underscore and UUID). So currently, we only
+# correctly support names with length up to 222.
 def test_create_and_delete_table_very_long_name(dynamodb):
-    create_and_delete_table(dynamodb, 'n' * 255)
+    # In the future, this should work:
+    #create_and_delete_table(dynamodb, 'n' * 255)
+    # But for now, only 222 works:
+    create_and_delete_table(dynamodb, 'n' * 222)
+    # We cannot test the following on DynamoDB because it will succeed
+    # (DynamoDB allows up to 255 bytes)
+    #with pytest.raises(ClientError, match='ValidationException'):
+    #   create_table(dynamodb, 'n' * 223)
 
 # Tests creating a table with an invalid schema should return a
 # ValidationException error.
