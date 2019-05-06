@@ -1341,8 +1341,8 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 , _batchlog_endpoints(
                         [this]() -> std::unordered_set<gms::inet_address> {
                             auto local_addr = utils::fb_utilities::get_broadcast_address();
-                            auto topology = service::get_storage_service().local().get_token_metadata().get_topology();
-                            auto local_endpoints = topology.get_datacenter_racks().at(get_local_dc()); // note: origin copies, so do that here too...
+                            auto& topology = service::get_storage_service().local().get_token_metadata().get_topology();
+                            auto& local_endpoints = topology.get_datacenter_racks().at(get_local_dc());
                             auto local_rack = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_rack(local_addr);
                             auto chosen_endpoints = db::get_batchlog_manager().local().endpoint_filter(local_rack, local_endpoints);
 
