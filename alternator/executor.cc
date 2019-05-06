@@ -111,10 +111,6 @@ static sstring type_to_sstring(data_type type) {
     return it->second;
 }
 
-static void add_column(schema_builder& builder, sstring name, sstring type, column_kind kind) {
-    builder.with_column(to_bytes(name), parse_type(type), kind);
-}
-
 static void supplement_table_info(Json::Value& descr, const schema& schema) {
     descr[CREATION_DATE_TIME] = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
     descr[TABLE_STATUS] = ACTIVE;
@@ -194,6 +190,18 @@ future<json::json_return_type> executor::delete_table(sstring content) {
     });
 }
 
+static void add_column(schema_builder& builder, const std::string& name, const Json::Value& attribute_definitions, column_kind kind) {
+    for (const Json::Value& attribute_info : attribute_definitions) {
+        if (attribute_info["AttributeName"].asString() == name) {
+            sstring type = attribute_info["AttributeType"].asString();
+            builder.with_column(to_bytes(name), parse_type(type), kind);
+            return;
+        }
+    }
+    throw api_error(reply::status_type::bad_request, "ValidationException",
+            format("KeySchema key '{}' missing in AttributeDefinitions", name));
+}
+
 future<json::json_return_type> executor::create_table(sstring content) {
     Json::Value table_info = json::to_json_value(content);
     elogger.warn("Creating table {}", table_info.toStyledString());
@@ -207,42 +215,26 @@ future<json::json_return_type> executor::create_table(sstring content) {
     const Json::Value& attribute_definitions = table_info[ATTRIBUTE_DEFINITIONS];
 
     schema_builder builder(KEYSPACE, table_name);
-    sstring pk_name;
-    sstring ck_name;
 
-    // DynamoDB requries that KeySchema includes up to two elements, the
+    // DynamoDB requires that KeySchema includes up to two elements, the
     // first must be a HASH, the optional second one can be a RANGE.
-    // We are less picky about the order, but still don't allow multiple
-    // key columns of the same type, or a missing HASH key.
-    for (const Json::Value& key_info : key_schema) {
-        if (key_info[KEY_TYPE] == HASH) {
-            if (!pk_name.empty()) {
-                throw api_error(reply::status_type::bad_request, "ValidationException",
-                        "Only one HASH key may be specified in KeySchema");
-            }
-            pk_name = key_info[ATTRIBUTE_NAME].asString();
-        } else if (key_info[KEY_TYPE] == RANGE) {
-            if (!ck_name.empty()) {
-                throw api_error(reply::status_type::bad_request, "ValidationException",
-                        "Only one RANGE key may be specified in KeySchema");
-            }
-            ck_name = key_info[ATTRIBUTE_NAME].asString();
-        }
-    }
-    if (pk_name.empty()) {
+    // These key names must also be present in the attributes_definitions.
+    if (!key_schema.isArray() || key_schema.size() < 1 || key_schema.size() > 2) {
         throw api_error(reply::status_type::bad_request, "ValidationException",
-                 "Missing HASH key in KeySchema");
+                "KeySchema must list exactly one or two key columns");
     }
-
-    for (const Json::Value& attribute_info : attribute_definitions) {
-        sstring attr_name = attribute_info[ATTRIBUTE_NAME].asString();
-        sstring attr_type = attribute_info[ATTRIBUTE_TYPE].asString();
-        column_kind kind = (attr_name == pk_name) ? column_kind::partition_key : (attr_name == ck_name) ? column_kind::clustering_key : column_kind::regular_column;
-        if (kind != column_kind::regular_column) {
-            add_column(builder, attr_name, attr_type, kind);
+    if (key_schema[0]["KeyType"] != "HASH") {
+        throw api_error(reply::status_type::bad_request, "ValidationException",
+                "First key in KeySchema must be a HASH key");
+    }
+    add_column(builder, key_schema[0]["AttributeName"].asString(), attribute_definitions, column_kind::partition_key);
+    if (key_schema.size() == 2) {
+        if (key_schema[1]["KeyType"] != "RANGE") {
+            throw api_error(reply::status_type::bad_request, "ValidationException",
+                    "Second key in KeySchema must be a RANGE key");
         }
+        add_column(builder, key_schema[1]["AttributeName"].asString(), attribute_definitions, column_kind::partition_key);
     }
-
     builder.with_column(bytes(ATTRS), attrs_type(), column_kind::regular_column);
 
     schema_ptr schema = builder.build();
