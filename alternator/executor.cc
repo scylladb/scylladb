@@ -210,18 +210,28 @@ future<json::json_return_type> executor::create_table(sstring content) {
     sstring pk_name;
     sstring ck_name;
 
+    // DynamoDB requries that KeySchema includes up to two elements, the
+    // first must be a HASH, the optional second one can be a RANGE.
+    // We are less picky about the order, but still don't allow multiple
+    // key columns of the same type, or a missing HASH key.
     for (const Json::Value& key_info : key_schema) {
         if (key_info[KEY_TYPE] == HASH) {
             if (!pk_name.empty()) {
-                throw std::runtime_error(format("Only one partition key can be specified in {}", key_info.toStyledString()));
+                throw api_error(reply::status_type::bad_request, "ValidationException",
+                        "Only one HASH key may be specified in KeySchema");
             }
             pk_name = key_info[ATTRIBUTE_NAME].asString();
         } else if (key_info[KEY_TYPE] == RANGE) {
             if (!ck_name.empty()) {
-                throw std::runtime_error(format("Only one clustering key can be specified in {}", key_info.toStyledString()));
+                throw api_error(reply::status_type::bad_request, "ValidationException",
+                        "Only one RANGE key may be specified in KeySchema");
             }
             ck_name = key_info[ATTRIBUTE_NAME].asString();
         }
+    }
+    if (pk_name.empty()) {
+        throw api_error(reply::status_type::bad_request, "ValidationException",
+                 "Missing HASH key in KeySchema");
     }
 
     for (const Json::Value& attribute_info : attribute_definitions) {
