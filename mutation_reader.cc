@@ -764,6 +764,8 @@ class foreign_reader : public flat_mutation_reader::impl {
     }
 
     void update_buffer_with(foreign_unique_ptr<fragment_buffer> buffer, bool end_of_steam);
+
+    static future<> ensure_buffer_contains_all_fragments_for_last_pos(flat_mutation_reader& reader, fragment_buffer& buffer);
 public:
     foreign_reader(schema_ptr schema,
             foreign_unique_ptr<flat_mutation_reader> reader,
@@ -797,6 +799,31 @@ void foreign_reader::update_buffer_with(foreign_unique_ptr<fragment_buffer> buff
         // Need a copy since the mf is on the remote shard.
         push_mutation_fragment(mutation_fragment(*_schema, mf));
     }
+}
+
+future<> foreign_reader::ensure_buffer_contains_all_fragments_for_last_pos(flat_mutation_reader& reader, fragment_buffer& buffer) {
+    if (buffer.empty() || !buffer.back().is_range_tombstone()) {
+        return make_ready_future<>();
+    }
+
+    auto stop = [&reader, &buffer] {
+        if (reader.is_buffer_empty()) {
+            return reader.is_end_of_stream();
+        }
+        const auto& next_pos = reader.peek_buffer().position();
+        if (next_pos.region() != partition_region::clustered) {
+            return true;
+        }
+        return !next_pos.key().equal(*reader.schema(), buffer.back().position().key());
+    };
+
+    return do_until(stop, [&reader, &buffer] {
+        if (reader.is_buffer_empty()) {
+            return reader.fill_buffer(db::no_timeout);
+        }
+        buffer.emplace_back(reader.pop_mutation_fragment());
+        return make_ready_future<>();
+    });
 }
 
 foreign_reader::foreign_reader(schema_ptr schema,
@@ -896,9 +923,29 @@ future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> foreign_reader::pause
             if (pending_next_partition) {
                 reader->next_partition();
             }
-            return make_ready_future<foreign_unique_ptr<fragment_buffer>, bool>(
-                    std::make_unique<fragment_buffer>(reader->detach_buffer()),
-                    reader->is_end_of_stream());
+            auto buffer = reader->detach_buffer();
+            if (buffer.empty() || !buffer.back().is_range_tombstone()) {
+                return make_ready_future<foreign_unique_ptr<fragment_buffer>, bool>(
+                        std::make_unique<fragment_buffer>(std::move(buffer)),
+                        reader->is_end_of_stream());
+            }
+            // When the reader is recreated (after having been evicted) we
+            // recreate it such that it starts reading from *after* the last
+            // seen fragment's position. If the last seen fragment is a range
+            // tombstone it is *not* guaranteed that the next fragments in the
+            // data stream have positions strictly greater than the range
+            // tombstone's. If the reader is evicted and has to be recreated,
+            // these fragments would be then skipped as the read would continue
+            // after their position.
+            // To avoid this ensure that the buffer contains *all* fragments for
+            // the last seen position.
+            return do_with(std::move(buffer), [reader] (fragment_buffer& buffer) mutable {
+                return ensure_buffer_contains_all_fragments_for_last_pos(*reader, buffer).then([reader, &buffer] () mutable {
+                    return make_ready_future<foreign_unique_ptr<fragment_buffer>, bool>(
+                            std::make_unique<fragment_buffer>(std::move(buffer)),
+                            reader->is_end_of_stream() && reader->is_buffer_empty());
+                });
+            });
         });
     }).then([this] (foreign_unique_ptr<fragment_buffer>&& buffer, bool end_of_stream) mutable {
         update_buffer_with(std::move(buffer), end_of_stream);
