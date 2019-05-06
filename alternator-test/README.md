@@ -1,7 +1,7 @@
 Tests for Alternator that should also pass, identically, against DynamoDB.
 
 Tests use the boto3 library for AWS API, and the pytest frameworks
-(both are available from Linux distributions, or with "pip install".
+(both are available from Linux distributions, or with "pip install").
 
 The files ~/.aws/credentials should be configure with your AWS key:
 
@@ -21,4 +21,7 @@ region = us-east-1
 * To run all tests in a single file, do `pytest test_table.py`.
 * To run a single specific test, do `pytest test_table.py::test_create_table_unsupported_names`.
 * To run tests against a local Scylla installation at http://localhost:8000, add "--local".
-  For example - `pytest --local test_item.py`.
+  For example - `pytest --local test_item.py` or `pytest --local`.
+* Additional useful pytest options, especially useful for debugging tests:
+  * -v: show the names of each individual test running instead of just dots.
+  * -s: show the full output of running tests (by default, pytest captures the test's output and only displays it if a test fails)
