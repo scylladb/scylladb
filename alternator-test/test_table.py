@@ -174,6 +174,12 @@ def test_create_table_invalid_schema(dynamodb):
             ],
         )
 
+# Test that trying to create a table that already exists fails in the
+# appropriate way (ResourceInUseException)
+def test_create_table_already_exists(dynamodb, test_table):
+    with pytest.raises(ClientError, match='ResourceInUseException'):
+        create_table(dynamodb, test_table.name)
+
 # DescribeTable error path: trying to describe a non-existent table should
 # result in a ResourceNotFoundException.
 def test_describe_table_non_existent_table(dynamodb):
