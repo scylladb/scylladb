@@ -86,6 +86,49 @@ def test_create_and_delete_table_non_scylla_name(dynamodb):
 def test_create_and_delete_table_very_long_name(dynamodb):
     create_and_delete_table(dynamodb, 'n' * 255)
 
+# Tests creating a table with an invalid schema should return a
+# ValidationException error.
+def test_create_table_invalid_schema(dynamodb):
+    # The name of the table "created" by this test shouldn't matter, the
+    # creation should not succeed anyway.
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.create_table(
+            TableName='name_doesnt_matter',
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                { 'AttributeName': 'c', 'KeyType': 'HASH' }
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'c', 'AttributeType': 'S' },
+            ],
+        )
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.create_table(
+            TableName='name_doesnt_matter',
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                { 'AttributeName': 'p', 'KeyType': 'RANGE' },
+                { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'c', 'AttributeType': 'S' },
+            ],
+        )
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.create_table(
+            TableName='name_doesnt_matter',
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'c', 'AttributeType': 'S' },
+            ],
+        )
+
 # DescribeTable error path: trying to describe a non-existent table should
 # result in a ResourceNotFoundException.
 def test_describe_table_non_existent_table(dynamodb):
