@@ -64,6 +64,7 @@ public:
     }
 };
 
+#if 0 /* not used yet */
 /*
  * Full representation should cover:
          "B": blob,
@@ -96,6 +97,7 @@ static data_type parse_type(sstring type) {
     }
     return it->second;
 }
+#endif
 
 static sstring type_to_sstring(data_type type) {
     static thread_local std::unordered_map<data_type, sstring> types = {
@@ -190,11 +192,26 @@ future<json::json_return_type> executor::delete_table(sstring content) {
     });
 }
 
+static data_type parse_key_type(const std::string& type) {
+    // Note that keys are only allowed to be string, blob or number (S/B/N).
+    // The other types: boolean and various lists or sets - are not allowed.
+    if (type.length() == 1) {
+        switch (type[0]) {
+        case 'S': return utf8_type;
+        case 'B': return bytes_type;
+        case 'N': return long_type; // FIXME: this actually needs to be a new number type, not long
+        }
+    }
+    throw api_error(reply::status_type::bad_request, "ValidationException",
+            format("Invalid key type '{}', can only be S, B or N.", type));
+}
+
+
 static void add_column(schema_builder& builder, const std::string& name, const Json::Value& attribute_definitions, column_kind kind) {
     for (const Json::Value& attribute_info : attribute_definitions) {
         if (attribute_info["AttributeName"].asString() == name) {
-            sstring type = attribute_info["AttributeType"].asString();
-            builder.with_column(to_bytes(name), parse_type(type), kind);
+            auto type = attribute_info["AttributeType"].asString();
+            builder.with_column(to_bytes(name), parse_key_type(type), kind);
             return;
         }
     }
