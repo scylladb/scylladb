@@ -63,6 +63,15 @@ public:
         return _value.toStyledString();
     }
 };
+struct json_string : public json::jsonable {
+    std::string _value;
+public:
+    explicit json_string(std::string&& value) : _value(std::move(value)) {}
+    virtual std::string to_json() const override {
+        return _value;
+    }
+};
+
 
 #if 0 /* not used yet */
 /*
@@ -326,10 +335,8 @@ future<json::json_return_type> executor::put_item(sstring content) {
     elogger.warn("Applying mutation {}", m);
 
     return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
-        // The Boto3 gets confused if we return just an empty structure {},
-        // thinking it isn't JSON at all. I don't know why, but putting an
-        // empty Attributes field in the result solves the problem.
-        return make_ready_future<json::json_return_type>("{ \"Attributes\": {} }");
+        // Without special options on what to return, PutItem returns nothing.
+        return make_ready_future<json::json_return_type>(json_string(""));
     });
 
 }
