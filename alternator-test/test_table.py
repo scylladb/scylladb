@@ -154,7 +154,17 @@ def test_create_table_invalid_schema(dynamodb):
                 { 'AttributeName': 'z', 'AttributeType': 'S' }
             ],
         )
-
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.create_table(
+            TableName='name_doesnt_matter',
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                { 'AttributeName': 'k', 'KeyType': 'HASH' },
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'k', 'AttributeType': 'Q' }
+            ],
+        )
 
 # DescribeTable error path: trying to describe a non-existent table should
 # result in a ResourceNotFoundException.
