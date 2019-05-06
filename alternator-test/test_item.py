@@ -3,6 +3,9 @@
 import random
 import string
 
+import pytest
+from botocore.exceptions import ClientError
+
 def random_string(len=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(len))
 
@@ -26,3 +29,10 @@ def test_basic_string_put_and_get(test_table):
     assert item['c'] == c
     assert item['attribute'] == val
     assert item['another'] == val2
+
+# Test that item operations on a non-existant table name fail with correct
+# error code.
+def test_item_operations_nonexistent_table(dynamodb):
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        dynamodb.meta.client.put_item(TableName='non_existent_table',
+            Item={'a':{'S':'b'}})
