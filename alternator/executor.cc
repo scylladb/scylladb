@@ -36,6 +36,12 @@ static map_type attrs_type() {
     return t;
 }
 
+static const column_definition& attrs_column(const schema& schema) {
+    const column_definition* cdef = schema.get_column_definition(bytes(executor::ATTRS_COLUMN_NAME));
+    assert(cdef);
+    return *cdef;
+}
+
 struct make_jsonable : public json::jsonable {
     Json::Value _value;
 public:
@@ -313,10 +319,9 @@ future<json::json_return_type> executor::put_item(sstring content) {
         }
         elogger.warn("{}: {}", it.key().asString(), it->toStyledString());
     }
-    const column_definition* attrs_cdef = schema->get_column_definition(bytes(ATTRS_COLUMN_NAME));
 
     auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
-    m.set_cell(ck, *attrs_cdef, std::move(serialized_map));
+    m.set_cell(ck, attrs_column(*schema), std::move(serialized_map));
     elogger.warn("Applying mutation {}", m);
 
     return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
@@ -385,7 +390,7 @@ future<json::json_return_type> executor::get_item(sstring content) {
     }
 
     //TODO(sarna): It would be better to fetch only some attributes of the map, not all
-    query::column_id_vector regular_columns{schema->get_column_definition(bytes(ATTRS_COLUMN_NAME))->id};
+    query::column_id_vector regular_columns{attrs_column(*schema).id};
 
     auto selection = cql3::selection::selection::wildcard(schema);
 
