@@ -194,7 +194,7 @@ make_from_json_function(database& db, const sstring& keyspace, data_type t) {
         if (!json_value.isNull()) {
             parsed_json_value.emplace(t->from_json_object(json_value, sf));
         }
-        return std::move(parsed_json_value);
+        return parsed_json_value;
     });
 }
 
