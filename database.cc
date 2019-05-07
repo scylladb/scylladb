@@ -551,7 +551,7 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
             auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
             names.emplace(keyspace_name);
         }
-        return std::move(names);
+        return names;
     }).then([&proxy, cf_name, func = std::move(func)] (std::set<sstring>&& names) mutable {
         return parallel_for_each(names.begin(), names.end(), [&proxy, cf_name, func = std::move(func)] (sstring name) mutable {
             if (is_system_keyspace(name)) {
