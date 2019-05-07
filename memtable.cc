@@ -678,7 +678,7 @@ memtable::make_flat_reader(schema_ptr s,
         if (fwd == streamed_mutation::forwarding::yes) {
             return make_forwardable(std::move(res));
         } else {
-            return std::move(res);
+            return res;
         }
     }
 }
