@@ -245,6 +245,8 @@ private:
     std::unique_ptr<result_set> _result_set;
     std::unique_ptr<selectors> _selectors;
     const std::vector<size_t> _group_by_cell_indices; ///< Indices in \c current of cells holding GROUP BY values.
+    std::vector<bytes_opt> _last_group; ///< Previous row's group: all of GROUP BY column values.
+    bool _group_began; ///< Whether a group began being formed.
 public:
     std::optional<std::vector<bytes_opt>> current;
 private:
@@ -425,6 +427,20 @@ public:
 
 private:
     bytes_opt get_value(data_type t, query::result_atomic_cell_view c);
+
+    /// True iff the \c current row ends a previously started group, either according to
+    /// _group_by_cell_indices or aggregation.
+    bool last_group_ended() const;
+
+    /// If there is a valid row in this->current, process it; if \p more_rows_coming, get ready to
+    /// receive another.
+    void process_current_row(bool more_rows_coming);
+
+    /// Gets output row from _selectors and resets them.
+    void flush_selectors();
+
+    /// Updates _last_group from the \c current row.
+    void update_last_group();
 };
 
 }
