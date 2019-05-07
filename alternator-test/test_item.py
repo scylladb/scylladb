@@ -30,6 +30,46 @@ def test_basic_string_put_and_get(test_table):
     assert item['attribute'] == val
     assert item['another'] == val2
 
+# Similar to test_basic_string_put_and_get, just uses UpdateItem instead of
+# PutItem. Because the item does not yet exist, it should work the same.
+def test_basic_string_update_and_get(test_table):
+    p = random_string()
+    c = random_string()
+    val = random_string()
+    val2 = random_string()
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'attribute': {'Value': val, 'Action': 'PUT'}, 'another': {'Value': val2, 'Action': 'PUT'}})
+    item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    assert item['p'] == p
+    assert item['c'] == c
+    assert item['attribute'] == val
+    assert item['another'] == val2
+
+
+# Test error handling of UpdateItem passed a bad "Action" field.
+def test_update_bad_action(test_table):
+    p = random_string()
+    c = random_string()
+    val = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'attribute': {'Value': val, 'Action': 'NONEXISTENT'}})
+
+# A more elaborate UpdateItem test, updating different attributes at different
+# times. TODO: also test DELETE action!
+def test_basic_string_more_update(test_table):
+    p = random_string()
+    c = random_string()
+    val1 = random_string()
+    val2 = random_string()
+    val3 = random_string()
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a1': {'Value': val1, 'Action': 'PUT'}})
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a2': {'Value': val2, 'Action': 'PUT'}})
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a1': {'Value': val3, 'Action': 'PUT'}})
+    item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    assert item['p'] == p
+    assert item['c'] == c
+    assert item['a1'] == val3
+    assert item['a2'] == val2
+
 # Test that item operations on a non-existant table name fail with correct
 # error code.
 def test_item_operations_nonexistent_table(dynamodb):
