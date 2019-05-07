@@ -125,6 +125,7 @@ struct uninitialized {
     uninitialized& operator=(uninitialized&&) = default;
     operator const T&() const & { return check(), *_val; }
     operator T&&() && { return check(), std::move(*_val); }
+    operator std::optional<T>&&() && { return check(), std::move(_val); }
     void check() const { if (!_val) { throw std::runtime_error("not intitialized"); } }
 };
 

@@ -3484,7 +3484,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
                 test_cases.emplace_back(slice_test_type{gt_range, true, lt_range,true});
             } else {
                 for(int i=0; i<=3; i++) {
-                    test_cases.emplace_back(slice_test_type{gt_range, i&1, lt_range, i&2});
+                    test_cases.emplace_back(slice_test_type{gt_range, bool(i&1), lt_range, bool(i&2)});
                 }
             }
         };

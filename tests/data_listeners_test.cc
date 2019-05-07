@@ -96,9 +96,9 @@ results test_data_listeners(cql_test_env& e, sstring cf_name) {
                 results res{li->read, li->write};
                 testlog.info("uninstalled listener {}: rd={} wr={}", li, li->read, li->write);
                 db.data_listeners().uninstall(li);
-                return std::move(res);
+                return res;
             }
-            return std::move(results{});
+            return results{};
         },
         results{},
         [] (results res, results li_res) {

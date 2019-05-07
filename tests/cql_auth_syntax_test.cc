@@ -186,11 +186,11 @@ BOOST_AUTO_TEST_CASE(list_permissions) {
 BOOST_AUTO_TEST_CASE(user_or_role_name) {
     const auto test = make_tester(&cql3_parser::CqlParser::userOrRoleName);
 
-    BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name>(test("SaM")).to_string(), "sam");
-    BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name>(test("'SaM'")).to_string(), "SaM");
-    BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name>(test("\"SaM\"")).to_string(), "SaM");
+    BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name&&>(test("SaM")).to_string(), "sam");
+    BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name&&>(test("'SaM'")).to_string(), "SaM");
+    BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name&&>(test("\"SaM\"")).to_string(), "SaM");
     // Unreserved keyword.
-    BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name>(test("LisT")).to_string(), "list");
+    BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name&&>(test("LisT")).to_string(), "list");
 }
 
 BOOST_AUTO_TEST_CASE(role_options) {

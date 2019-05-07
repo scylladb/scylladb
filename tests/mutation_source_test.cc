@@ -480,7 +480,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
             nullptr,
             streamed_mutation::forwarding::yes));
         res.produces_partition_start(m.decorated_key());
-        return std::move(res);
+        return res;
     };
 
     auto verify_range = [&] (flat_reader_assertions& sm, int start, int end) {

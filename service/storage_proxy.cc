@@ -1107,7 +1107,7 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         // call before send_to_live_endpoints() for the same reason as above
         auto f = response_wait(response_id, timeout);
         send_to_live_endpoints(protected_response.release(), timeout); // response is now running and it will either complete or timeout
-        return std::move(f);
+        return f;
     });
 }
 
@@ -3144,7 +3144,7 @@ std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, c
     std::vector<gms::inet_address> eps = rs.get_natural_endpoints(token);
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())));
     eps.erase(itend, eps.end());
-    return std::move(eps);
+    return eps;
 }
 
 std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) {

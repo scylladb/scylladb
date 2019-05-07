@@ -79,7 +79,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
 
     if (!candidate.sstables.empty()) {
         leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
-        return std::move(candidate);
+        return candidate;
     }
 
     // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio

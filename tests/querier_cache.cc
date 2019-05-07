@@ -165,7 +165,7 @@ public:
         , _mutation_source([this] (schema_ptr, const dht::partition_range& range) {
             auto rd = flat_mutation_reader_from_mutations(_mutations, range);
             rd.set_max_buffer_size(max_reader_buffer_size);
-            return std::move(rd);
+            return rd;
         }) {
     }
 

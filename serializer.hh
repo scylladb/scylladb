@@ -199,7 +199,21 @@ struct integral_serializer {
     }
 };
 
-template<> struct serializer<bool> : public integral_serializer<int8_t> {};
+template<> struct serializer<bool> {
+    template <typename Input>
+    static bool read(Input& i) {
+        return deserialize_integral<uint8_t>(i);
+    }
+    template< typename Output>
+    static void write(Output& out, bool v) {
+        serialize_integral(out, uint8_t(v));
+    }
+    template <typename Input>
+    static void skip(Input& i) {
+        read(i);
+    }
+
+};
 template<> struct serializer<int8_t> : public integral_serializer<int8_t> {};
 template<> struct serializer<uint8_t> : public integral_serializer<uint8_t> {};
 template<> struct serializer<int16_t> : public integral_serializer<int16_t> {};

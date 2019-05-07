@@ -325,7 +325,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
     if (fwd) {
         return make_forwardable(std::move(res)); // FIXME: optimize
     } else {
-        return std::move(res);
+        return res;
     }
 }
 

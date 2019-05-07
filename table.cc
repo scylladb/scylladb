@@ -343,7 +343,7 @@ table::make_sstable_reader(schema_ptr s,
         if (pr.is_singular() && pr.start()->value().has_key()) {
             const dht::ring_position& pos = pr.start()->value();
             if (dht::shard_of(pos.token()) != engine().cpu_id()) {
-                return mutation_source([s] (
+                return mutation_source([] (
                         schema_ptr s,
                         const dht::partition_range& pr,
                         const query::partition_slice& slice,
