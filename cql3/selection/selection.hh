@@ -244,6 +244,7 @@ class result_set_builder {
 private:
     std::unique_ptr<result_set> _result_set;
     std::unique_ptr<selectors> _selectors;
+    const std::vector<size_t> _group_by_cell_indices; ///< Indices in \c current of cells holding GROUP BY values.
 public:
     std::optional<std::vector<bytes_opt>> current;
 private:
@@ -306,7 +307,8 @@ public:
         bool do_filter(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view& row) const;
     };
 
-    result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf);
+    result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf,
+                       std::vector<size_t> group_by_cell_indices = {});
     void add_empty();
     void add(bytes_opt value);
     void add(const column_definition& def, const query::result_atomic_cell_view& c);

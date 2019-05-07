@@ -263,9 +263,11 @@ selection::collect_metadata(schema_ptr schema, const std::vector<::shared_ptr<ra
     return r;
 }
 
-result_set_builder::result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf)
+result_set_builder::result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf,
+                                       std::vector<size_t> group_by_cell_indices)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
+    , _group_by_cell_indices(std::move(group_by_cell_indices))
     , _now(now)
     , _cql_serialization_format(sf)
 {

@@ -142,6 +142,8 @@ public:
 
     ::shared_ptr<restrictions::statement_restrictions> get_restrictions() const;
 
+    bool has_group_by() { return _group_by_cell_indices && !_group_by_cell_indices->empty(); }
+
 protected:
     uint32_t do_get_limit(const query_options& options, ::shared_ptr<term> limit) const;
     uint32_t get_limit(const query_options& options) const {
