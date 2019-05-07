@@ -152,6 +152,9 @@ private:
                                             ::shared_ptr<selection::selection> selection,
                                             ::shared_ptr<restrictions::statement_restrictions> restrictions);
 
+    /// Returns indices of GROUP BY cells in fetched rows.
+    std::vector<size_t> prepare_group_by(schema_ptr schema, selection::selection& selection) const;
+
     bool contains_alias(::shared_ptr<column_identifier> name);
 
     ::shared_ptr<column_specification> limit_receiver(bool per_partition = false);

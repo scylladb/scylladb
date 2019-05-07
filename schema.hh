@@ -303,6 +303,7 @@ public:
 };
 
 bool operator==(const column_definition&, const column_definition&);
+inline bool operator!=(const column_definition& a, const column_definition& b) { return !(a == b); }
 
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
