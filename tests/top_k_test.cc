@@ -50,7 +50,7 @@ vector<unsigned> count(const utils::space_saving_top_k<unsigned>::results& res) 
     for (auto& c : res) {
         v.push_back(c.count);
     }
-    return std::move(v);
+    return v;
 }
 
 //---------------------------------------------------------------------------------------------

@@ -86,7 +86,7 @@ data_source prepare_test_skip() {
     BOOST_REQUIRE_EQUAL(1, buf.size());
     BOOST_REQUIRE_EQUAL(0, buf[0]);
     // At this point we have 9 chars buffered in limiting_data_source_impl
-    return std::move(tested);
+    return tested;
 }
 
 }

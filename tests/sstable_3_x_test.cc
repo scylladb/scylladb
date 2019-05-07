@@ -1346,7 +1346,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_static_row_read) {
         columns.push_back({s_text_cdef, utf8_type->from_string(text_val)});
         columns.push_back({s_inet_cdef, inet_addr_type->from_string(inet_val)});
 
-        return std::move(columns);
+        return columns;
     };
 
     assert_that(sst.read_rows_flat())
@@ -1689,7 +1689,7 @@ static void test_partition_key_with_values_of_different_types_read(const sstring
         columns.push_back({uuid_cdef, uuid_type->from_string(uuid_val)});
         columns.push_back({text_cdef, utf8_type->from_string(text_val)});
 
-        return std::move(columns);
+        return columns;
     };
 
     assert_that(sst.read_rows_flat())
@@ -1857,7 +1857,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_subset_of_columns_read) {
             columns.push_back({text_cdef, utf8_type->from_string(*text_val)});
         }
 
-        return std::move(columns);
+        return columns;
     };
 
     assert_that(sst.read_rows_flat())
@@ -2863,7 +2863,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
             });
         });
 
-        return std::move(assertions);
+        return assertions;
     };
 
     std::vector<column_id> ids{set_cdef->id, list_cdef->id, map_cdef->id};
