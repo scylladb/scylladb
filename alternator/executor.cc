@@ -137,7 +137,7 @@ future<json::json_return_type> executor::describe_table(sstring content) {
     // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
     sstring table_name = request["TableName"].asString();
     validate_table_name(table_name);
-    if (!_proxy.get_db().local().has_schema(KEYSPACE, table_name)) {
+    if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
         throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
     }
@@ -170,12 +170,12 @@ future<json::json_return_type> executor::delete_table(sstring content) {
     // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
     sstring table_name = request["TableName"].asString();
     validate_table_name(table_name);
-    if (!_proxy.get_db().local().has_schema(KEYSPACE, table_name)) {
+    if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
         throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
     }
 
-    return _mm.announce_column_family_drop(KEYSPACE, table_name).then([table_name = std::move(table_name)] {
+    return _mm.announce_column_family_drop(KEYSPACE_NAME, table_name).then([table_name = std::move(table_name)] {
         // FIXME: need more attributes?
         Json::Value table_description(Json::objectValue);
         table_description["TableName"] = table_name.c_str();
@@ -226,7 +226,7 @@ future<json::json_return_type> executor::create_table(sstring content) {
     const Json::Value& key_schema = table_info["KeySchema"];
     const Json::Value& attribute_definitions = table_info["AttributeDefinitions"];
 
-    schema_builder builder(KEYSPACE, table_name);
+    schema_builder builder(KEYSPACE_NAME, table_name);
 
     // DynamoDB requires that KeySchema includes up to two elements, the
     // first must be a HASH, the optional second one can be a RANGE.
@@ -247,7 +247,7 @@ future<json::json_return_type> executor::create_table(sstring content) {
         }
         add_column(builder, key_schema[1]["AttributeName"].asString(), attribute_definitions, column_kind::partition_key);
     }
-    builder.with_column(bytes(ATTRS), attrs_type(), column_kind::regular_column);
+    builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
     schema_ptr schema = builder.build();
 
@@ -293,7 +293,7 @@ future<json::json_return_type> executor::put_item(sstring content) {
     const Json::Value& item = update_info["Item"];
     schema_ptr schema;
     try {
-        schema = _proxy.get_db().local().find_schema(KEYSPACE, table_name);
+        schema = _proxy.get_db().local().find_schema(KEYSPACE_NAME, table_name);
     } catch(no_such_column_family&) {
         throw api_error("ResourceNotFoundException",
                  format("Requested resource not found: Table: {} not found", table_name));
@@ -313,7 +313,7 @@ future<json::json_return_type> executor::put_item(sstring content) {
         }
         elogger.warn("{}: {}", it.key().asString(), it->toStyledString());
     }
-    const column_definition* attrs_cdef = schema->get_column_definition(bytes(ATTRS));
+    const column_definition* attrs_cdef = schema->get_column_definition(bytes(ATTRS_COLUMN_NAME));
 
     auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
     m.set_cell(ck, *attrs_cdef, std::move(serialized_map));
@@ -338,7 +338,7 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
         auto column_it = columns.begin();
         for (const bytes_opt& cell : result_row) {
             sstring column_name = (*column_it)->name_as_text();
-            if (column_name != executor::ATTRS) {
+            if (column_name != executor::ATTRS_COLUMN_NAME) {
                 if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
                     Json::Value& field = item[column_name.c_str()];
                     field[type_to_sstring((*column_it)->type)] = json::to_json_value((*column_it)->type->to_json_string(cell));
@@ -371,7 +371,7 @@ future<json::json_return_type> executor::get_item(sstring content) {
     Json::Value query_key = table_info["Key"];
     db::consistency_level cl = table_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
 
-    schema_ptr schema = _proxy.get_db().local().find_schema(KEYSPACE, table_name);
+    schema_ptr schema = _proxy.get_db().local().find_schema(KEYSPACE_NAME, table_name);
 
     partition_key pk = pk_from_json(query_key, schema);
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*schema, pk))};
@@ -385,7 +385,7 @@ future<json::json_return_type> executor::get_item(sstring content) {
     }
 
     //TODO(sarna): It would be better to fetch only some attributes of the map, not all
-    query::column_id_vector regular_columns{schema->get_column_definition(bytes(ATTRS))->id};
+    query::column_id_vector regular_columns{schema->get_column_definition(bytes(ATTRS_COLUMN_NAME))->id};
 
     auto selection = cql3::selection::selection::wildcard(schema);
 
@@ -407,7 +407,7 @@ future<> executor::start() {
 
     // FIXME: the RF of this keyspace should be configurable: RF=1 makes
     // sense on test setups, but not on real clusters.
-    auto ksm = keyspace_metadata::new_keyspace(KEYSPACE, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", "1"}}, true);
+    auto ksm = keyspace_metadata::new_keyspace(KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", "1"}}, true);
     return _mm.announce_new_keyspace(ksm, api::min_timestamp, false).handle_exception_type([] (exceptions::already_exists_exception& ignored) {});
 }
 
