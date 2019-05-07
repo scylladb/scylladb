@@ -1188,7 +1188,7 @@ private:
         }
         def.__set_cf_defs(cfs);
         def.__set_durable_writes(meta->durable_writes());
-        return std::move(def);
+        return def;
     }
     static std::optional<index_metadata> index_metadata_from_thrift(const ColumnDef& def) {
         std::optional<sstring> idx_name;
