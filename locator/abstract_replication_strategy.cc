@@ -81,7 +81,7 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
         auto endpoints = calculate_natural_endpoints(search_token, _token_metadata);
         cached_endpoints.emplace(key_token, endpoints);
 
-        return std::move(endpoints);
+        return endpoints;
     }
 
     ++_cache_hits_count;
