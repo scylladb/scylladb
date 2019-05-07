@@ -331,6 +331,63 @@ future<json::json_return_type> executor::put_item(sstring content) {
 
 }
 
+future<json::json_return_type> executor::update_item(sstring content) {
+    Json::Value update_info = json::to_json_value(content);
+    elogger.trace("update_item {}", update_info.toStyledString());
+    std::string table_name = update_info["TableName"].asString();
+    schema_ptr schema;
+    try {
+        schema = _proxy.get_db().local().find_schema(KEYSPACE_NAME, table_name);
+    } catch(no_such_column_family&) {
+        throw api_error("ResourceNotFoundException",
+                 format("Requested resource not found: Table: {} not found", table_name));
+    }
+    // FIXME: handle missing Key.
+    const Json::Value& key = update_info["Key"];
+    // FIXME: handle missing components in Key, extra stuff, etc.
+    partition_key pk = pk_from_json(key, schema);
+    clustering_key ck = (schema->clustering_key_size() > 0) ? ck_from_json(key, schema) : clustering_key::make_empty();
+
+    mutation m(schema, pk);
+    collection_type_impl::mutation attrs_mut;
+
+    // FIXME: handle case of missing AttributeUpdates (we don't support the newer UpdateExpression yet).
+    const Json::Value& attribute_updates = update_info["AttributeUpdates"];
+    for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
+        // Note that it.key() is the name of the column, *it is the operation
+        std::string action = (*it)["Action"].asString();
+        // FIXME: need to support also DELETE and ADD. And case of missing attribute.
+        if (action != "PUT") {
+            throw api_error("ValidationException",
+                    format("Unknown Action value '{}' in AttributeUpdates", action));
+        }
+        const Json::Value& value = (*it)["Value"];
+        if (value.size() != 1) {
+            throw api_error("ValidationException",
+                    format("Value field in AttributeUpdates must have just one item", it.key().asString()));
+        }
+        bytes column_name = to_bytes(it.key().asString());
+        const column_definition* cdef = schema->get_column_definition(column_name);
+        if (cdef && cdef->is_primary_key()) {
+            throw api_error("ValidationException",
+                    format("UpdateItem cannot update key column {}", it.key().asString()));
+        }
+        // At this point, value is a dict with a single entry.
+        // value.begin().key() is its key (a type) and
+        // value.begin()->asString() is its value. But we currently
+        // serialize both together, with value.toStyledString().
+        bytes val = utf8_type->decompose(sstring(value.toStyledString()));
+        attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, api::new_timestamp(), val, atomic_cell::collection_member::yes));
+    }
+    auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
+    m.set_cell(ck, attrs_column(*schema), std::move(serialized_map));
+    elogger.trace("Applying mutation {}", m);
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+        // Without special options on what to return, UpdateItem returns nothing.
+        return make_ready_future<json::json_return_type>(json_string(""));
+    });
+}
+
 static Json::Value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<sstring>&& attrs_to_get) {
     Json::Value item(Json::objectValue);
 
