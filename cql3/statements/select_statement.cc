@@ -1107,13 +1107,15 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
                                    std::vector<::shared_ptr<relation>> where_clause,
                                    ::shared_ptr<term::raw> limit,
-                                   ::shared_ptr<term::raw> per_partition_limit)
+                                   ::shared_ptr<term::raw> per_partition_limit,
+                                   std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns)
     : cf_statement(std::move(cf_name))
     , _parameters(std::move(parameters))
     , _select_clause(std::move(select_clause))
     , _where_clause(std::move(where_clause))
     , _limit(std::move(limit))
     , _per_partition_limit(std::move(per_partition_limit))
+    , _group_by_columns(std::move(group_by_columns))
 { }
 
 void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr schema) {
