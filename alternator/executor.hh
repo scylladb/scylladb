@@ -25,6 +25,7 @@ class executor {
     service::migration_manager& _mm;
 
 public:
+    static constexpr auto ATTRS = "attrs";
     static constexpr auto KEYSPACE = "alternator";
 
     executor(service::storage_proxy& proxy, service::migration_manager& mm) : _proxy(proxy), _mm(mm) {}

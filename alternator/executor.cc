@@ -31,25 +31,6 @@ static logging::logger elogger("alternator-executor");
 
 namespace alternator {
 
-static constexpr auto ATTRIBUTE_DEFINITIONS = "AttributeDefinitions";
-static constexpr auto KEY_SCHEMA = "KeySchema";
-static constexpr auto TABLE_NAME = "TableName";
-static constexpr auto TABLE_DESCRIPTION = "TableDescription";
-static constexpr auto ATTRIBUTE_NAME = "AttributeName";
-static constexpr auto ATTRIBUTE_TYPE = "AttributeType";
-static constexpr auto KEY_TYPE = "KeyType";
-static constexpr auto HASH = "HASH";
-static constexpr auto RANGE = "RANGE";
-static constexpr auto CREATION_DATE_TIME = "CreationDateTime";
-static constexpr auto TABLE_ID = "TableId";
-static constexpr auto TABLE_STATUS = "TableStatus";
-static constexpr auto ACTIVE = "ACTIVE";
-static constexpr auto ATTRIBUTES_TO_GET = "AttributesToGet";
-static constexpr auto KEY = "Key";
-static constexpr auto CONSISTENT_READ = "ConsistentRead";
-static constexpr auto ATTRS = "attrs";
-static constexpr auto ITEM = "Item";
-
 static map_type attrs_type() {
     static auto t = map_type_impl::get_instance(utf8_type, utf8_type, true);
     return t;
@@ -123,9 +104,9 @@ static sstring type_to_sstring(data_type type) {
 }
 
 static void supplement_table_info(Json::Value& descr, const schema& schema) {
-    descr[CREATION_DATE_TIME] = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
-    descr[TABLE_STATUS] = ACTIVE;
-    descr[TABLE_ID] = schema.id().to_sstring().c_str();
+    descr["CreationDateTime"] = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
+    descr["TableStatus"] = "ACTIVE";
+    descr["TableId"] = schema.id().to_sstring().c_str();
 }
 
 // The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
@@ -237,13 +218,13 @@ future<json::json_return_type> executor::create_table(sstring content) {
     Json::Value table_info = json::to_json_value(content);
     elogger.warn("Creating table {}", table_info.toStyledString());
 
-    sstring table_name = table_info[TABLE_NAME].asString();
+    sstring table_name = table_info["TableName"].asString();
     validate_table_name(table_name);
     // FIXME: the table name's being valid in Dynamo doesn't make it valid
     // in Scylla. May need to quote or shorten table names.
 
-    const Json::Value& key_schema = table_info[KEY_SCHEMA];
-    const Json::Value& attribute_definitions = table_info[ATTRIBUTE_DEFINITIONS];
+    const Json::Value& key_schema = table_info["KeySchema"];
+    const Json::Value& attribute_definitions = table_info["AttributeDefinitions"];
 
     schema_builder builder(KEYSPACE, table_name);
 
@@ -273,7 +254,7 @@ future<json::json_return_type> executor::create_table(sstring content) {
     return _mm.announce_new_column_family(schema, false).then([table_info = std::move(table_info), schema] () mutable {
         Json::Value status(Json::objectValue);
         supplement_table_info(table_info, *schema);
-        status[TABLE_DESCRIPTION] = std::move(table_info);
+        status["TableDescription"] = std::move(table_info);
         return make_ready_future<json::json_return_type>(make_jsonable(std::move(status)));
     }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
         return make_exception_future<json::json_return_type>(
@@ -308,8 +289,8 @@ future<json::json_return_type> executor::put_item(sstring content) {
     Json::Value update_info = json::to_json_value(content);
     elogger.debug("Updating value {}", update_info.toStyledString());
 
-    sstring table_name = update_info[TABLE_NAME].asString();
-    const Json::Value& item = update_info[ITEM];
+    sstring table_name = update_info["TableName"].asString();
+    const Json::Value& item = update_info["Item"];
     schema_ptr schema;
     try {
         schema = _proxy.get_db().local().find_schema(KEYSPACE, table_name);
@@ -357,7 +338,7 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
         auto column_it = columns.begin();
         for (const bytes_opt& cell : result_row) {
             sstring column_name = (*column_it)->name_as_text();
-            if (column_name != ATTRS) {
+            if (column_name != executor::ATTRS) {
                 if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
                     Json::Value& field = item[column_name.c_str()];
                     field[type_to_sstring((*column_it)->type)] = (*column_it)->type->to_json(cell);
@@ -376,7 +357,7 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
         }
     }
     Json::Value item_descr(Json::objectValue);
-    item_descr[ITEM] = item;
+    item_descr["Item"] = item;
     return item_descr;
 }
 
@@ -384,11 +365,11 @@ future<json::json_return_type> executor::get_item(sstring content) {
     Json::Value table_info = json::to_json_value(content);
     elogger.warn("Getting item {}", table_info.toStyledString());
 
-    sstring table_name = table_info[TABLE_NAME].asString();
+    sstring table_name = table_info["TableName"].asString();
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
-    Json::Value attributes_to_get = table_info[ATTRIBUTES_TO_GET];
-    Json::Value query_key = table_info[KEY];
-    db::consistency_level cl = table_info[CONSISTENT_READ].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    Json::Value attributes_to_get = table_info["AttributesToGet"];
+    Json::Value query_key = table_info["Key"];
+    db::consistency_level cl = table_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
 
     schema_ptr schema = _proxy.get_db().local().find_schema(KEYSPACE, table_name);
 
