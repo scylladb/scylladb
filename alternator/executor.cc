@@ -398,8 +398,6 @@ future<json::json_return_type> executor::get_item(sstring content) {
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get)] (service::storage_proxy::coordinator_query_result qr) mutable {
         return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get))));
     });
-
-    return make_ready_future<json::json_return_type>("");
 }
 
 future<> executor::start() {
