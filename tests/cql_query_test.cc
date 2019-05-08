@@ -3592,15 +3592,6 @@ namespace {
 
 // TODO: move to cql_assertions.hh.
 
-/// Returns a predicate that checks whether a cassandra_exception's message contains fragment \c frag.
-auto make_predicate_for_exception_message_fragment(const char* frag) {
-    return [frag](const exceptions::cassandra_exception& e) {
-        const bool status = (e.get_message().find(frag) != sstring::npos);
-        BOOST_CHECK_MESSAGE(status, format("Exception text '{}' doesn't contain fragment '{}'", e.what(), frag));
-        return status;
-    };
-}
-
 using std::experimental::source_location;
 
 // Can't name it `query` -- clashes with namespace query.
@@ -3639,10 +3630,10 @@ SEASTAR_TEST_CASE(test_group_by_syntax) {
         equery(e, "select * from t1 where p1>0 and p2=0 group by p1, c1 allow filtering");
 
         using ire = exceptions::invalid_request_exception;
-        const auto unknown = make_predicate_for_exception_message_fragment("unknown column");
-        const auto non_primary = make_predicate_for_exception_message_fragment("non-primary-key");
-        const auto order = make_predicate_for_exception_message_fragment("order");
-        const auto partition = make_predicate_for_exception_message_fragment("partition key");
+        const auto unknown = exception_predicate::message_contains("unknown column");
+        const auto non_primary = exception_predicate::message_contains("non-primary-key");
+        const auto order = exception_predicate::message_contains("order");
+        const auto partition = exception_predicate::message_contains("partition key");
 
         // Flag invalid columns in GROUP BY:
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t1 group by xyz").get(), ire, unknown);
@@ -3697,7 +3688,7 @@ SEASTAR_TEST_CASE(test_group_by_syntax_no_value_columns) {
         BOOST_REQUIRE_EXCEPTION(
                 e.execute_cql("select * from t group by p1, p2, p3, p1").get(),
                 exceptions::invalid_request_exception,
-                make_predicate_for_exception_message_fragment("order"));
+                exception_predicate::message_contains("order"));
     });
 }
 
