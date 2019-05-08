@@ -9,16 +9,17 @@ import pytest
 import boto3
 import time
 
-# Run tests with "--local" to run against a local Scylla installation on localhost:8080/
-# instead of AWS.
-# TODO: allow other URLs, not just "--local".
+# Run tests with "--local" to run against a local Scylla installation on
+# localhost:8080/ instead of AWS.
 def pytest_addoption(parser):
     parser.addoption("--local", action="store_true",
         help="run against local Scylla installation instead of AWS")
 
 # "dynamodb" fixture: set up client object for communicating with the DynamoDB
-# API. Currently, this connects to the real Amazon on us-east-1, but we should
-# make it optional whether to connect to AWS or a local Scylla installation.
+# API. Currently this chooses either Amazon's DynamoDB in the us-east-1 region
+# or a local Alternator installation on http://localhost:8080 - depending on the
+# existence of the "--local" option. In the future we should provide options
+# for choosing other Amazon regions or local installations.
 # We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
 def dynamodb(request):
@@ -37,39 +38,31 @@ def test_table_name():
     return test_table_prefix + str(current_ms)
 test_table_name.last_ms = 0
 
-# "test_table" fixture:
-# TODO: explain: creates a table with a certain schema.
-# TODO: require a fixture which on teardown removes all tables with a particular
-# prefix.
+# "test_table" fixture: Create and return a temporary table to be used in tests
+# that need a table to work on. The table is automatically deleted at the end.
 # We use scope="session" so that all tests will reuse the same client object.
-@pytest.fixture(scope="session")
-def test_table(dynamodb):
+# This "test_table" creates a table which has a specific key schema: both a
+# partition key and a sort key, and both are strings. Other fixtures (below)
+# can be used to create different types of tables.
+#
+# TODO: Although we are careful about deleting temporary tables when the
+# fixture is torn down, in some cases (e.g., interrupted tests) we can be left
+# with some tables not deleted, and they will never be deleted. Because all
+# our temporary tables have the same test_table_prefix, we can actually find
+# and remove these old tables with this prefix. We can have a fixture, which
+# test_table will require, which on teardown will delete all remaining tables
+# (possibly from an older run). Because the table's name includes the current
+# time, we can also remove just tables older than a particular age. Such
+# mechanism will allow running tests in parallel, without the risk of deleting
+# a parallel run's temporary tables.
+
+def create_test_table(dynamodb, KeySchema, AttributeDefinitions):
     name = test_table_name()
-    print("test_table() fixture creating new table {}".format(name))
-    table = dynamodb.create_table(
-        TableName=name,
+    print("fixture creating new table {}".format(name))
+    table = dynamodb.create_table(TableName=name,
         BillingMode='PAY_PER_REQUEST',
-        KeySchema=[
-            {
-                'AttributeName': 'p',
-                'KeyType': 'HASH'
-            },
-            {
-                'AttributeName': 'c',
-                'KeyType': 'RANGE'
-            }
-        ],
-        AttributeDefinitions=[
-            {
-                'AttributeName': 'p',
-                'AttributeType': 'S'
-            },
-            {
-                'AttributeName': 'c',
-                'AttributeType': 'S'
-            },
-        ],
-    )
+        KeySchema=KeySchema,
+        AttributeDefinitions=AttributeDefinitions)
     waiter = table.meta.client.get_waiter('table_exists')
     # recheck every second instead of the default, lower, frequency. This can
     # save a few seconds on AWS with its very slow table creation, but can
@@ -77,6 +70,18 @@ def test_table(dynamodb):
     waiter.config.delay = 1
     waiter.config.max_attempts = 60
     waiter.wait(TableName=name)
+    return table
+
+@pytest.fixture(scope="session")
+def test_table(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ])
     yield table
     # We get back here when this fixture is torn down. We ask Dynamo to delete
     # this table, but not wait for the deletion to complete. The next time
