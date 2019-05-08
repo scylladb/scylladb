@@ -104,13 +104,15 @@ private:
     std::vector<::shared_ptr<relation>> _where_clause;
     ::shared_ptr<term::raw> _limit;
     ::shared_ptr<term::raw> _per_partition_limit;
+    std::vector<::shared_ptr<cql3::column_identifier::raw>> _group_by_columns;
 public:
     select_statement(::shared_ptr<cf_name> cf_name,
             ::shared_ptr<parameters> parameters,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
             std::vector<::shared_ptr<relation>> where_clause,
             ::shared_ptr<term::raw> limit,
-            ::shared_ptr<term::raw> per_partition_limit);
+            ::shared_ptr<term::raw> per_partition_limit,
+            std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns);
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override {
         return prepare(db, stats, false);
@@ -149,6 +151,9 @@ private:
     void ensure_filtering_columns_retrieval(database& db,
                                             ::shared_ptr<selection::selection> selection,
                                             ::shared_ptr<restrictions::statement_restrictions> restrictions);
+
+    /// Returns indices of GROUP BY cells in fetched rows.
+    std::vector<size_t> prepare_group_by(schema_ptr schema, selection::selection& selection) const;
 
     bool contains_alias(::shared_ptr<column_identifier> name);
 

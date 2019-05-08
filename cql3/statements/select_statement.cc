@@ -127,6 +127,7 @@ select_statement::select_statement(schema_ptr schema,
                                    ::shared_ptr<parameters> parameters,
                                    ::shared_ptr<selection::selection> selection,
                                    ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                   ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
                                    ::shared_ptr<term> limit,
@@ -138,6 +139,7 @@ select_statement::select_statement(schema_ptr schema,
     , _parameters(std::move(parameters))
     , _selection(std::move(selection))
     , _restrictions(std::move(restrictions))
+    , _group_by_cell_indices(group_by_cell_indices)
     , _is_reversed(is_reversed)
     , _limit(std::move(limit))
     , _per_partition_limit(std::move(per_partition_limit))
@@ -315,7 +317,8 @@ select_statement::do_execute(service::storage_proxy& proxy,
     // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
     // If we user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
     // Note that if there are some nodes in the cluster with a version less than 2.0, we can't use paging (CASSANDRA-6707).
-    const bool aggregate = _selection->is_aggregate();
+    // Also note: all GROUP BY queries are considered aggregation.
+    const bool aggregate = _selection->is_aggregate() || has_group_by();
     const bool nonpaged_filtering = restrictions_need_filtering && page_size <= 0;
     if (aggregate || nonpaged_filtering) {
         page_size = DEFAULT_COUNT_PAGE_SIZE;
@@ -337,7 +340,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     if (aggregate || nonpaged_filtering) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
-                        options.get_cql_serialization_format()),
+                        options.get_cql_serialization_format(), *_group_by_cell_indices),
                 [this, p, page_size, now, timeout_duration, restrictions_need_filtering](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
                             [p, &builder, page_size, now, timeout_duration] {
@@ -674,12 +677,13 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
                                                            ::shared_ptr<parameters> parameters,
                                                            ::shared_ptr<selection::selection> selection,
                                                            ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                                           ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
                                                            ::shared_ptr<term> limit,
                                                            ::shared_ptr<term> per_partition_limit,
                                                            cql_stats &stats)
-    : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
 {}
 
 ::shared_ptr<cql3::statements::select_statement>
@@ -689,6 +693,7 @@ indexed_table_select_statement::prepare(database& db,
                                         ::shared_ptr<parameters> parameters,
                                         ::shared_ptr<selection::selection> selection,
                                         ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                        ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                         bool is_reversed,
                                         ordering_comparator_type ordering_comparator,
                                         ::shared_ptr<term> limit,
@@ -711,6 +716,7 @@ indexed_table_select_statement::prepare(database& db,
             parameters,
             std::move(selection),
             std::move(restrictions),
+            std::move(group_by_cell_indices),
             is_reversed,
             std::move(ordering_comparator),
             limit,
@@ -726,6 +732,7 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            ::shared_ptr<parameters> parameters,
                                                            ::shared_ptr<selection::selection> selection,
                                                            ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                                           ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
                                                            ::shared_ptr<term> limit,
@@ -734,7 +741,7 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            const secondary_index::index& index,
                                                            ::shared_ptr<restrictions::restrictions> used_index_restrictions,
                                                            schema_ptr view_schema)
-    : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
     , _index{index}
     , _used_index_restrictions(used_index_restrictions)
     , _view_schema(view_schema)
@@ -1107,13 +1114,15 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
                                    std::vector<::shared_ptr<relation>> where_clause,
                                    ::shared_ptr<term::raw> limit,
-                                   ::shared_ptr<term::raw> per_partition_limit)
+                                   ::shared_ptr<term::raw> per_partition_limit,
+                                   std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns)
     : cf_statement(std::move(cf_name))
     , _parameters(std::move(parameters))
     , _select_clause(std::move(select_clause))
     , _where_clause(std::move(where_clause))
     , _limit(std::move(limit))
     , _per_partition_limit(std::move(per_partition_limit))
+    , _group_by_columns(std::move(group_by_columns))
 { }
 
 void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr schema) {
@@ -1182,6 +1191,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
 
     check_needs_filtering(restrictions);
     ensure_filtering_columns_retrieval(db, selection, restrictions);
+    auto group_by_cell_indices = ::make_shared<std::vector<size_t>>(prepare_group_by(schema, *selection));
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
     if (restrictions->uses_secondary_indexing()) {
@@ -1192,6 +1202,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                 _parameters,
                 std::move(selection),
                 std::move(restrictions),
+                std::move(group_by_cell_indices),
                 is_reversed_,
                 std::move(ordering_comparator),
                 prepare_limit(db, bound_names, _limit),
@@ -1204,6 +1215,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                 _parameters,
                 std::move(selection),
                 std::move(restrictions),
+                std::move(group_by_cell_indices),
                 is_reversed_,
                 std::move(ordering_comparator),
                 prepare_limit(db, bound_names, _limit),
@@ -1431,6 +1443,76 @@ bool select_statement::contains_alias(::shared_ptr<column_identifier> name) {
     sstring name = per_partition ? "[per_partition_limit]" : "[limit]";
     return ::make_shared<column_specification>(keyspace(), column_family(), ::make_shared<column_identifier>(name, true),
         int32_type);
+}
+
+namespace {
+
+/// True iff one of \p relations is a single-column EQ involving \p def.
+bool equality_restricted(
+        const column_definition& def, schema_ptr schema, const std::vector<::shared_ptr<relation>>& relations) {
+    for (const auto& relation : relations) {
+        if (const auto sc_rel = dynamic_pointer_cast<single_column_relation>(relation)) {
+            if (sc_rel->is_EQ() && sc_rel->get_entity()->prepare_column_identifier(schema)->name() == def.name()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Returns an exception to throw when \p col is out of order in GROUP BY.
+auto make_order_exception(const column_identifier::raw& col) {
+    return exceptions::invalid_request_exception(format("Group by column {} is out of order", col));
+}
+
+} // anonymous namespace
+
+std::vector<size_t> select_statement::prepare_group_by(schema_ptr schema, selection::selection& selection) const {
+    if (_group_by_columns.empty()) {
+        return {};
+    }
+
+    std::vector<size_t> indices;
+
+    // We compare GROUP BY columns to the primary-key columns (in their primary-key order).  If a
+    // primary-key column is equality-restricted by the WHERE clause, it can be skipped in GROUP BY.
+    // It's OK if GROUP BY columns list ends before the primary key is exhausted.
+
+    const auto key_size = schema->partition_key_size() + schema->clustering_key_size();
+    const auto all_columns = schema->all_columns_in_select_order();
+    uint32_t expected_index = 0; // Index of the next column we expect to encounter.
+
+    using exceptions::invalid_request_exception;
+    for (const auto& col : _group_by_columns) {
+        auto def = schema->get_column_definition(col->prepare_column_identifier(schema)->name());
+        if (!def) {
+            throw invalid_request_exception(format("Group by unknown column {}", *col));
+        }
+        if (!def->is_primary_key()) {
+            throw invalid_request_exception(format("Group by non-primary-key column {}", *col));
+        }
+        if (expected_index >= key_size) {
+            throw make_order_exception(*col);
+        }
+        while (*def != all_columns[expected_index]
+               && equality_restricted(all_columns[expected_index], schema, _where_clause)) {
+            if (++expected_index >= key_size) {
+                throw make_order_exception(*col);
+            }
+        }
+        if (*def != all_columns[expected_index]) {
+            throw make_order_exception(*col);
+        }
+        ++expected_index;
+        const auto index = selection.index_of(*def);
+        indices.push_back(index != -1 ? index : selection.add_column_for_post_processing(*def));
+    }
+
+    if (expected_index < schema->partition_key_size()) {
+        throw invalid_request_exception(format("GROUP BY must include the entire partition key"));
+    }
+
+    return indices;
 }
 
 }
