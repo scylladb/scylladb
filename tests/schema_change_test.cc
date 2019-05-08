@@ -34,8 +34,6 @@
 #include "schema_registry.hh"
 #include "types/list.hh"
 #include "types/user.hh"
-#include "db/config.hh"
-#include "tmpdir.hh"
 
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
@@ -506,49 +504,4 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
             }
         });
     });
-}
-
-// We don't want schema digest to change between Scylla versions because that results in a schema disagreement
-// during rolling upgrade.
-SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
-    using namespace db;
-    using namespace db::schema_tables;
-
-    auto tmp = tmpdir();
-    const bool regenerate = false;
-
-    sstring data_dir = "./tests/sstables/schema_digest_test";
-
-    db::config db_cfg;
-    if (regenerate) {
-        db_cfg.data_file_directories({data_dir}, db::config::config_source::CommandLine);
-    } else {
-        fs::copy(std::string(data_dir), std::string(tmp.path().string()), fs::copy_options::recursive);
-        db_cfg.data_file_directories({tmp.path().string()}, db::config::config_source::CommandLine);
-    }
-
-    return do_with_cql_env_thread([regenerate](cql_test_env& e) {
-        if (regenerate) {
-            // Exercise many different kinds of schema changes.
-            e.execute_cql(
-                "create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
-            e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
-            e.execute_cql("create type tests.basic_info (c1 timestamp, v2 text);").get();
-            e.execute_cql("create index on tests.table1 (c1);").get();
-            e.execute_cql("create table tbl (a int, b int, c float, PRIMARY KEY (a))").get();
-            e.execute_cql(
-                "create materialized view tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
-            e.execute_cql(
-                "create keyspace tests2 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
-            e.execute_cql("drop keyspace tests2;").get();
-        }
-
-        auto digest = [] (schema_features sf) {
-            return calculate_schema_digest(service::get_storage_proxy(), sf).get0();
-        };
-
-        BOOST_REQUIRE_EQUAL(digest(schema_features()), utils::UUID("d24d2ff6-565c-32d3-8f15-c7363d9951ef"));
-        BOOST_REQUIRE_EQUAL(digest(schema_features::of<schema_feature::VIEW_VIRTUAL_COLUMNS>()), utils::UUID("cc5a9f2f-10d7-33b9-9691-6106e376b913"));
-        BOOST_REQUIRE_EQUAL(digest(schema_features::full()), utils::UUID("cc5a9f2f-10d7-33b9-9691-6106e376b913"));
-    }, db_cfg).then([tmp = std::move(tmp)] {});
 }
