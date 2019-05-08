@@ -80,8 +80,8 @@ public:
 
    TODO(sarna): boost::bimap
  */
-static data_type parse_type(sstring type) {
-    static thread_local std::unordered_map<sstring, data_type> types = {
+static data_type parse_type(std::string type) {
+    static thread_local std::unordered_map<std::string, data_type> types = {
         {"S", utf8_type},
         {"B", bytes_type},
         {"BOOL", boolean_type},
@@ -95,8 +95,8 @@ static data_type parse_type(sstring type) {
 }
 #endif
 
-static sstring type_to_sstring(data_type type) {
-    static thread_local std::unordered_map<data_type, sstring> types = {
+static std::string type_to_string(data_type type) {
+    static thread_local std::unordered_map<data_type, std::string> types = {
         {utf8_type, "S"},
         {bytes_type, "B"},
         {boolean_type, "BOOL"},
@@ -119,7 +119,7 @@ static void supplement_table_info(Json::Value& descr, const schema& schema) {
 // specifies that table names "names must be between 3 and 255 characters long
 // and can contain only the following characters: a-z, A-Z, 0-9, _ (underscore), - (dash), . (dot)
 // validate_table_name throws the appropriate api_error if this validation fails.
-static void validate_table_name(const sstring& name) {
+static void validate_table_name(const std::string& name) {
     // FIXME: Although we would like to support table names up to 255
     // bytes, like DynamoDB, Scylla creates a directory whose name is the
     // table's name plus 33 bytes (dash and UUID), and since directory names
@@ -136,12 +136,12 @@ static void validate_table_name(const sstring& name) {
     }
 }
 
-future<json::json_return_type> executor::describe_table(sstring content) {
+future<json::json_return_type> executor::describe_table(std::string content) {
     Json::Value request = json::to_json_value(content);
     elogger.trace("Describing table {}", request.toStyledString());
 
     // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
-    sstring table_name = request["TableName"].asString();
+    std::string table_name = request["TableName"].asString();
     validate_table_name(table_name);
     if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
         throw api_error("ResourceNotFoundException",
@@ -169,12 +169,12 @@ future<json::json_return_type> executor::describe_table(sstring content) {
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
-future<json::json_return_type> executor::delete_table(sstring content) {
+future<json::json_return_type> executor::delete_table(std::string content) {
     Json::Value request = json::to_json_value(content);
     elogger.trace("Deleting table {}", request.toStyledString());
 
     // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
-    sstring table_name = request["TableName"].asString();
+    std::string table_name = request["TableName"].asString();
     validate_table_name(table_name);
     if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
         throw api_error("ResourceNotFoundException",
@@ -220,11 +220,11 @@ static void add_column(schema_builder& builder, const std::string& name, const J
             format("KeySchema key '{}' missing in AttributeDefinitions", name));
 }
 
-future<json::json_return_type> executor::create_table(sstring content) {
+future<json::json_return_type> executor::create_table(std::string content) {
     Json::Value table_info = json::to_json_value(content);
     elogger.warn("Creating table {}", table_info.toStyledString());
 
-    sstring table_name = table_info["TableName"].asString();
+    std::string table_name = table_info["TableName"].asString();
     validate_table_name(table_name);
     // FIXME: the table name's being valid in Dynamo doesn't make it valid
     // in Scylla. May need to quote or shorten table names.
@@ -272,7 +272,7 @@ future<json::json_return_type> executor::create_table(sstring content) {
 static partition_key pk_from_json(const Json::Value& item, schema_ptr schema) {
     std::vector<bytes> raw_pk;
     for (const column_definition& cdef : schema->partition_key_columns()) {
-        sstring value_str = item[cdef.name_as_text()][type_to_sstring(cdef.type)].asString();
+        std::string value_str = item[cdef.name_as_text()][type_to_string(cdef.type)].asString();
         bytes raw_value = cdef.type->from_string(value_str);
         raw_pk.push_back(std::move(raw_value));
     }
@@ -283,7 +283,7 @@ static clustering_key ck_from_json(const Json::Value& item, schema_ptr schema) {
     assert(schema->clustering_key_size() > 0);
     std::vector<bytes> raw_ck;
     for (const column_definition& cdef : schema->clustering_key_columns()) {
-        sstring value_str = item[cdef.name_as_text()][type_to_sstring(cdef.type)].asString();
+        std::string value_str = item[cdef.name_as_text()][type_to_string(cdef.type)].asString();
         bytes raw_value = cdef.type->from_string(value_str);
         raw_ck.push_back(std::move(raw_value));
     }
@@ -291,11 +291,11 @@ static clustering_key ck_from_json(const Json::Value& item, schema_ptr schema) {
     return clustering_key::from_exploded(raw_ck);
 }
 
-future<json::json_return_type> executor::put_item(sstring content) {
+future<json::json_return_type> executor::put_item(std::string content) {
     Json::Value update_info = json::to_json_value(content);
     elogger.debug("Updating value {}", update_info.toStyledString());
 
-    sstring table_name = update_info["TableName"].asString();
+    std::string table_name = update_info["TableName"].asString();
     const Json::Value& item = update_info["Item"];
     schema_ptr schema;
     try {
@@ -331,7 +331,7 @@ future<json::json_return_type> executor::put_item(sstring content) {
 
 }
 
-future<json::json_return_type> executor::update_item(sstring content) {
+future<json::json_return_type> executor::update_item(std::string content) {
     Json::Value update_info = json::to_json_value(content);
     elogger.trace("update_item {}", update_info.toStyledString());
     std::string table_name = update_info["TableName"].asString();
@@ -355,29 +355,40 @@ future<json::json_return_type> executor::update_item(sstring content) {
     const Json::Value& attribute_updates = update_info["AttributeUpdates"];
     for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
         // Note that it.key() is the name of the column, *it is the operation
-        std::string action = (*it)["Action"].asString();
-        // FIXME: need to support also DELETE and ADD. And case of missing attribute.
-        if (action != "PUT") {
-            throw api_error("ValidationException",
-                    format("Unknown Action value '{}' in AttributeUpdates", action));
-        }
-        const Json::Value& value = (*it)["Value"];
-        if (value.size() != 1) {
-            throw api_error("ValidationException",
-                    format("Value field in AttributeUpdates must have just one item", it.key().asString()));
-        }
         bytes column_name = to_bytes(it.key().asString());
         const column_definition* cdef = schema->get_column_definition(column_name);
         if (cdef && cdef->is_primary_key()) {
             throw api_error("ValidationException",
                     format("UpdateItem cannot update key column {}", it.key().asString()));
         }
-        // At this point, value is a dict with a single entry.
-        // value.begin().key() is its key (a type) and
-        // value.begin()->asString() is its value. But we currently
-        // serialize both together, with value.toStyledString().
-        bytes val = utf8_type->decompose(sstring(value.toStyledString()));
-        attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, api::new_timestamp(), val, atomic_cell::collection_member::yes));
+        std::string action = (*it)["Action"].asString();
+        if (action == "DELETE") {
+            // FIXME: Currently we support only the simple case where the
+            // "Value" field is missing. If it were not missing, we would
+            // we need to verify the old type and/or value is same as
+            // specified before deleting... We don't do this yet.
+            if (!it->get("Value", "").asString().empty()) {
+                throw api_error("ValidationException",
+                        format("UpdateItem DELETE with checking old value not yet supported"));
+            }
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_dead(api::new_timestamp(), gc_clock::now()));
+        } else if (action == "PUT") {
+            const Json::Value& value = (*it)["Value"];
+            if (value.size() != 1) {
+                throw api_error("ValidationException",
+                        format("Value field in AttributeUpdates must have just one item", it.key().asString()));
+            }
+            // At this point, value is a dict with a single entry.
+            // value.begin().key() is its key (a type) and
+            // value.begin()->asString() is its value. But we currently
+            // serialize both together, with value.toStyledString().
+            bytes val = utf8_type->decompose(sstring(value.toStyledString()));
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, api::new_timestamp(), val, atomic_cell::collection_member::yes));
+        } else {
+            // FIXME: need to support "ADD" as well.
+            throw api_error("ValidationException",
+                format("Unknown Action value '{}' in AttributeUpdates", action));
+        }
     }
     auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
     m.set_cell(ck, attrs_column(*schema), std::move(serialized_map));
@@ -388,7 +399,7 @@ future<json::json_return_type> executor::update_item(sstring content) {
     });
 }
 
-static Json::Value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<sstring>&& attrs_to_get) {
+static Json::Value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
     Json::Value item(Json::objectValue);
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
@@ -399,17 +410,17 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
         const auto& columns = selection.get_columns();
         auto column_it = columns.begin();
         for (const bytes_opt& cell : result_row) {
-            sstring column_name = (*column_it)->name_as_text();
+            std::string column_name = (*column_it)->name_as_text();
             if (column_name != executor::ATTRS_COLUMN_NAME) {
                 if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
                     Json::Value& field = item[column_name.c_str()];
-                    field[type_to_sstring((*column_it)->type)] = json::to_json_value((*column_it)->type->to_json_string(cell));
+                    field[type_to_string((*column_it)->type)] = json::to_json_value((*column_it)->type->to_json_string(cell));
                 }
             } else if (cell) {
                 auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
                 auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
                 for (auto entry : keys_and_values) {
-                    sstring attr_name = value_cast<sstring>(entry.first);
+                    std::string attr_name = value_cast<sstring>(entry.first);
                     if (attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
                         item[attr_name] = json::to_json_value(value_cast<sstring>(entry.second));
                     }
@@ -423,11 +434,11 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
     return item_descr;
 }
 
-future<json::json_return_type> executor::get_item(sstring content) {
+future<json::json_return_type> executor::get_item(std::string content) {
     Json::Value table_info = json::to_json_value(content);
     elogger.warn("Getting item {}", table_info.toStyledString());
 
-    sstring table_name = table_info["TableName"].asString();
+    std::string table_name = table_info["TableName"].asString();
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
     Json::Value attributes_to_get = table_info["AttributesToGet"];
     Json::Value query_key = table_info["Key"];
@@ -454,7 +465,7 @@ future<json::json_return_type> executor::get_item(sstring content) {
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
 
-    auto attrs_to_get = boost::copy_range<std::unordered_set<sstring>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
+    auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(db::no_timeout, empty_service_permit())).then(
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get)] (service::storage_proxy::coordinator_query_result qr) mutable {

@@ -30,12 +30,12 @@ public:
 
     executor(service::storage_proxy& proxy, service::migration_manager& mm) : _proxy(proxy), _mm(mm) {}
 
-    future<json::json_return_type> create_table(sstring content);
-    future<json::json_return_type> describe_table(sstring content);
-    future<json::json_return_type> delete_table(sstring content);
-    future<json::json_return_type> put_item(sstring content);
-    future<json::json_return_type> get_item(sstring content);
-    future<json::json_return_type> update_item(sstring content);
+    future<json::json_return_type> create_table(std::string content);
+    future<json::json_return_type> describe_table(std::string content);
+    future<json::json_return_type> delete_table(std::string content);
+    future<json::json_return_type> put_item(std::string content);
+    future<json::json_return_type> get_item(std::string content);
+    future<json::json_return_type> update_item(std::string content);
 
     future<> start();
     future<> stop() { return make_ready_future<>(); }
