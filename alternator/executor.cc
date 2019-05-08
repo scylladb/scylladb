@@ -280,7 +280,9 @@ static partition_key pk_from_json(const Json::Value& item, schema_ptr schema) {
 }
 
 static clustering_key ck_from_json(const Json::Value& item, schema_ptr schema) {
-    assert(schema->clustering_key_size() > 0);
+    if (schema->clustering_key_size() == 0) {
+        return clustering_key::make_empty();
+    }
     std::vector<bytes> raw_ck;
     for (const column_definition& cdef : schema->clustering_key_columns()) {
         std::string value_str = item[cdef.name_as_text()][type_to_string(cdef.type)].asString();
@@ -305,7 +307,7 @@ future<json::json_return_type> executor::put_item(std::string content) {
                  format("Requested resource not found: Table: {} not found", table_name));
     }
     partition_key pk = pk_from_json(item, schema);
-    clustering_key ck = (schema->clustering_key_size() > 0) ? ck_from_json(item, schema) : clustering_key::make_empty();
+    clustering_key ck = ck_from_json(item, schema);
 
     mutation m(schema, pk);
     collection_type_impl::mutation attrs_mut;
@@ -346,7 +348,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
     const Json::Value& key = update_info["Key"];
     // FIXME: handle missing components in Key, extra stuff, etc.
     partition_key pk = pk_from_json(key, schema);
-    clustering_key ck = (schema->clustering_key_size() > 0) ? ck_from_json(key, schema) : clustering_key::make_empty();
+    clustering_key ck = ck_from_json(key, schema);
 
     mutation m(schema, pk);
     collection_type_impl::mutation attrs_mut;
