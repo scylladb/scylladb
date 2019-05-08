@@ -418,7 +418,7 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
     try {
         auto ep_state_ptr = _gossiper. get_endpoint_state_for_endpoint_ptr(end_point_key());
         if (!ep_state_ptr || !ep_state_ptr->is_alive()) {
-            if (!_state.contains(state::ep_state_is_not_normal)) {
+            if (!_state.contains(state::ep_state_left_the_ring)) {
                 auto ep_gossip_state_val = _gossiper.get_gossip_status(end_point_key());
                 // If node has been removed from the ring it's going to be removed from the gossiper::endpoint_state
                 // map as well.
@@ -429,7 +429,7 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
                 //    - SHUTDOWN
                 //    - "" - when node is in a DN state but was DOWN since the local node started up. In this case
                 //      gossiper::endpoint_state[node][STATUS] value is going to be not set at all.
-                _state.set_if<state::ep_state_is_not_normal>(
+                _state.set_if<state::ep_state_left_the_ring>(
                     !ep_state_ptr ||
                     (ep_gossip_state_val != gms::versioned_value::STATUS_NORMAL &&
                     ep_gossip_state_val != gms::versioned_value::SHUTDOWN &&
@@ -437,9 +437,9 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
                 );
             }
             // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
-            return _state.contains(state::ep_state_is_not_normal);
+            return _state.contains(state::ep_state_left_the_ring);
         } else {
-            _state.remove(state::ep_state_is_not_normal);
+            _state.remove(state::ep_state_left_the_ring);
             return true;
         }
     } catch (...) {
