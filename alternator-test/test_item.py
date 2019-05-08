@@ -54,21 +54,25 @@ def test_update_bad_action(test_table):
         test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'attribute': {'Value': val, 'Action': 'NONEXISTENT'}})
 
 # A more elaborate UpdateItem test, updating different attributes at different
-# times. TODO: also test DELETE action!
+# times. Includes PUT and DELETE operations.
 def test_basic_string_more_update(test_table):
     p = random_string()
     c = random_string()
     val1 = random_string()
     val2 = random_string()
     val3 = random_string()
+    val4 = random_string()
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a3': {'Value': val1, 'Action': 'PUT'}})
     test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a1': {'Value': val1, 'Action': 'PUT'}})
     test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a2': {'Value': val2, 'Action': 'PUT'}})
     test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a1': {'Value': val3, 'Action': 'PUT'}})
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'a3': {'Action': 'DELETE'}})
     item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
     assert item['p'] == p
     assert item['c'] == c
     assert item['a1'] == val3
     assert item['a2'] == val2
+    assert not 'a3' in item
 
 # Test that item operations on a non-existant table name fail with correct
 # error code.

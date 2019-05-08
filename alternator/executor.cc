@@ -355,29 +355,40 @@ future<json::json_return_type> executor::update_item(sstring content) {
     const Json::Value& attribute_updates = update_info["AttributeUpdates"];
     for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
         // Note that it.key() is the name of the column, *it is the operation
-        std::string action = (*it)["Action"].asString();
-        // FIXME: need to support also DELETE and ADD. And case of missing attribute.
-        if (action != "PUT") {
-            throw api_error("ValidationException",
-                    format("Unknown Action value '{}' in AttributeUpdates", action));
-        }
-        const Json::Value& value = (*it)["Value"];
-        if (value.size() != 1) {
-            throw api_error("ValidationException",
-                    format("Value field in AttributeUpdates must have just one item", it.key().asString()));
-        }
         bytes column_name = to_bytes(it.key().asString());
         const column_definition* cdef = schema->get_column_definition(column_name);
         if (cdef && cdef->is_primary_key()) {
             throw api_error("ValidationException",
                     format("UpdateItem cannot update key column {}", it.key().asString()));
         }
-        // At this point, value is a dict with a single entry.
-        // value.begin().key() is its key (a type) and
-        // value.begin()->asString() is its value. But we currently
-        // serialize both together, with value.toStyledString().
-        bytes val = utf8_type->decompose(sstring(value.toStyledString()));
-        attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, api::new_timestamp(), val, atomic_cell::collection_member::yes));
+        std::string action = (*it)["Action"].asString();
+        if (action == "DELETE") {
+            // FIXME: Currently we support only the simple case where the
+            // "Value" field is missing. If it were not missing, we would
+            // we need to verify the old type and/or value is same as
+            // specified before deleting... We don't do this yet.
+            if (!it->get("Value", "").asString().empty()) {
+                throw api_error("ValidationException",
+                        format("UpdateItem DELETE with checking old value not yet supported"));
+            }
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_dead(api::new_timestamp(), gc_clock::now()));
+        } else if (action == "PUT") {
+            const Json::Value& value = (*it)["Value"];
+            if (value.size() != 1) {
+                throw api_error("ValidationException",
+                        format("Value field in AttributeUpdates must have just one item", it.key().asString()));
+            }
+            // At this point, value is a dict with a single entry.
+            // value.begin().key() is its key (a type) and
+            // value.begin()->asString() is its value. But we currently
+            // serialize both together, with value.toStyledString().
+            bytes val = utf8_type->decompose(sstring(value.toStyledString()));
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, api::new_timestamp(), val, atomic_cell::collection_member::yes));
+        } else {
+            // FIXME: need to support "ADD" as well.
+            throw api_error("ValidationException",
+                format("Unknown Action value '{}' in AttributeUpdates", action));
+        }
     }
     auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
     m.set_cell(ck, attrs_column(*schema), std::move(serialized_map));
