@@ -60,6 +60,17 @@ if __name__ == "__main__":
                 disk_properties["read_bandwidth"] = 2015342735 * nr_disks
                 disk_properties["write_iops"] = 181500 * nr_disks
                 disk_properties["write_bandwidth"] = 808775652 * nr_disks
+            elif idata.instance_class() == "i3en":
+                if idata.instance() in ("i3en.large", "i3.xlarge", "i3en.2xlarge"):
+                    disk_properties["read_iops"] = 46489
+                    disk_properties["read_bandwidth"] = 353437280
+                    disk_properties["write_iops"] = 36680
+                    disk_properties["write_bandwidth"] = 164766656
+                else:
+                    disk_properties["read_iops"] = 278478 * nr_disks
+                    disk_properties["read_bandwidth"] = 3029172992 * nr_disks
+                    disk_properties["write_iops"] = 221909 * nr_disks
+                    disk_properties["write_bandwidth"] = 1020482432 * nr_disks
             elif idata.instance_class() == "i2":
                 disk_properties["read_iops"] = 64000 * nr_disks
                 disk_properties["read_bandwidth"] = 507338935 * nr_disks
