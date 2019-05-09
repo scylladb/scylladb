@@ -222,7 +222,7 @@ static void add_column(schema_builder& builder, const std::string& name, const J
 
 future<json::json_return_type> executor::create_table(std::string content) {
     Json::Value table_info = json::to_json_value(content);
-    elogger.warn("Creating table {}", table_info.toStyledString());
+    elogger.trace("Creating table {}", table_info.toStyledString());
 
     std::string table_name = table_info["TableName"].asString();
     validate_table_name(table_name);
@@ -295,7 +295,7 @@ static clustering_key ck_from_json(const Json::Value& item, schema_ptr schema) {
 
 future<json::json_return_type> executor::put_item(std::string content) {
     Json::Value update_info = json::to_json_value(content);
-    elogger.debug("Updating value {}", update_info.toStyledString());
+    elogger.trace("Updating value {}", update_info.toStyledString());
 
     std::string table_name = update_info["TableName"].asString();
     const Json::Value& item = update_info["Item"];
@@ -319,12 +319,10 @@ future<json::json_return_type> executor::put_item(std::string content) {
             bytes value = utf8_type->decompose(sstring(it->toStyledString()));
             attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, api::new_timestamp(), value, atomic_cell::collection_member::yes));
         }
-        elogger.warn("{}: {}", it.key().asString(), it->toStyledString());
     }
 
     auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
     m.set_cell(ck, attrs_column(*schema), std::move(serialized_map));
-    elogger.warn("Applying mutation {}", m);
 
     return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, PutItem returns nothing.
@@ -438,7 +436,7 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
 
 future<json::json_return_type> executor::get_item(std::string content) {
     Json::Value table_info = json::to_json_value(content);
-    elogger.warn("Getting item {}", table_info.toStyledString());
+    elogger.trace("Getting item {}", table_info.toStyledString());
 
     std::string table_name = table_info["TableName"].asString();
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
