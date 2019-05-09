@@ -25,17 +25,17 @@
 
 class md5_hasher;
 
-template <typename T, size_t size> class hasher {
+template <typename T, size_t size> class cryptopp_hasher {
     struct impl;
     std::unique_ptr<impl> _impl;
 
 public:
-    hasher();
-    ~hasher();
-    hasher(hasher&&) noexcept;
-    hasher(const hasher&);
-    hasher& operator=(hasher&&) noexcept;
-    hasher& operator=(const hasher&);
+    cryptopp_hasher();
+    ~cryptopp_hasher();
+    cryptopp_hasher(cryptopp_hasher&&) noexcept;
+    cryptopp_hasher(const cryptopp_hasher&);
+    cryptopp_hasher& operator=(cryptopp_hasher&&) noexcept;
+    cryptopp_hasher& operator=(const cryptopp_hasher&);
 
     bytes finalize();
     std::array<uint8_t, size> finalize_array();
@@ -45,6 +45,6 @@ public:
     static bytes calculate(const std::string_view& s);
 };
 
-class md5_hasher : public hasher<md5_hasher, 16> {};
+class md5_hasher : public cryptopp_hasher<md5_hasher, 16> {};
 
-class sha256_hasher : public hasher<sha256_hasher, 32> {};
+class sha256_hasher : public cryptopp_hasher<sha256_hasher, 32> {};
