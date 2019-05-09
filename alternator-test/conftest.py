@@ -88,3 +88,16 @@ def test_table(dynamodb):
     # we create a test_table fixture, we'll choose a different table name
     # anyway.
     table.delete()
+
+@pytest.fixture(scope="session")
+def test_2_tables(dynamodb):
+    tables = [create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ]) for _ in range(2)]
+    yield tables
+    [table.delete() for table in tables]
