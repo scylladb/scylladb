@@ -51,6 +51,14 @@ GCC6_CONCEPT(
     }
 )
 
+class hasher {
+public:
+    virtual ~hasher() = default;
+    virtual void update(const char* ptr, size_t size) = 0;
+};
+
+GCC6_CONCEPT(static_assert(Hasher<hasher>());)
+
 template<typename T, typename Enable = void>
 struct appending_hash;
 
