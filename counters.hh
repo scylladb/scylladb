@@ -309,7 +309,8 @@ class basic_counter_cell_view {
 protected:
     using linearized_value_view = std::conditional_t<is_mutable == mutable_view::no,
                                                      bytes_view, bytes_mutable_view>;
-    using pointer_type = typename linearized_value_view::pointer;
+    using pointer_type = std::conditional_t<is_mutable == mutable_view::no,
+                                            bytes_view::const_pointer, bytes_mutable_view::pointer>;
     basic_atomic_cell_view<is_mutable> _cell;
     linearized_value_view _value;
 private:

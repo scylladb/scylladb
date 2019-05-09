@@ -807,7 +807,7 @@ BOOST_AUTO_TEST_CASE(test_object_exception_safety) {
                 [&] (auto nested_serializer) {
                     return nested_serializer
                         .serialize(128)
-                        .serialize(128, [] (auto&&...) { })
+                        .serialize(128, [] (auto&&...) noexcept { })
                         .done();
                 }
             ))
@@ -816,7 +816,7 @@ BOOST_AUTO_TEST_CASE(test_object_exception_safety) {
                 [&] (auto nested_serializer) {
                     return nested_serializer
                         .serialize(1024)
-                        .serialize(1024, [] (auto&&...) { })
+                        .serialize(1024, [] (auto&&...) noexcept { })
                         .done();
                 }
             ))

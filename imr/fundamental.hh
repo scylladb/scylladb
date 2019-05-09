@@ -241,7 +241,7 @@ struct buffer {
         { ctx.template size_of<Tag>() } noexcept -> size_t;
     })
     static view make_view(const uint8_t* in, const Context& context) noexcept {
-        auto ptr = reinterpret_cast<bytes_view::pointer>(in);
+        auto ptr = reinterpret_cast<bytes_view::const_pointer>(in);
         return bytes_view(ptr, context.template size_of<Tag>());
     }
 
