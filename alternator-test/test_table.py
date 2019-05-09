@@ -192,3 +192,37 @@ def test_describe_table_non_existent_table(dynamodb):
     err = response['Error']
     assert err['Code'] == 'ResourceNotFoundException'
     assert re.match(err['Message'], 'Requested resource not found: Table: non_existent_table not found')
+
+test_table_prefix = 'alternator_test_'
+# Test that all tables we create are listed
+def test_list_tables_all(dynamodb, test_table, test_2_tables):
+    returned_tables = dynamodb.meta.client.list_tables();
+    filtered_tables = set(filter(lambda t : t.startswith(test_table_prefix), returned_tables['TableNames']))
+
+    assert set([table.name for table in test_2_tables + [test_table]]).issubset(filtered_tables);
+    assert 'LastEvaluatedTableName' not in returned_tables.keys()
+
+# Test that pagination in table listing works properly
+def test_list_tables_paginated(dynamodb, test_table, test_2_tables):
+    all_table_names = set([table.name for table in test_2_tables + [test_table]])
+
+    for limit in range(1,4):
+        fetched = []
+        exclusive_start = None
+        while len(fetched) < len(all_table_names):
+            if exclusive_start:
+                returned_tables = dynamodb.meta.client.list_tables(ExclusiveStartTableName=exclusive_start, Limit=limit)
+            else:
+                returned_tables = dynamodb.meta.client.list_tables(Limit=limit)
+            assert len(returned_tables)
+            filtered_tables = sorted(filter(lambda t : t.startswith(test_table_prefix), returned_tables['TableNames']))
+            fetched += filtered_tables
+            exclusive_start = returned_tables.get('LastEvaluatedTableName', None)
+
+    assert set(all_table_names).issubset(fetched)
+
+# Test that pagination limit is validated
+def test_list_tables_wrong_limit(dynamodb):
+    # lower limit (min. 1) is imposed by boto3 library checks
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.meta.client.list_tables(Limit=101)
