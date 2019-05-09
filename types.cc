@@ -3212,7 +3212,7 @@ void list_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
                 format("Validation failed for type {}: bytes remaining after reading all {} elements of the list -> [{}]",
                        this->name(),
                        nr,
-                       v));
+                       to_hex(v)));
     }
 }
 

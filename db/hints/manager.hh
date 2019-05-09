@@ -86,13 +86,13 @@ public:
 
             enum class state {
                 stopping,               // stop() was called
-                ep_state_is_not_normal, // destination Node state is not NORMAL - usually means that it has been decommissioned
+                ep_state_left_the_ring, // destination Node is not a part of the ring anymore - usually means that it has been decommissioned
                 draining,               // try to send everything out and ignore errors
             };
 
             using state_set = enum_set<super_enum<state,
                 state::stopping,
-                state::ep_state_is_not_normal,
+                state::ep_state_left_the_ring,
                 state::draining>>;
 
             enum class send_state {
