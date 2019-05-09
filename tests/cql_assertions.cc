@@ -178,3 +178,14 @@ rows_assertions rows_assertions::with_serialized_columns_count(size_t columns_co
     }
     return {*this};
 }
+
+shared_ptr<cql_transport::messages::result_message> cquery_nofail(
+        cql_test_env& env, const char* query, const std::experimental::source_location& loc) {
+    try {
+        return env.execute_cql(query).get0();
+    } catch (...) {
+        BOOST_FAIL(format("query '{}' failed: {}\n{}:{}: originally from here",
+                          query, std::current_exception(), loc.file_name(), loc.line()));
+    }
+    return shared_ptr<cql_transport::messages::result_message>(nullptr);
+}
