@@ -27,6 +27,7 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "exception_utils.hh"
 
 
 SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {
@@ -537,14 +538,35 @@ SEASTAR_TEST_CASE(test_secondary_index_collections) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table t (p int primary key, s1 set<int>, m1 map<int, text>, l1 list<int>, s2 frozen<set<int>>, m2 frozen<map<int, text>>, l2 frozen<list<int>>)").get();
 
-        //NOTICE(sarna): should be lifted after issue #2962 is resolved
-        BOOST_REQUIRE_THROW(e.execute_cql("create index on t(s1)").get(), exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("create index on t(m1)").get(), exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("create index on t(l1)").get(), exceptions::invalid_request_exception);
+        using ire = exceptions::invalid_request_exception;
+        using exception_predicate::message_contains;
+        auto non_frozen = message_contains("index on non-frozen");
+        auto non_full = message_contains("Cannot create index");
+        auto duplicate = message_contains("duplicate");
+        auto entry_eq = message_contains("entry equality predicates on frozen map");
 
+        //NOTICE(sarna): should be lifted after issue #2962 is resolved
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(s1)").get(), ire, non_frozen);
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(m1)").get(), ire, non_frozen);
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(l1)").get(), ire, non_frozen);
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL(s1))").get(), ire, non_frozen);
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL(m1))").get(), ire, non_frozen);
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL(l1))").get(), ire, non_frozen);
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(     s2 )").get(), ire, non_full);
         e.execute_cql("create index on t(FULL(s2))").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL(s2))").get(), ire, duplicate);
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(     m2 )").get(), ire, non_full);
         e.execute_cql("create index on t(FULL(m2))").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL(m2))").get(), ire, duplicate);
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(     l2 )").get(), ire, non_full);
         e.execute_cql("create index on t(FULL(l2))").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL(l2))").get(), ire, duplicate);
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where m2[1] = '1'").get(), ire, entry_eq);
 
         e.execute_cql("insert into t(p, s2, m2, l2) values (1, {1}, {1: 'one', 2: 'two'}, [2])").get();
         e.execute_cql("insert into t(p, s2, m2, l2) values (2, {2}, {3: 'three'}, [3, 4, 5])").get();
