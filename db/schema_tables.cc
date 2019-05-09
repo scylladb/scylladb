@@ -778,6 +778,10 @@ mutation compact_for_schema_digest(const mutation& m) {
     return m_compacted;
 }
 
+void feed_hash_for_schema_digest(hasher& h, const mutation& m) {
+    feed_hash(h, compact_for_schema_digest(m));
+}
+
 // Applies deletion of the "version" column to a system_schema.scylla_tables mutation.
 static void delete_schema_version(mutation& m) {
     if (m.column_family_id() != scylla_tables()->id()) {
