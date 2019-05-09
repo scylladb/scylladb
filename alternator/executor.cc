@@ -27,6 +27,8 @@
 #include "cql3/update_parameters.hh"
 #include "server.hh"
 
+#include <boost/range/adaptors.hpp>
+
 static logging::logger elogger("alternator-executor");
 
 namespace alternator {
@@ -471,6 +473,59 @@ future<json::json_return_type> executor::get_item(std::string content) {
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get)] (service::storage_proxy::coordinator_query_result qr) mutable {
         return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get))));
     });
+}
+
+static void validate_limit(int limit) {
+    if (limit < 1 || limit > 100) {
+        throw api_error("ValidationException", "Limit must be greater than 0 and no greater than 100");
+    }
+}
+
+future<json::json_return_type> executor::list_tables(std::string content) {
+    Json::Value table_info = json::to_json_value(content);
+    elogger.trace("Listing tables {}", table_info.toStyledString());
+
+    std::string exclusive_start = table_info.get("ExclusiveStartTableName", "").asString();
+    int limit = table_info.get("Limit", 100).asInt();
+    validate_limit(limit);
+
+    auto table_names = _proxy.get_db().local().get_column_families()
+            | boost::adaptors::map_values
+            | boost::adaptors::filtered([] (const lw_shared_ptr<table>& t) {
+                        return t->schema()->ks_name() == KEYSPACE_NAME;
+                    })
+            | boost::adaptors::transformed([] (const lw_shared_ptr<table>& t) {
+                        return t->schema()->cf_name();
+                    });
+
+    Json::Value response;
+    Json::Value& all_tables = response["TableNames"];
+    all_tables = Json::Value(Json::arrayValue);
+
+    //TODO(sarna): Dynamo doesn't declare any ordering when listing tables,
+    // but our implementation is vulnerable to changes, because the tables
+    // are stored in an unordered map. We may consider (partially) sorting
+    // the results before returning them to the client, especially if there
+    // is an implicit order of elements that Dynamo imposes.
+    auto table_names_it = [&table_names, &exclusive_start] {
+        if (!exclusive_start.empty()) {
+            auto it = boost::find_if(table_names, [&exclusive_start] (const sstring& table_name) { return table_name == exclusive_start; });
+            return std::next(it, it != table_names.end());
+        } else {
+            return table_names.begin();
+        }
+    }();
+    while (limit > 0 && table_names_it != table_names.end()) {
+        all_tables.append(Json::Value(table_names_it->c_str()));
+        --limit;
+        ++table_names_it;
+    }
+
+    if (table_names_it != table_names.end()) {
+        response["LastEvaluatedTableName"] = *std::prev(all_tables.end());
+    }
+
+    return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
 future<> executor::start() {

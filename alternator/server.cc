@@ -115,6 +115,8 @@ void server::set_routes(routes& r) {
             return _executor.local().update_item(req->content);
         } else if (op == "GetItem") {
             return _executor.local().get_item(req->content);
+        } else if (op == "ListTables") {
+            return _executor.local().list_tables(req->content);
         }
         throw api_error("UnknownOperationException",
                 format("Unsupported operation {}", op));
