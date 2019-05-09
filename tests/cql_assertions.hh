@@ -22,10 +22,12 @@
 
 #pragma once
 
+#include "tests/cql_test_env.hh"
 #include "transport/messages/result_message_base.hh"
 #include "bytes.hh"
 #include "core/shared_ptr.hh"
 #include "core/future.hh"
+#include <experimental/source_location>
 
 class rows_assertions {
     shared_ptr<cql_transport::messages::result_message::rows> _rows;
@@ -73,3 +75,12 @@ void assert_that_failed(future<T...>&& f)
     catch (...) {
     }
 }
+
+/// Invokes env.execute_cql(query), awaits its result, and returns it.  If an exception is thrown,
+/// invokes BOOST_FAIL with useful diagnostics.
+///
+/// \note Should be called from a seastar::thread context, as it awaits the CQL result.
+shared_ptr<cql_transport::messages::result_message> cquery_nofail(
+        cql_test_env& env,
+        const char* query,
+        const std::experimental::source_location& loc = std::experimental::source_location::current());
