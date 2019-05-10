@@ -982,7 +982,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                                 _prev_snapshot_pos = {};
                             } else {
                                 _update_section(_tracker.region(), [&] {
-                                    _prev_snapshot_pos = dht::ring_position(m.partitions.begin()->key());
+                                    _prev_snapshot_pos = m.partitions.begin()->key();
                                 });
                             }
                         });
