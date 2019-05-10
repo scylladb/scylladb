@@ -587,9 +587,9 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
             return mutations;
         });
     };
-    auto reduce = [] (auto& hash, auto&& mutations) {
+    auto reduce = [features] (auto& hash, auto&& mutations) {
         for (const mutation& m : mutations) {
-            feed_hash_for_schema_digest(hash, m);
+            feed_hash_for_schema_digest(hash, m, features);
         }
     };
     return do_with(md5_hasher(), all_table_names(features), [features, map, reduce] (auto& hash, auto& tables) {
@@ -778,8 +778,11 @@ mutation compact_for_schema_digest(const mutation& m) {
     return m_compacted;
 }
 
-void feed_hash_for_schema_digest(hasher& h, const mutation& m) {
-    feed_hash(h, compact_for_schema_digest(m));
+void feed_hash_for_schema_digest(hasher& h, const mutation& m, schema_features features) {
+    auto compacted = compact_for_schema_digest(m);
+    if (!features.contains<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>() || !compacted.partition().empty()) {
+        feed_hash(h, compact_for_schema_digest(m));
+    }
 }
 
 // Applies deletion of the "version" column to a system_schema.scylla_tables mutation.
@@ -2731,8 +2734,9 @@ namespace legacy {
 
 table_schema_version schema_mutations::digest() const {
     md5_hasher h;
-    db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies);
-    db::schema_tables::feed_hash_for_schema_digest(h, _columns);
+    const db::schema_features no_features;
+    db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies, no_features);
+    db::schema_tables::feed_hash_for_schema_digest(h, _columns, no_features);
     return utils::UUID_gen::get_name_UUID(h.finalize());
 }
 

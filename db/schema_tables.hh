@@ -215,7 +215,7 @@ index_metadata_kind deserialize_index_kind(sstring kind);
 
 mutation compact_for_schema_digest(const mutation& m);
 
-void feed_hash_for_schema_digest(hasher&, const mutation&);
+void feed_hash_for_schema_digest(hasher&, const mutation&, schema_features);
 
 } // namespace schema_tables
 } // namespace db
