@@ -193,33 +193,47 @@ def test_describe_table_non_existent_table(dynamodb):
     assert err['Code'] == 'ResourceNotFoundException'
     assert re.match(err['Message'], 'Requested resource not found: Table: non_existent_table not found')
 
-test_table_prefix = 'alternator_test_'
-# Test that all tables we create are listed
-def test_list_tables_all(dynamodb, test_table, test_2_tables):
-    returned_tables = dynamodb.meta.client.list_tables();
-    filtered_tables = set(filter(lambda t : t.startswith(test_table_prefix), returned_tables['TableNames']))
+# DynamoDB's ListTables request returns up to a single page of table names
+# (e.g., up to 100) and it is up to the caller to call it again and again
+# to get the next page. This is a utility function which calls it repeatedly
+# as much as necessary to get the entire list.
+# We deliberately return a list and not a set, because we want the caller
+# to be able to recognize bugs in ListTables which causes the same table
+# to be returned twice.
+def list_tables(dynamodb, limit):
+    ret = []
+    pos = None
+    while True:
+        if pos:
+            page = dynamodb.meta.client.list_tables(Limit=limit, ExclusiveStartTableName=pos);
+        else:
+            page = dynamodb.meta.client.list_tables(Limit=limit);
+        results = page.get('TableNames', None)
+        assert(results)
+        ret = ret + results
+        newpos = page.get('LastEvaluatedTableName', None)
+        if not newpos:
+            break;
+        # It doesn't make sense for Dynamo to tell us we need more pages, but
+        # not send anything in *this* page!
+        assert len(results) > 0
+        assert newpos != pos
+        # Note that we only checked that we got back tables, not that we got
+        # any new tables not already in ret. So a buggy implementation might
+        # still cause an endless loop getting the same tables again and again.
+        pos = newpos
+    return ret
 
-    assert set([table.name for table in test_2_tables + [test_table]]).issubset(filtered_tables);
-    assert 'LastEvaluatedTableName' not in returned_tables.keys()
-
-# Test that pagination in table listing works properly
+# Test that all tables we create are listed, and pagination works properly.
+# Note that the DyanamoDB setup we run this against may have hundreds of
+# other tables, for all we know. We just need to check that the tables we
+# created are indeed listed.
 def test_list_tables_paginated(dynamodb, test_table, test_2_tables):
-    all_table_names = set([table.name for table in test_2_tables + [test_table]])
-
-    for limit in range(1,4):
-        fetched = []
-        exclusive_start = None
-        while len(fetched) < len(all_table_names):
-            if exclusive_start:
-                returned_tables = dynamodb.meta.client.list_tables(ExclusiveStartTableName=exclusive_start, Limit=limit)
-            else:
-                returned_tables = dynamodb.meta.client.list_tables(Limit=limit)
-            assert len(returned_tables)
-            filtered_tables = sorted(filter(lambda t : t.startswith(test_table_prefix), returned_tables['TableNames']))
-            fetched += filtered_tables
-            exclusive_start = returned_tables.get('LastEvaluatedTableName', None)
-
-    assert set(all_table_names).issubset(fetched)
+    my_tables_set = set([table.name for table in test_2_tables + [test_table]])
+    for limit in [1, 2, 3, 4, 50, 100]:
+        print("testing limit={}".format(limit))
+        list_tables_set = set(list_tables(dynamodb, limit))
+        assert my_tables_set.issubset(list_tables_set)
 
 # Test that pagination limit is validated
 def test_list_tables_wrong_limit(dynamodb):
