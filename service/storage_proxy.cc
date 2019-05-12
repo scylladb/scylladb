@@ -797,6 +797,9 @@ using namespace std::literals::chrono_literals;
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog)
     : _db(db)
+    , _read_smp_service_group(cfg.read_smp_service_group)
+    , _write_smp_service_group(cfg.write_smp_service_group)
+    , _write_ack_smp_service_group(cfg.write_ack_smp_service_group)
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
     , _hints_resource_manager(cfg.available_memory / 10)
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
@@ -937,7 +940,7 @@ future<>
 storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-    return _db.invoke_on(shard, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
+    return _db.invoke_on(shard, _write_smp_service_group, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
         return db.apply(s, m, timeout);
     });
 }
@@ -946,7 +949,7 @@ future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-    return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
+    return _db.invoke_on(shard, _write_smp_service_group, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
         return db.apply(gs, m, timeout);
     });
 }
@@ -976,7 +979,7 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
                                                       tracing::trace_state_ptr trace_state) {
     auto shard = _db.local().shard_of(fm);
     _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-    return _db.invoke_on(shard, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) {
+    return _db.invoke_on(shard, _write_smp_service_group, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) {
         auto trace_state = gt.get();
         return db.apply_counter_update(gs, fm, timeout, trace_state).then([cl, timeout, trace_state] (mutation m) mutable {
             return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout);
@@ -988,7 +991,9 @@ future<>
 storage_proxy::mutate_streaming_mutation(const schema_ptr& s, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {
     auto shard = _db.local().shard_of(m);
     _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-    return _db.invoke_on(shard, [&m, plan_id, fragmented, gs = global_schema_ptr(s)] (database& db) mutable -> future<> {
+    // In theory streaming writes should have their own smp_service_group, but this is only used during upgrades from old versions; new
+    // versions use rpc streaming.
+    return _db.invoke_on(shard, _write_smp_service_group, [&m, plan_id, fragmented, gs = global_schema_ptr(s)] (database& db) mutable -> future<> {
         return db.apply_streaming_mutation(gs, plan_id, m, fragmented);
     });
 }
@@ -2751,7 +2756,7 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-        return _db.invoke_on(shard, [max_size, gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [max_size, gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
             auto trace_state = gt.get();
             tracing::trace(trace_state, "Start querying the token range that starts with {}", seastar::value_of([&prv] { return prv.begin()->start()->value().token(); }));
             return db.query(gs, *cmd, opts, prv, trace_state, max_size, timeout).then([trace_state](auto&& f, cache_temperature ht) {
@@ -2760,6 +2765,7 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
             });
         });
     } else {
+        // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
         return query_nonsingular_mutations_locally(s, cmd, {pr}, std::move(trace_state), max_size, timeout).then([s, cmd, opts] (foreign_ptr<lw_shared_ptr<reconcilable_result>>&& r, cache_temperature&& ht) {
             return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(
                     ::make_foreign(::make_lw_shared(to_data_query_result(*r, s, cmd->slice,  cmd->row_limit, cmd->partition_limit, opts))), ht);
@@ -3429,7 +3435,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_mutation_done([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-        return get_storage_proxy().invoke_on(shard, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
+        return get_storage_proxy().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
             sp.got_response(response_id, from, std::move(backlog));
             return netw::messaging_service::no_wait();
         });
@@ -3437,7 +3443,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_mutation_failed([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-        return get_storage_proxy().invoke_on(shard, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
+        return get_storage_proxy().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
             sp.got_failure_response(response_id, from, num_failed, std::move(backlog));
             return netw::messaging_service::no_wait();
         });
@@ -3526,10 +3532,10 @@ void storage_proxy::init_messaging_service() {
             });
         });
     });
-    ms.register_truncate([](sstring ksname, sstring cfname) {
+    ms.register_truncate([this](sstring ksname, sstring cfname) {
         return do_with(utils::make_joinpoint([] { return db_clock::now();}),
-                        [ksname, cfname](auto& tsf) {
-            return get_storage_proxy().invoke_on_all([ksname, cfname, &tsf](storage_proxy& sp) {
+                        [this, ksname, cfname](auto& tsf) {
+            return get_storage_proxy().invoke_on_all(_write_smp_service_group, [ksname, cfname, &tsf](storage_proxy& sp) {
                 return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
             });
         });
@@ -3537,6 +3543,7 @@ void storage_proxy::init_messaging_service() {
 
     ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
+        // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
         return get_storage_proxy().invoke_on(shard, [v] (auto&& sp) {
             slogger.debug("Schema version request for {}", v);
             return local_schema_registry().get_frozen(v);
@@ -3562,7 +3569,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-        return _db.invoke_on(shard, [max_size, cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [max_size, cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
           return db.get_result_memory_limiter().new_mutation_read(max_size).then([&] (query::result_memory_accounter ma) {
             return db.query_mutations(gs, *cmd, pr, std::move(ma), gt, timeout).then([] (reconcilable_result&& result, cache_temperature ht) {
                 return make_ready_future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>(make_foreign(make_lw_shared(std::move(result))), ht);

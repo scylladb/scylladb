@@ -685,6 +685,12 @@ int main(int ac, char** av) {
             service::storage_proxy::config spcfg;
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
             spcfg.available_memory = memory::stats().total_memory();
+            smp_service_group_config storage_proxy_smp_service_group_config;
+            // Assuming less than 1kB per queued request, this limits storage_proxy submit_to() queues to 5MB or less
+            storage_proxy_smp_service_group_config.max_nonlocal_requests = 5000;
+            spcfg.read_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
             static db::view::node_update_backlog node_backlog(smp::count, 10ms);
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog)).get();
             // #293 - do not stop anything

@@ -117,6 +117,12 @@ public:
     struct config {
         std::optional<std::vector<sstring>> hinted_handoff_enabled = {};
         size_t available_memory;
+        smp_service_group read_smp_service_group = default_smp_service_group();
+        smp_service_group write_smp_service_group = default_smp_service_group();
+        // Write acknowledgments might not be received on the correct shard, and
+        // they need a separate smp_service_group to prevent an ABBA deadlock
+        // with writes.
+        smp_service_group write_ack_smp_service_group = default_smp_service_group();
     };
 private:
 
@@ -177,6 +183,9 @@ public:
     };
 private:
     distributed<database>& _db;
+    smp_service_group _read_smp_service_group;
+    smp_service_group _write_smp_service_group;
+    smp_service_group _write_ack_smp_service_group;
     response_id_type _next_response_id;
     std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>> _response_handlers;
     // This buffer hold ids of throttled writes in case resource consumption goes
