@@ -139,20 +139,49 @@ static void validate_table_name(const std::string& name) {
     }
 }
 
+/** Extract table name from a request.
+ *  Most requests expect the table's name to be listed in a "TableName" field.
+ *  This convenience function returns the name, with appropriate validation
+ *  and api_error in case the table name is missing or not a string, or
+ *  doesn't pass validate_table_name().
+ */
+static std::string get_table_name(const Json::Value& request) {
+    Json::Value table_name_value = request.get("TableName", Json::nullValue);
+    if (!table_name_value.isString()) {
+        throw api_error("ValidationException",
+                "Missing or non-string TableName field in request");
+    }
+    std::string table_name = table_name_value.asString();
+    validate_table_name(table_name);
+    return table_name;
+}
+
+
+/** Extract table schema from a request.
+ *  Many requests expect the table's name to be listed in a "TableName" field
+ *  and need to look it up as an existing table. This convenience function
+ *  does this, with the appropriate validation and api_error in case the table
+ *  name is missing, invalid or the table doesn't exist. If everything is
+ *  successful, it returns the table's schema.
+ */
+static schema_ptr get_table(service::storage_proxy& proxy, const Json::Value& request) {
+    std::string table_name = get_table_name(request);
+    try {
+        return proxy.get_db().local().find_schema(executor::KEYSPACE_NAME, table_name);
+    } catch(no_such_column_family&) {
+        throw api_error("ResourceNotFoundException",
+                format("Requested resource not found: Table: {} not found", table_name));
+    }
+}
+
 future<json::json_return_type> executor::describe_table(std::string content) {
     Json::Value request = json::to_json_value(content);
     elogger.trace("Describing table {}", request.toStyledString());
 
-    // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
-    std::string table_name = request["TableName"].asString();
-    validate_table_name(table_name);
-    if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
-        throw api_error("ResourceNotFoundException",
-                format("Requested resource not found: Table: {} not found", table_name));
-    }
+    schema_ptr schema = get_table(_proxy, request);
 
     Json::Value table_description(Json::objectValue);
-    table_description["TableName"] = table_name.c_str();
+    table_description["TableName"] = schema->cf_name().c_str();
     // FIXME: take the tables creation time, not the current time!
     table_description["CreationDateTime"] = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
@@ -176,9 +205,7 @@ future<json::json_return_type> executor::delete_table(std::string content) {
     Json::Value request = json::to_json_value(content);
     elogger.trace("Deleting table {}", request.toStyledString());
 
-    // FIXME: work on error handling. E.g., what if the TableName parameter is missing? What if it's not a string?
-    std::string table_name = request["TableName"].asString();
-    validate_table_name(table_name);
+    std::string table_name = get_table_name(request);
     if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
         throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
@@ -227,11 +254,7 @@ future<json::json_return_type> executor::create_table(std::string content) {
     Json::Value table_info = json::to_json_value(content);
     elogger.trace("Creating table {}", table_info.toStyledString());
 
-    std::string table_name = table_info["TableName"].asString();
-    validate_table_name(table_name);
-    // FIXME: the table name's being valid in Dynamo doesn't make it valid
-    // in Scylla. May need to quote or shorten table names.
-
+    std::string table_name = get_table_name(table_info);
     const Json::Value& key_schema = table_info["KeySchema"];
     const Json::Value& attribute_definitions = table_info["AttributeDefinitions"];
 
@@ -300,15 +323,8 @@ future<json::json_return_type> executor::put_item(std::string content) {
     Json::Value update_info = json::to_json_value(content);
     elogger.trace("Updating value {}", update_info.toStyledString());
 
-    std::string table_name = update_info["TableName"].asString();
+    schema_ptr schema = get_table(_proxy, update_info);
     const Json::Value& item = update_info["Item"];
-    schema_ptr schema;
-    try {
-        schema = _proxy.get_db().local().find_schema(KEYSPACE_NAME, table_name);
-    } catch(no_such_column_family&) {
-        throw api_error("ResourceNotFoundException",
-                 format("Requested resource not found: Table: {} not found", table_name));
-    }
     partition_key pk = pk_from_json(item, schema);
     clustering_key ck = ck_from_json(item, schema);
 
@@ -337,14 +353,7 @@ future<json::json_return_type> executor::put_item(std::string content) {
 future<json::json_return_type> executor::update_item(std::string content) {
     Json::Value update_info = json::to_json_value(content);
     elogger.trace("update_item {}", update_info.toStyledString());
-    std::string table_name = update_info["TableName"].asString();
-    schema_ptr schema;
-    try {
-        schema = _proxy.get_db().local().find_schema(KEYSPACE_NAME, table_name);
-    } catch(no_such_column_family&) {
-        throw api_error("ResourceNotFoundException",
-                 format("Requested resource not found: Table: {} not found", table_name));
-    }
+    schema_ptr schema = get_table(_proxy, update_info);
     // FIXME: handle missing Key.
     const Json::Value& key = update_info["Key"];
     // FIXME: handle missing components in Key, extra stuff, etc.
@@ -441,13 +450,11 @@ future<json::json_return_type> executor::get_item(std::string content) {
     Json::Value table_info = json::to_json_value(content);
     elogger.trace("Getting item {}", table_info.toStyledString());
 
-    std::string table_name = table_info["TableName"].asString();
+    schema_ptr schema = get_table(_proxy, table_info);
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
     Json::Value attributes_to_get = table_info["AttributesToGet"];
     Json::Value query_key = table_info["Key"];
     db::consistency_level cl = table_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
-
-    schema_ptr schema = _proxy.get_db().local().find_schema(KEYSPACE_NAME, table_name);
 
     partition_key pk = pk_from_json(query_key, schema);
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*schema, pk))};
@@ -574,18 +581,15 @@ future<json::json_return_type> executor::scan(std::string content) {
     Json::Value request_info = json::to_json_value(content);
     elogger.trace("Scanning {}", request_info.toStyledString());
 
-    std::string table_name = request_info["TableName"].asString();
+    schema_ptr schema = get_table(_proxy, request_info);
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
     Json::Value attributes_to_get = request_info["AttributesToGet"];
     Json::Value exclusive_start_key = request_info["ExclusiveStartKey"];
     db::consistency_level cl = request_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
     uint32_t limit = request_info.get("Limit", query::max_partitions).asUInt();
-    validate_table_name(table_name);
     if (limit <= 0) {
         throw api_error("ValidationException", "Limit must be greater than 0");
     }
-
-    schema_ptr schema = _proxy.get_db().local().find_schema(KEYSPACE_NAME, table_name);
 
     partition_key pk = pk_from_json(exclusive_start_key, schema);
     std::optional<clustering_key> ck;
