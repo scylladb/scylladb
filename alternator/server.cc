@@ -95,13 +95,13 @@ protected:
 
 void server::set_routes(routes& r) {
     api_handler* handler = new api_handler([this](std::unique_ptr<request> req) -> future<json::json_return_type> {
-        slogger.warn("REQ {} {}", req->content, req->content_length);
+        slogger.trace("Raw request: {} ({})", req->content, req->content_length);
         sstring target = req->get_header(TARGET);
         std::vector<sstring> split_target = split(target, ".");
         //NOTICE(sarna): Target consists of Dynamo API version folllowed by a dot '.' and operation type (e.g. CreateTable)
         sstring op = split_target.empty() ? sstring() : split_target.back();
 
-        slogger.warn("Got Request <{}>", op);
+        slogger.trace("Request type: {}", op);
         // FIXME: this should be a table lookup, not a long list of else.
         if (op == "CreateTable") {
             return _executor.local().create_table(req->content);
