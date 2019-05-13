@@ -3850,6 +3850,7 @@ SEASTAR_TEST_CASE(test_aggregate_and_simple_selection_together) {
         equery(e, "insert into t (p, c, v) values (2, 2, 22)");
         require_rows(e, "select c, avg(c) from t", {{I(1), I(2)}});
         require_rows(e, "select p, sum(v) from t", {{I(1), I(58)}});
+        require_rows(e, "select p, count(c) from t group by p", {{I(1), L(3)}, {I(2), L(1)}});
         return make_ready_future<>();
     });
 }

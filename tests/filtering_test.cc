@@ -1147,7 +1147,7 @@ SEASTAR_TEST_CASE(test_filtering) {
         {
             auto msg = e.execute_cql("SELECT COUNT(k) FROM cf WHERE n>3 ALLOW FILTERING;").get0();
             assert_that(msg).is_rows().with_serialized_columns_count(1).with_size(1).with_rows_ignore_order({
-                { long_type->decompose(4L), int32_type->decompose(4) },
+                { long_type->decompose(4L), int32_type->decompose(5) },
             });
         }
 

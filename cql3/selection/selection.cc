@@ -115,7 +115,7 @@ protected:
     class simple_selectors : public selectors {
     private:
         std::vector<bytes_opt> _current;
-        bool _first = true;
+        bool _first = true; ///< Whether the next row we receive is the first in its group.
     public:
         virtual void reset() override {
             _current.clear();
