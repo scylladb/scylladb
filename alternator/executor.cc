@@ -26,6 +26,7 @@
 #include "bytes.hh"
 #include "cql3/update_parameters.hh"
 #include "server.hh"
+#include "service/pager/query_pagers.hh"
 
 #include <boost/range/adaptors.hpp>
 
@@ -472,6 +473,164 @@ future<json::json_return_type> executor::get_item(std::string content) {
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(db::no_timeout, empty_service_permit())).then(
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get)] (service::storage_proxy::coordinator_query_result qr) mutable {
         return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get))));
+    });
+}
+
+class describe_items_visitor {
+    typedef std::vector<const column_definition*> columns_t;
+    const columns_t& _columns;
+    const std::unordered_set<std::string>& _attrs_to_get;
+    typename columns_t::const_iterator _column_it;
+    Json::Value _item;
+    Json::Value _items;
+
+public:
+    describe_items_visitor(const columns_t& columns, const std::unordered_set<std::string>& attrs_to_get)
+            : _columns(columns)
+            , _attrs_to_get(attrs_to_get)
+            , _column_it(columns.begin())
+            , _item(Json::objectValue)
+            , _items(Json::arrayValue)
+    { }
+
+    void start_row() {
+        _column_it = _columns.begin();
+    }
+
+    void accept_value(const std::optional<query::result_bytes_view>& result_bytes_view) {
+        if (!result_bytes_view) {
+            ++_column_it;
+            return;
+        }
+        result_bytes_view->with_linearized([this] (bytes_view bv) {
+            std::string column_name = (*_column_it)->name_as_text();
+            if (column_name != executor::ATTRS_COLUMN_NAME) {
+                if (_attrs_to_get.empty() || _attrs_to_get.count(column_name) > 0) {
+                    Json::Value& field = _item[column_name.c_str()];
+                    field[type_to_string((*_column_it)->type)] = json::to_json_value((*_column_it)->type->to_json_string(bytes(bv)));
+                }
+            } else {
+                auto deserialized = attrs_type()->deserialize(bv, cql_serialization_format::latest());
+                auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
+                for (auto entry : keys_and_values) {
+                    std::string attr_name = value_cast<sstring>(entry.first);
+                    if (_attrs_to_get.empty() || _attrs_to_get.count(attr_name) > 0) {
+                        _item[attr_name] = json::to_json_value(value_cast<sstring>(entry.second));
+                    }
+                }
+            }
+        });
+        ++_column_it;
+    }
+
+    void end_row() {
+        _items.append(std::move(_item));
+    }
+
+    Json::Value get_items() && {
+        return std::move(_items);
+    }
+};
+
+static Json::Value describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::unordered_set<std::string>&& attrs_to_get) {
+    describe_items_visitor visitor(selection.get_columns(), attrs_to_get);
+    result_set->visit(visitor);
+    Json::Value items = std::move(visitor).get_items();
+    Json::Value items_descr(Json::objectValue);
+    items_descr["Count"] = items.size();
+    items_descr["ScannedCount"] = items.size(); // TODO(sarna): Update once filtering is implemented
+    items_descr["Items"] = std::move(items);
+    return items_descr;
+}
+
+static Json::Value encode_paging_state(const schema& schema, const service::pager::paging_state& paging_state) {
+    Json::Value last_evaluated_key(Json::objectValue);
+    std::vector<bytes> exploded_pk = paging_state.get_partition_key().explode();
+    auto exploded_pk_it = exploded_pk.begin();
+    for (const column_definition& cdef : schema.partition_key_columns()) {
+        Json::Value& key_entry = last_evaluated_key[cdef.name_as_text()];
+        key_entry[type_to_string(cdef.type)] = json::to_json_value(cdef.type->to_json_string(*exploded_pk_it));
+        ++exploded_pk_it;
+    }
+    auto ck = paging_state.get_clustering_key();
+    if (ck) {
+        auto exploded_ck = ck->explode();
+        auto exploded_ck_it = exploded_ck.begin();
+        for (const column_definition& cdef : schema.clustering_key_columns()) {
+            Json::Value& key_entry = last_evaluated_key[cdef.name_as_text()];
+            key_entry[type_to_string(cdef.type)] = json::to_json_value(cdef.type->to_json_string(*exploded_ck_it));
+            ++exploded_ck_it;
+        }
+    }
+    return last_evaluated_key;
+}
+
+// TODO(sarna):
+// 1. Paging must have 1MB boundary according to the docs. IIRC we do have a replica-side reply size limit though - verify.
+// 2. Filtering - by passing appropriately created restrictions to pager as a last parameter
+// 3. Proper timeouts instead of gc_clock::now() and db::no_timeout
+// 4. Implement parallel scanning via Segments
+future<json::json_return_type> executor::scan(std::string content) {
+    Json::Value request_info = json::to_json_value(content);
+    elogger.trace("Scanning {}", request_info.toStyledString());
+
+    std::string table_name = request_info["TableName"].asString();
+    //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
+    Json::Value attributes_to_get = request_info["AttributesToGet"];
+    Json::Value exclusive_start_key = request_info["ExclusiveStartKey"];
+    db::consistency_level cl = request_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    uint32_t limit = request_info.get("Limit", query::max_partitions).asUInt();
+    validate_table_name(table_name);
+    if (limit <= 0) {
+        throw api_error("ValidationException", "Limit must be greater than 0");
+    }
+
+    schema_ptr schema = _proxy.get_db().local().find_schema(KEYSPACE_NAME, table_name);
+
+    partition_key pk = pk_from_json(exclusive_start_key, schema);
+    std::optional<clustering_key> ck;
+    if (schema->clustering_key_size() > 0) {
+        ck = ck_from_json(exclusive_start_key, schema);
+    }
+
+    dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
+    std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
+
+    ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
+    if (!exclusive_start_key.empty()) {
+        paging_state = ::make_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+    }
+
+    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto selection = cql3::selection::selection::wildcard(schema);
+    auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), selection->get_query_options());
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+
+    auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
+
+    //FIXME(sarna): This context will need to be provided once we start gathering statistics, authenticating, etc. Right now these are just stubs.
+    static thread_local cql3::cql_stats dummy_stats;
+    static thread_local service::client_state dummy_client_state{service::client_state::internal_tag()};
+    static thread_local service::query_state dummy_query_state(dummy_client_state, empty_service_permit());
+
+    command->slice.options.set<query::partition_slice::option::allow_short_read>();
+    auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
+    query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
+    ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr;
+    auto p = service::pager::query_pagers::pager(schema, selection, dummy_query_state, *query_options, command, std::move(partition_ranges), dummy_stats, filtering_restrictions);
+
+    return p->fetch_page(limit, gc_clock::now(), db::no_timeout).then(
+            [this, p, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), query_options = std::move(query_options)](std::unique_ptr<cql3::result_set> rs) mutable {
+        if (!p->is_exhausted()) {
+            rs->get_metadata().set_paging_state(p->state());
+        }
+
+        auto paging_state = rs->get_metadata().paging_state();
+        auto items = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get));
+        if (paging_state) {
+            items["LastEvaluatedKey"] = encode_paging_state(*schema, *paging_state);
+        }
+        return make_ready_future<json::json_return_type>(make_jsonable(std::move(items)));
     });
 }
 
