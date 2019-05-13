@@ -428,6 +428,7 @@ public:
     enum class token_bound : int8_t { start = -1, end = 1 };
 private:
     friend class ring_position_comparator;
+    friend class ring_position_ext;
     dht::token _token;
     token_bound _token_bound; // valid when !_key
     std::optional<partition_key> _key;
@@ -520,7 +521,7 @@ public:
     friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };
 
-// Non-owning version of ring_position.
+// Non-owning version of ring_position and ring_position_ext.
 //
 // Unlike ring_position, it can express positions which are right after and right before the keys.
 // ring_position still can not because it is sent between nodes and such a position
@@ -534,6 +535,7 @@ public:
 class ring_position_view {
     friend int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
     friend class ring_position_comparator;
+    friend class ring_position_ext;
 
     // Order is lexicographical on (_token, _key) tuples, where _key part may be missing, and
     // _weight affecting order between tuples if one is a prefix of the other (including being equal).
@@ -633,6 +635,138 @@ public:
     after_key is_after_key() const { return after_key(_weight == 1); }
 
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
+};
+
+using ring_position_ext_view = ring_position_view;
+
+//
+// Represents position in the ring of partitions, where partitions are ordered
+// according to decorated_key ordering (first by token, then by key value).
+// Intended to be used for defining partition ranges.
+//
+// Unlike ring_position, it can express positions which are right after and right before the keys.
+// ring_position still can not because it is sent between nodes and such a position
+// would not be (yet) properly interpreted by old nodes. That's why any ring_position
+// can be converted to ring_position_ext, but not the other way.
+//
+// It is possible to express a partition_range using a pair of two ring_position_exts v1 and v2,
+// where v1 = ring_position_ext::for_range_start(r) and v2 = ring_position_ext::for_range_end(r).
+// Such range includes all keys k such that v1 <= k < v2, with order defined by ring_position_comparator.
+//
+class ring_position_ext {
+    // Order is lexicographical on (_token, _key) tuples, where _key part may be missing, and
+    // _weight affecting order between tuples if one is a prefix of the other (including being equal).
+    // A positive weight puts the position after all strictly prefixed by it, while a non-positive
+    // weight puts it before them. If tuples are equal, the order is further determined by _weight.
+    //
+    // For example {_token=t1, _key=nullptr, _weight=1} is ordered after {_token=t1, _key=k1, _weight=0},
+    // but {_token=t1, _key=nullptr, _weight=-1} is ordered before it.
+    //
+    dht::token _token;
+    std::optional<partition_key> _key;
+    int8_t _weight;
+public:
+    using token_bound = ring_position::token_bound;
+    struct after_key_tag {};
+    using after_key = bool_class<after_key_tag>;
+
+    static ring_position_ext min() {
+        return { minimum_token(), std::nullopt, -1 };
+    }
+
+    static ring_position_ext max() {
+        return { maximum_token(), std::nullopt, 1 };
+    }
+
+    bool is_min() const {
+        return _token.is_minimum();
+    }
+
+    bool is_max() const {
+        return _token.is_maximum();
+    }
+
+    static ring_position_ext for_range_start(const partition_range& r) {
+        return r.start() ? ring_position_ext(r.start()->value(), after_key(!r.start()->is_inclusive())) : min();
+    }
+
+    static ring_position_ext for_range_end(const partition_range& r) {
+        return r.end() ? ring_position_ext(r.end()->value(), after_key(r.end()->is_inclusive())) : max();
+    }
+
+    static ring_position_ext for_after_key(const dht::decorated_key& dk) {
+        return ring_position_ext(dk, after_key::yes);
+    }
+
+    static ring_position_ext for_after_key(dht::ring_position_ext view) {
+        return ring_position_ext(after_key_tag(), view);
+    }
+
+    static ring_position_ext starting_at(const dht::token& t) {
+        return ring_position_ext(t, token_bound::start);
+    }
+
+    static ring_position_ext ending_at(const dht::token& t) {
+        return ring_position_ext(t, token_bound::end);
+    }
+
+    ring_position_ext(const dht::ring_position& pos, after_key after = after_key::no)
+        : _token(pos.token())
+        , _key(pos.key())
+        , _weight(pos.has_key() ? bool(after) : pos.relation_to_keys())
+    { }
+
+    ring_position_ext(const ring_position_ext& pos) = default;
+    ring_position_ext& operator=(const ring_position_ext& other) = default;
+
+    ring_position_ext(ring_position_view v)
+        : _token(*v._token)
+        , _key(v._key ? std::make_optional(*v._key) : std::nullopt)
+        , _weight(v._weight)
+    { }
+
+    ring_position_ext(after_key_tag, const ring_position_ext& v)
+        : _token(v._token)
+        , _key(v._key)
+        , _weight(v._key ? 1 : v._weight)
+    { }
+
+    ring_position_ext(const dht::decorated_key& key, after_key after_key = after_key::no)
+        : _token(key.token())
+        , _key(key.key())
+        , _weight(bool(after_key))
+    { }
+
+    ring_position_ext(dht::token token, std::optional<partition_key> key, int8_t weight) noexcept
+        : _token(std::move(token))
+        , _key(std::move(key))
+        , _weight(weight)
+    { }
+
+    ring_position_ext(ring_position&& pos) noexcept
+        : _token(std::move(pos._token))
+        , _key(std::move(pos._key))
+        , _weight(pos.relation_to_keys())
+    { }
+
+    explicit ring_position_ext(const dht::token& token, token_bound bound = token_bound::start)
+        : _token(token)
+        , _key(std::nullopt)
+        , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
+    { }
+
+    const dht::token& token() const { return _token; }
+    const std::optional<partition_key>& key() const { return _key; }
+
+    // Only when key() == std::nullopt
+    token_bound get_token_bound() const { return token_bound(_weight); }
+
+    // Only when key() != std::nullopt
+    after_key is_after_key() const { return after_key(_weight == 1); }
+
+    operator ring_position_view() const { return { _token, _key ? &*_key : nullptr, _weight }; }
+
+    friend std::ostream& operator<<(std::ostream&, const ring_position_ext&);
 };
 
 int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);

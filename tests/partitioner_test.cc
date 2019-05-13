@@ -142,60 +142,84 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
     BOOST_TEST_MESSAGE(format("Keys: {}", keys));
 
     auto positions = boost::copy_range<std::vector<dht::ring_position>>(keys);
+    auto ext_positions = boost::copy_range<std::vector<dht::ring_position_ext>>(keys);
     auto views = boost::copy_range<std::vector<dht::ring_position_view>>(positions);
 
     total_order_check<dht::ring_position_comparator, dht::ring_position, dht::ring_position_view, dht::decorated_key>(cmp)
       .next(dht::ring_position_view::min())
+          .equal_to(dht::ring_position_ext::min())
 
       .next(dht::ring_position(keys[0].token(), dht::ring_position::token_bound::start))
           .equal_to(dht::ring_position_view(keys[0].token(), nullptr, -1))
+          .equal_to(dht::ring_position_ext(keys[0].token(), std::nullopt, -1))
       .next(views[0])
         .equal_to(keys[0])
         .equal_to(positions[0])
+        .equal_to(ext_positions[0])
       .next(dht::ring_position_view::for_after_key(keys[0]))
+        .equal_to(dht::ring_position_ext::for_after_key(keys[0]))
       .next(dht::ring_position(keys[0].token(), dht::ring_position::token_bound::end))
         .equal_to(dht::ring_position_view(keys[0].token(), nullptr, 1))
+        .equal_to(dht::ring_position_ext(keys[0].token(), std::nullopt, 1))
 
       .next(dht::ring_position(keys[1].token(), dht::ring_position::token_bound::start))
           .equal_to(dht::ring_position_view(keys[1].token(), nullptr, -1))
+          .equal_to(dht::ring_position_ext(keys[1].token(), std::nullopt, -1))
       .next(views[1])
         .equal_to(keys[1])
         .equal_to(positions[1])
+        .equal_to(ext_positions[1])
       .next(dht::ring_position_view::for_after_key(keys[1]))
+        .equal_to(dht::ring_position_ext::for_after_key(keys[1]))
+
       .next(dht::ring_position(keys[1].token(), dht::ring_position::token_bound::end))
         .equal_to(dht::ring_position_view(keys[1].token(), nullptr, 1))
+        .equal_to(dht::ring_position_ext(keys[1].token(), std::nullopt, 1))
 
       .next(dht::ring_position(keys[2].token(), dht::ring_position::token_bound::start))
           .equal_to(dht::ring_position_view(keys[2].token(), nullptr, -1))
+          .equal_to(dht::ring_position_ext(keys[2].token(), std::nullopt, -1))
 
       .next(views[2])
         .equal_to(keys[2])
         .equal_to(positions[2])
+        .equal_to(ext_positions[2])
       .next(dht::ring_position_view::for_after_key(keys[2]))
+        .equal_to(dht::ring_position_ext::for_after_key(keys[2]))
 
       .next(views[3])
         .equal_to(keys[3])
         .equal_to(positions[3])
+        .equal_to(ext_positions[3])
       .next(dht::ring_position_view::for_after_key(keys[3]))
+        .equal_to(dht::ring_position_ext::for_after_key(keys[3]))
 
       .next(views[4])
         .equal_to(keys[4])
         .equal_to(positions[4])
+        .equal_to(ext_positions[4])
       .next(dht::ring_position_view::for_after_key(keys[4]))
+        .equal_to(dht::ring_position_ext::for_after_key(keys[4]))
 
       .next(dht::ring_position(keys[4].token(), dht::ring_position::token_bound::end))
         .equal_to(dht::ring_position_view(keys[4].token(), nullptr, 1))
+        .equal_to(dht::ring_position_ext(keys[4].token(), std::nullopt, 1))
 
       .next(dht::ring_position(keys[5].token(), dht::ring_position::token_bound::start))
         .equal_to(dht::ring_position_view(keys[5].token(), nullptr, -1))
+        .equal_to(dht::ring_position_ext(keys[5].token(), std::nullopt, -1))
       .next(views[5])
         .equal_to(keys[5])
         .equal_to(positions[5])
+        .equal_to(ext_positions[5])
       .next(dht::ring_position_view::for_after_key(keys[5]))
+        .equal_to(dht::ring_position_ext::for_after_key(keys[5]))
       .next(dht::ring_position(keys[5].token(), dht::ring_position::token_bound::end))
         .equal_to(dht::ring_position_view(keys[5].token(), nullptr, 1))
+        .equal_to(dht::ring_position_ext(keys[5].token(), std::nullopt, 1))
 
       .next(dht::ring_position_view::max())
+        .equal_to(dht::ring_position_ext::max())
       .check();
 }
 
