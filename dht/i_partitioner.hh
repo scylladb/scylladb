@@ -612,7 +612,7 @@ public:
         , _weight(bool(after_key))
     { }
 
-    ring_position_view(const dht::token& token, partition_key* key, int8_t weight)
+    ring_position_view(const dht::token& token, const partition_key* key, int8_t weight)
         : _token(&token)
         , _key(key)
         , _weight(weight)
