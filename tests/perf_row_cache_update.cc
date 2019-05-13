@@ -174,7 +174,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto compacted = logalloc::memory_compacted() - prev_compacted;
         auto allocated = logalloc::memory_allocated() - prev_allocated;
 
-        std::cout << format("update: {:.6f} [ms], stall: {}, cache: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f}), pr/me/dr {:d}/{:d}/{:d}\n",
+        std::cout << format("update: {:.6f} [ms], preemption: {}, cache: {:d}/{:d} [MB], alloc/comp: {:d}/{:d} [MB] (amp: {:.3f}), pr/me/dr {:d}/{:d}/{:d}\n",
             d.count() * 1000,
             slm,
             tracker.region().occupancy().used_space() / MB,
@@ -192,7 +192,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
     });
     invalidate_slm.stop();
 
-    std::cout << format("invalidation: {:.6f} [ms], stall: {}", d.count() * 1000, invalidate_slm) << "\n";
+    std::cout << format("invalidation: {:.6f} [ms], preemption: {}", d.count() * 1000, invalidate_slm) << "\n";
 }
 
 void test_small_partitions() {
