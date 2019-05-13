@@ -8,6 +8,8 @@
 import pytest
 import boto3
 import time
+import string
+import random
 
 # Run tests with "--local" to run against a local Scylla installation on
 # localhost:8080/ instead of AWS.
@@ -101,3 +103,36 @@ def test_2_tables(dynamodb):
         ]) for _ in range(2)]
     yield tables
     [table.delete() for table in tables]
+
+def random_string(len=10, chars=string.ascii_uppercase + string.digits):
+    return ''.join(random.choice(chars) for x in range(len))
+
+# "filled_test_table" fixture:  Create a temporary table to be used in tests
+# that involve reading data - GetItem, Scan, etc. The table is filled with
+# 164 elements - each consisting of a partition key, clustering key
+# and two string attributes. This table is supposed to be read from,
+# not updated nor overwritten.
+# This fixture returns both a table object and the description of all items
+# inserted into it.
+@pytest.fixture(scope="session")
+def filled_test_table(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ])
+    count = 164
+    items = [{
+        'p': str(i),
+        'c': str(i),
+        'attribute': "x" * 7,
+        'another': "y" * 16
+    } for i in range(count)]
+
+    for item in items:
+        table.put_item(Item=item)
+    yield table, items
+    table.delete()
