@@ -8,8 +8,6 @@
 import pytest
 import boto3
 import time
-import string
-import random
 
 # Run tests with "--local" to run against a local Scylla installation on
 # localhost:8080/ instead of AWS.
@@ -104,9 +102,6 @@ def test_2_tables(dynamodb):
     yield tables
     [table.delete() for table in tables]
 
-def random_string(len=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for x in range(len))
-
 # "filled_test_table" fixture:  Create a temporary table to be used in tests
 # that involve reading data - GetItem, Scan, etc. The table is filled with
 # 164 elements - each consisting of a partition key, clustering key
@@ -133,6 +128,8 @@ def filled_test_table(dynamodb):
     } for i in range(count)]
 
     for item in items:
+        # TODO: eventually, when Alternator supports batch operations,
+        # use a batch write to make this fixture start faster.
         table.put_item(Item=item)
     yield table, items
     table.delete()
