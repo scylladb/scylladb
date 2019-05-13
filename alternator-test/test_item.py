@@ -51,40 +51,31 @@ def test_basic_string_update_and_get(test_table):
 #    number, boolean, bytes, null, list, map, string set, number set,
 #    binary set.
 # The keys are still strings.
+# Note that only top-level attributes are written and read in this test -
+# this test does not attempt to modify *nested* attributes.
 # See https://boto3.amazonaws.com/v1/documentation/api/latest/reference/customizations/dynamodb.html
 # on how to pass these various types to Boto3's put_item().
 def test_put_and_get_attribute_types(test_table):
-    p = random_string()
-    c = random_string()
-    num1 = Decimal("12.345")
-    num2 = 42
-    bool1 = True
-    bool2 = False
-    binary1 = b'xyz'
-    null1 = None
-    list1 = ['hello', 'world', 42]
-    map1 = {'hello': 'world', 'life': 42}
-    map2 = {'hello': {'test': 'hi', 'hello': True, 'list': [1, 2, 'hi']}}
-    ss1 = set(['hello', 'world', 'hi'])
-    ns1 = set([1, 42, Decimal("3.14")])
-    bs1 = set([b'xyz', b'hi'])
-    test_table.put_item(Item={'p': p, 'c': c, 'num1': num1, 'num2': num2,
-        'bool1': bool1, 'bool2': bool2, 'binary1': binary1, 'null1': null1, 'list1': list1,
-        'map1': map1, 'map2': map2, 'ss1': ss1, 'ns1': ns1, 'bs1': bs1 })
-    item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
-    assert item['p'] == p
-    assert item['c'] == c
-    assert item['num1'] == num1
-    assert item['num2'] == num2
-    assert item['bool1'] == bool1
-    assert item['bool2'] == bool2
-    assert item['binary1'] == binary1
-    assert item['null1'] == null1
-    assert item['list1'] == list1
-    assert item['map1'] == map1
-    assert item['map2'] == map2
-    assert item['ss1'] == ss1
-    assert item['ns1'] == ns1
+    key = {'p': random_string(), 'c': random_string()}
+    test_items = [
+        Decimal("12.345"),
+        42,
+        True,
+        False,
+        b'xyz',
+        None,
+        ['hello', 'world', 42],
+        {'hello': 'world', 'life': 42},
+        {'hello': {'test': 'hi', 'hello': True, 'list': [1, 2, 'hi']}},
+        set(['hello', 'world', 'hi']),
+        set([1, 42, Decimal("3.14")]),
+        set([b'xyz', b'hi']),
+    ]
+    item = { str(i) : test_items[i] for i in range(len(test_items)) }
+    item.update(key)
+    test_table.put_item(Item=item)
+    got_item = test_table.get_item(Key=key, ConsistentRead=True)['Item']
+    assert item == got_item
 
 # Test error handling of UpdateItem passed a bad "Action" field.
 def test_update_bad_action(test_table):
