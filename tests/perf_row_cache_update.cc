@@ -185,11 +185,14 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
             tracker.get_stats().rows_dropped_from_memtable - prev_rows_dropped_from_memtable);
     }
 
+    scheduling_latency_measurer invalidate_slm;
+    invalidate_slm.start();
     auto d = duration_in_seconds([&] {
         cache.invalidate([] {}).get();
     });
+    invalidate_slm.stop();
 
-    std::cout << format("invalidation: {:.6f} [ms]", d.count() * 1000) << "\n";
+    std::cout << format("invalidation: {:.6f} [ms], stall: {}", d.count() * 1000, invalidate_slm) << "\n";
 }
 
 void test_small_partitions() {
