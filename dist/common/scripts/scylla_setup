@@ -95,6 +95,9 @@ def do_verify_package(pkg):
         res = run('rpm -q {}'.format(pkg), silent=True, exception=False)
     elif is_gentoo_variant():
         res = 0 if len(glob.glob('/var/db/pkg/*/{}-*'.format(pkg))) else 1
+    else:
+        print("OS variant not recognized")
+        res = 1
     if res != 0:
         print('{} package is not installed.'.format(pkg))
         sys.exit(1)
