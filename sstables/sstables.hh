@@ -557,7 +557,6 @@ private:
 
     future<file> rename_new_sstable_component_file(sstring from_file, sstring to_file, file fd);
     future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {});
-    future<file> new_sstable_component_file_non_checked(component_type f, open_flags flags, file_open_options options = {});
 
     future<> touch_temp_dir();
     future<> remove_temp_dir();

@@ -101,16 +101,6 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-static future<file> open_sstable_component_file(const io_error_handler& error_handler, const sstring& name, open_flags flags,
-        file_open_options options) {
-    if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
-        return open_integrity_checked_file_dma(name, flags, options).then([&error_handler] (auto f) {
-            return make_checked_file(error_handler, std::move(f));
-        });
-    }
-    return open_checked_file_dma(error_handler, name, flags, options);
-}
-
 static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options) {
     if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
         return open_integrity_checked_file_dma(name, flags, options);
@@ -127,32 +117,36 @@ future<file> sstable::rename_new_sstable_component_file(sstring from_name, sstri
     });
 }
 
-future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options) {
+future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) {
     auto create_flags = open_flags::create | open_flags::exclusive;
-    if ((flags & create_flags) != create_flags) {
-        return open_sstable_component_file(error_handler, filename(f), flags, options);
-    }
-    auto name = _temp_dir ? temp_filename(f) : filename(f);
-    return open_sstable_component_file(error_handler, name, flags, options).handle_exception([this, name] (auto ep) {
-        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
-        return make_exception_future<file>(ep);
-    }).then([this, f, name = std::move(name)] (file fd) mutable {
-        return rename_new_sstable_component_file(name, filename(f), std::move(fd));
-    });
-}
+    auto readonly = (flags & create_flags) != create_flags;
+    auto name = !readonly && _temp_dir ? temp_filename(type) : filename(type);
 
-future<file> sstable::new_sstable_component_file_non_checked(component_type f, open_flags flags, file_open_options options) {
-    auto create_flags = open_flags::create | open_flags::exclusive;
-    if ((flags & create_flags) != create_flags) {
-        return open_sstable_component_file_non_checked(filename(f), flags, options);
+    auto f = open_sstable_component_file_non_checked(name, flags, options);
+
+    if (type != component_type::TOC && type != component_type::TemporaryTOC) {
+        for (auto * ext : get_config().extensions().sstable_file_io_extensions()) {
+            f = f.then([ext, this, type, flags](file f) {
+               return ext->wrap_file(*this, type, f, flags).then([f](file nf) mutable {
+                   return nf ? nf : std::move(f);
+               });
+            });
+        }
     }
-    auto name = _temp_dir ? temp_filename(f) : filename(f);
-    return open_sstable_component_file_non_checked(name, flags, options).handle_exception([this, name] (auto ep) {
-        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
-        return make_exception_future<file>(ep);
-    }).then([this, f, name = std::move(name)] (file fd) mutable {
-        return rename_new_sstable_component_file(name, filename(f), std::move(fd));
+
+    f = f.then([&error_handler](file f) {
+        return make_checked_file(error_handler, std::move(f));
     });
+
+    if (!readonly) {
+        f = f.handle_exception([name] (auto ep) {
+            sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
+            return make_exception_future<file>(ep);
+        }).then([this, type, name = std::move(name)] (file fd) mutable {
+            return rename_new_sstable_component_file(name, filename(type), std::move(fd));
+        });
+    }
+    return f;
 }
 
 utils::phased_barrier& background_jobs() {
@@ -851,7 +845,7 @@ future<> sstable::read_toc() {
 
     sstlog.debug("Reading TOC file {} ", file_path);
 
-    return open_checked_file_dma(_read_error_handler, file_path, open_flags::ro).then([this, file_path] (file f) {
+    return new_sstable_component_file(_read_error_handler, component_type::TOC, open_flags::ro).then([this, file_path] (file f) {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
@@ -1026,11 +1020,10 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
-    return open_file_dma(file_path, open_flags::ro).then([this, &component] (file fi) {
+    return new_sstable_component_file(_read_error_handler, Type, open_flags::ro).then([this, &component] (file fi) {
         auto fut = fi.size();
         return fut.then([this, &component, fi = std::move(fi)] (uint64_t size) {
-            auto f = make_checked_file(_read_error_handler, fi);
-            auto r = make_lw_shared<file_random_access_reader>(std::move(f), size, sstable_buffer_size);
+            auto r = make_lw_shared<file_random_access_reader>(std::move(fi), size, sstable_buffer_size);
             auto fut = parse(_version, *r, component);
             return fut.finally([r] {
                 return r->close();
@@ -1246,25 +1239,7 @@ future<> sstable::read_summary(const io_priority_class& pc) {
 }
 
 future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) {
-    if ((type != component_type::Data && type != component_type::Index)
-                    || get_config().extensions().sstable_file_io_extensions().empty()) {
-        return new_sstable_component_file(_read_error_handler, type, flags, opts);
-    }
-    return new_sstable_component_file_non_checked(type, flags, opts).then([this, type, flags](file f) {
-        return do_with(std::move(f), get_config().extensions().sstable_file_io_extensions(), [this, type, flags](file& f, std::vector<sstables::file_io_extension*>& ext_range) {
-            return do_for_each(ext_range.begin(), ext_range.end(), [this, &f, type, flags](auto& ext) {
-                // note: we're potentially wrapping more than once. extension mechanism
-                // is responsible for order being sane.
-                return ext->wrap_file(*this, type, f, flags).then([&f](file of) {
-                    if (of) {
-                        f = std::move(of);
-                    }
-                });
-            }).then([this, &f] {
-                return make_checked_file(_read_error_handler, std::move(f));
-            });
-        });
-    });
+    return new_sstable_component_file(_read_error_handler, type, flags, opts);
 }
 
 future<> sstable::open_data() {
@@ -1377,18 +1352,21 @@ void sstable::write_filter(const io_priority_class& pc) {
 // No need to set tunable priorities for it.
 future<> sstable::load(const io_priority_class& pc) {
     return read_toc().then([this, &pc] {
-        // Read statistics ahead of others - if summary is missing
-        // we'll attempt to re-generate it and we need statistics for that
-        return read_statistics(pc).then([this, &pc] {
-            return seastar::when_all_succeed(
-                    read_compression(pc),
-                    read_scylla_metadata(pc),
-                    read_filter(pc),
-                    read_summary(pc)).then([this] {
-                validate_min_max_metadata();
-                validate_max_local_deletion_time();
-                validate_partitioner();
-                return open_data();
+        // read scylla-meta after toc. Might need it to parse
+        // rest (hint extensions)
+        return read_scylla_metadata(pc).then([this, &pc] {
+            // Read statistics ahead of others - if summary is missing
+            // we'll attempt to re-generate it and we need statistics for that
+            return read_statistics(pc).then([this, &pc] {
+                return seastar::when_all_succeed(
+                        read_compression(pc),
+                        read_filter(pc),
+                        read_summary(pc)).then([this] {
+                            validate_min_max_metadata();
+                            validate_max_local_deletion_time();
+                            validate_partitioner();
+                            return open_data();
+                        });
             });
         });
     });
@@ -2460,7 +2438,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         }
     };
 
-    return open_checked_file_dma(_read_error_handler, filename(component_type::Index), open_flags::ro).then([this, &pc] (file index_file) {
+    return new_sstable_component_file(_read_error_handler, component_type::Index, open_flags::ro).then([this, &pc] (file index_file) {
         return do_with(std::move(index_file), [this, &pc] (file index_file) {
             return index_file.size().then([this, &pc, index_file] (auto index_size) {
                 // an upper bound. Surely to be less than this.
