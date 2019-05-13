@@ -156,11 +156,7 @@ public:
             factories->contains_write_time_selector_factory(),
             factories->contains_ttl_selector_factory())
         , _factories(std::move(factories))
-    {
-        if (_factories->does_aggregation() && !_factories->contains_only_aggregate_functions()) {
-            throw exceptions::invalid_request_exception("the select clause must either contains only aggregates or none");
-        }
-    }
+    { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return _factories->uses_function(ks_name, function_name);
@@ -173,7 +169,7 @@ public:
     }
 
     virtual bool is_aggregate() const override {
-        return _factories->contains_only_aggregate_functions();
+        return _factories->does_aggregation();
     }
 protected:
     class selectors_with_processing : public selectors {
@@ -193,7 +189,7 @@ protected:
         }
 
         virtual bool is_aggregate() override {
-            return _factories->contains_only_aggregate_functions();
+            return _factories->does_aggregation();
         }
 
         virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
