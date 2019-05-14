@@ -27,6 +27,7 @@
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
+#include <seastar/util/gcc6-concepts.hh>
 
 //
 // This hashing differs from std::hash<> in that it decouples knowledge about
@@ -41,24 +42,38 @@
 // appending_hash<T> is machine-independent.
 //
 
-// The Hasher concept
-struct Hasher {
-    void update(const char* ptr, size_t size);
+GCC6_CONCEPT(
+    template<typename H>
+    concept bool Hasher() {
+        return requires(H& h, const char* ptr, size_t size) {
+            { h.update(ptr, size) } -> void
+        };
+    }
+)
+
+class hasher {
+public:
+    virtual ~hasher() = default;
+    virtual void update(const char* ptr, size_t size) = 0;
 };
+
+GCC6_CONCEPT(static_assert(Hasher<hasher>());)
 
 template<typename T, typename Enable = void>
 struct appending_hash;
 
-template<typename Hasher, typename T, typename... Args>
+template<typename H, typename T, typename... Args>
+GCC6_CONCEPT(requires Hasher<H>())
 inline
-void feed_hash(Hasher& h, const T& value, Args&&... args) {
+void feed_hash(H& h, const T& value, Args&&... args) {
     appending_hash<T>()(h, value, std::forward<Args>(args)...);
 };
 
 template<typename T>
 struct appending_hash<T, std::enable_if_t<std::is_arithmetic<T>::value>> {
-    template<typename Hasher>
-    void operator()(Hasher& h, T value) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, T value) const {
         auto value_le = cpu_to_le(value);
         h.update(reinterpret_cast<const char*>(&value_le), sizeof(T));
     }
@@ -66,24 +81,27 @@ struct appending_hash<T, std::enable_if_t<std::is_arithmetic<T>::value>> {
 
 template<>
 struct appending_hash<bool> {
-    template<typename Hasher>
-    void operator()(Hasher& h, bool value) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, bool value) const {
         feed_hash(h, static_cast<uint8_t>(value));
     }
 };
 
 template<typename T>
 struct appending_hash<T, std::enable_if_t<std::is_enum<T>::value>> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const T& value) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, const T& value) const {
         feed_hash(h, static_cast<std::underlying_type_t<T>>(value));
     }
 };
 
 template<typename T>
 struct appending_hash<std::optional<T>>  {
-    template<typename Hasher>
-    void operator()(Hasher& h, const std::optional<T>& value) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, const std::optional<T>& value) const {
         if (value) {
             feed_hash(h, true);
             feed_hash(h, *value);
@@ -95,8 +113,9 @@ struct appending_hash<std::optional<T>>  {
 
 template<size_t N>
 struct appending_hash<char[N]>  {
-    template<typename Hasher>
-    void operator()(Hasher& h, const char (&value) [N]) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, const char (&value) [N]) const {
         feed_hash(h, N);
         h.update(value, N);
     }
@@ -104,8 +123,9 @@ struct appending_hash<char[N]>  {
 
 template<typename T>
 struct appending_hash<std::vector<T>> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const std::vector<T>& value) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, const std::vector<T>& value) const {
         feed_hash(h, value.size());
         for (auto&& v : value) {
             appending_hash<T>()(h, v);
@@ -115,8 +135,9 @@ struct appending_hash<std::vector<T>> {
 
 template<typename K, typename V>
 struct appending_hash<std::map<K, V>> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const std::map<K, V>& value) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, const std::map<K, V>& value) const {
         feed_hash(h, value.size());
         for (auto&& e : value) {
             appending_hash<K>()(h, e.first);
@@ -127,8 +148,9 @@ struct appending_hash<std::map<K, V>> {
 
 template<>
 struct appending_hash<sstring> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const sstring& v) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, const sstring& v) const {
         feed_hash(h, v.size());
         h.update(reinterpret_cast<const char*>(v.cbegin()), v.size() * sizeof(sstring::value_type));
     }
@@ -136,8 +158,9 @@ struct appending_hash<sstring> {
 
 template<>
 struct appending_hash<std::string> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const std::string& v) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, const std::string& v) const {
         feed_hash(h, v.size());
         h.update(reinterpret_cast<const char*>(v.data()), v.size() * sizeof(std::string::value_type));
     }
@@ -145,16 +168,18 @@ struct appending_hash<std::string> {
 
 template<typename T, typename R>
 struct appending_hash<std::chrono::duration<T, R>> {
-    template<typename Hasher>
-    void operator()(Hasher& h, std::chrono::duration<T, R> v) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, std::chrono::duration<T, R> v) const {
         feed_hash(h, v.count());
     }
 };
 
 template<typename Clock, typename Duration>
 struct appending_hash<std::chrono::time_point<Clock, Duration>> {
-    template<typename Hasher>
-    void operator()(Hasher& h, std::chrono::time_point<Clock, Duration> v) const {
+    template<typename H>
+    GCC6_CONCEPT(requires Hasher<H>())
+    void operator()(H& h, std::chrono::time_point<Clock, Duration> v) const {
         feed_hash(h, v.time_since_epoch().count());
     }
 };

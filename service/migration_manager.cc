@@ -82,12 +82,16 @@ future<> migration_manager::stop()
 void migration_manager::init_messaging_service()
 {
     auto& ss = service::get_local_storage_service();
-    _feature_listeners.push_back(ss.cluster_supports_view_virtual_columns().when_enabled([this, &ss] {
+
+    auto update_schema = [this, &ss] {
         with_gate(_background_tasks, [this, &ss] {
-            mlogger.debug("view_virtual_columns feature enabled, recalculating schema version");
+            mlogger.debug("features changed, recalculating schema version");
             return update_schema_version(get_storage_proxy(), ss.cluster_schema_features());
         });
-    }));
+    };
+
+    _feature_listeners.push_back(ss.cluster_supports_view_virtual_columns().when_enabled(update_schema));
+    _feature_listeners.push_back(ss.cluster_supports_digest_insensitive_to_expiry().when_enabled(update_schema));
 
     auto& ms = netw::get_local_messaging_service();
     ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> m) {

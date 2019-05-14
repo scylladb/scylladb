@@ -69,19 +69,30 @@ table_schema_version schema_mutations::digest() const {
     }
 
     md5_hasher h;
-    db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies);
-    db::schema_tables::feed_hash_for_schema_digest(h, _columns);
+    db::schema_features sf = db::schema_features::full();
+
+    // Disable this feature so that the digest remains compactible with Scylla
+    // versions prior to this feature.
+    // This digest affects the table schema version calculation and it's important
+    // that all nodes arrive at the same table schema version to avoid needless schema version
+    // pulls. Table schema versions are calculated on boot when we don't yet
+    // know all the cluster features, so we could get different table versions after reboot
+    // in an already upgraded cluster.
+    sf.remove<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
+
+    db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies, sf);
+    db::schema_tables::feed_hash_for_schema_digest(h, _columns, sf);
     if (_view_virtual_columns && !_view_virtual_columns->partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_view_virtual_columns);
+        db::schema_tables::feed_hash_for_schema_digest(h, *_view_virtual_columns, sf);
     }
     if (_indices && !_indices->partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_indices);
+        db::schema_tables::feed_hash_for_schema_digest(h, *_indices, sf);
     }
     if (_dropped_columns && !_dropped_columns->partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_dropped_columns);
+        db::schema_tables::feed_hash_for_schema_digest(h, *_dropped_columns, sf);
     }
     if (_scylla_tables) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_scylla_tables);
+        db::schema_tables::feed_hash_for_schema_digest(h, *_scylla_tables, sf);
     }
     return utils::UUID_gen::get_name_UUID(h.finalize());
 }

@@ -34,6 +34,8 @@
 #include "schema_registry.hh"
 #include "types/list.hh"
 #include "types/user.hh"
+#include "db/config.hh"
+#include "tmpdir.hh"
 
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
@@ -504,4 +506,84 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
             }
         });
     });
+}
+
+// We don't want schema digest to change between Scylla versions because that results in a schema disagreement
+// during rolling upgrade.
+SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
+    using namespace db;
+    using namespace db::schema_tables;
+
+    auto tmp = tmpdir();
+    const bool regenerate = false;
+
+    sstring data_dir = "./tests/sstables/schema_digest_test";
+
+    db::config db_cfg;
+    if (regenerate) {
+        db_cfg.data_file_directories({data_dir}, db::config::config_source::CommandLine);
+    } else {
+        fs::copy(std::string(data_dir), std::string(tmp.path().string()), fs::copy_options::recursive);
+        db_cfg.data_file_directories({tmp.path().string()}, db::config::config_source::CommandLine);
+    }
+
+    return do_with_cql_env_thread([regenerate](cql_test_env& e) {
+        if (regenerate) {
+            // Exercise many different kinds of schema changes.
+            e.execute_cql(
+                "create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
+            e.execute_cql("create type tests.basic_info (c1 timestamp, v2 text);").get();
+            e.execute_cql("create index on tests.table1 (c1);").get();
+            e.execute_cql("create table ks.tbl (a int, b int, c float, PRIMARY KEY (a))").get();
+            e.execute_cql(
+                "create materialized view ks.tbl_view AS SELECT c FROM ks.tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
+            e.execute_cql(
+                "create materialized view ks.tbl_view_2 AS SELECT a FROM ks.tbl WHERE a IS NOT NULL PRIMARY KEY (a)").get();
+            e.execute_cql(
+                "create keyspace tests2 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("drop keyspace tests2;").get();
+        }
+
+        auto expect_digest = [&] (schema_features sf, utils::UUID expected) {
+            auto actual = calculate_schema_digest(service::get_storage_proxy(), sf).get0();
+            if (regenerate) {
+                std::cout << "Digest is " << actual << "\n";
+            } else {
+                BOOST_REQUIRE_EQUAL(actual, expected);
+            }
+        };
+
+        auto expect_version = [&] (sstring ks_name, sstring cf_name, utils::UUID expected) {
+            auto actual = e.local_db().find_column_family(ks_name, cf_name).schema()->version();
+            if (regenerate) {
+                std::cout << "Version of " << ks_name << "." << cf_name << " is " << actual << "\n";
+            } else {
+                BOOST_REQUIRE_EQUAL(actual, expected);
+            }
+        };
+
+        schema_features sf = schema_features::of<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
+
+        expect_digest(sf, utils::UUID("492719e5-0169-30b1-a15e-3447674c0c0c"));
+
+        sf.set<schema_feature::VIEW_VIRTUAL_COLUMNS>();
+        expect_digest(sf, utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"));
+
+        expect_digest(schema_features::full(), utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"));
+
+        // Causes tombstones to become expired
+        // This is in order to test that schema disagreement doesn't form due to expired tombstones being collected
+        // Refs https://github.com/scylladb/scylla/issues/4485
+        forward_jump_clocks(std::chrono::seconds(60*60*24*31));
+
+        expect_digest(schema_features::full(), utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"));
+
+        // FIXME: schema_mutations::digest() is still sensitive to expiry, so we can check versions only after forward_jump_clocks()
+        // otherwise the results would not be stable.
+        expect_version("tests", "table1", utils::UUID("4198e26c-f214-3888-9c49-c396eb01b8d7"));
+        expect_version("ks", "tbl", utils::UUID("5c9cadec-e5df-357e-81d0-0261530af64b"));
+        expect_version("ks", "tbl_view", utils::UUID("1d91ad22-ea7c-3e7f-9557-87f0f3bb94d7"));
+        expect_version("ks", "tbl_view_2", utils::UUID("2dcd4a37-cbb5-399b-b3c9-8eb1398b096b"));
+    }, db_cfg).then([tmp = std::move(tmp)] {});
 }

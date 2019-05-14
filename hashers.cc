@@ -29,7 +29,7 @@ template <typename T> struct hasher_traits;
 template <> struct hasher_traits<md5_hasher> { using impl_type = CryptoPP::Weak::MD5; };
 template <> struct hasher_traits<sha256_hasher> { using impl_type = CryptoPP::SHA256; };
 
-template <typename T, size_t size> struct hasher<T, size>::impl {
+template <typename T, size_t size> struct cryptopp_hasher<T, size>::impl {
     using impl_type = typename hasher_traits<T>::impl_type;
 
     impl_type hash{};
@@ -53,35 +53,35 @@ template <typename T, size_t size> struct hasher<T, size>::impl {
     }
 };
 
-template <typename T, size_t size> hasher<T, size>::hasher() : _impl(std::make_unique<impl>()) {}
+template <typename T, size_t size> cryptopp_hasher<T, size>::cryptopp_hasher() : _impl(std::make_unique<impl>()) {}
 
-template <typename T, size_t size> hasher<T, size>::~hasher() = default;
+template <typename T, size_t size> cryptopp_hasher<T, size>::~cryptopp_hasher() = default;
 
-template <typename T, size_t size> hasher<T, size>::hasher(hasher&& o) noexcept = default;
+template <typename T, size_t size> cryptopp_hasher<T, size>::cryptopp_hasher(cryptopp_hasher&& o) noexcept = default;
 
-template <typename T, size_t size> hasher<T, size>::hasher(const hasher& o) : _impl(std::make_unique<hasher<T, size>::impl>(*o._impl)) {}
+template <typename T, size_t size> cryptopp_hasher<T, size>::cryptopp_hasher(const cryptopp_hasher& o) : _impl(std::make_unique<cryptopp_hasher<T, size>::impl>(*o._impl)) {}
 
-template <typename T, size_t size> hasher<T, size>& hasher<T, size>::operator=(hasher&& o) noexcept = default;
+template <typename T, size_t size> cryptopp_hasher<T, size>& cryptopp_hasher<T, size>::operator=(cryptopp_hasher&& o) noexcept = default;
 
-template <typename T, size_t size> hasher<T, size>& hasher<T, size>::operator=(const hasher& o) {
-    _impl = std::make_unique<hasher<T, size>::impl>(*o._impl);
+template <typename T, size_t size> cryptopp_hasher<T, size>& cryptopp_hasher<T, size>::operator=(const cryptopp_hasher& o) {
+    _impl = std::make_unique<cryptopp_hasher<T, size>::impl>(*o._impl);
     return *this;
 }
 
-template <typename T, size_t size> bytes hasher<T, size>::finalize() { return _impl->finalize(); }
+template <typename T, size_t size> bytes cryptopp_hasher<T, size>::finalize() { return _impl->finalize(); }
 
-template <typename T, size_t size> std::array<uint8_t, size> hasher<T, size>::finalize_array() {
+template <typename T, size_t size> std::array<uint8_t, size> cryptopp_hasher<T, size>::finalize_array() {
     return _impl->finalize_array();
 }
 
-template <typename T, size_t size> void hasher<T, size>::update(const char* ptr, size_t length) { _impl->update(ptr, length); }
+template <typename T, size_t size> void cryptopp_hasher<T, size>::update(const char* ptr, size_t length) { _impl->update(ptr, length); }
 
-template <typename T, size_t size> bytes hasher<T, size>::calculate(const std::string_view& s) {
-    typename hasher<T, size>::impl::impl_type hash;
+template <typename T, size_t size> bytes cryptopp_hasher<T, size>::calculate(const std::string_view& s) {
+    typename cryptopp_hasher<T, size>::impl::impl_type hash;
     unsigned char digest[size];
     hash.CalculateDigest(digest, reinterpret_cast<const unsigned char*>(s.data()), s.size());
     return std::move(bytes{reinterpret_cast<const int8_t*>(digest), size});
 }
 
-template class hasher<md5_hasher, 16>;
-template class hasher<sha256_hasher, 32>;
+template class cryptopp_hasher<md5_hasher, 16>;
+template class cryptopp_hasher<sha256_hasher, 32>;
