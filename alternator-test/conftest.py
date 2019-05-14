@@ -104,9 +104,11 @@ def test_2_tables(dynamodb):
 
 # "filled_test_table" fixture:  Create a temporary table to be used in tests
 # that involve reading data - GetItem, Scan, etc. The table is filled with
-# 164 elements - each consisting of a partition key, clustering key
-# and two string attributes. This table is supposed to be read from,
-# not updated nor overwritten.
+# 328 items - each consisting of a partition key, clustering key and two
+# string attributes. 164 of the items are in a single partition (with the
+# partition key 'long') and the 164 other items are each in a separate
+# partition.
+# This table is supposed to be read from, not updated nor overwritten.
 # This fixture returns both a table object and the description of all items
 # inserted into it.
 @pytest.fixture(scope="session")
@@ -122,6 +124,12 @@ def filled_test_table(dynamodb):
     count = 164
     items = [{
         'p': str(i),
+        'c': str(i),
+        'attribute': "x" * 7,
+        'another': "y" * 16
+    } for i in range(count)]
+    items = items + [{
+        'p': 'long',
         'c': str(i),
         'attribute': "x" * 7,
         'another': "y" * 16
