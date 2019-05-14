@@ -77,6 +77,7 @@ private:
     const uint32_t _idx;
     data_type _type;
     bytes_opt _current;
+    bool _first; ///< Whether the next row we receive is the first in its group.
 public:
     static ::shared_ptr<factory> new_factory(const sstring& column_name, uint32_t idx, data_type type) {
         return ::make_shared<simple_selector_factory>(column_name, idx, type);
@@ -86,11 +87,18 @@ public:
         : _column_name(std::move(column_name))
         , _idx(idx)
         , _type(type)
+        , _first(true)
     { }
 
     virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {
-        // TODO: can we steal it?
-        _current = (*rs.current)[_idx];
+        // GROUP BY calls add_input() repeatedly without reset() in between, and it expects the
+        // output to be the first value encountered:
+        // https://cassandra.apache.org/doc/latest/cql/dml.html#grouping-results
+        if (_first) {
+            // TODO: can we steal it?
+            _current = (*rs.current)[_idx];
+            _first = false;
+        }
     }
 
     virtual bytes_opt get_output(cql_serialization_format sf) override {
@@ -99,6 +107,7 @@ public:
 
     virtual void reset() override {
         _current = {};
+        _first = true;
     }
 
     virtual data_type get_type() override {

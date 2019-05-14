@@ -3840,3 +3840,17 @@ SEASTAR_TEST_CASE(test_group_by_null_clustering) {
         return make_ready_future<>();
     });
 }
+
+SEASTAR_TEST_CASE(test_aggregate_and_simple_selection_together) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        equery(e, "create table t (p int, c int, v int, primary key(p, c))");
+        equery(e, "insert into t (p, c, v) values (1, 1, 11)");
+        equery(e, "insert into t (p, c, v) values (1, 2, 12)");
+        equery(e, "insert into t (p, c, v) values (1, 3, 13)");
+        equery(e, "insert into t (p, c, v) values (2, 2, 22)");
+        require_rows(e, "select c, avg(c) from t", {{I(1), I(2)}});
+        require_rows(e, "select p, sum(v) from t", {{I(1), I(58)}});
+        require_rows(e, "select p, count(c) from t group by p", {{I(1), L(3)}, {I(2), L(1)}});
+        return make_ready_future<>();
+    });
+}
