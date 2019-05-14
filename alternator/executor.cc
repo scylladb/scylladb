@@ -691,6 +691,16 @@ future<json::json_return_type> executor::list_tables(std::string content) {
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
+future<json::json_return_type> executor::describe_endpoints(std::string content) {
+    Json::Value response;
+    // FIXME: need to pick up the endpoint address from somewhere. It's not
+    // generally this server's IP address but usually some domain name that
+    // resolves to this or many other servers.
+    response["Endpoints"][0]["Address"] = "localhost:8000";
+    response["Endpoints"][0]["CachePeriodInMinutes"] = 1440;
+    return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
+}
+
 future<> executor::start() {
     if (engine().cpu_id() != 0) {
         return make_ready_future<>();

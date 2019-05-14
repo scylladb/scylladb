@@ -38,6 +38,7 @@ public:
     future<json::json_return_type> update_item(std::string content);
     future<json::json_return_type> list_tables(std::string content);
     future<json::json_return_type> scan(std::string content);
+    future<json::json_return_type> describe_endpoints(std::string content);
 
     future<> start();
     future<> stop() { return make_ready_future<>(); }
