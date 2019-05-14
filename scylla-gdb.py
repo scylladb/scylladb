@@ -1872,6 +1872,7 @@ class scylla_fiber(gdb.Command):
                 ("seastar", "internal", "repeater"),
                 ("seastar", "internal", "when_all_state_component"),
                 ("seastar", "lambda_task"),
+                ("seastar", "smp_message_queue", "async_work_item"),
         ])
 
 
