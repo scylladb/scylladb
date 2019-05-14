@@ -277,7 +277,7 @@ future<json::json_return_type> executor::create_table(std::string content) {
             throw api_error("ValidationException",
                     "Second key in KeySchema must be a RANGE key");
         }
-        add_column(builder, key_schema[1]["AttributeName"].asString(), attribute_definitions, column_kind::partition_key);
+        add_column(builder, key_schema[1]["AttributeName"].asString(), attribute_definitions, column_kind::clustering_key);
     }
     builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
