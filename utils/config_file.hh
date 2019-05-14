@@ -34,11 +34,32 @@
 #include "seastarx.hh"
 
 namespace seastar { class file; }
+namespace seastar::json { class json_return_type; }
 namespace YAML { class Node; }
 
 namespace utils {
 
 namespace bpo = boost::program_options;
+
+class config_type {
+    std::string_view _name;
+    std::function<json::json_return_type (const void*)> _to_json;
+private:
+    template <typename NativeType>
+    std::function<json::json_return_type (const void*)> make_to_json(json::json_return_type (*func)(const NativeType&)) {
+        return [func] (const void* value) {
+            return func(*static_cast<const NativeType*>(value));
+        };
+    }
+public:
+    template <typename NativeType>
+    config_type(std::string_view name, json::json_return_type (*to_json)(const NativeType&)) : _name(name), _to_json(make_to_json(to_json)) {}
+    std::string_view name() const { return _name; }
+    json::json_return_type to_json(const void* value) const;
+};
+
+template <typename T>
+extern const config_type config_type_for;
 
 class config_file {
 public:
@@ -59,10 +80,14 @@ public:
 
     struct config_src {
         std::string_view _name, _desc;
+        const config_type* _type;
+    protected:
+        virtual const void* current_value() const = 0;
     public:
-        config_src(std::string_view name, std::string_view desc)
+        config_src(std::string_view name, const config_type* type, std::string_view desc)
             : _name(name)
             , _desc(desc)
+            , _type(type)
         {}
         virtual ~config_src() {}
 
@@ -72,6 +97,9 @@ public:
         const std::string_view & desc() const {
             return _desc;
         }
+        std::string_view type_name() const {
+            return _type->name();
+        }
 
         virtual void add_command_line_option(
                         bpo::options_description_easy_init&, const std::string_view&,
@@ -79,25 +107,35 @@ public:
         virtual void set_value(const YAML::Node&) = 0;
         virtual value_status status() const = 0;
         virtual config_source source() const = 0;
+        json::json_return_type value_as_json() const;
     };
 
-    template<typename T, value_status S = value_status::Used>
+    template<typename T>
     struct named_value : public config_src {
     private:
         friend class config;
         std::string_view _name, _desc;
         T _value = T();
         config_source _source = config_source::None;
+        value_status _value_status;
+    protected:
+        virtual const void* current_value() const override {
+            return &_value;
+        }
     public:
         typedef T type;
-        typedef named_value<T, S> MyType;
+        typedef named_value<T> MyType;
 
-        named_value(std::string_view name, const T& t = T(), std::string_view desc = {})
-            : config_src(name, desc)
+        named_value(config_file* file, std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {},
+                std::initializer_list<T> allowed_values = {})
+            : config_src(name, &config_type_for<T>, desc)
             , _value(t)
-        {}
+            , _value_status(vs)
+        {
+            file->add(*this);
+        }
         value_status status() const override {
-            return S;
+            return _value_status;
         }
         config_source source() const override {
             return _source;
@@ -174,7 +212,7 @@ private:
         _cfgs;
 };
 
-extern template struct config_file::named_value<seastar::log_level, config_file::value_status::Used>;
+extern template struct config_file::named_value<seastar::log_level>;
 
 }
 
