@@ -22,6 +22,7 @@
 #pragma once
 
 #include "clocks-impl.hh"
+#include "hashing.hh"
 
 #include <seastar/core/lowres_clock.hh>
 
@@ -71,3 +72,17 @@ using ttl_opt = std::optional<gc_clock::duration>;
 static constexpr gc_clock::duration max_ttl = gc_clock::duration{20 * 365 * 24 * 60 * 60};
 
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp);
+
+template<>
+struct appending_hash<gc_clock::time_point> {
+    template<typename Hasher>
+    void operator()(Hasher& h, gc_clock::time_point t) const {
+        // Remain backwards-compatible with the 32-bit duration::rep (refs #4460).
+        uint64_t d64 = t.time_since_epoch().count();
+        feed_hash(h, uint32_t(d64 & 0xffff'ffff));
+        uint32_t msb = d64 >> 32;
+        if (msb) {
+            feed_hash(h, msb);
+        }
+    }
+};

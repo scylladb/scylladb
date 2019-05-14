@@ -323,6 +323,7 @@ private:
     gms::feature _correct_static_compact_in_mc;
     gms::feature _unbounded_range_tombstones_feature;
     gms::feature _view_virtual_columns;
+    gms::feature _digest_insensitive_to_expiry;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
     seastar::semaphore _feature_listeners_sem = {1};
@@ -2337,6 +2338,9 @@ public:
     }
     const gms::feature& cluster_supports_view_virtual_columns() const {
         return _view_virtual_columns;
+    }
+    const gms::feature& cluster_supports_digest_insensitive_to_expiry() const {
+        return _digest_insensitive_to_expiry;
     }
     // Returns schema features which all nodes in the cluster advertise as supported.
     db::schema_features cluster_schema_features() const;
