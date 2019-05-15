@@ -1845,8 +1845,8 @@ class scylla_fiber(gdb.Command):
     #2  (task*) 0x00006000018af600 0x00000000046c37a0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
     #3  (task*) 0x00006000005502a0 0x00000000046c37f0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
     #4  (task*) 0x0000600001a65e10 0x00000000046c6b10 vtable for seastar::continuation<seastar::future<boost::iterator_range<mutation_fragment*> >::then_impl<...>(...)::{lambda(auto:1)#1}, boost::iterator_range<mutation_fragment*> > + 16
-     ^          ^                ^                    ^
-    (1)        (2)              (3)                  (4)
+     ^          ^                  ^                  ^
+    (1)        (2)                (3)                (4)
 
     1) Task index (0 is the task passed to the command).
     2) Pointer to the task object.
