@@ -47,7 +47,6 @@ def test_basic_batch_write_item(dynamodb, test_table):
 
     for i in range(count):
         item = test_table.get_item(Key={'p': "batch{}".format(i), 'c': "batch_ck{}".format(i)}, ConsistentRead=True)['Item']
-        print(item)
         assert item['p'] == "batch{}".format(i)
         assert item['c'] == "batch_ck{}".format(i)
         assert item['attribute'] == str(i)
