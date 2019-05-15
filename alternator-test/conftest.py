@@ -135,9 +135,9 @@ def filled_test_table(dynamodb):
         'another': "y" * 16
     } for i in range(count)]
 
-    for item in items:
-        # TODO: eventually, when Alternator supports batch operations,
-        # use a batch write to make this fixture start faster.
-        table.put_item(Item=item)
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+
     yield table, items
     table.delete()
