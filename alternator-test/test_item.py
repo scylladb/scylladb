@@ -31,6 +31,28 @@ def test_basic_string_put_and_get(test_table):
     assert item['attribute'] == val
     assert item['another'] == val2
 
+# Test ensuring that items inserted by a batched statement can be properly extracted
+# via GetItem
+def test_basic_batch_write_item(dynamodb, test_table):
+    count = 7
+
+    with test_table.batch_writer() as batch:
+        for i in range(count):
+            batch.put_item(Item={
+                'p': "batch{}".format(i),
+                'c': "batch_ck{}".format(i),
+                'attribute': str(i),
+                'another': 'xyz'
+            })
+
+    for i in range(count):
+        item = test_table.get_item(Key={'p': "batch{}".format(i), 'c': "batch_ck{}".format(i)}, ConsistentRead=True)['Item']
+        print(item)
+        assert item['p'] == "batch{}".format(i)
+        assert item['c'] == "batch_ck{}".format(i)
+        assert item['attribute'] == str(i)
+        assert item['another'] == 'xyz' 
+
 # Similar to test_basic_string_put_and_get, just uses UpdateItem instead of
 # PutItem. Because the item does not yet exist, it should work the same.
 def test_basic_string_update_and_get(test_table):
