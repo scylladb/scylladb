@@ -120,7 +120,7 @@ void server::set_routes(routes& r) {
         } else if (op == "Scan") {
             return _executor.local().scan(req->content);
         } else if (op == "DescribeEndpoints") {
-            return _executor.local().describe_endpoints(req->content);
+            return _executor.local().describe_endpoints(req->content, req->get_header("Host"));
         }
         throw api_error("UnknownOperationException",
                 format("Unsupported operation {}", op));
