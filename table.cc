@@ -1557,7 +1557,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
     , _index_manager(*this)
-    , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
+    , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
     , _row_locker(_schema)
 {
     if (!_config.enable_disk_writes) {
@@ -1969,6 +1969,7 @@ table::disable_sstable_write() {
 
 
 void table::set_schema(schema_ptr s) {
+    assert(s->is_counter() == _schema->is_counter());
     tlogger.debug("Changing schema version of {}.{} ({}) from {} to {}",
                 _schema->ks_name(), _schema->cf_name(), _schema->id(), _schema->version(), s->version());
 
@@ -1987,7 +1988,9 @@ void table::set_schema(schema_ptr s) {
     }
 
     _cache.set_schema(s);
-    _counter_cell_locks->set_schema(s);
+    if (_counter_cell_locks) {
+        _counter_cell_locks->set_schema(s);
+    }
     _schema = std::move(s);
 
     set_compaction_strategy(_schema->compaction_strategy());

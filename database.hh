@@ -477,7 +477,7 @@ private:
     seastar::gate _streaming_flush_gate;
     std::vector<view_ptr> _views;
 
-    std::unique_ptr<cell_locker> _counter_cell_locks;
+    std::unique_ptr<cell_locker> _counter_cell_locks; // Memory-intensive; allocate only when needed.
     void set_metrics();
     seastar::metrics::metric_groups _metrics;
 
