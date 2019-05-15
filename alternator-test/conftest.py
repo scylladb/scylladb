@@ -107,7 +107,7 @@ def test_2_tables(dynamodb):
 # 328 items - each consisting of a partition key, clustering key and two
 # string attributes. 164 of the items are in a single partition (with the
 # partition key 'long') and the 164 other items are each in a separate
-# partition.
+# partition. Finally, a 329th item is added with different attributes.
 # This table is supposed to be read from, not updated nor overwritten.
 # This fixture returns both a table object and the description of all items
 # inserted into it.
@@ -134,6 +134,7 @@ def filled_test_table(dynamodb):
         'attribute': "x" * 7,
         'another': "y" * 16
     } for i in range(count)]
+    items.append({'p': 'hello', 'c': 'world', 'str': 'and now for something completely different'})
 
     with table.batch_writer() as batch:
         for item in items:

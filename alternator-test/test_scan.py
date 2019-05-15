@@ -6,6 +6,15 @@ import string
 import pytest
 from botocore.exceptions import ClientError
 
+# Utility function for scanning the entire table into an array of items
+def full_scan(table, **kwargs):
+    response = table.scan(**kwargs)
+    items = response['Items']
+    while 'LastEvaluatedKey' in response:
+        response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
+        items.extend(response['Items'])
+    return items
+
 def set_of_frozen_elements(list_of_dicts):
     return {frozenset(item.items()) for item in list_of_dicts}
 
@@ -70,3 +79,19 @@ def test_scan_sort_order_string(filled_test_table):
     assert sorted(got_items_long) == got_items_long
     # Verify that got_items_long are a sorted version of the expected items_long
     assert sorted(items_long) == got_items_long
+
+# Test Scan with the AttributesToGet parameter. Result should include the
+# selected attributes only - if one wants the key attributes as well, one
+# needs to select them explicitly. When no key attributes are selected,
+# some items may have *none* of the selected attributes. Those items are
+# returned too, as empty items - they are not outright missing.
+def test_scan_attributes_to_get(dynamodb, filled_test_table):
+    table, items = filled_test_table
+    for wanted in [ ['another'],       # only non-key attributes (one item doesn't have it!)
+                    ['c', 'another'],  # a key attribute (sort key) and non-key
+                    ['p', 'c']         # entire key
+                   ]:
+        print(wanted)
+        got_items = full_scan(table, AttributesToGet=wanted)
+        expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
+        assert sorted(expected_items) == sorted(got_items)
