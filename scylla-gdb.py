@@ -1228,8 +1228,23 @@ class pointer_metadata(object):
 
 
 class scylla_ptr(gdb.Command):
+    _is_seastar_allocator_used = None
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla ptr', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    @staticmethod
+    def is_seastar_allocator_used():
+        if not scylla_ptr._is_seastar_allocator_used is None:
+            return scylla_ptr._is_seastar_allocator_used
+
+        try:
+            gdb.parse_and_eval('&\'seastar::memory::cpu_mem\'')
+            scylla_ptr._is_seastar_allocator_used = True
+            return True
+        except:
+            scylla_ptr._is_seastar_allocator_used = False
+            return False
 
     @staticmethod
     def analyze(ptr):
