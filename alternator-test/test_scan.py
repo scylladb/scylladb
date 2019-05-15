@@ -82,7 +82,8 @@ def test_scan_attributes_to_get(dynamodb, filled_test_table):
     table, items = filled_test_table
     for wanted in [ ['another'],       # only non-key attributes (one item doesn't have it!)
                     ['c', 'another'],  # a key attribute (sort key) and non-key
-                    ['p', 'c']         # entire key
+                    ['p', 'c'],        # entire key
+                    ['nonexistent']    # none of the items have this attribute!
                    ]:
         print(wanted)
         got_items = full_scan(table, AttributesToGet=wanted)
