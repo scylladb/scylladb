@@ -92,9 +92,22 @@ protected:
     sstring _type;
 };
 
-
 void server::set_routes(routes& r) {
-    api_handler* handler = new api_handler([this](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    using alternator_callback = std::function<future<json::json_return_type>(executor&, std::unique_ptr<request>)>;
+    std::unordered_map<std::string, alternator_callback> routes{
+        {"CreateTable", [] (executor& e, std::unique_ptr<request> req) { return e.create_table(req->content); }},
+        {"DescribeTable", [] (executor& e, std::unique_ptr<request> req) { return e.describe_table(req->content); }},
+        {"DeleteTable", [] (executor& e, std::unique_ptr<request> req) { return e.delete_table(req->content); }},
+        {"PutItem", [] (executor& e, std::unique_ptr<request> req) { return e.put_item(req->content); }},
+        {"UpdateItem", [] (executor& e, std::unique_ptr<request> req) { return e.update_item(req->content); }},
+        {"GetItem", [] (executor& e, std::unique_ptr<request> req) { return e.get_item(req->content); }},
+        {"ListTables", [] (executor& e, std::unique_ptr<request> req) { return e.list_tables(req->content); }},
+        {"Scan", [] (executor& e, std::unique_ptr<request> req) { return e.scan(req->content); }},
+        {"DescribeEndpoints", [] (executor& e, std::unique_ptr<request> req) { return e.describe_endpoints(req->content, req->get_header("Host")); }},
+        {"BatchWriteItem", [] (executor& e, std::unique_ptr<request> req) { return e.batch_write_item(req->content); }},
+    };
+
+    api_handler* handler = new api_handler([this, routes = std::move(routes)](std::unique_ptr<request> req) -> future<json::json_return_type> {
         slogger.trace("Raw request: {} ({})", req->content, req->content_length);
         sstring target = req->get_header(TARGET);
         std::vector<sstring> split_target = split(target, ".");
@@ -102,30 +115,12 @@ void server::set_routes(routes& r) {
         sstring op = split_target.empty() ? sstring() : split_target.back();
 
         slogger.trace("Request type: {}", op);
-        // FIXME: this should be a table lookup, not a long list of else.
-        if (op == "CreateTable") {
-            return _executor.local().create_table(req->content);
-        } else if (op == "DescribeTable") {
-            return _executor.local().describe_table(req->content);
-        } else if (op == "DeleteTable") {
-            return _executor.local().delete_table(req->content);
-        } else if (op == "PutItem") {
-            return _executor.local().put_item(req->content);
-        } else if (op == "UpdateItem") {
-            return _executor.local().update_item(req->content);
-        } else if (op == "GetItem") {
-            return _executor.local().get_item(req->content);
-        } else if (op == "ListTables") {
-            return _executor.local().list_tables(req->content);
-        } else if (op == "Scan") {
-            return _executor.local().scan(req->content);
-        } else if (op == "DescribeEndpoints") {
-            return _executor.local().describe_endpoints(req->content, req->get_header("Host"));
-        } else if (op == "BatchWriteItem") {
-            return _executor.local().batch_write_item(req->content);
+        auto callback_it = routes.find(op);
+        if (callback_it == routes.end()) {
+            throw api_error("UnknownOperationException",
+                    format("Unsupported operation {}", op));
         }
-        throw api_error("UnknownOperationException",
-                format("Unsupported operation {}", op));
+        return callback_it->second(_executor.local(), std::move(req));
     });
 
     r.add(operation_type::POST, url("/"), handler);
