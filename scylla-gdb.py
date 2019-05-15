@@ -1164,7 +1164,13 @@ def get_thread_owning_memory(ptr):
 
 
 class pointer_metadata(object):
-    def __init__(self, ptr, thread):
+    def __init__(self, ptr, *args):
+        if isinstance(args[0], gdb.InferiorThread):
+            self._init_seastar_ptr(ptr, *args)
+        else:
+            self._init_generic_ptr(ptr, *args)
+
+    def _init_seastar_ptr(self, ptr, thread):
         self.ptr = ptr
         self.thread = thread
         self._is_containing_page_free = False
@@ -1172,6 +1178,16 @@ class pointer_metadata(object):
         self.is_live = False
         self.is_lsa = False
         self.size = 0
+        self.offset_in_object = 0
+
+    def _init_generic_ptr(self, ptr, speculative_size):
+        self.ptr = ptr
+        self.thread = None
+        self._is_containing_page_free = None
+        self.is_small = None
+        self.is_live = None
+        self.is_lsa = None
+        self.size = speculative_size
         self.offset_in_object = 0
 
     def is_managed_by_seastar(self):
@@ -1187,7 +1203,7 @@ class pointer_metadata(object):
 
     def __str__(self):
         if not self.is_managed_by_seastar():
-            return "Not managed by seastar"
+            return "0x{:x} (default allocator)".format(self.ptr)
 
         msg = "thread %d" % self.thread.num
 
