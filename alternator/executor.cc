@@ -319,12 +319,7 @@ static clustering_key ck_from_json(const Json::Value& item, schema_ptr schema) {
     return clustering_key::from_exploded(raw_ck);
 }
 
-future<json::json_return_type> executor::put_item(std::string content) {
-    Json::Value update_info = json::to_json_value(content);
-    elogger.trace("Updating value {}", update_info.toStyledString());
-
-    schema_ptr schema = get_table(_proxy, update_info);
-    const Json::Value& item = update_info["Item"];
+static mutation make_item_mutation(const Json::Value& item, schema_ptr schema) {
     partition_key pk = pk_from_json(item, schema);
     clustering_key ck = ck_from_json(item, schema);
 
@@ -342,12 +337,61 @@ future<json::json_return_type> executor::put_item(std::string content) {
 
     auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
     m.set_cell(ck, attrs_column(*schema), std::move(serialized_map));
+    return m;
+}
+
+future<json::json_return_type> executor::put_item(std::string content) {
+    Json::Value update_info = json::to_json_value(content);
+    elogger.trace("Updating value {}", update_info.toStyledString());
+
+    schema_ptr schema = get_table(_proxy, update_info);
+    const Json::Value& item = update_info["Item"];
+    partition_key pk = pk_from_json(item, schema);
+    clustering_key ck = ck_from_json(item, schema);
+
+    mutation m = make_item_mutation(item, schema);
 
     return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, PutItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
 
+}
+
+static schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const Json::Value::const_iterator& batch_request) {
+    std::string table_name = batch_request.key().asString(); // JSON keys are always strings
+    validate_table_name(table_name);
+    try {
+        return proxy.get_db().local().find_schema(executor::KEYSPACE_NAME, table_name);
+    } catch(no_such_column_family&) {
+        throw api_error("ResourceNotFoundException", format("Requested resource not found: Table: {} not found", table_name));
+    }
+}
+
+future<json::json_return_type> executor::batch_write_item(std::string content) {
+    Json::Value batch_info = json::to_json_value(content);
+    Json::Value& request_items = batch_info["RequestItems"];
+
+    std::vector<mutation> mutations;
+    mutations.reserve(request_items.size());
+    for (auto it = request_items.begin(); it != request_items.end(); ++it) {
+        schema_ptr schema = get_table_from_batch_request(_proxy, it);
+        for (auto&& request : *it) {
+            //FIXME(sarna): Add support for DeleteRequest too
+            const Json::Value& put_request = request.get("PutRequest", Json::Value());
+            const Json::Value& item = put_request["Item"];
+            mutations.push_back(make_item_mutation(item, schema));
+        }
+    }
+
+    return _proxy.mutate(std::move(mutations), db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+        // Without special options on what to return, BatchWriteItem returns nothing,
+        // unless there are UnprocessedItems - it's possible to just stop processing a batch
+        // due to throttling. TODO(sarna): Consider UnprocessedItems when returning.
+        Json::Value ret;
+        ret["UnprocessedItems"] = Json::Value(Json::objectValue);
+        return make_ready_future<json::json_return_type>(make_jsonable(std::move(ret)));
+    });
 }
 
 future<json::json_return_type> executor::update_item(std::string content) {
