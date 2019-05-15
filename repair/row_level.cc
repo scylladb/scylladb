@@ -643,6 +643,8 @@ public:
         }
         return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
             return rm->stop();
+        }).then([repair_metas, from] {
+            rlogger.debug("Removed all repair_meta for single node {}", from);
         });
     }
 
@@ -655,6 +657,8 @@ public:
         repair_meta_map().clear();
         return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
             return rm->stop();
+        }).then([repair_metas] {
+            rlogger.debug("Removed all repair_meta for all nodes");
         });
     }
 
