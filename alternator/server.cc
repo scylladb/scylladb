@@ -121,6 +121,8 @@ void server::set_routes(routes& r) {
             return _executor.local().scan(req->content);
         } else if (op == "DescribeEndpoints") {
             return _executor.local().describe_endpoints(req->content, req->get_header("Host"));
+        } else if (op == "BatchWriteItem") {
+            return _executor.local().batch_write_item(req->content);
         }
         throw api_error("UnknownOperationException",
                 format("Unsupported operation {}", op));
