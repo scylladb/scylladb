@@ -1936,7 +1936,7 @@ class scylla_fiber(gdb.Command):
         if verbose:
             gdb.write(msg)
 
-    def _probe_pointer(self, ptr, verbose):
+    def _probe_pointer(self, ptr, scanned_region_size, using_seastar_allocator, verbose):
         """ Check if the pointer is a task pointer
 
         The pattern we are looking for is:
@@ -1963,16 +1963,19 @@ class scylla_fiber(gdb.Command):
             self._maybe_log(" Symbol name doesn't match whitelisted symbols\n", verbose)
             return
 
-        ptr_meta = scylla_ptr.analyze(ptr)
-        if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live or ptr_meta.offset_in_object != 0:
-            self._maybe_log(" Not the start of an allocation block or not a live object\n", verbose)
-            return
+        if using_seastar_allocator:
+            ptr_meta = scylla_ptr.analyze(ptr)
+            if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live or ptr_meta.offset_in_object != 0:
+                self._maybe_log(" Not the start of an allocation block or not a live object\n", verbose)
+                return
+        else:
+            ptr_meta = pointer_metadata(ptr, scanned_region_size)
 
         self._maybe_log(" Task found\n", verbose)
 
         return ptr_meta, maybe_vptr, resolved_symbol
 
-    def _do_walk(self, ptr_meta, i, max_depth, verbose):
+    def _do_walk(self, ptr_meta, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         if max_depth > -1 and i >= max_depth:
             return []
 
@@ -1985,27 +1988,31 @@ class scylla_fiber(gdb.Command):
             maybe_tptr = int(gdb.Value(it).reinterpret_cast(self._vptr_type).dereference())
             self._maybe_log("0x{:016x}+0x{:04x} -> 0x{:016x}".format(ptr, it - ptr, maybe_tptr), verbose)
 
-            res = self._probe_pointer(maybe_tptr, verbose)
+            res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
 
             if res is None:
                 continue
 
             tptr_meta, vptr, name = res
 
-            fiber = self._do_walk(tptr_meta, i + 1, max_depth, verbose)
+            fiber = self._do_walk(tptr_meta, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
             fiber.append((maybe_tptr, vptr, name))
             return fiber
 
         return []
 
-    def _walk(self, ptr, max_depth, verbose):
-        ptr_meta = scylla_ptr.analyze(int(ptr))
+    def _walk(self, ptr, max_depth, scanned_region_size, force_fallback_mode, verbose):
+        using_seastar_allocator = not force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
+        if using_seastar_allocator:
+            ptr_meta = scylla_ptr.analyze(int(ptr))
+            if not ptr_meta.is_managed_by_seastar():
+                gdb.write("Task pointer 0x{:016x} is not an object managed by seastar\n")
+                return []
+        else:
+            gdb.write("Not using the seastar allocator, falling back to scanning a fixed-size region of memory\n")
+            ptr_meta = pointer_metadata(int(ptr), scanned_region_size)
 
-        if not ptr_meta.is_managed_by_seastar():
-            gdb.write("Task pointer 0x{:016x} is not an object managed by seastar\n")
-            return []
-
-        return reversed(self._do_walk(ptr_meta, 0, max_depth, verbose))
+        return reversed(self._do_walk(ptr_meta, 0, max_depth, scanned_region_size, using_seastar_allocator, verbose))
 
     def invoke(self, arg, for_tty):
         parser = argparse.ArgumentParser(description="scylla fiber")
@@ -2013,6 +2020,13 @@ class scylla_fiber(gdb.Command):
                 help="Make the command more verbose about what it is doing")
         parser.add_argument("-d", "--max-depth", action="store", type=int, default=-1,
                 help="Maximum depth to traverse on the continuation chain")
+        parser.add_argument("-s", "--scanned-region-size", action="store", type=int, default=512,
+                help="The size of the memory region to be scanned when examining a task object."
+                " Only used in fallback-mode. Fallback mode is used either when the default allocator is used by the application"
+                " (and hence pointer-metadata is not available) or when `scylla fiber` was invoked with `--force-fallback-mode`.")
+        parser.add_argument("--force-fallback-mode", action="store_true", default=False,
+                help="Force fallback mode to be used, that is, scan a fixed-size region of memory"
+                " (configurable via --scanned-region-size), instead of relying on `scylla ptr` for determining the size of the task objects.")
         parser.add_argument("task", action="store", help="An expression that evaluates to a valid `seastar::task*` value. Cannot contain white-space.")
 
         try:
@@ -2021,7 +2035,7 @@ class scylla_fiber(gdb.Command):
             return
 
         try:
-            fiber = self._walk(gdb.parse_and_eval(args.task), args.max_depth, args.verbose)
+            fiber = self._walk(gdb.parse_and_eval(args.task), args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
 
             for i, (tptr, vptr, name) in enumerate(fiber):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
