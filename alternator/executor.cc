@@ -691,12 +691,18 @@ future<json::json_return_type> executor::list_tables(std::string content) {
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
-future<json::json_return_type> executor::describe_endpoints(std::string content) {
+future<json::json_return_type> executor::describe_endpoints(std::string content, std::string host_header) {
     Json::Value response;
-    // FIXME: need to pick up the endpoint address from somewhere. It's not
-    // generally this server's IP address but usually some domain name that
-    // resolves to this or many other servers.
-    response["Endpoints"][0]["Address"] = "localhost:8000";
+    // Without having any configuration parameter to say otherwise, we tell
+    // the user to return to the same endpoint they used to reach us. The only
+    // way we can know this is through the "Host:" header in the request,
+    // which typically exists (and in fact is mandatory in HTTP 1.1).
+    // A "Host:" header includes both host name and port, exactly what we need
+    // to return.
+    if (host_header.empty()) {
+        throw api_error("ValidationException", "DescribeEndpoints needs a 'Host:' header in request");
+    }
+    response["Endpoints"][0]["Address"] = host_header;
     response["Endpoints"][0]["CachePeriodInMinutes"] = 1440;
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
