@@ -35,6 +35,8 @@ bool user_function::is_native() { return false; }
 
 bool user_function::is_aggregate() { return false; }
 
+bool user_function::requires_thread() const { return true; }
+
 bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) {
     return {};
 }

@@ -78,6 +78,8 @@ public:
         return fun()->execute(sf, _args);
     }
 
+    virtual bool requires_thread() override;
+
     scalar_function_selector(shared_ptr<functions::function> fun, std::vector<shared_ptr<selector>> arg_selectors)
             : abstract_function_selector_for<functions::scalar_function>(
                 dynamic_pointer_cast<functions::scalar_function>(std::move(fun)), std::move(arg_selectors)) {

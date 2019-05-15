@@ -50,6 +50,7 @@
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "unimplemented.hh"
+#include <seastar/core/thread.hh>
 
 namespace cql3 {
 
@@ -61,6 +62,8 @@ namespace selection {
 class selectors {
 public:
     virtual ~selectors() {}
+
+    virtual bool requires_thread() = 0;
 
     virtual bool is_aggregate() = 0;
 
@@ -255,6 +258,15 @@ private:
     const gc_clock::time_point _now;
     cql_serialization_format _cql_serialization_format;
 public:
+    template<typename Func>
+    auto with_thread_if_needed(Func&& func) {
+        if (_selectors->requires_thread()) {
+            return async(std::move(func));
+        } else {
+            return futurize_apply(std::move(func));
+        }
+    }
+
     class nop_filter {
     public:
         inline bool operator()(const selection&, const std::vector<bytes>&, const std::vector<bytes>&, const query::result_row_view&, const query::result_row_view*) const {

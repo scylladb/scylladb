@@ -71,6 +71,8 @@ public:
      */
     virtual bool is_native() = 0;
 
+    virtual bool requires_thread() const = 0;
+
     /**
      * Checks whether the function is an aggregate function or not.
      *

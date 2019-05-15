@@ -70,6 +70,9 @@ protected:
     }
 
 public:
+
+    virtual bool requires_thread() const;
+
     virtual const function_name& name() const override {
         return _name;
     }

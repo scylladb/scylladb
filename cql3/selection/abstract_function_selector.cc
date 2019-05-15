@@ -102,6 +102,10 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
     return make_shared<fun_selector_factory>(std::move(fun), std::move(factories));
 }
 
+bool scalar_function_selector::requires_thread() {
+    return fun()->requires_thread();
+}
+
 }
 
 }

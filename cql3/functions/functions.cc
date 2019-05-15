@@ -34,6 +34,7 @@
 #include "types/list.hh"
 #include "types/user.hh"
 #include "concrete_types.hh"
+#include "as_json_function.hh"
 
 namespace std {
 std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_types) {
@@ -51,6 +52,10 @@ namespace cql3 {
 namespace functions {
 
 static logging::logger log("cql3_fuctions");
+
+bool abstract_function::requires_thread() const { return false; }
+
+bool as_json_function::requires_thread() const { return false; }
 
 thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
 
