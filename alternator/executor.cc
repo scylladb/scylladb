@@ -576,6 +576,7 @@ public:
 
     void end_row() {
         _items.append(std::move(_item));
+        _item = Json::objectValue;
     }
 
     Json::Value get_items() && {
