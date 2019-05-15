@@ -23,12 +23,17 @@
 
 #include "cql3/statements/property_definitions.hh"
 #include "compaction_backlog_manager.hh"
+#include "compaction_strategy.hh"
+#include "database_fwd.hh"
+#include "db_clock.hh"
 
 namespace sstables {
 
 compaction_backlog_tracker& get_unimplemented_backlog_tracker();
 
 class sstable_set_impl;
+class compaction_descriptor;
+class resharding_descriptor;
 
 class compaction_strategy_impl {
     static constexpr float DEFAULT_TOMBSTONE_THRESHOLD = 0.2f;
@@ -67,9 +72,7 @@ protected:
 public:
     virtual ~compaction_strategy_impl() {}
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
-    virtual compaction_descriptor get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
-        return compaction_descriptor(std::move(candidates));
-    }
+    virtual compaction_descriptor get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates);
     virtual std::vector<resharding_descriptor> get_resharding_jobs(column_family& cf, std::vector<sstables::shared_sstable> candidates);
     virtual void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) { }
     virtual compaction_strategy_type type() const = 0;
@@ -89,19 +92,7 @@ public:
 
     // Check if a given sstable is entitled for tombstone compaction based on its
     // droppable tombstone histogram and gc_before.
-    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before) {
-        if (_disable_tombstone_compaction) {
-            return false;
-        }
-        // ignore sstables that were created just recently because there's a chance
-        // that expired tombstones still cover old data and thus cannot be removed.
-        // We want to avoid a compaction loop here on the same data by considering
-        // only old enough sstables.
-        if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
-            return false;
-        }
-        return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
-    }
+    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before);
 
     virtual compaction_backlog_tracker& get_backlog_tracker() = 0;
 };

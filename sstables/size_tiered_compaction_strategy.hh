@@ -23,6 +23,8 @@
 
 #include "compaction_strategy_impl.hh"
 #include "compaction.hh"
+#include "sstables/sstables.hh"
+#include "database.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
