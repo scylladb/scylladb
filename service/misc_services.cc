@@ -113,16 +113,6 @@ void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
 }
 
 future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() {
-    struct stat {
-        float h = 0;
-        float m = 0;
-        stat& operator+=(stat& o) {
-            h += o.h;
-            m += o.m;
-            return *this;
-        }
-    };
-
     auto non_system_filter = [&] (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& cf) {
         return _db.local().find_keyspace(cf.second->schema()->ks_name()).get_replication_strategy().get_type() != locator::replication_strategy_type::local;
     };
@@ -144,12 +134,13 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
 
     return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<utils::UUID, stat>(), sum_stats_per_cf).then([this, non_system_filter] (std::unordered_map<utils::UUID, stat> rates) mutable {
         _diff = 0;
+        _rates = std::move(rates);
         // set calculated rates on all shards
-        return _db.invoke_on_all([this, rates = std::move(rates), cpuid = engine().cpu_id(), non_system_filter] (database& db) {
+        return _db.invoke_on_all([this, cpuid = engine().cpu_id(), non_system_filter] (database& db) {
             sstring gstate;
             for (auto& cf : db.get_column_families() | boost::adaptors::filtered(non_system_filter)) {
-                auto it = rates.find(cf.first);
-                if (it == rates.end()) { // a table may be added before map/reduce compltes and this code runs
+                auto it = _rates.find(cf.first);
+                if (it == _rates.end()) { // a table may be added before map/reduce completes and this code runs
                     continue;
                 }
                 stat s = it->second;
@@ -172,6 +163,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
             return make_ready_future<>();
         });
     }).then([this] {
+        _rates.clear();
         // if max difference during this round is big schedule next recalculate earlier
         if (_diff < 0.01) {
             return std::chrono::milliseconds(2000);
