@@ -46,6 +46,8 @@ class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hit
     bool _stopped = false;
     float _diff = 0;
     std::unordered_map<utils::UUID, stat> _rates;
+    size_t _slen = 0;
+    std::string _gstate;
     future<> _done = make_ready_future();
 
     future<lowres_clock::duration> recalculate_hitrates();
