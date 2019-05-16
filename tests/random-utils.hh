@@ -34,6 +34,39 @@ inline std::default_random_engine& gen() {
     return seastar::testing::local_random_engine;
 }
 
+/// Produces random integers from a set of steps.
+///
+/// Each step has a weight and a uniform distribution that determines the range
+/// of values for that step. The probability of the generated number to be from
+/// any given step is Ws/Wt, where Ws is the weight of the step and Wt is the
+/// sum of the weight of all steps.
+template <typename Integer>
+class stepped_int_distribution {
+public:
+    struct step {
+        double weight;
+        std::pair<Integer, Integer> range;
+    };
+
+private:
+    std::discrete_distribution<Integer> _step_index_dist;
+    std::vector<std::uniform_int_distribution<Integer>> _step_ranges;
+
+public:
+    explicit stepped_int_distribution(std::initializer_list<step> steps) {
+        std::vector<double> step_weights;
+        for (auto& s : steps) {
+            step_weights.push_back(s.weight);
+            _step_ranges.emplace_back(s.range.first, s.range.second);
+        }
+        _step_index_dist = std::discrete_distribution<Integer>{step_weights.begin(), step_weights.end()};
+    }
+    template <typename RandomEngine>
+    Integer operator()(RandomEngine& engine) {
+        return _step_ranges[_step_index_dist(engine)](engine);
+    }
+};
+
 template<typename T>
 T get_int() {
     std::uniform_int_distribution<T> dist;
