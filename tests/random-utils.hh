@@ -98,6 +98,37 @@ T get_int(T min, T max) {
     return get_int(min, max, gen());
 }
 
+template <typename Real, typename RandomEngine>
+Real get_real(Real min, Real max, RandomEngine& engine) {
+    auto dist = std::uniform_real_distribution<Real>(min, max);
+    return dist(engine);
+}
+
+template <typename Real, typename RandomEngine>
+Real get_real(Real max, RandomEngine& engine) {
+    return get_real<Real>(Real{0}, max, engine);
+}
+
+template <typename Real, typename RandomEngine>
+Real get_real(RandomEngine& engine) {
+    return get_real<Real>(Real{0}, std::numeric_limits<Real>::max(), engine);
+}
+
+template <typename Real>
+Real get_real(Real min, Real max) {
+    return get_real<Real>(min, max, gen());
+}
+
+template <typename Real>
+Real get_real(Real max) {
+    return get_real<Real>(Real{0}, max, gen());
+}
+
+template <typename Real>
+Real get_real() {
+    return get_real<Real>(Real{0}, std::numeric_limits<Real>::max(), gen());
+}
+
 inline bool get_bool() {
     static std::bernoulli_distribution dist;
     return dist(gen());
