@@ -67,22 +67,35 @@ public:
     }
 };
 
+template<typename T, typename RandomEngine>
+T get_int(T min, T max, RandomEngine& engine) {
+    std::uniform_int_distribution<T> dist(min, max);
+    return dist(engine);
+}
+
+template<typename T, typename RandomEngine>
+T get_int(T max, RandomEngine& engine) {
+    return get_int(T{0}, max, engine);
+}
+
+template<typename T, typename RandomEngine>
+T get_int(RandomEngine& engine) {
+    return get_int(T{0}, std::numeric_limits<T>::max(), engine);
+}
+
 template<typename T>
 T get_int() {
-    std::uniform_int_distribution<T> dist;
-    return dist(gen());
+    return get_int(T{0}, std::numeric_limits<T>::max(), gen());
 }
 
 template<typename T>
 T get_int(T max) {
-    std::uniform_int_distribution<T> dist(0, max);
-    return dist(gen());
+    return get_int(T{0}, max, gen());
 }
 
 template<typename T>
 T get_int(T min, T max) {
-    std::uniform_int_distribution<T> dist(min, max);
-    return dist(gen());
+    return get_int(min, max, gen());
 }
 
 inline bool get_bool() {
