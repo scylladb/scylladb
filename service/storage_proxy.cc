@@ -817,6 +817,9 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         sm::make_queue_length("background_writes", _stats.background_writes,
                        sm::description("number of currently pending background write requests")),
 
+        sm::make_total_operations("writes_coordinator_outside_replica_set", _stats.writes_coordinator_outside_replica_set,
+                                  sm::description("number of CQL write requests which arrived to a non-replica and had to be forwarded to a replica")),
+
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
                        sm::description("number of currently throttled write requests")),
 
@@ -1018,7 +1021,18 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     slogger.trace("creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints, pending_endpoints);
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints ,pending_endpoints);
 
-    // filter out naturale_endpoints from pending_endpoint if later is not yet updated during node join
+    // Check if this node, which is serving as a coordinator for
+    // the mutation, is also a replica for the partition being
+    // changed. Mutations sent by drivers unaware of token
+    // distribution create a lot of network noise and thus should be
+    // accounted in the metrics.
+    if (std::find(natural_endpoints.begin(), natural_endpoints.end(),
+                  utils::fb_utilities::get_broadcast_address()) == natural_endpoints.end()) {
+
+        _stats.writes_coordinator_outside_replica_set++;
+    }
+
+    // filter out natural_endpoints from pending_endpoints if the latter is not yet updated during node join
     auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
         return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
     });
