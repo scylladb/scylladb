@@ -11,10 +11,10 @@ override_dh_auto_clean:
 
 override_dh_auto_install:
 	dh_auto_install
-	install -d $(CURDIR)/debian/scylla-server/usr/bin
-	ln -sf /opt/scylladb/bin/scylla $(CURDIR)/debian/scylla-server/usr/bin/scylla
-	ln -sf /opt/scylladb/bin/iotune $(CURDIR)/debian/scylla-server/usr/bin/iotune
-	ln -sf /usr/lib/scylla/scyllatop/scyllatop.py $(CURDIR)/debian/scylla-server/usr/bin/scyllatop
+	install -d $(CURDIR)/debian/{{product}}-server/usr/bin
+	ln -sf /opt/scylladb/bin/scylla $(CURDIR)/debian/{{product}}-server/usr/bin/scylla
+	ln -sf /opt/scylladb/bin/iotune $(CURDIR)/debian/{{product}}-server/usr/bin/iotune
+	ln -sf /usr/lib/scylla/scyllatop/scyllatop.py $(CURDIR)/debian/{{product}}-server/usr/bin/scyllatop
 
 override_dh_installinit:
 {{#scylla}}
