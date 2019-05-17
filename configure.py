@@ -1355,11 +1355,16 @@ with open(buildfile, 'w') as f:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
 
-        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune: ninja | always\n'
+        f.write('build seastar/build/{mode}/libseastar.a: ninja | always\n'
                 .format(**locals()))
         f.write('  pool = seastar_pool\n')
         f.write('  subdir = seastar/build/{mode}\n'.format(**locals()))
-        f.write('  target = seastar seastar_testing app_iotune\n'.format(**locals()))
+        f.write('  target = seastar seastar_testing\n'.format(**locals()))
+        f.write('build seastar/build/{mode}/apps/iotune/iotune: ninja\n'
+                .format(**locals()))
+        f.write('  pool = seastar_pool\n')
+        f.write('  subdir = seastar/build/{mode}\n'.format(**locals()))
+        f.write('  target = iotune\n'.format(**locals()))
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
             ''').format(**locals()))
