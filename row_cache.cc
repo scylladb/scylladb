@@ -982,7 +982,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                                 _prev_snapshot_pos = {};
                             } else {
                                 _update_section(_tracker.region(), [&] {
-                                    _prev_snapshot_pos = dht::ring_position(m.partitions.begin()->key());
+                                    _prev_snapshot_pos = m.partitions.begin()->key();
                                 });
                             }
                         });
@@ -1106,14 +1106,57 @@ future<> row_cache::invalidate(external_updater eu, const dht::partition_range& 
 
 future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&& ranges) {
     return do_update(std::move(eu), [this, ranges = std::move(ranges)] {
-        auto on_failure = defer([this] { this->clear_now(); });
-        with_linearized_managed_bytes([&] {
+        return seastar::async([this, ranges = std::move(ranges)] {
+            auto on_failure = defer([this] {
+                this->clear_now();
+                _prev_snapshot_pos = {};
+                _prev_snapshot = {};
+            });
+
             for (auto&& range : ranges) {
-                this->invalidate_unwrapped(range);
+                _prev_snapshot_pos = dht::ring_position_view::for_range_start(range);
+                seastar::thread::maybe_yield();
+
+                while (true) {
+                    auto done = with_linearized_managed_bytes([&] {
+                        return _update_section(_tracker.region(), [&] {
+                            auto cmp = cache_entry::compare(_schema);
+                            auto it = _partitions.lower_bound(*_prev_snapshot_pos, cmp);
+                            auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
+                            return with_allocator(_tracker.allocator(), [&] {
+                                auto deleter = current_deleter<cache_entry>();
+                                while (it != end) {
+                                    it = _partitions.erase_and_dispose(it, [&] (cache_entry* p) mutable {
+                                        _tracker.on_partition_erase();
+                                        p->evict(_tracker);
+                                        deleter(p);
+                                    });
+                                    // it != end is necessary for correctness. We cannot set _prev_snapshot_pos to end->position()
+                                    // because after resuming something may be inserted before "end" which falls into the next range.
+                                    if (need_preempt() && it != end) {
+                                        with_allocator(standard_allocator(), [&] {
+                                            _prev_snapshot_pos = it->key();
+                                        });
+                                        break;
+                                    }
+                                }
+                                assert(it != _partitions.end());
+                                _tracker.clear_continuity(*it);
+                                return stop_iteration(it == end);
+                            });
+                        });
+                    });
+                    if (done == stop_iteration::yes) {
+                        break;
+                    }
+                    // _prev_snapshot_pos must be updated at this point such that every position < _prev_snapshot_pos
+                    // is already invalidated and >= _prev_snapshot_pos is not yet invalidated.
+                    seastar::thread::yield();
+                }
             }
+
+            on_failure.cancel();
         });
-        on_failure.cancel();
-        return make_ready_future<>();
     });
 }
 
