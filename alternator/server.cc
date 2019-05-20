@@ -109,6 +109,7 @@ void server::set_routes(routes& r) {
     };
 
     api_handler* handler = new api_handler([this, routes = std::move(routes)](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        _executor.local()._stats.total_operations++;
         slogger.trace("Raw request: {} ({})", req->content, req->content_length);
         sstring target = req->get_header(TARGET);
         std::vector<sstring> split_target = split(target, ".");
@@ -118,6 +119,7 @@ void server::set_routes(routes& r) {
         slogger.trace("Request type: {}", op);
         auto callback_it = routes.find(op);
         if (callback_it == routes.end()) {
+            _executor.local()._stats.unsupported_operations++;
             throw api_error("UnknownOperationException",
                     format("Unsupported operation {}", op));
         }

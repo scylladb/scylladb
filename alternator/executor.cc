@@ -175,6 +175,7 @@ static schema_ptr get_table(service::storage_proxy& proxy, const Json::Value& re
 }
 
 future<json::json_return_type> executor::describe_table(std::string content) {
+    _stats.api_operations.describe_table++;
     Json::Value request = json::to_json_value(content);
     elogger.trace("Describing table {}", request.toStyledString());
 
@@ -202,6 +203,7 @@ future<json::json_return_type> executor::describe_table(std::string content) {
 }
 
 future<json::json_return_type> executor::delete_table(std::string content) {
+    _stats.api_operations.delete_table++;
     Json::Value request = json::to_json_value(content);
     elogger.trace("Deleting table {}", request.toStyledString());
 
@@ -251,6 +253,7 @@ static void add_column(schema_builder& builder, const std::string& name, const J
 }
 
 future<json::json_return_type> executor::create_table(std::string content) {
+    _stats.api_operations.create_table++;
     Json::Value table_info = json::to_json_value(content);
     elogger.trace("Creating table {}", table_info.toStyledString());
 
@@ -341,6 +344,7 @@ static mutation make_item_mutation(const Json::Value& item, schema_ptr schema) {
 }
 
 future<json::json_return_type> executor::put_item(std::string content) {
+    _stats.api_operations.put_item++;
     Json::Value update_info = json::to_json_value(content);
     elogger.trace("Updating value {}", update_info.toStyledString());
 
@@ -369,6 +373,7 @@ static schema_ptr get_table_from_batch_request(const service::storage_proxy& pro
 }
 
 future<json::json_return_type> executor::batch_write_item(std::string content) {
+    _stats.api_operations.batch_write_item++;
     Json::Value batch_info = json::to_json_value(content);
     Json::Value& request_items = batch_info["RequestItems"];
 
@@ -395,6 +400,7 @@ future<json::json_return_type> executor::batch_write_item(std::string content) {
 }
 
 future<json::json_return_type> executor::update_item(std::string content) {
+    _stats.api_operations.update_item++;
     Json::Value update_info = json::to_json_value(content);
     elogger.trace("update_item {}", update_info.toStyledString());
     schema_ptr schema = get_table(_proxy, update_info);
@@ -491,6 +497,7 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
 }
 
 future<json::json_return_type> executor::get_item(std::string content) {
+    _stats.api_operations.get_item++;
     Json::Value table_info = json::to_json_value(content);
     elogger.trace("Getting item {}", table_info.toStyledString());
 
@@ -672,6 +679,7 @@ static future<json::json_return_type> do_query(schema_ptr schema,
 // 3. Proper timeouts instead of gc_clock::now() and db::no_timeout
 // 4. Implement parallel scanning via Segments
 future<json::json_return_type> executor::scan(std::string content) {
+    _stats.api_operations.scan++;
     Json::Value request_info = json::to_json_value(content);
     elogger.trace("Scanning {}", request_info.toStyledString());
 
@@ -816,6 +824,7 @@ calculate_bounds(schema_ptr schema, const Json::Value& conditions) {
 }
 
 future<json::json_return_type> executor::query(std::string content) {
+    _stats.api_operations.query++;
     Json::Value request_info = json::to_json_value(content);
     elogger.trace("Querying {}", request_info.toStyledString());
 
@@ -845,6 +854,7 @@ static void validate_limit(int limit) {
 }
 
 future<json::json_return_type> executor::list_tables(std::string content) {
+    _stats.api_operations.list_tables++;
     Json::Value table_info = json::to_json_value(content);
     elogger.trace("Listing tables {}", table_info.toStyledString());
 
@@ -892,6 +902,7 @@ future<json::json_return_type> executor::list_tables(std::string content) {
 }
 
 future<json::json_return_type> executor::describe_endpoints(std::string content, std::string host_header) {
+    _stats.api_operations.describe_endpoints++;
     Json::Value response;
     // Without having any configuration parameter to say otherwise, we tell
     // the user to return to the same endpoint they used to reach us. The only
