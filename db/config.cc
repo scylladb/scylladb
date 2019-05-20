@@ -303,6 +303,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Related information: Configuring memtable throughput")
     , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Used, true,
         "Whether or not to re-use commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n")
+    , commitlog_use_o_dsync(this, "commitlog_use_o_dsync", value_status::Used, true,
+        "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
     /* Compaction settings */
     /* Related information: Configuring compaction */
     , compaction_preheat_key_cache(this, "compaction_preheat_key_cache", value_status::Unused, true,

@@ -130,6 +130,7 @@ public:
         std::string fname_prefix = descriptor::FILENAME_PREFIX;
 
         bool reuse_segments = true;
+        bool use_o_dsync = false;
 
         const db::extensions * extensions = nullptr;
     };

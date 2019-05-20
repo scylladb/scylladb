@@ -131,6 +131,7 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.mode = cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC;
     c.extensions = &cfg.extensions();
     c.reuse_segments = cfg.commitlog_reuse_segments();
+    c.use_o_dsync = cfg.commitlog_use_o_dsync();
 
     return c;
 }
@@ -331,6 +332,7 @@ public:
     using buffer_type = fragmented_temporary_buffer;
 
     buffer_type acquire_buffer(size_t s);
+    temporary_buffer<char> allocate_single_buffer(size_t);
 
     future<std::vector<descriptor>> list_descriptors(sstring dir);
 
@@ -1258,10 +1260,47 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         return fut;
     });
 
-    return fut.then([this, d, active, filename](file f) {
+    return fut.then([this, d, active, filename, flags](file f) {
         f = make_checked_file(commit_error_handler, f);
         // xfs doesn't like files extended betond eof, so enlarge the file
-        return f.truncate(max_size).then([this, d, active, f, filename] () mutable {
+        auto fut = make_ready_future<>();
+        // If file is opened with O_DSYNC, we should explicitly write zeros
+        // instead of just truncate/fallocate. Otherwise we get crappy
+        // behaviour.
+        if ((flags & open_flags::dsync) != open_flags{}) {
+            clogger.trace("Pre-writing {}KB to segment {}", max_size/1024, filename);
+            // would be super nice if we just could mmap(/dev/zero) and do sendto
+            // instead of this, but for now we must do explicit buffer writes.
+            fut = f.allocate(0, max_size).then([f, this]() mutable {
+                static constexpr size_t buf_size = 4 * segment::alignment;
+                return do_with(allocate_single_buffer(buf_size), max_size, [this, f](temporary_buffer<char>& buf, uint64_t& rem) mutable {
+                    std::fill(buf.get_write(), buf.get_write() + buf.size(), 0);
+                    return repeat([this, f, &rem, &buf]() mutable {
+                        if (rem == 0) {
+                            return make_ready_future<stop_iteration>(stop_iteration::yes);
+                        }
+                        static constexpr size_t max_write = 128 * 1024;
+                        auto n = std::min(max_write / buf_size, 1 + rem / buf_size);
+
+                        std::vector<iovec> v;
+                        v.reserve(n);
+                        size_t m = 0;
+                        while (m < rem && n < max_write) {
+                            auto s = std::min(rem - m, buf_size);
+                            v.emplace_back(iovec{ buf.get_write(), s});
+                            m += s;
+                        }
+                        return f.dma_write(max_size - rem, std::move(v)).then([&rem](size_t s) {
+                            rem -= s;
+                            return stop_iteration::no;
+                        });
+                    });
+                });
+            });
+        } else {
+            fut = f.truncate(max_size);
+        }
+        return fut.then([this, d, active, f, filename] () mutable {
             auto s = make_shared<segment>(this->shared_from_this(), d, std::move(f), active);
             return make_ready_future<sseg_ptr>(s);
         });
@@ -1279,6 +1318,10 @@ future<> db::commitlog::segment_manager::rename_file(sstring from, sstring to) c
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
     descriptor d(next_id(), cfg.fname_prefix);
     auto dst = filename(d);
+    auto flags = open_flags::wo;
+    if (cfg.use_o_dsync) {
+        flags |= open_flags::dsync;
+    }
 
     if (!_recycled_segments.empty()) {
         auto src = std::move(_recycled_segments.front());
@@ -1289,11 +1332,11 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         // out-of-order files. (Sort does not help).
         clogger.debug("Using recycled segment file {} -> {}", src, dst);
         return rename_file(std::move(src), dst).then([=] {
-            return allocate_segment_ex(d, dst, open_flags::wo, false);
+            return allocate_segment_ex(d, dst, flags, false);
         });
     }
 
-    return allocate_segment_ex(d, dst, open_flags::wo|open_flags::create, active);
+    return allocate_segment_ex(d, dst, flags|open_flags::create, active);
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
@@ -1611,6 +1654,9 @@ uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
     });
 }
 
+temporary_buffer<char> db::commitlog::segment_manager::allocate_single_buffer(size_t s) {
+    return temporary_buffer<char>::aligned(segment::alignment, s);
+}
 
 db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acquire_buffer(size_t s) {
     s = align_up(s, segment::default_size);
@@ -1619,11 +1665,7 @@ db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acqu
     std::vector<temporary_buffer<char>> buffers;
     buffers.reserve(fragment_count);
     while (buffers.size() < fragment_count) {
-        auto a = ::memalign(segment::alignment, segment::default_size);
-        if (a == nullptr) {
-            throw std::bad_alloc();
-        }
-        buffers.emplace_back(static_cast<char*>(a), segment::default_size, make_free_deleter(a));
+        buffers.emplace_back(allocate_single_buffer(segment::default_size));
     }
     clogger.trace("Allocated {} k buffer", s / 1024);
     return fragmented_temporary_buffer(std::move(buffers), s);
