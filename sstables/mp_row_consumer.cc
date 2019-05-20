@@ -67,8 +67,6 @@ atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value) {
         throw marshal_exception("encountered remote shards in a counter cell");
     }
 
-    std::vector<counter_shard> shards;
-    shards.reserve(shard_count);
     counter_cell_builder ccb(shard_count);
     for (auto i = 0u; i < shard_count; i++) {
         auto id_hi = in.read<int64_t>();
