@@ -44,6 +44,14 @@ namespace sstables {
 atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value) {
     static constexpr size_t shard_size = 32;
 
+    if (value.empty()) {
+        // This will never happen in a correct MC sstable but
+        // we had a bug #4363 that caused empty counters
+        // to be incorrectly stored inside sstables.
+        counter_cell_builder ccb;
+        return ccb.build(timestamp);
+    }
+
     data_input in(value);
 
     auto header_size = in.read<int16_t>();
