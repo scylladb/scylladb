@@ -251,7 +251,7 @@ verify_seastar_io_scheduler(bool has_max_io_requests, bool has_properties, bool 
                     + cause + "\n"
                     + "To properly configure the I/O Scheduler, run the scylla_io_setup utility shipped with Scylla.\n";
 
-        sstring devmode_msg = msg + "To ignore this, see the developer_mode configuration option.";
+        sstring devmode_msg = msg + "To ignore this, see the developer-mode configuration option.";
         if (developer_mode) {
             startlog.warn(msg.c_str());
         } else {
