@@ -27,35 +27,6 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/queue.hh>
 
-class queue_reader final : public flat_mutation_reader::impl {
-    seastar::queue<mutation_fragment_opt>& _mq;
-public:
-    queue_reader(schema_ptr s, seastar::queue<mutation_fragment_opt>& mq)
-        : impl(std::move(s))
-        , _mq(mq) {
-    }
-    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            return _mq.pop_eventually().then([this] (mutation_fragment_opt mopt) {
-                if (!mopt) {
-                    _end_of_stream = true;
-                } else {
-                    push_mutation_fragment(std::move(*mopt));
-                }
-            });
-        });
-    }
-    virtual void next_partition() override {
-        throw std::bad_function_call();
-    }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
-    }
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
-    }
-};
-
 class shard_writer {
 private:
     schema_ptr _s;
@@ -138,7 +109,7 @@ multishard_writer::multishard_writer(
 }
 
 future<> multishard_writer::make_shard_writer(unsigned shard) {
-    auto this_shard_reader = make_foreign(std::make_unique<flat_mutation_reader>(make_flat_mutation_reader<queue_reader>(_s, _queues[shard])));
+    auto this_shard_reader = make_foreign(std::make_unique<flat_mutation_reader>(make_queue_reader(_s, _queues[shard])));
     return smp::submit_to(shard, [gs = global_schema_ptr(_s),
             consumer = _consumer,
             reader = std::move(this_shard_reader)] () mutable {

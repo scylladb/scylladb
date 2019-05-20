@@ -507,3 +507,5 @@ flat_mutation_reader make_multishard_combining_reader(
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state = nullptr,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+
+flat_mutation_reader make_queue_reader(schema_ptr s, queue<mutation_fragment_opt>& mq);

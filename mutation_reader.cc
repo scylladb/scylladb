@@ -1565,3 +1565,36 @@ flat_mutation_reader make_multishard_combining_reader(
     return make_flat_mutation_reader<multishard_combining_reader>(std::move(lifecycle_policy), partitioner, std::move(schema), pr, ps, pc,
             std::move(trace_state), fwd_mr);
 }
+
+class queue_reader final : public flat_mutation_reader::impl {
+    seastar::queue<mutation_fragment_opt>& _mq;
+public:
+    queue_reader(schema_ptr s, seastar::queue<mutation_fragment_opt>& mq)
+        : impl(std::move(s))
+        , _mq(mq) {
+    }
+    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+            return _mq.pop_eventually().then([this] (mutation_fragment_opt mopt) {
+                if (!mopt) {
+                    _end_of_stream = true;
+                } else {
+                    push_mutation_fragment(std::move(*mopt));
+                }
+            });
+        });
+    }
+    virtual void next_partition() override {
+        throw std::bad_function_call();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
+        throw std::bad_function_call();
+    }
+    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
+        throw std::bad_function_call();
+    }
+};
+
+flat_mutation_reader make_queue_reader(schema_ptr s, queue<mutation_fragment_opt>& mq) {
+    return make_flat_mutation_reader<queue_reader>(std::move(s), mq);
+}
