@@ -18,13 +18,15 @@
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 
+#include "stats.hh"
+
 namespace alternator {
 
 class executor {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
-
 public:
+    stats _stats;
     static constexpr auto ATTRS_COLUMN_NAME = "attrs";
     static constexpr auto KEYSPACE_NAME = "alternator";
 

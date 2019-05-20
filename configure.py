@@ -772,6 +772,7 @@ api = ['api/api.cc',
        'api/api-doc/config.json',
        'alternator/server.cc',
        'alternator/executor.cc',
+       'alternator/stats.cc',
        ]
 
 idls = ['idl/gossip_digest.idl.hh',
