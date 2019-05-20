@@ -40,6 +40,7 @@ public:
     future<json::json_return_type> scan(std::string content);
     future<json::json_return_type> describe_endpoints(std::string content, std::string host_header);
     future<json::json_return_type> batch_write_item(std::string content);
+    future<json::json_return_type> query(std::string content);
 
     future<> start();
     future<> stop() { return make_ready_future<>(); }

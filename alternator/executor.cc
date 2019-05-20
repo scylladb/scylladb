@@ -693,6 +693,151 @@ future<json::json_return_type> executor::scan(std::string content) {
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl);
 }
 
+enum class comparison_operator_type {
+    EQ, NE, LE, LT, GE, GT, IN, BETWEEN, CONTAINS, IS_NULL, NOT_NULL, BEGINS_WITH
+};
+
+static comparison_operator_type get_comparison_operator(const Json::Value& comparison_operator) {
+    static std::unordered_map<std::string, comparison_operator_type> ops = {
+            {"EQ", comparison_operator_type::EQ},
+            {"LE", comparison_operator_type::LE},
+            {"LT", comparison_operator_type::LT},
+            {"GE", comparison_operator_type::GE},
+            {"GT", comparison_operator_type::GT},
+            {"BETWEEN", comparison_operator_type::BETWEEN},
+            {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
+    }; //TODO(sarna): NE, IN, CONTAINS, NULL, NOT_NULL
+    if (!comparison_operator.isString()) {
+        throw api_error("ValidationException", format("Invalid comparison operator definition {}", comparison_operator.toStyledString()));
+    }
+    std::string op = comparison_operator.asString();
+    auto it = ops.find(op);
+    if (it == ops.end()) {
+        throw api_error("ValidationException", format("Unsupported comparison operator {}", op));
+    }
+    return it->second;
+}
+
+static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, comparison_operator_type op, const Json::Value& attrs) {
+    if (attrs.size() != 1) {
+        throw api_error("ValidationException", format("Only a single attribute is allowed for a hash key restriction: {}", attrs.toStyledString()));
+    }
+    bytes raw_value = pk_cdef.type->from_string(attrs[0][type_to_string(pk_cdef.type)].asString());
+    partition_key pk = partition_key::from_singular(*schema, pk_cdef.type->deserialize(raw_value));
+    auto decorated_key = dht::global_partitioner().decorate_key(*schema, pk);
+    if (op != comparison_operator_type::EQ) {
+        throw api_error("ValidationException", format("Hash key {} can only be restricted with equality operator (EQ)"));
+    }
+    return dht::partition_range(decorated_key);
+}
+
+static query::clustering_range calculate_ck_bound(schema_ptr schema, const column_definition& ck_cdef, comparison_operator_type op, const Json::Value& attrs) {
+    const size_t expected_attrs_size = (op == comparison_operator_type::BETWEEN) ? 2 : 1;
+    if (attrs.size() != expected_attrs_size) {
+        throw api_error("ValidationException", format("{} arguments expected for a sort key restriction: {}", expected_attrs_size, attrs.toStyledString()));
+    }
+    bytes raw_value = ck_cdef.type->from_string(attrs[0][type_to_string(ck_cdef.type)].asString());
+    clustering_key ck = clustering_key::from_singular(*schema, ck_cdef.type->deserialize(raw_value));
+    switch (op) {
+    case comparison_operator_type::EQ:
+        return query::clustering_range(ck);
+    case comparison_operator_type::LE:
+        return query::clustering_range::make_ending_with(query::clustering_range::bound(ck));
+    case comparison_operator_type::LT:
+        return query::clustering_range::make_ending_with(query::clustering_range::bound(ck, false));
+    case comparison_operator_type::GE:
+        return query::clustering_range::make_starting_with(query::clustering_range::bound(ck));
+    case comparison_operator_type::GT:
+        return query::clustering_range::make_starting_with(query::clustering_range::bound(ck, false));
+    case comparison_operator_type::BETWEEN: {
+        bytes raw_upper_limit = ck_cdef.type->from_string(attrs[1][type_to_string(ck_cdef.type)].asString());
+        clustering_key upper_limit = clustering_key::from_singular(*schema, ck_cdef.type->deserialize(raw_upper_limit));
+        return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit));
+    }
+    case comparison_operator_type::BEGINS_WITH: {
+        if (raw_value.empty()) {
+            return query::clustering_range::make_open_ended_both_sides();
+        }
+        // NOTICE(sarna): A range starting with given prefix and ending (non-inclusively) with a string "incremented" by a single
+        // character at the end. Throws for NUMBER instances.
+        if (!ck_cdef.type->is_compatible_with(*utf8_type)) {
+            throw api_error("ValidationException", format("BEGINS_WITH operator cannot be applied to type {}", type_to_string(ck_cdef.type)));
+        }
+        std::string raw_upper_limit_str = attrs[0][type_to_string(ck_cdef.type)].asString();
+        bytes raw_upper_limit = ck_cdef.type->from_string(raw_upper_limit_str);
+        if (raw_upper_limit.back() != std::numeric_limits<bytes::value_type>::max()) {
+            raw_upper_limit.back()++;
+        } else {
+            raw_upper_limit.resize(raw_upper_limit.size() + 1);
+        }
+        clustering_key upper_limit = clustering_key::from_singular(*schema, ck_cdef.type->deserialize(raw_upper_limit));
+        return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit, false));
+    }
+    default:
+        throw api_error("ValidationException", format("Unknown primary key bound passed: {}", int(op)));
+    }
+}
+
+// Calculates primary key bounds from the list of conditions
+static std::pair<dht::partition_range_vector, std::vector<query::clustering_range>>
+calculate_bounds(schema_ptr schema, const Json::Value& conditions) {
+    dht::partition_range_vector partition_ranges;
+    std::vector<query::clustering_range> ck_bounds;
+
+    for (auto it = conditions.begin(); it != conditions.end(); ++it) {
+        std::string key = it.key().asString();
+        const Json::Value& condition = *it;
+
+        Json::Value comp_definition = condition.get("ComparisonOperator", Json::Value());
+        Json::Value attr_list = condition.get("AttributeValueList", Json::Value(Json::arrayValue));
+
+        auto op = get_comparison_operator(comp_definition);
+
+        const column_definition& pk_cdef = schema->partition_key_columns().front();
+        const column_definition* ck_cdef = schema->clustering_key_size() > 0 ? &schema->clustering_key_columns().front() : nullptr;
+        if (sstring(key) == pk_cdef.name_as_text()) {
+            if (!partition_ranges.empty()) {
+                throw api_error("ValidationException", "Currently only a single restriction per key is allowed");
+            }
+            partition_ranges.push_back(calculate_pk_bound(schema, pk_cdef, op, attr_list));
+        }
+        if (ck_cdef && sstring(key) == ck_cdef->name_as_text()) {
+            if (!ck_bounds.empty()) {
+                throw api_error("ValidationException", "Currently only a single restriction per key is allowed");
+            }
+            ck_bounds.push_back(calculate_ck_bound(schema, *ck_cdef, op, attr_list));
+        }
+    }
+    if (ck_bounds.empty()) {
+        ck_bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+    }
+
+    return {std::move(partition_ranges), std::move(ck_bounds)};
+}
+
+future<json::json_return_type> executor::query(std::string content) {
+    Json::Value request_info = json::to_json_value(content);
+    elogger.trace("Querying {}", request_info.toStyledString());
+
+    schema_ptr schema = get_table(_proxy, request_info);
+    //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
+    Json::Value attributes_to_get = request_info["AttributesToGet"];
+    Json::Value exclusive_start_key = request_info["ExclusiveStartKey"];
+    db::consistency_level cl = request_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    uint32_t limit = request_info.get("Limit", query::max_partitions).asUInt();
+    if (limit <= 0) {
+        throw api_error("ValidationException", "Limit must be greater than 0");
+    }
+
+    //FIXME(sarna): KeyConditions are deprecated in favor of KeyConditionExpression
+    const Json::Value& conditions = request_info["KeyConditions"];
+
+    auto [partition_ranges, ck_bounds] = calculate_bounds(schema, conditions);
+    auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
+
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl);
+}
+
 static void validate_limit(int limit) {
     if (limit < 1 || limit > 100) {
         throw api_error("ValidationException", "Limit must be greater than 0 and no greater than 100");
