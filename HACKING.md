@@ -22,6 +22,15 @@ Scylla depends on the system package manager for its development dependencies.
 
 Running `./install-dependencies.sh` (as root) installs the appropriate packages based on your Linux distribution.
 
+On Ubuntu and Debian based Linux distributions, some packages
+required to build Scylla are missing in the official upstream:
+
+- libthrift-dev and libthrift, version 0.9 or 0.10 (0.11 won't work)
+- antlr3-c++-dev
+
+Try running ```sudo ./scripts/scylla_current_repo``` to add Scylla upstream,
+and get the missing packages from it.
+
 ### Build system
 
 **Note**: Compiling Scylla requires, conservatively, 2 GB of memory per native
@@ -55,6 +64,7 @@ To save time -- for instance, to avoid compiling all unit tests -- you can also 
 
 ```bash
 $ ninja-build build/release/tests/schema_change_test
+$ ninja-build build/release/service/storage_proxy.o
 ```
 
 You can also specify a single mode. For example
@@ -194,7 +204,7 @@ cqlsh and nodetool. They are available at
 https://github.com/scylladb/scylla-tools-java and can be built with
 
 ```bash
-$ ./install-dependencies.sh
+$ sudo ./install-dependencies.sh
 $ ant jar
 ```
 

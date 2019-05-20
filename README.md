@@ -2,21 +2,22 @@
 
 ## Quick-start
 
+To get the build going quickly, Scylla offers a [frozen toolchain](tools/toolchain/README.md)
+which would build and run Scylla using a pre-configured Docker image.
+Using the frozen toolchain will also isolate all of the installed
+dependencies in a Docker container.
+Assuming you have met the toolchain prerequisites, which is running
+Docker in user mode, building and running is as easy as:
+
 ```bash
-$ git submodule update --init --recursive
-$ sudo ./install-dependencies.sh
-$ ./configure.py --mode=release
-$ ninja-build -j4 # Assuming 4 system threads.
-$ ./build/release/scylla
-$ # Rejoice!
-```
+$ ./tools/toolchain/dbuild ./configure.py
+$ ./tools/toolchain/dbuild ninja build/release/scylla
+$ ./tools/toolchain/dbuild ./build/release/scylla --developer-mode 1
+ ```
 
 Please see [HACKING.md](HACKING.md) for detailed information on building and developing Scylla.
 
-**Note**: GCC >= 8.1.1 is require to compile Scylla.
-
-**Note**: See [frozen toolchain](tools/toolchain/README.md) for a way to build and run
-   on an older distribution.
+**Note**: GCC >= 8.1.1 is required to compile Scylla.
 
 ## Running Scylla
 
@@ -80,4 +81,5 @@ docker run -p $(hostname -i):9042:9042 -i -t <image name>
 
 ## Contributing to Scylla
 
+[Hacking howto](HACKING.md)
 [Guidelines for contributing](CONTRIBUTING.md)
