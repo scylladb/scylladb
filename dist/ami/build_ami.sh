@@ -124,6 +124,11 @@ if [ $LOCALRPM -eq 1 ]; then
         cd ../..
         cp build/$PRODUCT-ami/build/RPMS/noarch/$PRODUCT-ami-`cat build/$PRODUCT-ami/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-ami/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/$PRODUCT-ami.noarch.rpm
     fi
+    if [ ! -f dist/ami/files/$PRODUCT-python3.x86_64.rpm ]; then
+        reloc/python3/build_reloc.sh
+        reloc/python3/build_rpm.sh
+        cp build/redhat/RPMS/x86_64/$PRODUCT-python3*.x86_64.rpm dist/ami/files/$PRODUCT-python3.x86_64.rpm
+    fi
 fi
 
 cd dist/ami
