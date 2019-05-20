@@ -617,6 +617,55 @@ static Json::Value encode_paging_state(const schema& schema, const service::page
     return last_evaluated_key;
 }
 
+static future<json::json_return_type> do_query(schema_ptr schema,
+        const Json::Value& exclusive_start_key,
+        dht::partition_range_vector&& partition_ranges,
+        std::vector<query::clustering_range>&& ck_bounds,
+        std::unordered_set<std::string>&& attrs_to_get,
+        uint32_t limit,
+        db::consistency_level cl) {
+    ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
+
+    partition_key pk = pk_from_json(exclusive_start_key, schema);
+    std::optional<clustering_key> ck;
+    if (schema->clustering_key_size() > 0) {
+        ck = ck_from_json(exclusive_start_key, schema);
+    }
+    if (!exclusive_start_key.empty()) {
+        paging_state = ::make_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+    }
+
+    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto selection = cql3::selection::selection::wildcard(schema);
+    auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), selection->get_query_options());
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+
+    //FIXME(sarna): This context will need to be provided once we start gathering statistics, authenticating, etc. Right now these are just stubs.
+    static thread_local cql3::cql_stats dummy_stats;
+    static thread_local service::client_state dummy_client_state{service::client_state::internal_tag()};
+    static thread_local service::query_state dummy_query_state(dummy_client_state, empty_service_permit());
+
+    command->slice.options.set<query::partition_slice::option::allow_short_read>();
+    auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
+    query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
+    ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr;
+    auto p = service::pager::query_pagers::pager(schema, selection, dummy_query_state, *query_options, command, std::move(partition_ranges), dummy_stats, filtering_restrictions);
+
+    return p->fetch_page(limit, gc_clock::now(), db::no_timeout).then(
+            [p, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), query_options = std::move(query_options)](std::unique_ptr<cql3::result_set> rs) mutable {
+        if (!p->is_exhausted()) {
+            rs->get_metadata().set_paging_state(p->state());
+        }
+
+        auto paging_state = rs->get_metadata().paging_state();
+        auto items = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get));
+        if (paging_state) {
+            items["LastEvaluatedKey"] = encode_paging_state(*schema, *paging_state);
+        }
+        return make_ready_future<json::json_return_type>(make_jsonable(std::move(items)));
+    });
+}
+
 // TODO(sarna):
 // 1. Paging must have 1MB boundary according to the docs. IIRC we do have a replica-side reply size limit though - verify.
 // 2. Filtering - by passing appropriately created restrictions to pager as a last parameter
@@ -636,51 +685,12 @@ future<json::json_return_type> executor::scan(std::string content) {
         throw api_error("ValidationException", "Limit must be greater than 0");
     }
 
-    partition_key pk = pk_from_json(exclusive_start_key, schema);
-    std::optional<clustering_key> ck;
-    if (schema->clustering_key_size() > 0) {
-        ck = ck_from_json(exclusive_start_key, schema);
-    }
+    auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
 
     dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
     std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
 
-    ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
-    if (!exclusive_start_key.empty()) {
-        paging_state = ::make_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
-    }
-
-    query::column_id_vector regular_columns{attrs_column(*schema).id};
-    auto selection = cql3::selection::selection::wildcard(schema);
-    auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
-
-    auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
-
-    //FIXME(sarna): This context will need to be provided once we start gathering statistics, authenticating, etc. Right now these are just stubs.
-    static thread_local cql3::cql_stats dummy_stats;
-    static thread_local service::client_state dummy_client_state{service::client_state::internal_tag()};
-    static thread_local service::query_state dummy_query_state(dummy_client_state, empty_service_permit());
-
-    command->slice.options.set<query::partition_slice::option::allow_short_read>();
-    auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
-    query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
-    ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr;
-    auto p = service::pager::query_pagers::pager(schema, selection, dummy_query_state, *query_options, command, std::move(partition_ranges), dummy_stats, filtering_restrictions);
-
-    return p->fetch_page(limit, gc_clock::now(), db::no_timeout).then(
-            [this, p, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), query_options = std::move(query_options)](std::unique_ptr<cql3::result_set> rs) mutable {
-        if (!p->is_exhausted()) {
-            rs->get_metadata().set_paging_state(p->state());
-        }
-
-        auto paging_state = rs->get_metadata().paging_state();
-        auto items = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get));
-        if (paging_state) {
-            items["LastEvaluatedKey"] = encode_paging_state(*schema, *paging_state);
-        }
-        return make_ready_future<json::json_return_type>(make_jsonable(std::move(items)));
-    });
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl);
 }
 
 static void validate_limit(int limit) {
