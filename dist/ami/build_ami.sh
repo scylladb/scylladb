@@ -17,6 +17,7 @@ print_usage() {
     exit 1
 }
 LOCALRPM=0
+REPO_FOR_INSTALL=
 while [ $# -gt 0 ]; do
     case "$1" in
         "--localrpm")
@@ -24,10 +25,12 @@ while [ $# -gt 0 ]; do
             shift 1
             ;;
         "--repo")
+            REPO_FOR_INSTALL=$2
             INSTALL_ARGS="$INSTALL_ARGS --repo $2"
             shift 2
             ;;
         "--repo-for-install")
+            REPO_FOR_INSTALL=$2
             INSTALL_ARGS="$INSTALL_ARGS --repo-for-install $2"
             shift 2
             ;;
@@ -129,6 +132,38 @@ if [ $LOCALRPM -eq 1 ]; then
         reloc/python3/build_rpm.sh
         cp build/redhat/RPMS/x86_64/$PRODUCT-python3*.x86_64.rpm dist/ami/files/$PRODUCT-python3.x86_64.rpm
     fi
+
+    SCYLLA_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} dist/ami/files/$PRODUCT.x86_64.rpm || true)
+    SCYLLA_AMI_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} dist/ami/files/$PRODUCT-ami.noarch.rpm || true)
+    SCYLLA_JMX_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} dist/ami/files/$PRODUCT-jmx.noarch.rpm || true)
+    SCYLLA_TOOLS_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} dist/ami/files/$PRODUCT-tools.noarch.rpm || true)
+    SCYLLA_PYTHON3_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} dist/ami/files/$PRODUCT-python3.x86_64.rpm || true)
+else
+    if [ -z "$REPO_FOR_INSTALL" ]; then
+        print_usage
+        exit 1
+    fi
+    if [ ! -f /usr/bin/yumdownloader ]; then
+        if is_redhat_variant; then
+            sudo yum install /usr/bin/yumdownloader
+        else
+            sudo apt-get install yum-utils
+        fi
+    fi
+    if [ ! -f /usr/bin/curl ]; then
+        pkg_install curl
+    fi
+    TMPREPO=$(mktemp -u -p /etc/yum.repos.d/ --suffix .repo)
+    sudo curl -o $TMPREPO $REPO_FOR_INSTALL
+    rm -rf build/ami_packages
+    mkdir -p build/ami_packages
+    yumdownloader --downloaddir build/ami_packages/ $PRODUCT $PRODUCT-kernel-conf $PRODUCT-conf $PRODUCT-server $PRODUCT-debuginfo $PRODUCT-ami $PRODUCT-jmx $PRODUCT-tools-core $PRODUCT-tools $PRODUCT-python3
+    sudo rm -f $TMPREPO
+    SCYLLA_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} build/ami_packages/$PRODUCT-[0-9]*.rpm || true)
+    SCYLLA_AMI_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} build/ami_packages/$PRODUCT-ami-*.rpm || true)
+    SCYLLA_JMX_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} build/ami_packages/$PRODUCT-jmx-*.rpm || true)
+    SCYLLA_TOOLS_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} build/ami_packages/$PRODUCT-tools-[0-9]*.rpm || true)
+    SCYLLA_PYTHON3_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} build/ami_packages/$PRODUCT-python3-*.rpm || true)
 fi
 
 cd dist/ami
@@ -153,4 +188,4 @@ if [ ! -d packer ]; then
     cd -
 fi
 
-env PACKER_LOG=1 PACKER_LOG_PATH=../../build/ami.log packer/packer build -var-file=variables.json -var install_args="$INSTALL_ARGS" -var region="$REGION" -var source_ami="$AMI" -var ssh_username="$SSH_USERNAME" scylla.json
+env PACKER_LOG=1 PACKER_LOG_PATH=../../build/ami.log packer/packer build -var-file=variables.json -var install_args="$INSTALL_ARGS" -var region="$REGION" -var source_ami="$AMI" -var ssh_username="$SSH_USERNAME" -var scylla_version="$SCYLLA_VERSION" -var scylla_ami_version="$SCYLLA_AMI_VERSION" -var scylla_jmx_version="$SCYLLA_JMX_VERSION" -var scylla_tools_version="$SCYLLA_TOOLS_VERSION" -var scylla_python3_version="$SCYLLA_PYTHON3_VERSION" scylla.json
