@@ -247,3 +247,13 @@ def test_get_item_wrong_key_type(test_table):
     # Should fail (missing sort key)
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.get_item(Key={'p': n})
+
+# Most of the tests here arbitrarily used a table with both hash and sort keys
+# (both strings). Let's check that a table with *only* a hash key works ok
+# too, for PutItem, GetItem, and UpdateItem.
+def test_only_hash_key(test_table_s):
+    s = random_string()
+    test_table_s.put_item(Item={'p': s, 'hello': 'world'})
+    assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'hello': 'world'}
+    test_table_s.update_item(Key={'p': s}, AttributeUpdates={'hi': {'Value': 'there', 'Action': 'PUT'}})
+    assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'hello': 'world', 'hi': 'there'}

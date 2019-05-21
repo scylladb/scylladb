@@ -89,6 +89,16 @@ def test_table(dynamodb):
     # anyway.
     table.delete()
 
+# The following fixtures test_table_* are similar to test_table but create
+# tables with different key schemas.
+@pytest.fixture(scope="session")
+def test_table_s(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
+    yield table
+    table.delete()
+
 @pytest.fixture(scope="session")
 def test_2_tables(dynamodb):
     tables = [create_test_table(dynamodb,
