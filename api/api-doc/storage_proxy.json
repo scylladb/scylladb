@@ -792,6 +792,36 @@
       ]
     },
     {
+      "path": "/storage_proxy/metrics/cas_read/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get CAS read rate and latency histogram",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_cas_read_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/view_write/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get view write rate and latency histogram",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_view_write_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/storage_proxy/metrics/range/moving_average_histogram",
       "operations": [
         {
@@ -949,6 +979,21 @@
           "summary": "Get write metrics",
           "$ref": "#/utils/rate_moving_average_and_histogram",
           "nickname": "get_write_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/cas_write/moving_average_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get CAS write rate and latency histogram",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_cas_write_metrics_latency_histogram",
           "produces": [
             "application/json"
           ],
