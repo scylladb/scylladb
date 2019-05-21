@@ -478,6 +478,13 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
     query::result_view::consume(*query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
 
     auto result_set = builder.build();
+    if (result_set->empty()) {
+        // If there is no matching item, we're supposed to return an empty
+        // object without an Item member - not one with an empty Item member
+        return Json::objectValue;
+    }
+    // FIXME: I think this can't really be a loop, there should be exactly
+    // one result after above we handled the 0 result case
     for (auto& result_row : result_set->rows()) {
         const auto& columns = selection.get_columns();
         auto column_it = columns.begin();
