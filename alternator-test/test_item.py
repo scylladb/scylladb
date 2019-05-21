@@ -9,6 +9,8 @@ from decimal import Decimal
 
 def random_string(len=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(len))
+def random_bytes(len=10):
+    return bytearray(random.getrandbits(8) for _ in xrange(len))
 
 # Basic test for creating a new item with a random name, and reading it back
 # with strong consistency.
@@ -174,3 +176,56 @@ def test_get_item_missing_item(test_table):
     p = random_string()
     c = random_string()
     assert not "Item" in test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
+
+# Test that if we have a table with string hash and sort keys, we can't read
+# or write items with other key types to it.
+def test_put_item_wrong_key_type(test_table):
+    b = random_bytes()
+    s = random_string()
+    n = Decimal("3.14")
+    # Should succeed (correct key types)
+    test_table.put_item(Item={'p': s, 'c': s})
+    assert test_table.get_item(Key={'p': s, 'c': s}, ConsistentRead=True)['Item'] == {'p': s, 'c': s}
+    # Should fail (incorrect hash key types)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.put_item(Item={'p': b, 'c': s})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.put_item(Item={'p': n, 'c': s})
+    # Should fail (incorrect sort key types)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.put_item(Item={'p': s, 'c': b})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.put_item(Item={'p': s, 'c': n})
+def test_update_item_wrong_key_type(test_table):
+    b = random_bytes()
+    s = random_string()
+    n = Decimal("3.14")
+    # Should succeed (correct key types)
+    test_table.update_item(Key={'p': s, 'c': s}, AttributeUpdates={})
+    assert test_table.get_item(Key={'p': s, 'c': s}, ConsistentRead=True)['Item'] == {'p': s, 'c': s}
+    # Should fail (incorrect hash key types)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.update_item(Key={'p': b, 'c': s}, AttributeUpdates={})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.update_item(Key={'p': n, 'c': s}, AttributeUpdates={})
+    # Should fail (incorrect sort key types)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.update_item(Key={'p': s, 'c': b}, AttributeUpdates={})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.update_item(Key={'p': s, 'c': n}, AttributeUpdates={})
+def test_get_item_wrong_key_type(test_table):
+    b = random_bytes()
+    s = random_string()
+    n = Decimal("3.14")
+    # Should succeed (correct key types) but have empty result
+    assert not "Item" in test_table.get_item(Key={'p': s, 'c': s}, ConsistentRead=True)
+    # Should fail (incorrect hash key types)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'p': b, 'c': s})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'p': n, 'c': s})
+    # Should fail (incorrect sort key types)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'p': s, 'c': b})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'p': s, 'c': n})

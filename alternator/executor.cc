@@ -298,11 +298,32 @@ future<json::json_return_type> executor::create_table(std::string content) {
     });
 }
 
+static bytes get_key_column_value(const Json::Value& item, const column_definition& column) {
+    std::string column_name = column.name_as_text();
+    std::string expected_type = type_to_string(column.type);
+
+    Json::Value key_typed_value = item.get(column_name, Json::nullValue);
+    if (!key_typed_value.isObject() || key_typed_value.size() != 1) {
+        throw api_error("ValidationException",
+                format("Missing or invalid value object for key column {}: {}",
+                        column_name, item.toStyledString()));
+    }
+    auto it = key_typed_value.begin();
+    if (it.key().asString() != expected_type) {
+        throw api_error("ValidationException",
+                format("Expected type {} for key column {}, got type {}",
+                        expected_type, column_name, it.key().asString()));
+    }
+    // FIXME: if expected_type is B, we need to do base64 decoding!
+    return column.type->from_string(it->asString());
+
+}
+
 static partition_key pk_from_json(const Json::Value& item, schema_ptr schema) {
     std::vector<bytes> raw_pk;
+    // FIXME: this is a loop, but we really allow only one partition key column.
     for (const column_definition& cdef : schema->partition_key_columns()) {
-        std::string value_str = item[cdef.name_as_text()][type_to_string(cdef.type)].asString();
-        bytes raw_value = cdef.type->from_string(value_str);
+        bytes raw_value = get_key_column_value(item, cdef);
         raw_pk.push_back(std::move(raw_value));
     }
    return partition_key::from_exploded(raw_pk);
@@ -313,9 +334,9 @@ static clustering_key ck_from_json(const Json::Value& item, schema_ptr schema) {
         return clustering_key::make_empty();
     }
     std::vector<bytes> raw_ck;
+    // FIXME: this is a loop, but we really allow only one clustering key column.
     for (const column_definition& cdef : schema->clustering_key_columns()) {
-        std::string value_str = item[cdef.name_as_text()][type_to_string(cdef.type)].asString();
-        bytes raw_value = cdef.type->from_string(value_str);
+        bytes raw_value = get_key_column_value(item,  cdef);
         raw_ck.push_back(std::move(raw_value));
     }
 
@@ -650,12 +671,12 @@ static future<json::json_return_type> do_query(schema_ptr schema,
         db::consistency_level cl) {
     ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
 
-    partition_key pk = pk_from_json(exclusive_start_key, schema);
-    std::optional<clustering_key> ck;
-    if (schema->clustering_key_size() > 0) {
-        ck = ck_from_json(exclusive_start_key, schema);
-    }
     if (!exclusive_start_key.empty()) {
+        partition_key pk = pk_from_json(exclusive_start_key, schema);
+        std::optional<clustering_key> ck;
+        if (schema->clustering_key_size() > 0) {
+            ck = ck_from_json(exclusive_start_key, schema);
+        }
         paging_state = ::make_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
