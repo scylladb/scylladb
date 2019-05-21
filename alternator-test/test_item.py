@@ -196,6 +196,12 @@ def test_put_item_wrong_key_type(test_table):
         test_table.put_item(Item={'p': s, 'c': b})
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.put_item(Item={'p': s, 'c': n})
+    # Should fail (missing hash key)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.put_item(Item={'c': s})
+    # Should fail (missing sort key)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.put_item(Item={'p': s})
 def test_update_item_wrong_key_type(test_table):
     b = random_bytes()
     s = random_string()
@@ -213,6 +219,12 @@ def test_update_item_wrong_key_type(test_table):
         test_table.update_item(Key={'p': s, 'c': b}, AttributeUpdates={})
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.update_item(Key={'p': s, 'c': n}, AttributeUpdates={})
+    # Should fail (missing hash key)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.update_item(Key={'c': s}, AttributeUpdates={})
+    # Should fail (missing sort key)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.update_item(Key={'p': s}, AttributeUpdates={})
 def test_get_item_wrong_key_type(test_table):
     b = random_bytes()
     s = random_string()
@@ -229,3 +241,9 @@ def test_get_item_wrong_key_type(test_table):
         test_table.get_item(Key={'p': s, 'c': b})
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.get_item(Key={'p': s, 'c': n})
+    # Should fail (missing hash key)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'c': n})
+    # Should fail (missing sort key)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'p': n})
