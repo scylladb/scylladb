@@ -98,6 +98,39 @@ def test_put_and_get_attribute_types(test_table):
     got_item = test_table.get_item(Key=key, ConsistentRead=True)['Item']
     assert item == got_item
 
+# The test_empty_* tests below verify support for empty items, with no
+# attributes except the key. This is a difficult case for Scylla, because
+# for an empty row to exist, Scylla needs to add a "CQL row marker".
+# There are several ways to create empty items - via PutItem, UpdateItem
+# and deleting attributes from non-empty items, and we need to check them
+# all, in several test_empty_* tests:
+def test_empty_put(test_table):
+    p = random_string()
+    c = random_string()
+    test_table.put_item(Item={'p': p, 'c': c})
+    item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    assert item == {'p': p, 'c': c}
+def test_empty_put_delete(test_table):
+    p = random_string()
+    c = random_string()
+    test_table.put_item(Item={'p': p, 'c': c, 'hello': 'world'})
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'hello': {'Action': 'DELETE'}})
+    item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    assert item == {'p': p, 'c': c}
+def test_empty_update(test_table):
+    p = random_string()
+    c = random_string()
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={})
+    item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    assert item == {'p': p, 'c': c}
+def test_empty_update_delete(test_table):
+    p = random_string()
+    c = random_string()
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'hello': {'Value': 'world', 'Action': 'PUT'}})
+    test_table.update_item(Key={'p': p, 'c': c}, AttributeUpdates={'hello': {'Action': 'DELETE'}})
+    item = test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    assert item == {'p': p, 'c': c}
+
 # Test error handling of UpdateItem passed a bad "Action" field.
 def test_update_bad_action(test_table):
     p = random_string()

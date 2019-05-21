@@ -329,17 +329,22 @@ static mutation make_item_mutation(const Json::Value& item, schema_ptr schema) {
     mutation m(schema, pk);
     collection_type_impl::mutation attrs_mut;
 
+    auto ts = api::new_timestamp();
+
     for (auto it = item.begin(); it != item.end(); ++it) {
         bytes column_name = to_bytes(it.key().asString());
         const column_definition* cdef = schema->get_column_definition(column_name);
         if (!cdef || !cdef->is_primary_key()) {
             bytes value = utf8_type->decompose(sstring(it->toStyledString()));
-            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, api::new_timestamp(), value, atomic_cell::collection_member::yes));
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, ts, value, atomic_cell::collection_member::yes));
         }
     }
 
     auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
-    m.set_cell(ck, attrs_column(*schema), std::move(serialized_map));
+    auto& row = m.partition().clustered_row(*schema, ck);
+    row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+    // To allow creation of an item with no attributes, we need a row marker.
+    row.apply(row_marker(ts));
     return m;
 }
 
@@ -410,6 +415,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
 
     mutation m(schema, pk);
     collection_type_impl::mutation attrs_mut;
+    auto ts = api::new_timestamp();
 
     // FIXME: handle case of missing AttributeUpdates (we don't support the newer UpdateExpression yet).
     const Json::Value& attribute_updates = update_info["AttributeUpdates"];
@@ -431,7 +437,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
                 throw api_error("ValidationException",
                         format("UpdateItem DELETE with checking old value not yet supported"));
             }
-            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_dead(api::new_timestamp(), gc_clock::now()));
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_dead(ts, gc_clock::now()));
         } else if (action == "PUT") {
             const Json::Value& value = (*it)["Value"];
             if (value.size() != 1) {
@@ -443,7 +449,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
             // value.begin()->asString() is its value. But we currently
             // serialize both together, with value.toStyledString().
             bytes val = utf8_type->decompose(sstring(value.toStyledString()));
-            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, api::new_timestamp(), val, atomic_cell::collection_member::yes));
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, ts, val, atomic_cell::collection_member::yes));
         } else {
             // FIXME: need to support "ADD" as well.
             throw api_error("ValidationException",
@@ -451,7 +457,13 @@ future<json::json_return_type> executor::update_item(std::string content) {
         }
     }
     auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
-    m.set_cell(ck, attrs_column(*schema), std::move(serialized_map));
+    auto& row = m.partition().clustered_row(*schema, ck);
+    row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+    // To allow creation of an item with no attributes, we need a row marker.
+    // Note that unlike Scylla, even an "update" operation needs to add a row
+    // marker. TODO: a row marker isn't really needed for a DELETE operation.
+    row.apply(row_marker(ts));
+
     elogger.trace("Applying mutation {}", m);
     return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, UpdateItem returns nothing.
