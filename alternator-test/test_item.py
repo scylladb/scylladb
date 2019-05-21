@@ -166,3 +166,11 @@ def test_item_operations_nonexistent_table(dynamodb):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         dynamodb.meta.client.put_item(TableName='non_existent_table',
             Item={'a':{'S':'b'}})
+
+# Fetching a non-existant item. According to the DynamoDB doc, "If there is no
+# matching item, GetItem does not return any data and there will be no Item
+# element in the response."
+def test_get_item_missing_item(test_table):
+    p = random_string()
+    c = random_string()
+    assert not "Item" in test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
