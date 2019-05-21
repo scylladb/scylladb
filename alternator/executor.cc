@@ -350,8 +350,6 @@ future<json::json_return_type> executor::put_item(std::string content) {
 
     schema_ptr schema = get_table(_proxy, update_info);
     const Json::Value& item = update_info["Item"];
-    partition_key pk = pk_from_json(item, schema);
-    clustering_key ck = ck_from_json(item, schema);
 
     mutation m = make_item_mutation(item, schema);
 
