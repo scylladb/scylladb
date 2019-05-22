@@ -379,7 +379,7 @@ future<json::json_return_type> executor::put_item(std::string content) {
 
     mutation m = make_item_mutation(item, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, PutItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
@@ -413,7 +413,7 @@ future<json::json_return_type> executor::batch_write_item(std::string content) {
         }
     }
 
-    return _proxy.mutate(std::move(mutations), db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+    return _proxy.mutate(std::move(mutations), db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, BatchWriteItem returns nothing,
         // unless there are UnprocessedItems - it's possible to just stop processing a batch
         // due to throttling. TODO(sarna): Consider UnprocessedItems when returning.
@@ -486,7 +486,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
     row.apply(row_marker(ts));
 
     elogger.trace("Applying mutation {}", m);
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, UpdateItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
