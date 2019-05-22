@@ -534,6 +534,25 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
     return item_descr;
 }
 
+// Check according to the request's "ConsistentRead" field, which consistency
+// level we need to use for the read. The field can be True for strongly
+// consistent reads, or False for eventually consistent reads, or if this
+// field is absense, we default to eventually consistent reads.
+// In Scylla, eventually-consistent reads are implemented as consistency
+// level LOCAL_ONE, and strongly-consistent reads as LOCAL_QUORUM.
+static db::consistency_level get_read_consistency(const Json::Value& request) {
+    Json::Value consistent_read_value = request.get("ConsistentRead", Json::nullValue);
+    bool consistent_read = false;
+    if (!consistent_read_value.isNull()) {
+        if (consistent_read_value.isBool()) {
+            consistent_read = consistent_read_value.asBool();
+        } else {
+            throw api_error("ValidationException", "ConsistentRead flag must be a boolean");
+        }
+    }
+    return consistent_read ? db::consistency_level::LOCAL_QUORUM : db::consistency_level::LOCAL_ONE;
+}
+
 future<json::json_return_type> executor::get_item(std::string content) {
     _stats.api_operations.get_item++;
     Json::Value table_info = json::to_json_value(content);
@@ -543,7 +562,7 @@ future<json::json_return_type> executor::get_item(std::string content) {
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
     Json::Value attributes_to_get = table_info["AttributesToGet"];
     Json::Value query_key = table_info["Key"];
-    db::consistency_level cl = table_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    db::consistency_level cl = get_read_consistency(table_info);
 
     partition_key pk = pk_from_json(query_key, schema);
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*schema, pk))};
@@ -725,7 +744,7 @@ future<json::json_return_type> executor::scan(std::string content) {
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
     Json::Value attributes_to_get = request_info["AttributesToGet"];
     Json::Value exclusive_start_key = request_info["ExclusiveStartKey"];
-    db::consistency_level cl = request_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    db::consistency_level cl = get_read_consistency(request_info);
     uint32_t limit = request_info.get("Limit", query::max_partitions).asUInt();
     if (limit <= 0) {
         throw api_error("ValidationException", "Limit must be greater than 0");
@@ -870,7 +889,7 @@ future<json::json_return_type> executor::query(std::string content) {
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
     Json::Value attributes_to_get = request_info["AttributesToGet"];
     Json::Value exclusive_start_key = request_info["ExclusiveStartKey"];
-    db::consistency_level cl = request_info["ConsistentRead"].asBool() ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    db::consistency_level cl = get_read_consistency(request_info);
     uint32_t limit = request_info.get("Limit", query::max_partitions).asUInt();
     if (limit <= 0) {
         throw api_error("ValidationException", "Limit must be greater than 0");
