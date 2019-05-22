@@ -27,6 +27,7 @@
 #include "cql3/update_parameters.hh"
 #include "server.hh"
 #include "service/pager/query_pagers.hh"
+#include <functional>
 
 #include <boost/range/adaptors.hpp>
 
@@ -796,6 +797,17 @@ static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_d
     return dht::partition_range(decorated_key);
 }
 
+static query::clustering_range get_clustering_range_for_begins_with(bytes&& target, const clustering_key& ck, schema_ptr schema, data_type t) {
+    auto it = boost::range::find_end(target, bytes("\xFF"), std::not_equal_to<bytes::value_type>());
+    if (it != target.end()) {
+        ++*it;
+        target.resize(std::distance(target.begin(), it) + 1);
+        clustering_key upper_limit = clustering_key::from_singular(*schema, t->deserialize(target));
+        return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit, false));
+    }
+    return query::clustering_range::make_starting_with(query::clustering_range::bound(ck));
+}
+
 static query::clustering_range calculate_ck_bound(schema_ptr schema, const column_definition& ck_cdef, comparison_operator_type op, const Json::Value& attrs) {
     const size_t expected_attrs_size = (op == comparison_operator_type::BETWEEN) ? 2 : 1;
     if (attrs.size() != expected_attrs_size) {
@@ -830,13 +842,7 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         }
         std::string raw_upper_limit_str = attrs[0][type_to_string(ck_cdef.type)].asString();
         bytes raw_upper_limit = ck_cdef.type->from_string(raw_upper_limit_str);
-        if (raw_upper_limit.back() != std::numeric_limits<bytes::value_type>::max()) {
-            raw_upper_limit.back()++;
-        } else {
-            raw_upper_limit.resize(raw_upper_limit.size() + 1);
-        }
-        clustering_key upper_limit = clustering_key::from_singular(*schema, ck_cdef.type->deserialize(raw_upper_limit));
-        return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit, false));
+        return get_clustering_range_for_begins_with(std::move(raw_upper_limit), ck, schema, ck_cdef.type);
     }
     default:
         throw api_error("ValidationException", format("Unknown primary key bound passed: {}", int(op)));
