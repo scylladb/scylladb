@@ -10,7 +10,7 @@ def set_of_frozen_elements(list_of_dicts):
     return {frozenset(item.items()) for item in list_of_dicts}
 
 # Test that scanning works fine with in-stock paginator
-def test_query_with_paginator(dynamodb, filled_test_table):
+def test_query_basic_restrictions(dynamodb, filled_test_table):
     test_table, items = filled_test_table
     paginator = dynamodb.meta.client.get_paginator('query')
 
