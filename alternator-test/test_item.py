@@ -8,9 +8,9 @@ from botocore.exceptions import ClientError
 from decimal import Decimal
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for x in range(len))
+    return ''.join(random.choice(chars) for x in range(length))
 def random_bytes(length=10):
-    return bytearray(random.getrandbits(8) for _ in xrange(len))
+    return bytearray(random.getrandbits(8) for _ in range(length))
 
 # Basic test for creating a new item with a random name, and reading it back
 # with strong consistency.

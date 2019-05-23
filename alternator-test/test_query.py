@@ -17,9 +17,9 @@ def full_query(table, **kwargs):
     return items
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for x in range(len))
+    return ''.join(random.choice(chars) for x in range(length))
 def random_bytes(length=10):
-    return bytearray(random.getrandbits(8) for _ in xrange(len))
+    return bytearray(random.getrandbits(8) for _ in range(length))
 
 def set_of_frozen_elements(list_of_dicts):
     return {frozenset(item.items()) for item in list_of_dicts}
