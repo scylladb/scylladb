@@ -7,6 +7,20 @@ import string
 import pytest
 from botocore.exceptions import ClientError
 
+# Utility function for fetching the entire results of a query into an array of items
+def full_query(table, **kwargs):
+    response = table.query(**kwargs)
+    items = response['Items']
+    while 'LastEvaluatedKey' in response:
+        response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
+        items.extend(response['Items'])
+    return items
+
+def random_string(len=10, chars=string.ascii_uppercase + string.digits):
+    return ''.join(random.choice(chars) for x in range(len))
+def random_bytes(len=10):
+    return bytearray(random.getrandbits(8) for _ in xrange(len))
+
 def set_of_frozen_elements(list_of_dicts):
     return {frozenset(item.items()) for item in list_of_dicts}
 
@@ -110,3 +124,43 @@ def test_begins_with(dynamodb, test_table):
         got_items += page['Items']
     print(got_items)
     assert sorted([d['c'] for d in got_items]) == sorted([d['c'] for d in items if d['c'].startswith(u'cÿbÿ')])
+
+# Items returned by Query should be sorted by the sort key. The following
+# tests verify that this is indeed the case, for the three allowed key types:
+# strings, binary, and numbers. These tests test not just the Query operation,
+# but inherently that the sort-key sorting works.
+def test_query_sort_order_string(test_table):
+    # Insert a lot of random items in one new partition:
+    # str(i) has a non-obvious sort order (e.g., "100" comes before "2") so is a nice test.
+    p = random_string()
+    items = [{'p': p, 'c': str(i)} for i in range(128)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    assert len(items) == len(got_items)
+    # Extract just the sort key ("c") from the items
+    sort_keys = [x['c'] for x in items]
+    got_sort_keys = [x['c'] for x in got_items]
+    # Verify that got_sort_keys are already sorted (in string order)
+    assert sorted(got_sort_keys) == got_sort_keys
+    # Verify that got_sort_keys are a sorted version of the expected sort_keys
+    assert sorted(sort_keys) == got_sort_keys
+def test_query_sort_order_bytes(test_table_sb):
+    # Insert a lot of random items in one new partition:
+    # We arbitrarily use random_bytes with a random length.
+    p = random_string()
+    items = [{'p': p, 'c': random_bytes(10)} for i in range(128)]
+    with test_table_sb.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    got_items = full_query(test_table_sb, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    assert len(items) == len(got_items)
+    sort_keys = [x['c'] for x in items]
+    got_sort_keys = [x['c'] for x in got_items]
+    # Boto3's "Binary" objects are sorted as if bytes are signed integers.
+    # This isn't the order that DynamoDB itself uses (byte 0 should be first,
+    # not byte -128). Sorting the byte array ".value" works.
+    assert sorted(got_sort_keys, key=lambda x: x.value) == got_sort_keys
+    assert sorted(sort_keys) == got_sort_keys
+# TODO: add number key version of this test: test_query_sort_order_number(test_table_sn)
