@@ -228,8 +228,8 @@ def list_tables(dynamodb, limit):
 # Note that the DyanamoDB setup we run this against may have hundreds of
 # other tables, for all we know. We just need to check that the tables we
 # created are indeed listed.
-def test_list_tables_paginated(dynamodb, test_table, test_2_tables):
-    my_tables_set = set([table.name for table in test_2_tables + [test_table]])
+def test_list_tables_paginated(dynamodb, test_table, test_table_s, test_table_b):
+    my_tables_set = {table.name for table in [test_table, test_table_s, test_table_b]}
     for limit in [1, 2, 3, 4, 50, 100]:
         print("testing limit={}".format(limit))
         list_tables_set = set(list_tables(dynamodb, limit))
