@@ -98,19 +98,7 @@ def test_table_s(dynamodb):
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
     yield table
     table.delete()
-
 @pytest.fixture(scope="session")
-def test_2_tables(dynamodb):
-    tables = [create_test_table(dynamodb,
-        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
-                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
-        ],
-        AttributeDefinitions=[
-                    { 'AttributeName': 'p', 'AttributeType': 'S' },
-                    { 'AttributeName': 'c', 'AttributeType': 'S' },
-        ]) for _ in range(2)]
-    yield tables
-    [table.delete() for table in tables]
 def test_table_b(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
