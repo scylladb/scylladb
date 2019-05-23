@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Tests for the Query operation
 
 import random
@@ -83,3 +84,29 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         got_items += page['Items']
     print(got_items)
     assert set_of_frozen_elements([item for item in items if item['p'] == 'long' and item['c'].startswith('11')]) == set_of_frozen_elements(got_items)
+
+def test_begins_with(dynamodb, test_table):
+    paginator = dynamodb.meta.client.get_paginator('query')
+    items = [{'p': 'unorthodox_chars', 'c': sort_key, 'str': 'a'} for sort_key in [u'ÿÿÿ', u'cÿbÿ', u'cÿbÿÿabg'] ]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+
+    # TODO(sarna): Once bytes type is supported, /xFF character should be tested
+    got_items = []
+    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
+            'p' : {'AttributeValueList': ['unorthodox_chars'], 'ComparisonOperator': 'EQ'},
+            'c' : {'AttributeValueList': [u'ÿÿ'], 'ComparisonOperator': 'BEGINS_WITH'}
+        }):
+        got_items += page['Items']
+    print(got_items)
+    assert sorted([d['c'] for d in got_items]) == sorted([d['c'] for d in items if d['c'].startswith(u'ÿÿ')])
+
+    got_items = []
+    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
+            'p' : {'AttributeValueList': ['unorthodox_chars'], 'ComparisonOperator': 'EQ'},
+            'c' : {'AttributeValueList': [u'cÿbÿ'], 'ComparisonOperator': 'BEGINS_WITH'}
+        }):
+        got_items += page['Items']
+    print(got_items)
+    assert sorted([d['c'] for d in got_items]) == sorted([d['c'] for d in items if d['c'].startswith(u'cÿbÿ')])
