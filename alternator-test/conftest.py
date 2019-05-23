@@ -111,6 +111,19 @@ def test_2_tables(dynamodb):
         ]) for _ in range(2)]
     yield tables
     [table.delete() for table in tables]
+def test_table_b(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'B' } ])
+    yield table
+    table.delete()
+@pytest.fixture(scope="session")
+def test_table_sb(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'B' } ])
+    yield table
+    table.delete()
 
 # "filled_test_table" fixture:  Create a temporary table to be used in tests
 # that involve reading data - GetItem, Scan, etc. The table is filled with

@@ -257,3 +257,24 @@ def test_only_hash_key(test_table_s):
     assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'hello': 'world'}
     test_table_s.update_item(Key={'p': s}, AttributeUpdates={'hi': {'Value': 'there', 'Action': 'PUT'}})
     assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'hello': 'world', 'hi': 'there'}
+
+# Tests for item operations in tables with non-string hash or sort keys.
+# These tests focus only on the type of the key - everything else is as
+# simple as we can (string attributes, no special options for GetItem
+# and PutItem). These tests also focus on individual items only, and
+# not about the sort order of sort keys - this should be verified in
+# test_query.py, for example.
+def test_bytes_hash_key(test_table_b):
+    # Bytes values are passed using base64 encoding, which has weird cases
+    # depending on len%3 and len%4. So let's try various lengths.
+    for len in range(10,18):
+        p = random_bytes(len)
+        val = random_string()
+        test_table_b.put_item(Item={'p': p, 'attribute': val})
+        assert test_table_b.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'attribute': val}
+def test_bytes_sort_key(test_table_sb):
+    p = random_string()
+    c = random_bytes()
+    val = random_string()
+    test_table_sb.put_item(Item={'p': p, 'c': c, 'attribute': val})
+    assert test_table_sb.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'attribute': val}
