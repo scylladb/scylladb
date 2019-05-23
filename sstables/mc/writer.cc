@@ -983,7 +983,7 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
                        properties.local_deletion_time == cell.deletion_time();
 
     cell_flags flags = cell_flags::none;
-    if (!has_value) {
+    if ((!has_value && !cdef.is_counter()) || is_deleted) {
         flags |= cell_flags::has_empty_value_mask;
     }
     if (is_deleted) {
@@ -1017,15 +1017,17 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
         write(_sst.get_version(), writer, cell_path);
     }
 
-    if (has_value) {
-        if (cdef.is_counter()) {
+    if (cdef.is_counter()) {
+        if (!is_deleted) {
             assert(!cell.is_counter_update());
             counter_cell_view::with_linearized(cell, [&] (counter_cell_view ccv) {
                 write_counter_value(ccv, writer, sstable_version_types::mc, [] (bytes_ostream& out, uint32_t value) {
                     return write_vint(out, value);
                 });
             });
-        } else {
+        }
+    } else {
+        if (has_value) {
             write_cell_value(writer, *cdef.type, cell.value());
         }
     }

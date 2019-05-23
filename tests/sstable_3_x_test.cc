@@ -3676,6 +3676,32 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     validate_stats_metadata(s, written_sst, table_name);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_write_empty_counter) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    sstring table_name = "empty_counter";
+    // CREATE TABLE empty_counter (pk text, ck text, val counter, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck", utf8_type, column_kind::clustering_key);
+    builder.with_column("val", counter_type);
+    builder.set_compressor_params(compression_parameters::no_compression());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    auto key = partition_key::from_exploded(*s, {to_bytes("key")});
+    mutation mut{s, key};
+
+    const column_definition& cdef = *s->get_column_definition("val");
+    auto ckey = clustering_key::from_exploded(*s, {to_bytes("ck")});
+
+    counter_cell_builder b;
+    mut.set_clustered_cell(ckey, cdef, b.build(write_timestamp));
+
+    mt->apply(mut);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path(), {mut});
+}
+
 SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
     auto abj = defer([] { await_background_jobs().get(); });
     sstring table_name = "counter_table";

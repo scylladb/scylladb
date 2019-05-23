@@ -458,7 +458,8 @@ enum sstable_feature : uint8_t {
     NonCompoundRangeTombstones = 1, // See #2986
     ShadowableTombstones = 2, // See #3885
     CorrectStaticCompact = 3, // See #4139
-    End = 4,
+    CorrectEmptyCounters = 4, // See #4363
+    End = 5,
 };
 
 // Scylla-specific features enabled for a particular sstable.
