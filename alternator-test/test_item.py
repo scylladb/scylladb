@@ -278,3 +278,28 @@ def test_bytes_sort_key(test_table_sb):
     val = random_string()
     test_table_sb.put_item(Item={'p': p, 'c': c, 'attribute': val})
     assert test_table_sb.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'attribute': val}
+
+# Tests for using a large binary blob as hash key, sort key, or attribute.
+# DynamoDB strictly limits the size of the binary hash key to 2048 bytes,
+# and binary sort key to 1024 bytes, and refuses anything larger. The total
+# size of an item is limited to 400KB, which also limits the size of the
+# largest attributes. For more details on these limits, see
+# https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Limits.html
+# Alternator currently does *not* have these limitations, and can accept much
+# larger keys and attributes, but what we do in the following tests is to verify
+# that items up to DynamoDB's maximum sizes also work well in Alternator.
+def test_large_blob_hash_key(test_table_b):
+    b = random_bytes(2048)
+    test_table_b.put_item(Item={'p': b})
+    assert test_table_b.get_item(Key={'p': b}, ConsistentRead=True)['Item'] == {'p': b}
+def test_large_blob_sort_key(test_table_sb):
+    s = random_string()
+    b = random_bytes(1024)
+    test_table_sb.put_item(Item={'p': s, 'c': b})
+    assert test_table_sb.get_item(Key={'p': s, 'c': b}, ConsistentRead=True)['Item'] == {'p': s, 'c': b}
+def test_large_blob_attribute(test_table):
+    p = random_string()
+    c = random_string()
+    b = random_bytes(409500)  # a bit less than 400KB
+    test_table.put_item(Item={'p': p, 'c': c, 'attribute': b })
+    assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'attribute': b}
