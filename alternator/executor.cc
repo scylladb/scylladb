@@ -10,6 +10,8 @@
 
 #include <regex>
 
+#include "base64.hh"
+
 #include "alternator/executor.hh"
 #include "log.hh"
 #include "json.hh"
@@ -315,9 +317,24 @@ static bytes get_key_column_value(const Json::Value& item, const column_definiti
                 format("Expected type {} for key column {}, got type {}",
                         expected_type, column_name, it.key().asString()));
     }
-    // FIXME: if expected_type is B, we need to do base64 decoding!
-    return column.type->from_string(it->asString());
+    if (column.type == bytes_type) {
+        return base64_decode(it->asString());
+    } else {
+        return column.type->from_string(it->asString());
+    }
 
+}
+
+static Json::Value json_key_column_value(bytes_view cell, const column_definition& column) {
+    if (column.type == bytes_type) {
+        return base64_encode(cell);
+    } if (column.type == utf8_type) {
+        return Json::Value(reinterpret_cast<const char*>(cell.data()),
+                reinterpret_cast<const char*>(cell.data()) + cell.size());
+    } else {
+        // We shouldn't get here, we shouldn't see such key columns.
+        throw std::runtime_error(format("Unexpected key type: {}", column.type->name()));
+    }
 }
 
 static partition_key pk_from_json(const Json::Value& item, schema_ptr schema) {
@@ -512,10 +529,10 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
         auto column_it = columns.begin();
         for (const bytes_opt& cell : result_row) {
             std::string column_name = (*column_it)->name_as_text();
-            if (column_name != executor::ATTRS_COLUMN_NAME) {
+            if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
                 if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
                     Json::Value& field = item[column_name.c_str()];
-                    field[type_to_string((*column_it)->type)] = (*column_it)->type->to_json(cell);
+                    field[type_to_string((*column_it)->type)] = json_key_column_value(*cell, **column_it);
                 }
             } else if (cell) {
                 auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
@@ -623,7 +640,7 @@ public:
             if (column_name != executor::ATTRS_COLUMN_NAME) {
                 if (_attrs_to_get.empty() || _attrs_to_get.count(column_name) > 0) {
                     Json::Value& field = _item[column_name.c_str()];
-                    field[type_to_string((*_column_it)->type)] = (*_column_it)->type->to_json(bytes(bv));
+                    field[type_to_string((*_column_it)->type)] = json_key_column_value(bv, **_column_it);
                 }
             } else {
                 auto deserialized = attrs_type()->deserialize(bv, cql_serialization_format::latest());
