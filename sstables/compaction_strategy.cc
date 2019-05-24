@@ -78,6 +78,26 @@ uint64_t sstable_run::data_size() const {
     return boost::accumulate(_all | boost::adaptors::transformed(std::mem_fn(&sstable::data_size)), uint64_t(0));
 }
 
+std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
+    os << "Run = {\n";
+    if (run.all().empty()) {
+        os << "  Identifier: not found\n";
+    } else {
+        os << format("  Identifier: {}\n", (*run.all().begin())->run_identifier());
+    }
+
+    auto frags = boost::copy_range<std::vector<shared_sstable>>(run.all());
+    boost::sort(frags, [] (const shared_sstable& x, const shared_sstable& y) {
+        return x->get_first_decorated_key().token() < y->get_first_decorated_key().token();
+    });
+    os << "  Fragments = {\n";
+    for (auto& frag : frags) {
+        os << format("    {}={}:{}\n", frag->generation(), frag->get_first_decorated_key().token(), frag->get_last_decorated_key().token());
+    }
+    os << "  }\n}\n";
+    return os;
+}
+
 class incremental_selector_impl {
 public:
     virtual ~incremental_selector_impl() {}
