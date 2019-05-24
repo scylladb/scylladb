@@ -61,16 +61,21 @@ if __name__ == "__main__":
                 disk_properties["write_iops"] = 181500 * nr_disks
                 disk_properties["write_bandwidth"] = 808775652 * nr_disks
             elif idata.instance_class() == "i3en":
-                if idata.instance() in ("i3en.large", "i3.xlarge", "i3en.2xlarge"):
-                    disk_properties["read_iops"] = 46489
-                    disk_properties["read_bandwidth"] = 353437280
-                    disk_properties["write_iops"] = 36680
-                    disk_properties["write_bandwidth"] = 164766656
+                if idata.instance() == "i3en.large":
+                    disk_properties["read_iops"] = 43315
+                    disk_properties["read_bandwidth"] = 330301440
+                    disk_properties["write_iops"] = 33177
+                    disk_properties["write_bandwidth"] = 165675008
+                elif idata.instance() in ("i3.xlarge", "i3en.2xlarge"):
+                    disk_properties["read_iops"] = 84480 * nr_disks
+                    disk_properties["read_bandwidth"] = 666894336 * nr_disks
+                    disk_properties["write_iops"] = 66969 * nr_disks
+                    disk_properties["write_bandwidth"] = 333447168 * nr_disks
                 else:
-                    disk_properties["read_iops"] = 278478 * nr_disks
-                    disk_properties["read_bandwidth"] = 3029172992 * nr_disks
-                    disk_properties["write_iops"] = 221909 * nr_disks
-                    disk_properties["write_bandwidth"] = 1020482432 * nr_disks
+                    disk_properties["read_iops"] = 257024 * nr_disks
+                    disk_properties["read_bandwidth"] = 2043674624 * nr_disks
+                    disk_properties["write_iops"] = 174080 * nr_disks
+                    disk_properties["write_bandwidth"] = 1024458752 * nr_disks
             elif idata.instance_class() == "i2":
                 disk_properties["read_iops"] = 64000 * nr_disks
                 disk_properties["read_bandwidth"] = 507338935 * nr_disks
