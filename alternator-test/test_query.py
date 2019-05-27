@@ -3,6 +3,7 @@
 
 import random
 import string
+import collections
 
 import pytest
 from botocore.exceptions import ClientError
@@ -22,8 +23,13 @@ def random_string(length=10, chars=string.ascii_uppercase + string.digits):
 def random_bytes(length=10):
     return bytearray(random.getrandbits(8) for _ in range(length))
 
-def set_of_frozen_elements(list_of_dicts):
-    return {frozenset(item.items()) for item in list_of_dicts}
+# To compare two lists of items (each is a dict) without regard for order,
+# "==" is not good enough because it will fail if the order is different.
+# The following function, multiset() converts the list into a multiset
+# (set with duplicates) where order doesn't matter, so the multisets can
+# be compared.
+def multiset(items):
+    return collections.Counter([frozenset(item.items()) for item in items])
 
 # Test that scanning works fine with in-stock paginator
 def test_query_basic_restrictions(dynamodb, filled_test_table):
@@ -37,7 +43,7 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         }):
         got_items += page['Items']
     print(got_items)
-    assert set_of_frozen_elements([item for item in items if item['p'] == 'long']) == set_of_frozen_elements(got_items)
+    assert multiset([item for item in items if item['p'] == 'long']) == multiset(got_items)
 
     # LT
     got_items = []
@@ -47,7 +53,7 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         }):
         got_items += page['Items']
     print(got_items)
-    assert set_of_frozen_elements([item for item in items if item['p'] == 'long' and item['c'] < '12']) == set_of_frozen_elements(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['c'] < '12']) == multiset(got_items)
 
     # LE
     got_items = []
@@ -57,7 +63,7 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         }):
         got_items += page['Items']
     print(got_items)
-    assert set_of_frozen_elements([item for item in items if item['p'] == 'long' and item['c'] <= '14']) == set_of_frozen_elements(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['c'] <= '14']) == multiset(got_items)
 
     # GT
     got_items = []
@@ -67,7 +73,7 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         }):
         got_items += page['Items']
     print(got_items)
-    assert set_of_frozen_elements([item for item in items if item['p'] == 'long' and item['c'] > '15']) == set_of_frozen_elements(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['c'] > '15']) == multiset(got_items)
 
     # GE
     got_items = []
@@ -77,7 +83,7 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         }):
         got_items += page['Items']
     print(got_items)
-    assert set_of_frozen_elements([item for item in items if item['p'] == 'long' and item['c'] >= '14']) == set_of_frozen_elements(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['c'] >= '14']) == multiset(got_items)
 
     # BETWEEN
     got_items = []
@@ -87,7 +93,7 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         }):
         got_items += page['Items']
     print(got_items)
-    assert set_of_frozen_elements([item for item in items if item['p'] == 'long' and item['c'] >= '155' and item['c'] <= '164']) == set_of_frozen_elements(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['c'] >= '155' and item['c'] <= '164']) == multiset(got_items)
 
     # BEGINS_WITH
     got_items = []
@@ -98,7 +104,7 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         print([item for item in items if item['p'] == 'long' and item['c'].startswith('11')])
         got_items += page['Items']
     print(got_items)
-    assert set_of_frozen_elements([item for item in items if item['p'] == 'long' and item['c'].startswith('11')]) == set_of_frozen_elements(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['c'].startswith('11')]) == multiset(got_items)
 
 def test_begins_with(dynamodb, test_table):
     paginator = dynamodb.meta.client.get_paginator('query')
