@@ -2,6 +2,7 @@
 
 import random
 import string
+import collections
 
 import pytest
 from botocore.exceptions import ClientError
@@ -15,8 +16,13 @@ def full_scan(table, **kwargs):
         items.extend(response['Items'])
     return items
 
-def set_of_frozen_elements(list_of_dicts):
-    return {frozenset(item.items()) for item in list_of_dicts}
+# To compare two lists of items (each is a dict) without regard for order,
+# "==" is not good enough because it will fail if the order is different.
+# The following function, multiset() converts the list into a multiset
+# (set with duplicates) where order doesn't matter, so the multisets can
+# be compared.
+def multiset(items):
+    return collections.Counter([frozenset(item.items()) for item in items])
 
 # Test that scanning works fine with/without pagination
 def test_scan_basic(filled_test_table):
@@ -36,7 +42,7 @@ def test_scan_basic(filled_test_table):
                 break
 
         assert len(items) == len(got_items)
-        assert set_of_frozen_elements(items) == set_of_frozen_elements(got_items)
+        assert multiset(items) == multiset(got_items)
 
 def test_scan_with_paginator(dynamodb, filled_test_table):
     test_table, items = filled_test_table
@@ -47,7 +53,7 @@ def test_scan_with_paginator(dynamodb, filled_test_table):
         got_items += page['Items']
 
     assert len(items) == len(got_items)
-    assert set_of_frozen_elements(items) == set_of_frozen_elements(got_items)
+    assert multiset(items) == multiset(got_items)
 
     for page_size in [1, 17, 1234]:
         got_items = []
@@ -55,7 +61,7 @@ def test_scan_with_paginator(dynamodb, filled_test_table):
             got_items += page['Items']
 
     assert len(items) == len(got_items)
-    assert set_of_frozen_elements(items) == set_of_frozen_elements(got_items)
+    assert multiset(items) == multiset(got_items)
 
 # Although partitions are scanned in seemingly-random order, inside a
 # partition items must be returned by Scan sorted in sort-key order.
@@ -88,4 +94,4 @@ def test_scan_attributes_to_get(dynamodb, filled_test_table):
         print(wanted)
         got_items = full_scan(table, AttributesToGet=wanted)
         expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
-        assert sorted(expected_items) == sorted(got_items)
+        assert multiset(expected_items) == multiset(got_items)
