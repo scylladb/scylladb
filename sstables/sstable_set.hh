@@ -103,4 +103,6 @@ public:
 
 std::unique_ptr<sstable_set_impl> make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata = true);
 
+std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run);
+
 }
