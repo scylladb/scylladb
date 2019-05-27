@@ -106,7 +106,7 @@ static std::string type_to_string(data_type type) {
         {utf8_type, "S"},
         {bytes_type, "B"},
         {boolean_type, "BOOL"},
-        {long_type, "N"},
+        {decimal_type, "N"}, // FIXME: use a specialized Alternator number type instead of the general decimal_type
     };
     auto it = types.find(type);
     if (it == types.end()) {
@@ -235,7 +235,7 @@ static data_type parse_key_type(const std::string& type) {
         switch (type[0]) {
         case 'S': return utf8_type;
         case 'B': return bytes_type;
-        case 'N': return long_type; // FIXME: this actually needs to be a new number type, not long
+        case 'N': return decimal_type; // FIXME: use a specialized Alternator type, not the general "decimal_type".
         }
     }
     throw api_error("ValidationException",
@@ -331,6 +331,13 @@ static Json::Value json_key_column_value(bytes_view cell, const column_definitio
     } if (column.type == utf8_type) {
         return Json::Value(reinterpret_cast<const char*>(cell.data()),
                 reinterpret_cast<const char*>(cell.data()) + cell.size());
+    } else if (column.type == decimal_type) {
+        // FIXME: use specialized Alternator number type, not the more
+        // general "decimal_type". A dedicated type can be more efficient
+        // in storage space and in parsing speed.
+        auto s = decimal_type->to_json_string(bytes(cell));
+        return Json::Value(reinterpret_cast<const char*>(s.data()),
+                reinterpret_cast<const char*>(s.data()) + s.size());
     } else {
         // We shouldn't get here, we shouldn't see such key columns.
         throw std::runtime_error(format("Unexpected key type: {}", column.type->name()));
