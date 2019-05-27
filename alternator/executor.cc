@@ -65,42 +65,6 @@ public:
     }
 };
 
-
-#if 0 /* not used yet */
-/*
- * Full representation should cover:
-         "B": blob,
-         "BOOL": boolean,
-         "BS": [ blob ],
-         "L": [
-            "AttributeValue"
-         ],
-         "M": {
-            "string" : "AttributeValue"
-         },
-         "N": "string",
-         "NS": [ "string" ],
-         "NULL": boolean,
-         "S": "string",
-         "SS": [ "string" ]
-
-   TODO(sarna): boost::bimap
- */
-static data_type parse_type(std::string type) {
-    static thread_local std::unordered_map<std::string, data_type> types = {
-        {"S", utf8_type},
-        {"B", bytes_type},
-        {"BOOL", boolean_type},
-        {"N", long_type}, //FIXME(sarna): It's actually a special generic number type, not long
-    };
-    auto it = types.find(type);
-    if (it == types.end()) {
-        throw std::runtime_error(format("Unknown type {}", type));
-    }
-    return it->second;
-}
-#endif
-
 static std::string type_to_string(data_type type) {
     static thread_local std::unordered_map<data_type, std::string> types = {
         {utf8_type, "S"},
