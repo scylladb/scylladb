@@ -6,6 +6,7 @@ import string
 
 import pytest
 from botocore.exceptions import ClientError
+from decimal import Decimal
 
 # Utility function for fetching the entire results of a query into an array of items
 def full_query(table, **kwargs):
@@ -163,4 +164,33 @@ def test_query_sort_order_bytes(test_table_sb):
     # not byte -128). Sorting the byte array ".value" works.
     assert sorted(got_sort_keys, key=lambda x: x.value) == got_sort_keys
     assert sorted(sort_keys) == got_sort_keys
-# TODO: add number key version of this test: test_query_sort_order_number(test_table_sn)
+def test_query_sort_order_number(test_table_sn):
+    # This is a list of numbers, sorted in correct order, and each suitable
+    # for accurate representation by Alternator's number type.
+    numbers = [
+        Decimal("-2e10"),
+        Decimal("-7.1e2"),
+        Decimal("-4.1"),
+        Decimal("-0.1"),
+        Decimal("-1e-5"),
+        Decimal("0"),
+        Decimal("2e-5"),
+        Decimal("0.15"),
+        Decimal("1"),
+        Decimal("1.00000000000000000000000001"),
+        Decimal("3.14159"),
+        Decimal("3.1415926535897932384626433832795028841"),
+        Decimal("31.4"),
+        Decimal("1.4e10"),
+    ]
+    # Insert these numbers, in random order, into one partition:
+    p = random_string()
+    items = [{'p': p, 'c': num} for num in random.sample(numbers, len(numbers))]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Finally, verify that we get back exactly the same numbers (with identical
+    # precision), and in their original sorted order.
+    got_items = full_query(test_table_sn, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == numbers
