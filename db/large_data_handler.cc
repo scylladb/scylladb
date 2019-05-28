@@ -76,6 +76,14 @@ future<> cql_table_large_data_handler::record_large_partitions(const sstables::s
     return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {});
 }
 
+void cql_table_large_data_handler::log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key,
+        uint64_t rows_count) const {
+    const schema& s = *sst.get_schema();
+    large_data_logger.warn("Writing a partition with too many rows [{}/{}:{}] ({} rows)",
+                           s.ks_name(), s.cf_name(), partition_key.to_partition_key(s).with_schema(s),
+                           rows_count);
+}
+
 future<> cql_table_large_data_handler::record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const {
     auto column_name = cdef.name_as_text();

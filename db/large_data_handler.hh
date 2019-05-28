@@ -63,13 +63,15 @@ private:
     uint64_t _partition_threshold_bytes;
     uint64_t _row_threshold_bytes;
     uint64_t _cell_threshold_bytes;
+    uint64_t _rows_count_threshold;
     mutable large_data_handler::stats _stats;
 
 public:
-    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes)
+    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold)
         : _partition_threshold_bytes(partition_threshold_bytes)
         , _row_threshold_bytes(row_threshold_bytes)
-        , _cell_threshold_bytes(cell_threshold_bytes) {}
+        , _cell_threshold_bytes(cell_threshold_bytes)
+        , _rows_count_threshold(rows_count_threshold) {}
     virtual ~large_data_handler() {}
 
     // Once large_data_handler is stopped no further updates will be accepted.
@@ -80,6 +82,12 @@ public:
         }
         _stopped = true;
         return _sem.wait(max_concurrency);
+    }
+
+    void maybe_log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) {
+        if (__builtin_expect(rows_count > _rows_count_threshold, false)) {
+            log_too_many_rows(sst, partition_key, rows_count);
+        }
     }
 
     future<> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
@@ -132,6 +140,7 @@ public:
     const large_data_handler::stats& stats() const { return _stats; }
 
 protected:
+    virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) const = 0;
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const = 0;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
@@ -141,10 +150,11 @@ protected:
 
 class cql_table_large_data_handler : public large_data_handler {
 public:
-    explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes)
-        : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes) {}
+    explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold)
+        : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold) {}
 
 protected:
+    virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) const override;
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const override;
     virtual future<> delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view large_table_name) const override;
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
@@ -156,7 +166,11 @@ class nop_large_data_handler : public large_data_handler {
 public:
     nop_large_data_handler()
         : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
-              std::numeric_limits<uint64_t>::max()) {}
+              std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {}
+    virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) const override {
+        return;
+    }
+
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const override {
         return make_ready_future<>();
     }

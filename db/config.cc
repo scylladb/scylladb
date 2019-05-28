@@ -259,6 +259,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Log a warning when writing rows larger than this value")
     , compaction_large_cell_warning_threshold_mb(this, "compaction_large_cell_warning_threshold_mb", value_status::Used, 1,
         "Log a warning when writing cells larger than this value")
+    , compaction_rows_count_warning_threshold(this, "compaction_rows_count_warning_threshold", value_status::Used, 100000,
+        "Log a warning when writing a number of rows larger than this value")
     /* Common memtable settings */
     , memtable_total_space_in_mb(this, "memtable_total_space_in_mb", value_status::Invalid, 0,
         "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb.")

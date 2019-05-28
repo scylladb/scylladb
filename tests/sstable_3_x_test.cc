@@ -5033,9 +5033,17 @@ struct large_row_handler : public db::large_data_handler {
             const clustering_key_prefix* clustering_key, uint64_t row_size)>;
     callback_t callback;
 
-    large_row_handler(uint64_t threshold, callback_t callback)
-        : large_data_handler(std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max())
+    large_row_handler(uint64_t large_rows_threshold, uint64_t rows_count_threshold, callback_t callback)
+        : large_data_handler(std::numeric_limits<uint64_t>::max(), large_rows_threshold, std::numeric_limits<uint64_t>::max(),
+            rows_count_threshold)
         , callback(std::move(callback)) {}
+
+    virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key,
+            uint64_t rows_count) const override {
+        const schema_ptr s = sst.get_schema();
+        callback(*s, partition_key, nullptr, rows_count);
+        return;
+    }
 
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
@@ -5077,7 +5085,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
         ++i;
     };
 
-    large_row_handler handler(threshold, f);
+    large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
     auto env = test_env(&handler);
     tmpdir dir;
     auto sst = env.make_sstable(
@@ -5109,4 +5117,50 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
 
     test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck1, &ck2}, 21);
     test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck2}, 22);
+}
+
+static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool expected) {
+    simple_schema s;
+    mutation p = s.new_mutation("pv");
+    const partition_key& pk = p.key();
+    sstring sv;
+    for (auto idx = 0; idx < rows - 1; idx++) {
+        sv += "foo ";
+        s.add_row(p, s.make_ckey(sv), sv);
+    }
+    schema_ptr sc = s.schema();
+    auto mt = make_lw_shared<memtable>(sc);
+    mt->apply(p);
+
+    bool logged = false;
+    auto f = [&logged, &expected, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
+                     const clustering_key_prefix* clustering_key, uint64_t rows_count) {
+        BOOST_REQUIRE(rows_count > threshold);
+        BOOST_REQUIRE_EQUAL(pk.components(sc), partition_key.to_partition_key(sc).components(sc));
+        logged = true;
+    };
+
+    large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
+    auto env = test_env(&handler);
+    tmpdir dir;
+    auto sst = env.make_sstable(sc, dir.path().string(), 1, sstable_version_types::mc, sstables::sstable::format_types::big);
+    sst->write_components(mt->make_flat_reader(sc), 1, sc, sstable_writer_config{}, encoding_stats{}).get();
+
+    BOOST_REQUIRE_EQUAL(logged, expected);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
+    storage_service_for_tests ssft;
+
+    // Generates a pseudo-random number from 1 to 100
+    uint64_t random = (rand() % 100 + 1);
+
+    // This test creates a sstable with a given number of rows and test it against a
+    // compaction_rows_count_warning_threshold. A warning is triggered when the number of rows
+    // exceeds the threshold.
+    test_sstable_log_too_many_rows_f(random, 0, true);
+    test_sstable_log_too_many_rows_f(random, (random - 1), true);
+    test_sstable_log_too_many_rows_f(random, random, false);
+    test_sstable_log_too_many_rows_f(random, (random + 1), false);
+    test_sstable_log_too_many_rows_f((random + 1), random, true);
 }
