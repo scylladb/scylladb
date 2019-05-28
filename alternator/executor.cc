@@ -427,8 +427,22 @@ future<json::json_return_type> executor::update_item(std::string content) {
     collection_type_impl::mutation attrs_mut;
     auto ts = api::new_timestamp();
 
-    // FIXME: handle case of missing AttributeUpdates (we don't support the newer UpdateExpression yet).
     const Json::Value& attribute_updates = update_info["AttributeUpdates"];
+    const Json::Value& update_expression = update_info["UpdateExpression"];
+
+    // DynamoDB forbids having both old-style AttributeUpdates and new-style
+    // UpdateExpression in the same request
+    if (attribute_updates && update_expression) {
+        throw api_error("ValidationException",
+                format("UpdateItem does not allow both AttributeUpdates and UpdateExpression to be given together"));
+    }
+
+    // FIXME: handle UpdateExpression
+    if (update_expression) {
+        throw api_error("ValidationException",
+                format("UpdateItem does not yet support UpdateExpression"));
+    }
+
     for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
         // Note that it.key() is the name of the column, *it is the operation
         bytes column_name = to_bytes(it.key().asString());

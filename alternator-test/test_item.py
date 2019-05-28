@@ -321,3 +321,21 @@ def test_attribute_updates_dot(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p}, AttributeUpdates={'a.b': {'Value': 3, 'Action': 'PUT'}})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a.b': 3}
+
+# Checks what it is not allowed to use in a single UpdateItem request both
+# old-style AttributeUpdates and new-style UpdateExpression.
+def test_update_item_two_update_methods(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 3, 'Action': 'PUT'}},
+            UpdateExpression='SET b = :val1',
+            ExpressionAttributeValues={':val1': 4})
+
+# Verify that having neither AttributeUpdates nor UpdateExpression is
+# allowed, and results in creation of an empty item.
+def test_update_item_no_update_method(test_table_s):
+    p = random_string()
+    assert not "Item" in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    test_table_s.update_item(Key={'p': p})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p}
