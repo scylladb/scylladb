@@ -15,6 +15,14 @@ override_dh_auto_install:
 	ln -sf /opt/scylladb/bin/scylla $(CURDIR)/debian/{{product}}-server/usr/bin/scylla
 	ln -sf /opt/scylladb/bin/iotune $(CURDIR)/debian/{{product}}-server/usr/bin/iotune
 	ln -sf /usr/lib/scylla/scyllatop/scyllatop.py $(CURDIR)/debian/{{product}}-server/usr/bin/scyllatop
+	find ./dist/common/scripts -type f -exec ./relocate_python_scripts.py \
+	--installroot $(CURDIR)/debian/scylla-server/usr/lib/scylla/ --with-python3 "$(CURDIR)/debian/scylla-server/opt/scylladb/python3/bin/python3" {} +
+	./relocate_python_scripts.py \
+	--installroot $(CURDIR)/debian/scylla-server/usr/lib/scylla/ --with-python3 "$(CURDIR)/debian/scylla-server/opt/scylladb/python3/bin/python3" \
+	seastar/scripts/perftune.py seastar/scripts/seastar-addr2line seastar/scripts/perftune.py
+	./relocate_python_scripts.py \
+	--installroot $(CURDIR)/debian/scylla-server/usr/lib/scylla/scyllatop/ --with-python3 "$(CURDIR)/debian/scylla-server/opt/scylladb/python3/bin/python3" \
+	tools/scyllatop/scyllatop.py
 
 override_dh_installinit:
 {{#scylla}}
