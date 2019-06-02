@@ -27,29 +27,32 @@ collect metrics from several Scylla nodes into a Prometheus metric-collection
 server, and then to visualize these metrics using Grafana and a web browser.
 Prometheus and Grafana will be described in separate sections below.
 
-## Metric labels: instance and shard
+## Metric labels: shard, instance and type
 Different Scylla nodes will have different values for each metric (e.g.,
 `scylla_cql_reads`, the total number of CQL read requests). Moreover, Scylla
 is sharded, meaning that inside each node each core works on its own data
 and keeps its own separate metrics. So in the metrics output, each metric
-identifier contains, beyond the metric's name, also additional labels to
-qualify which node and which shard this metric comes from. For example:
+identifier contains, beyond the metric's name, also an additional label to
+qualify which shard this metric comes from. For example:
 ```
-scylla_cql_reads{instance="sid",shard="0",type="derive"} 20
+scylla_cql_reads{shard="0",type="derive"} 20
 ```
-In this case, the metric comes from a node (which we call "instance") whose
-name is "sid", and from shard 0.
+In this example, this measurement comes from shard 0 (the first shard) of
+the node which returned this metric.
 
-The appearance of the instance and shard ids on each metric is what allows
-a single server (e.g. the Prometheus server mentioned above) to collect
-metrics from many Scylla nodes and their shards. The visualization tool
-(e.g., Grafana) can then show the metrics of different nodes and shards
-separately, or to calculate and display various sums - e.g., the sum
-on all shards of each node, or the total sum of all shards and all nodes.
+When Prometheus collects measurements from multiple nodes, it further adds
+an "instance" label to each measurement to remember from which node this
+measurement came. The "instance" label has the form `ip_address:port` - see
+https://prometheus.io/docs/concepts/jobs_instances/ for more information.
+Note again that the instance label is not present in the metrics exposed by
+Scylla (`http://scyllanode:9180/metrics`) but added later by Prometheus.
 
-The "instance" label is superflous for this goal - the Prometheus server
-knows which node it got each metric from - so we plan to remove it in the
-future - see https://github.com/scylladb/seastar/issues/477
+Saving instance and shard ids on each metric is what allows a single
+Prometheus server to collect metrics from many Scylla nodes and their shards.
+The visualization tool (such as Prometheus itself, or Grafana) can then show
+the metrics of different nodes and shards separately, or to calculate and
+display various sums - e.g., the sum on all shards of each node, or the total
+sum of all shards and all nodes.
 
 The "type" label should be ignored - it appears for historic reasons
 (it was used by collectd) and is planned to be removed in the future.
@@ -82,11 +85,11 @@ contains the "ks" (*keyspace*) and "cf" (*column family* - the old name
 for table) as labels. For example,
 
 ```
-scylla_column_family_pending_compaction{instance="sid",cf="IndexInfo",ks="system",shard="0",type="gauge"} 0.000000
+scylla_column_family_pending_compaction{cf="IndexInfo",ks="system",shard="0",type="gauge"} 0.000000
 ```
 
 Here we can see the "scylla_column_family_pending_compactions" metric
-measured in shard 0 of node "sid", for the table "IndexInfo" in keyspace
+measured in shard 0 of this node, for the table "IndexInfo" in keyspace
 "system".
 
 ## Types of metrics
