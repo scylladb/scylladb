@@ -42,6 +42,7 @@ boost_tests = [
     'range_test',
     'mutation_reader_test',
     'serialized_action_test',
+    'cdc_test',
     'cql_query_test',
     'secondary_index_test',
     'json_cql_query_test',
