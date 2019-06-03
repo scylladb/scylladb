@@ -811,70 +811,70 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         sm::make_queue_length("foreground_writes", [this] { return _stats.writes - _stats.background_writes; },
                        sm::description("number of currently pending foreground write requests")),
 
-        sm::make_queue_length("background_writes", [this] { return _stats.background_writes; },
+        sm::make_queue_length("background_writes", _stats.background_writes,
                        sm::description("number of currently pending background write requests")),
 
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
                        sm::description("number of currently throttled write requests")),
 
-        sm::make_queue_length("current_throttled_base_writes", [this] { return _stats.throttled_base_writes; },
+        sm::make_queue_length("current_throttled_base_writes", _stats.throttled_base_writes,
                        sm::description("number of currently throttled base replica write requests")),
 
         sm::make_gauge("last_mv_flow_control_delay", [this] { return std::chrono::duration<float>(_stats.last_mv_flow_control_delay).count(); },
                                       sm::description("delay (in seconds) added for MV flow control in the last request")),
 
-        sm::make_total_operations("throttled_writes", [this] { return _stats.throttled_writes; },
+        sm::make_total_operations("throttled_writes", _stats.throttled_writes,
                                   sm::description("number of throttled write requests")),
 
-        sm::make_current_bytes("queued_write_bytes", [this] { return _stats.queued_write_bytes; },
+        sm::make_current_bytes("queued_write_bytes", _stats.queued_write_bytes,
                        sm::description("number of bytes in pending write requests")),
 
-        sm::make_current_bytes("background_write_bytes", [this] { return _stats.background_write_bytes; },
+        sm::make_current_bytes("background_write_bytes", _stats.background_write_bytes,
                        sm::description("number of bytes in pending background write requests")),
 
-        sm::make_queue_length("foreground_reads", [this] { return _stats.foreground_reads; },
+        sm::make_queue_length("foreground_reads", _stats.foreground_reads,
                        sm::description("number of currently pending foreground read requests")),
 
         sm::make_queue_length("background_reads", [this] { return _stats.reads - _stats.foreground_reads; },
                        sm::description("number of currently pending background read requests")),
 
-        sm::make_total_operations("read_retries", [this] { return _stats.read_retries; },
+        sm::make_total_operations("read_retries", _stats.read_retries,
                        sm::description("number of read retry attempts")),
 
-        sm::make_total_operations("canceled_read_repairs", [this] { return _stats.global_read_repairs_canceled_due_to_concurrent_write; },
+        sm::make_total_operations("canceled_read_repairs", _stats.global_read_repairs_canceled_due_to_concurrent_write,
                        sm::description("number of global read repairs canceled due to a concurrent write")),
 
-        sm::make_total_operations("foreground_read_repair", [this] { return _stats.read_repair_repaired_blocking; },
+        sm::make_total_operations("foreground_read_repair", _stats.read_repair_repaired_blocking,
                       sm::description("number of foreground read repairs")),
 
-        sm::make_total_operations("background_read_repairs", [this] { return _stats.read_repair_repaired_background; },
+        sm::make_total_operations("background_read_repairs", _stats.read_repair_repaired_background,
                        sm::description("number of background read repairs")),
 
-        sm::make_total_operations("write_timeouts", [this] { return _stats.write_timeouts._count; },
+        sm::make_total_operations("write_timeouts", _stats.write_timeouts._count,
                        sm::description("number of write request failed due to a timeout")),
 
-        sm::make_total_operations("write_unavailable", [this] { return _stats.write_unavailables._count; },
+        sm::make_total_operations("write_unavailable", _stats.write_unavailables._count,
                        sm::description("number write requests failed due to an \"unavailable\" error")),
 
-        sm::make_total_operations("read_timeouts", [this] { return _stats.read_timeouts._count; },
+        sm::make_total_operations("read_timeouts", _stats.read_timeouts._count,
                        sm::description("number of read request failed due to a timeout")),
 
-        sm::make_total_operations("read_unavailable", [this] { return _stats.read_unavailables._count; },
+        sm::make_total_operations("read_unavailable", _stats.read_unavailables._count,
                        sm::description("number read requests failed due to an \"unavailable\" error")),
 
-        sm::make_total_operations("range_timeouts", [this] { return _stats.range_slice_timeouts._count; },
+        sm::make_total_operations("range_timeouts", _stats.range_slice_timeouts._count,
                        sm::description("number of range read operations failed due to a timeout")),
 
-        sm::make_total_operations("range_unavailable", [this] { return _stats.range_slice_unavailables._count; },
+        sm::make_total_operations("range_unavailable", _stats.range_slice_unavailables._count,
                        sm::description("number of range read operations failed due to an \"unavailable\" error")),
 
-        sm::make_total_operations("speculative_digest_reads", [this] { return _stats.speculative_digest_reads; },
+        sm::make_total_operations("speculative_digest_reads", _stats.speculative_digest_reads,
                        sm::description("number of speculative digest read requests that were sent")),
 
-        sm::make_total_operations("speculative_data_reads", [this] { return _stats.speculative_data_reads; },
+        sm::make_total_operations("speculative_data_reads", _stats.speculative_data_reads,
                        sm::description("number of speculative data read requests that were sent")),
 
-        sm::make_total_operations("background_writes_failed", [this] { return _stats.background_writes_failed; },
+        sm::make_total_operations("background_writes_failed", _stats.background_writes_failed,
                        sm::description("number of write requests that failed after CL was reached")),
     });
 
