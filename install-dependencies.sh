@@ -60,6 +60,7 @@ fedora_packages=(
     python3-setuptools
     python3-magic
     python3-psutil
+    python3-cassandra-driver
     dnf-utils
     pigz
     net-tools
