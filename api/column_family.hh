@@ -39,14 +39,14 @@ template<class Mapper, class I, class Reducer>
 future<I> map_reduce_cf_raw(http_context& ctx, const sstring& name, I init,
         Mapper mapper, Reducer reducer) {
     auto uuid = get_uuid(name, ctx.db.local());
-    using mapper_type = std::function<std::any (database&)>;
-    using reducer_type = std::function<std::any (std::any, std::any)>;
+    using mapper_type = std::function<std::unique_ptr<std::any>(database&)>;
+    using reducer_type = std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)>;
     return ctx.db.map_reduce0(mapper_type([mapper, uuid](database& db) {
-        return I(mapper(db.find_column_family(uuid)));
-    }), std::any(std::move(init)), reducer_type([reducer = std::move(reducer)] (std::any a, std::any b) mutable {
-        return I(reducer(std::any_cast<I>(std::move(a)), std::any_cast<I>(std::move(b))));
-    })).then([] (std::any r) {
-        return std::any_cast<I>(std::move(r));
+        return std::make_unique<std::any>(I(mapper(db.find_column_family(uuid))));
+    }), std::make_unique<std::any>(std::move(init)), reducer_type([reducer = std::move(reducer)] (std::unique_ptr<std::any> a, std::unique_ptr<std::any> b) mutable {
+        return std::make_unique<std::any>(I(reducer(std::any_cast<I>(std::move(*a)), std::any_cast<I>(std::move(*b)))));
+    })).then([] (std::unique_ptr<std::any> r) {
+        return std::any_cast<I>(std::move(*r));
     });
 }
 
@@ -70,14 +70,14 @@ future<json::json_return_type> map_reduce_cf(http_context& ctx, const sstring& n
 
 struct map_reduce_column_families_locally {
     std::any init;
-    std::function<std::any (column_family&)> mapper;
-    std::function<std::any (std::any, std::any)> reducer;
-    future<std::any> operator()(database& db) const {
-        auto res = seastar::make_lw_shared<std::any>(init);
+    std::function<std::unique_ptr<std::any>(column_family&)> mapper;
+    std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)> reducer;
+    future<std::unique_ptr<std::any>> operator()(database& db) const {
+        auto res = seastar::make_lw_shared<std::unique_ptr<std::any>>(std::make_unique<std::any>(init));
         return do_for_each(db.get_column_families(), [res, this](const std::pair<utils::UUID, seastar::lw_shared_ptr<table>>& i) {
-            *res = reducer(*res.get(), mapper(*i.second.get()));
+            *res = std::move(reducer(std::move(*res), mapper(*i.second.get())));
         }).then([res] {
-            return *res;
+            return std::move(*res);
         });
     }
 };
@@ -85,16 +85,17 @@ struct map_reduce_column_families_locally {
 template<class Mapper, class I, class Reducer>
 future<I> map_reduce_cf_raw(http_context& ctx, I init,
         Mapper mapper, Reducer reducer) {
-    using mapper_type = std::function<std::any (column_family&)>;
-    using reducer_type = std::function<std::any (std::any, std::any)>;
+    using mapper_type = std::function<std::unique_ptr<std::any>(column_family&)>;
+    using reducer_type = std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)>;
     auto wrapped_mapper = mapper_type([mapper = std::move(mapper)] (column_family& cf) mutable {
-        return I(mapper(cf));
+        return std::make_unique<std::any>(I(mapper(cf)));
     });
-    auto wrapped_reducer = reducer_type([reducer = std::move(reducer)] (std::any a, std::any b) mutable {
-        return I(reducer(std::any_cast<I>(std::move(a)), std::any_cast<I>(std::move(b))));
+    auto wrapped_reducer = reducer_type([reducer = std::move(reducer)] (std::unique_ptr<std::any> a, std::unique_ptr<std::any> b) mutable {
+        return std::make_unique<std::any>(I(reducer(std::any_cast<I>(std::move(*a)), std::any_cast<I>(std::move(*b)))));
     });
-    return ctx.db.map_reduce0(map_reduce_column_families_locally{init, std::move(wrapped_mapper), wrapped_reducer}, std::any(init), wrapped_reducer).then([] (std::any res) {
-        return std::any_cast<I>(std::move(res));
+    return ctx.db.map_reduce0(map_reduce_column_families_locally{init,
+            std::move(wrapped_mapper), wrapped_reducer}, std::make_unique<std::any>(init), wrapped_reducer).then([] (std::unique_ptr<std::any> res) {
+        return std::any_cast<I>(std::move(*res));
     });
 }
 
