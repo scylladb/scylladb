@@ -508,4 +508,41 @@ flat_mutation_reader make_multishard_combining_reader(
         tracing::trace_state_ptr trace_state = nullptr,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
-flat_mutation_reader make_queue_reader(schema_ptr s, queue<mutation_fragment_opt>& mq);
+class queue_reader;
+
+/// Calls to different methods cannot overlap!
+/// The handle can be used only while the reader is still alive. Once
+/// `push_end_of_stream()` is called, the reader and the handle can be destroyed
+/// in any order. The reader can be destroyed at any time.
+class queue_reader_handle {
+    friend std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s);
+    friend class queue_reader;
+
+private:
+    queue_reader* _reader = nullptr;
+    std::exception_ptr _ex;
+
+private:
+    explicit queue_reader_handle(queue_reader& reader);
+
+    void abandon();
+
+public:
+    queue_reader_handle(queue_reader_handle&& o);
+    ~queue_reader_handle();
+    queue_reader_handle& operator=(queue_reader_handle&& o);
+
+    future<> push(mutation_fragment mf);
+
+    /// Terminate the queue.
+    ///
+    /// The reader will be set to EOS. The handle cannot be used anymore.
+    void push_end_of_stream();
+
+    /// Aborts the queue.
+    ///
+    /// All future operations on the handle or the reader will raise `ep`.
+    void abort(std::exception_ptr ep);
+};
+
+std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s);
