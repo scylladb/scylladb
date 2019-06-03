@@ -771,11 +771,14 @@ api = ['api/api.cc',
        'api/system.cc',
        'api/config.cc',
        'api/api-doc/config.json',
+       ]
+
+alternator = [
        'alternator/server.cc',
        'alternator/executor.cc',
        'alternator/stats.cc',
        'alternator/base64.cc',
-       ]
+]
 
 idls = ['idl/gossip_digest.idl.hh',
         'idl/uuid.idl.hh',
@@ -821,7 +824,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
 ]
 
 deps = {
-    'scylla': idls + ['main.cc', 'release.cc'] + scylla_core + api,
+    'scylla': idls + ['main.cc', 'release.cc'] + scylla_core + api + alternator,
 }
 
 pure_boost_tests = set([
