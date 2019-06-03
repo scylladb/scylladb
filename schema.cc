@@ -441,6 +441,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._compaction_strategy == y._raw._compaction_strategy
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
         && x._raw._compaction_enabled == y._raw._compaction_enabled
+        && x._raw._cdc_options == y._raw._cdc_options
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
@@ -595,6 +596,7 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << ",bloomFilterFpChance=" << s._raw._bloom_filter_fp_chance;
     os << ",memtableFlushPeriod=" << s._raw._memtable_flush_period;
     os << ",caching=" << s._raw._caching_options.to_sstring();
+    os << ",cdc=" << s._raw._cdc_options.to_sstring();
     os << ",defaultTimeToLive=" << s._raw._default_time_to_live.count();
     os << ",minIndexInterval=" << s._raw._min_index_interval;
     os << ",maxIndexInterval=" << s._raw._max_index_interval;
