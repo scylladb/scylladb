@@ -78,6 +78,8 @@ public:
 
     static const sstring KW_ID;
 
+    static const sstring KW_CDC;
+
     static const sstring COMPACTION_STRATEGY_CLASS_KEY;
     static const sstring COMPACTION_ENABLED_KEY;
 
@@ -91,6 +93,7 @@ public:
     void validate(const db::extensions&);
     std::map<sstring, sstring> get_compaction_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
+    std::optional<std::map<sstring, sstring>> get_cdc_options() const;
 #if 0
     public CachingOptions getCachingOptions() throws SyntaxException, ConfigurationException
     {
