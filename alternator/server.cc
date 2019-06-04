@@ -15,6 +15,7 @@
 #include <seastarx.hh>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include "error.hh"
 
 static logging::logger slogger("alternator-server");
 
