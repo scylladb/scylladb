@@ -31,6 +31,7 @@
 #include "service/pager/query_pagers.hh"
 #include <functional>
 #include "error.hh"
+#include "serialization.hh"
 
 #include <boost/range/adaptors.hpp>
 
@@ -39,7 +40,7 @@ static logging::logger elogger("alternator-executor");
 namespace alternator {
 
 static map_type attrs_type() {
-    static auto t = map_type_impl::get_instance(utf8_type, utf8_type, true);
+    static auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
     return t;
 }
 
@@ -346,8 +347,8 @@ static mutation make_item_mutation(const Json::Value& item, schema_ptr schema) {
         bytes column_name = to_bytes(it.key().asString());
         const column_definition* cdef = schema->get_column_definition(column_name);
         if (!cdef || !cdef->is_primary_key()) {
-            bytes value = utf8_type->decompose(sstring(it->toStyledString()));
-            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, ts, value, atomic_cell::collection_member::yes));
+            bytes value = serialize_item(*it);
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*bytes_type, ts, std::move(value), atomic_cell::collection_member::yes));
         }
     }
 
@@ -469,12 +470,8 @@ future<json::json_return_type> executor::update_item(std::string content) {
                 throw api_error("ValidationException",
                         format("Value field in AttributeUpdates must have just one item", it.key().asString()));
             }
-            // At this point, value is a dict with a single entry.
-            // value.begin().key() is its key (a type) and
-            // value.begin()->asString() is its value. But we currently
-            // serialize both together, with value.toStyledString().
-            bytes val = utf8_type->decompose(sstring(value.toStyledString()));
-            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*utf8_type, ts, val, atomic_cell::collection_member::yes));
+            bytes val = serialize_item(value);
+            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*bytes_type, ts, val, atomic_cell::collection_member::yes));
         } else {
             // FIXME: need to support "ADD" as well.
             throw api_error("ValidationException",
@@ -526,7 +523,8 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
                 for (auto entry : keys_and_values) {
                     std::string attr_name = value_cast<sstring>(entry.first);
                     if (attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
-                        item[attr_name] = json::to_json_value(value_cast<sstring>(entry.second));
+                        bytes value = value_cast<bytes>(entry.second);
+                        item[attr_name] = deserialize_item(value);
                     }
                 }
             }
@@ -634,7 +632,8 @@ public:
                 for (auto entry : keys_and_values) {
                     std::string attr_name = value_cast<sstring>(entry.first);
                     if (_attrs_to_get.empty() || _attrs_to_get.count(attr_name) > 0) {
-                        _item[attr_name] = json::to_json_value(value_cast<sstring>(entry.second));
+                        bytes value = value_cast<bytes>(entry.second);
+                        _item[attr_name] = deserialize_item(value);
                     }
                 }
             }
