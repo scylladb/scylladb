@@ -27,35 +27,6 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/queue.hh>
 
-class queue_reader final : public flat_mutation_reader::impl {
-    seastar::queue<mutation_fragment_opt>& _mq;
-public:
-    queue_reader(schema_ptr s, seastar::queue<mutation_fragment_opt>& mq)
-        : impl(std::move(s))
-        , _mq(mq) {
-    }
-    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            return _mq.pop_eventually().then([this] (mutation_fragment_opt mopt) {
-                if (!mopt) {
-                    _end_of_stream = true;
-                } else {
-                    push_mutation_fragment(std::move(*mopt));
-                }
-            });
-        });
-    }
-    virtual void next_partition() override {
-        throw std::bad_function_call();
-    }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
-    }
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
-    }
-};
-
 class shard_writer {
 private:
     schema_ptr _s;
@@ -80,7 +51,7 @@ private:
     dht::i_partitioner& _partitioner;
     std::vector<foreign_ptr<std::unique_ptr<shard_writer>>> _shard_writers;
     std::vector<future<>> _pending_consumers;
-    std::vector<seastar::queue<mutation_fragment_opt>> _queues;
+    std::vector<std::optional<queue_reader_handle>> _queue_reader_handles;
     unsigned _current_shard = -1;
     uint64_t _consumed_partitions = 0;
     flat_mutation_reader _producer;
@@ -128,20 +99,18 @@ multishard_writer::multishard_writer(
     std::function<future<> (flat_mutation_reader)> consumer)
     : _s(std::move(s))
     , _partitioner(partitioner)
+    , _queue_reader_handles(_partitioner.shard_count())
     , _producer(std::move(producer))
     , _consumer(std::move(consumer)) {
     _shard_writers.resize(_partitioner.shard_count());
-    _queues.reserve(_partitioner.shard_count());
-    for (unsigned shard = 0; shard < _partitioner.shard_count(); shard++) {
-        _queues.push_back(seastar::queue<mutation_fragment_opt>{2});
-    }
 }
 
 future<> multishard_writer::make_shard_writer(unsigned shard) {
-    auto this_shard_reader = make_foreign(std::make_unique<flat_mutation_reader>(make_flat_mutation_reader<queue_reader>(_s, _queues[shard])));
+    auto [reader, handle] = make_queue_reader(_s);
+    _queue_reader_handles[shard] = std::move(handle);
     return smp::submit_to(shard, [gs = global_schema_ptr(_s),
             consumer = _consumer,
-            reader = std::move(this_shard_reader)] () mutable {
+            reader = make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)))] () mutable {
         auto this_shard_reader = make_foreign_reader(gs.get(), std::move(reader));
         return make_foreign(std::make_unique<shard_writer>(gs.get(), std::move(this_shard_reader), consumer));
     }).then([this, shard] (foreign_ptr<std::unique_ptr<shard_writer>> writer) {
@@ -163,7 +132,7 @@ future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_frag
     }
     return f.then([this, mf = std::move(mf)] () mutable {
         assert(_current_shard != -1u);
-        return _queues[_current_shard].push_eventually(mutation_fragment_opt(std::move(mf)));
+        return _queue_reader_handles[_current_shard]->push(std::move(mf));
     }).then([] {
         return stop_iteration::no;
     });
@@ -171,11 +140,10 @@ future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_frag
 
 future<stop_iteration> multishard_writer::handle_end_of_stream() {
     return parallel_for_each(boost::irange(0u, _partitioner.shard_count()), [this] (unsigned shard) {
-        if (bool(_shard_writers[shard])) {
-            return _queues[shard].push_eventually(mutation_fragment_opt());
-        } else {
-            return make_ready_future<>();
+        if (_queue_reader_handles[shard]) {
+            _queue_reader_handles[shard]->push_end_of_stream();
         }
+        return make_ready_future<>();
     }).then([] {
         return stop_iteration::yes;
     });
@@ -185,8 +153,10 @@ future<> multishard_writer::consume(unsigned shard) {
     return smp::submit_to(shard, [writer = _shard_writers[shard].get()] () mutable {
         return writer->consume();
     }).handle_exception([this] (std::exception_ptr ep) {
-        for (auto& q : _queues) {
-            q.abort(ep);
+        for (auto& q : _queue_reader_handles) {
+            if (q) {
+                q->abort(ep);
+            }
         }
         return make_exception_future<>(std::move(ep));
     });

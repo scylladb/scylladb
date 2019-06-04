@@ -2225,3 +2225,138 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         return make_ready_future<>();
     }).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
+    auto gen = random_mutation_generator(random_mutation_generator::generate_counters::no);
+
+    const auto expected_muts = gen(20);
+
+    // Simultaneous read and write
+    {
+        auto read_all = [] (flat_mutation_reader& reader, std::vector<mutation>& muts) {
+            return async([&reader, &muts] {
+                while (auto mut_opt = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0()) {
+                    muts.emplace_back(std::move(*mut_opt));
+                }
+            });
+        };
+
+        auto write_all = [] (queue_reader_handle& handle, const std::vector<mutation>& muts) {
+            return async([&] {
+                auto reader = flat_mutation_reader_from_mutations(muts);
+                while (auto mf_opt = reader(db::no_timeout).get0()) {
+                    handle.push(std::move(*mf_opt)).get();
+                }
+                handle.push_end_of_stream();
+            });
+        };
+
+        auto actual_muts = std::vector<mutation>{};
+        actual_muts.reserve(20);
+
+        auto [reader, handle] = make_queue_reader(gen.schema());
+
+        when_all_succeed(read_all(reader, actual_muts), write_all(handle, expected_muts)).get();
+        BOOST_REQUIRE_EQUAL(actual_muts.size(), expected_muts.size());
+        for (size_t i = 0; i < expected_muts.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(actual_muts.at(i), expected_muts.at(i));
+        }
+    }
+
+    // abort()
+    {
+        auto [reader, handle] = make_queue_reader(gen.schema());
+        auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
+
+        auto expected_reader = flat_mutation_reader_from_mutations(expected_muts);
+
+        handle.push(std::move(*expected_reader(db::no_timeout).get0()));
+
+        BOOST_REQUIRE(!fill_buffer_fut.available());
+
+        handle.abort(std::make_exception_ptr<std::runtime_error>(std::runtime_error("error")));
+
+        BOOST_REQUIRE_THROW(fill_buffer_fut.get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(handle.push(partition_end{}).get(), std::runtime_error);
+    }
+
+    // Detached handle
+    {
+        auto [reader, handle] = make_queue_reader(gen.schema());
+        auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
+
+        {
+            auto throwaway_reader = std::move(reader);
+        }
+
+        BOOST_REQUIRE_THROW(handle.push(partition_end{}).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(handle.push_end_of_stream(), std::runtime_error);
+    }
+
+    // Abandoned handle aborts, move-assignment
+    {
+        auto [reader, handle] = make_queue_reader(gen.schema());
+        auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
+
+        auto expected_reader = flat_mutation_reader_from_mutations(expected_muts);
+
+        handle.push(std::move(*expected_reader(db::no_timeout).get0()));
+
+        BOOST_REQUIRE(!fill_buffer_fut.available());
+
+        {
+            auto [throwaway_reader, throwaway_handle] = make_queue_reader(gen.schema());
+            // Overwrite handle
+            handle = std::move(throwaway_handle);
+        }
+
+        BOOST_REQUIRE_THROW(fill_buffer_fut.get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(handle.push(partition_end{}).get(), std::runtime_error);
+    }
+
+    // Abandoned handle aborts, destructor
+    {
+        auto [reader, handle] = make_queue_reader(gen.schema());
+        auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
+
+        auto expected_reader = flat_mutation_reader_from_mutations(expected_muts);
+
+        handle.push(std::move(*expected_reader(db::no_timeout).get0()));
+
+        BOOST_REQUIRE(!fill_buffer_fut.available());
+
+        {
+            // Destroy handle
+            queue_reader_handle throwaway_handle(std::move(handle));
+        }
+
+        BOOST_REQUIRE_THROW(fill_buffer_fut.get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(handle.push(partition_end{}).get(), std::runtime_error);
+    }
+
+    // Life-cycle, relies on ASAN for error reporting
+    {
+        auto [reader, handle] = make_queue_reader(gen.schema());
+        {
+            auto [throwaway_reader, throwaway_handle] = make_queue_reader(gen.schema());
+            // Overwrite handle
+            handle = std::move(throwaway_handle);
+
+            auto [another_throwaway_reader, another_throwaway_handle] = make_queue_reader(gen.schema());
+            // Overwrite with moved-from handle (move assignment operator)
+            another_throwaway_handle = std::move(throwaway_handle);
+
+            // Overwrite with moved-from handle (move constructor)
+            queue_reader_handle yet_another_throwaway_handle(std::move(throwaway_handle));
+        }
+    }
+
+    // push_end_of_stream() detaches handle from reader, relies on ASAN for error reporting
+    {
+        auto [reader, handle] = make_queue_reader(gen.schema());
+        {
+            auto throwaway_handle = std::move(handle);
+            throwaway_handle.push_end_of_stream();
+        }
+    }
+}

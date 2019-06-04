@@ -1565,3 +1565,142 @@ flat_mutation_reader make_multishard_combining_reader(
     return make_flat_mutation_reader<multishard_combining_reader>(std::move(lifecycle_policy), partitioner, std::move(schema), pr, ps, pc,
             std::move(trace_state), fwd_mr);
 }
+
+class queue_reader final : public flat_mutation_reader::impl {
+    friend class queue_reader_handle;
+
+private:
+    queue_reader_handle* _handle = nullptr;
+    std::optional<promise<>> _not_full;
+    std::optional<promise<>> _full;
+    std::exception_ptr _ex;
+
+private:
+    void push_and_maybe_notify(mutation_fragment&& mf) {
+        push_mutation_fragment(std::move(mf));
+        if (_full && is_buffer_full()) {
+            _full->set_value();
+            _full.reset();
+        }
+    }
+
+public:
+    explicit queue_reader(schema_ptr s)
+        : impl(std::move(s)) {
+    }
+    ~queue_reader() {
+        if (_handle) {
+            _handle->_reader = nullptr;
+        }
+    }
+    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
+        if (_ex) {
+            return make_exception_future<>(_ex);
+        }
+        if (_end_of_stream || !is_buffer_empty()) {
+            return make_ready_future<>();
+        }
+        if (_not_full) {
+            _not_full->set_value();
+            _not_full.reset();
+        }
+        _full.emplace();
+        return _full->get_future();
+    }
+    virtual void next_partition() override {
+        throw std::bad_function_call();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
+        throw std::bad_function_call();
+    }
+    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
+        throw std::bad_function_call();
+    }
+    future<> push(mutation_fragment&& mf) {
+        if (!is_buffer_full()) {
+            push_and_maybe_notify(std::move(mf));
+            return make_ready_future<>();
+        }
+        _not_full.emplace();
+        return _not_full->get_future().then([this, mf = std::move(mf)] () mutable {
+            push_and_maybe_notify(std::move(mf));
+        });
+    }
+    void push_end_of_stream() {
+        _end_of_stream = true;
+        if (_full) {
+            _full->set_value();
+            _full.reset();
+        }
+    }
+    void abort(std::exception_ptr ep) {
+        _end_of_stream = true;
+        _ex = std::move(ep);
+        if (_full) {
+            _full->set_exception(_ex);
+            _full.reset();
+        }
+    }
+};
+
+void queue_reader_handle::abandon() {
+    abort(std::make_exception_ptr<std::runtime_error>(std::runtime_error("Abandoned queue_reader_handle")));
+}
+
+queue_reader_handle::queue_reader_handle(queue_reader& reader) : _reader(&reader) {
+    _reader->_handle = this;
+}
+
+queue_reader_handle::queue_reader_handle(queue_reader_handle&& o) : _reader(std::exchange(o._reader, nullptr)) {
+    if (_reader) {
+        _reader->_handle = this;
+    }
+}
+
+queue_reader_handle::~queue_reader_handle() {
+    abandon();
+}
+
+queue_reader_handle& queue_reader_handle::operator=(queue_reader_handle&& o) {
+    abandon();
+    _reader = std::exchange(o._reader, nullptr);
+    _ex = std::exchange(o._ex, {});
+    if (_reader) {
+        _reader->_handle = this;
+    }
+    return *this;
+}
+
+future<> queue_reader_handle::push(mutation_fragment mf) {
+    if (!_reader) {
+        if (_ex) {
+            return make_exception_future<>(_ex);
+        }
+        return make_exception_future<>(std::runtime_error("Dangling queue_reader_handle"));
+    }
+    return _reader->push(std::move(mf));
+}
+
+void queue_reader_handle::push_end_of_stream() {
+    if (!_reader) {
+        throw std::runtime_error("Dangling queue_reader_handle");
+    }
+    _reader->push_end_of_stream();
+    _reader->_handle = nullptr;
+    _reader = nullptr;
+}
+
+void queue_reader_handle::abort(std::exception_ptr ep) {
+    _ex = std::move(ep);
+    if (_reader) {
+        _reader->abort(_ex);
+        _reader->_handle = nullptr;
+        _reader = nullptr;
+    }
+}
+
+std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s) {
+    auto impl = std::make_unique<queue_reader>(std::move(s));
+    auto handle = queue_reader_handle(*impl);
+    return {flat_mutation_reader(std::move(impl)), std::move(handle)};
+}
