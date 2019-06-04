@@ -34,7 +34,15 @@ class FilesystemFixup:
 x="$(readlink -f "$0")"
 b="$(basename "$x")"
 d="$(dirname "$x")"
-PYTHONPATH="${{d}}:${{d}}/libexec:$PYTHONPATH" PATH="${{d}}/{pythonpath}:${{PATH}}" exec -a "$0" "${{d}}/libexec/${{b}}" "$@"
+CENTOS_SSL_CERT_FILE="/etc/pki/tls/cert.pem"
+if [ -f "${{CENTOS_SSL_CERT_FILE}}" ]; then
+  c=${{CENTOS_SSL_CERT_FILE}}
+fi
+DEBIAN_SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
+if [ -f "${{DEBIAN_SSL_CERT_FILE}}" ]; then
+  c=${{DEBIAN_SSL_CERT_FILE}}
+fi
+PYTHONPATH="${{d}}:${{d}}/libexec:$PYTHONPATH" PATH="${{d}}/{pythonpath}:${{PATH}}" SSL_CERT_FILE="${{c}}" exec -a "$0" "${{d}}/libexec/${{b}}" "$@"
 '''
         self.python_path = python_path
         self.installroot = installroot
