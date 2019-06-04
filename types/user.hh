@@ -59,7 +59,7 @@ public:
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 
-    virtual sstring to_json_string(const bytes& b) const override;
+    virtual sstring to_json_string(bytes_view bv) const override;
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
 private:
     static sstring make_name(sstring keyspace,

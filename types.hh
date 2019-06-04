@@ -581,7 +581,10 @@ public:
     }
     virtual sstring to_string(const bytes& b) const = 0;
     virtual bytes from_string(sstring_view text) const = 0;
-    virtual sstring to_json_string(const bytes& b) const = 0;
+    virtual sstring to_json_string(bytes_view bv) const = 0;
+    sstring to_json_string(const bytes& b) const {
+        return to_json_string(bytes_view(b));
+    }
     sstring to_json_string(const bytes_opt& b) const {
         return b ? to_json_string(*b) : "null";
     }
@@ -952,8 +955,8 @@ public:
     virtual sstring to_string(const bytes& b) const override {
         return _underlying_type->to_string(b);
     }
-    virtual sstring to_json_string(const bytes& b) const override {
-        return _underlying_type->to_json_string(b);
+    virtual sstring to_json_string(bytes_view bv) const override {
+        return _underlying_type->to_json_string(bv);
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return _underlying_type->from_json_object(value, sf);
