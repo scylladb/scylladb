@@ -67,20 +67,6 @@ public:
     }
 };
 
-static std::string type_to_string(data_type type) {
-    static thread_local std::unordered_map<data_type, std::string> types = {
-        {utf8_type, "S"},
-        {bytes_type, "B"},
-        {boolean_type, "BOOL"},
-        {decimal_type, "N"}, // FIXME: use a specialized Alternator number type instead of the general decimal_type
-    };
-    auto it = types.find(type);
-    if (it == types.end()) {
-        throw std::runtime_error(format("Unknown type {}", type->name()));
-    }
-    return it->second;
-}
-
 static void supplement_table_info(Json::Value& descr, const schema& schema) {
     descr["CreationDateTime"] = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
     descr["TableStatus"] = "ACTIVE";
@@ -265,73 +251,6 @@ future<json::json_return_type> executor::create_table(std::string content) {
                 api_error("ResourceInUseException",
                         format("Table {} already exists", table_name)));
     });
-}
-
-static bytes get_key_column_value(const Json::Value& item, const column_definition& column) {
-    std::string column_name = column.name_as_text();
-    std::string expected_type = type_to_string(column.type);
-
-    Json::Value key_typed_value = item.get(column_name, Json::nullValue);
-    if (!key_typed_value.isObject() || key_typed_value.size() != 1) {
-        throw api_error("ValidationException",
-                format("Missing or invalid value object for key column {}: {}",
-                        column_name, item.toStyledString()));
-    }
-    auto it = key_typed_value.begin();
-    if (it.key().asString() != expected_type) {
-        throw api_error("ValidationException",
-                format("Expected type {} for key column {}, got type {}",
-                        expected_type, column_name, it.key().asString()));
-    }
-    if (column.type == bytes_type) {
-        return base64_decode(it->asString());
-    } else {
-        return column.type->from_string(it->asString());
-    }
-
-}
-
-static Json::Value json_key_column_value(bytes_view cell, const column_definition& column) {
-    if (column.type == bytes_type) {
-        return base64_encode(cell);
-    } if (column.type == utf8_type) {
-        return Json::Value(reinterpret_cast<const char*>(cell.data()),
-                reinterpret_cast<const char*>(cell.data()) + cell.size());
-    } else if (column.type == decimal_type) {
-        // FIXME: use specialized Alternator number type, not the more
-        // general "decimal_type". A dedicated type can be more efficient
-        // in storage space and in parsing speed.
-        auto s = decimal_type->to_json_string(bytes(cell));
-        return Json::Value(reinterpret_cast<const char*>(s.data()),
-                reinterpret_cast<const char*>(s.data()) + s.size());
-    } else {
-        // We shouldn't get here, we shouldn't see such key columns.
-        throw std::runtime_error(format("Unexpected key type: {}", column.type->name()));
-    }
-}
-
-static partition_key pk_from_json(const Json::Value& item, schema_ptr schema) {
-    std::vector<bytes> raw_pk;
-    // FIXME: this is a loop, but we really allow only one partition key column.
-    for (const column_definition& cdef : schema->partition_key_columns()) {
-        bytes raw_value = get_key_column_value(item, cdef);
-        raw_pk.push_back(std::move(raw_value));
-    }
-   return partition_key::from_exploded(raw_pk);
-}
-
-static clustering_key ck_from_json(const Json::Value& item, schema_ptr schema) {
-    if (schema->clustering_key_size() == 0) {
-        return clustering_key::make_empty();
-    }
-    std::vector<bytes> raw_ck;
-    // FIXME: this is a loop, but we really allow only one clustering key column.
-    for (const column_definition& cdef : schema->clustering_key_columns()) {
-        bytes raw_value = get_key_column_value(item,  cdef);
-        raw_ck.push_back(std::move(raw_value));
-    }
-
-    return clustering_key::from_exploded(raw_ck);
 }
 
 static mutation make_item_mutation(const Json::Value& item, schema_ptr schema) {
