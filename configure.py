@@ -778,6 +778,7 @@ alternator = [
        'alternator/executor.cc',
        'alternator/stats.cc',
        'alternator/base64.cc',
+       'alternator/serialization.cc',
 ]
 
 idls = ['idl/gossip_digest.idl.hh',
