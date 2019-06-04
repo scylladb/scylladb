@@ -432,6 +432,7 @@ public:
     static const std::chrono::seconds hint_file_write_timeout;
 
 private:
+    static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
     state_set _state;
     const fs::path _hints_dir;
     dev_t _hints_dir_device_id = 0;
