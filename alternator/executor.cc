@@ -30,6 +30,7 @@
 #include "server.hh"
 #include "service/pager/query_pagers.hh"
 #include <functional>
+#include "error.hh"
 
 #include <boost/range/adaptors.hpp>
 
