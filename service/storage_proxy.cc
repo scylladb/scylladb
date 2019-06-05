@@ -847,7 +847,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         sm::make_total_operations("canceled_read_repairs", _stats.global_read_repairs_canceled_due_to_concurrent_write,
                        sm::description("number of global read repairs canceled due to a concurrent write")),
 
-        sm::make_total_operations("foreground_read_repair", _stats.read_repair_repaired_blocking,
+        sm::make_total_operations("foreground_read_repairs", _stats.read_repair_repaired_blocking,
                       sm::description("number of foreground read repairs")),
 
         sm::make_total_operations("background_read_repairs", _stats.read_repair_repaired_background,
