@@ -1036,14 +1036,14 @@ future<std::unordered_set<repair_hash>> messaging_service::send_repair_get_full_
 }
 
 // Wrapper for REPAIR_GET_COMBINED_ROW_HASH
-void messaging_service::register_repair_get_combined_row_hash(std::function<future<repair_hash> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary)>&& func) {
+void messaging_service::register_repair_get_combined_row_hash(std::function<future<get_combined_row_hash_response> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary)>&& func) {
     register_handler(this, messaging_verb::REPAIR_GET_COMBINED_ROW_HASH, std::move(func));
 }
 void messaging_service::unregister_repair_get_combined_row_hash() {
     _rpc->unregister_handler(messaging_verb::REPAIR_GET_COMBINED_ROW_HASH);
 }
-future<repair_hash> messaging_service::send_repair_get_combined_row_hash(msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary) {
-    return send_message<future<repair_hash>>(this, messaging_verb::REPAIR_GET_COMBINED_ROW_HASH, std::move(id), repair_meta_id, std::move(common_sync_boundary));
+future<get_combined_row_hash_response> messaging_service::send_repair_get_combined_row_hash(msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary) {
+    return send_message<future<get_combined_row_hash_response>>(this, messaging_verb::REPAIR_GET_COMBINED_ROW_HASH, std::move(id), repair_meta_id, std::move(common_sync_boundary));
 }
 
 void messaging_service::register_repair_get_sync_boundary(std::function<future<get_sync_boundary_response> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary)>&& func) {
