@@ -59,6 +59,7 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "types/listlike_partial_deserializing_iterator.hh"
 
 template<typename T>
 sstring time_point_to_string(const T& tp)
@@ -2887,57 +2888,6 @@ collection_type_impl::reserialize(cql_serialization_format from, cql_serializati
     serialize(get_value_ptr(val), out, to);
     return ret;
 }
-
-// iterator that takes a set or list in serialized form, and emits
-// each element, still in serialized form
-class listlike_partial_deserializing_iterator
-          : public std::iterator<std::input_iterator_tag, bytes_view> {
-    bytes_view* _in;
-    int _remain;
-    bytes_view _cur;
-    cql_serialization_format _sf;
-private:
-    struct end_tag {};
-    listlike_partial_deserializing_iterator(bytes_view& in, cql_serialization_format sf)
-            : _in(&in), _sf(sf) {
-        _remain = read_collection_size(*_in, _sf);
-        parse();
-    }
-    listlike_partial_deserializing_iterator(end_tag)
-            : _remain(0), _sf(cql_serialization_format::internal()) {  // _sf is bogus, but doesn't matter
-    }
-public:
-    bytes_view operator*() const { return _cur; }
-    listlike_partial_deserializing_iterator& operator++() {
-        --_remain;
-        parse();
-        return *this;
-    }
-    void operator++(int) {
-        --_remain;
-        parse();
-    }
-    bool operator==(const listlike_partial_deserializing_iterator& x) const {
-        return _remain == x._remain;
-    }
-    bool operator!=(const listlike_partial_deserializing_iterator& x) const {
-        return _remain != x._remain;
-    }
-    static listlike_partial_deserializing_iterator begin(bytes_view& in, cql_serialization_format sf) {
-        return { in, sf };
-    }
-    static listlike_partial_deserializing_iterator end(bytes_view in, cql_serialization_format sf) {
-        return { end_tag() };
-    }
-private:
-    void parse() {
-        if (_remain) {
-            _cur = read_collection_value(*_in, _sf);
-        } else {
-            _cur = {};
-        }
-    }
-};
 
 set_type
 set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
