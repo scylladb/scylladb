@@ -375,6 +375,7 @@ scylla_tests = [
     'tests/small_vector_test',
     'tests/data_listeners_test',
     'tests/truncation_migration_test',
+    'tests/like_matcher_test',
 ]
 
 perf_tests = [
@@ -724,6 +725,7 @@ scylla_core = (['database.cc',
                 'distributed_loader.cc',
                 'utils/utf8.cc',
                 'utils/ascii.cc',
+                'utils/like_matcher.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                )
 
@@ -842,6 +844,7 @@ pure_boost_tests = set([
     'tests/auth_passwords_test',
     'tests/top_k_test',
     'tests/small_vector_test',
+    'tests/like_matcher_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
@@ -1115,7 +1118,7 @@ args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 args.user_cflags += ' -march=' + args.target
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
-                 maybe_static(args.staticboost, '-lboost_date_time'), ])
+                 maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc'), ])
 
 xxhash_dir = 'xxHash'
 
