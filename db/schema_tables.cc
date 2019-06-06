@@ -781,7 +781,7 @@ mutation compact_for_schema_digest(const mutation& m) {
 void feed_hash_for_schema_digest(hasher& h, const mutation& m, schema_features features) {
     auto compacted = compact_for_schema_digest(m);
     if (!features.contains<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>() || !compacted.partition().empty()) {
-        feed_hash(h, compact_for_schema_digest(m));
+        feed_hash(h, compacted);
     }
 }
 
