@@ -515,6 +515,10 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
     using namespace db::schema_tables;
 
     auto tmp = tmpdir();
+    // NOTICE: Regenerating data for this test may be necessary when a system table is added.
+    // This test uses pre-generated sstables and relies on the fact that they are up to date
+    // with the current system schema. If it is not, the schema will be updated, which will cause
+    // new timestamps to appear and schema digests will not match anymore.
     const bool regenerate = false;
 
     sstring data_dir = "./tests/sstables/schema_digest_test";
