@@ -94,7 +94,7 @@ if [ $LOCALRPM -eq 1 ]; then
         if [ ! -f $PRODUCT-jmx/reloc/build_reloc.sh ]; then
             # directory exists but file is missing, so need to try clone again
             rm -rf $PRODUCT-jmx
-            git clone $branch_arg --depth 1 https://github.com/scylladb/$PRODUCT-jmx.git
+            git clone $branch_arg --depth 1 git@github.com:scylladb/$PRODUCT-jmx.git
         else
             git pull
         fi
@@ -109,7 +109,7 @@ if [ $LOCALRPM -eq 1 ]; then
         if [ ! -f $PRODUCT-tools-java/reloc/build_reloc.sh ]; then
             # directory exists but file is missing, so need to try clone again
             rm -rf $PRODUCT-tools-java
-            git clone $branch_arg --depth 1 https://github.com/scylladb/$PRODUCT-tools-java.git
+            git clone $branch_arg --depth 1 git@github.com:scylladb/$PRODUCT-tools-java.git
         else
             git pull
         fi
@@ -125,7 +125,7 @@ if [ $LOCALRPM -eq 1 ]; then
         if [ ! -f $PRODUCT-ami/dist/redhat/build_rpm.sh ]; then
             # directory exists but file is missing, so need to try clone again
             rm -rf $PRODUCT-ami
-            git clone $branch_arg --depth 1 https://github.com/scylladb/$PRODUCT-ami.git
+            git clone $branch_arg --depth 1 git@github.com:scylladb/$PRODUCT-ami.git
         else
             git pull
         fi
