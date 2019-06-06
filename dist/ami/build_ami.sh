@@ -82,12 +82,19 @@ if [ $LOCALRPM -eq 1 ]; then
         cp build/redhat/RPMS/x86_64/$PRODUCT-server-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT-server.x86_64.rpm
         cp build/redhat/RPMS/x86_64/$PRODUCT-debuginfo-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT-debuginfo.x86_64.rpm
     fi
+    branch_arg=${BRANCH:-$(git rev-parse --abbrev-ref HEAD))}
+    if [ -n "$branch_arg" ]; then
+        if [[ "$b" == '(HEAD detached at'* ]]; then
+            branch_arg=$(echo "$branch_arg" | sed -e 's/^(HEAD detached at.*\///' -e 's/)$//')
+        fi
+        branch_arg="-b $branch_arg"
+    fi
     if [ ! -f dist/ami/files/$PRODUCT-jmx.noarch.rpm ]; then
         cd build
         if [ ! -f $PRODUCT-jmx/reloc/build_reloc.sh ]; then
             # directory exists but file is missing, so need to try clone again
             rm -rf $PRODUCT-jmx
-            git clone --depth 1 https://github.com/scylladb/$PRODUCT-jmx.git
+            git clone $branch_arg --depth 1 https://github.com/scylladb/$PRODUCT-jmx.git
         else
             git pull
         fi
@@ -102,7 +109,7 @@ if [ $LOCALRPM -eq 1 ]; then
         if [ ! -f $PRODUCT-tools-java/reloc/build_reloc.sh ]; then
             # directory exists but file is missing, so need to try clone again
             rm -rf $PRODUCT-tools-java
-            git clone --depth 1 https://github.com/scylladb/$PRODUCT-tools-java.git
+            git clone $branch_arg --depth 1 https://github.com/scylladb/$PRODUCT-tools-java.git
         else
             git pull
         fi
@@ -118,7 +125,7 @@ if [ $LOCALRPM -eq 1 ]; then
         if [ ! -f $PRODUCT-ami/dist/redhat/build_rpm.sh ]; then
             # directory exists but file is missing, so need to try clone again
             rm -rf $PRODUCT-ami
-            git clone --depth 1 https://github.com/scylladb/$PRODUCT-ami.git
+            git clone $branch_arg --depth 1 https://github.com/scylladb/$PRODUCT-ami.git
         else
             git pull
         fi
