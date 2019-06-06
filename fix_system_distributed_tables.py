@@ -151,7 +151,7 @@ if __name__ == '__main__':
     argp.add_argument('--user', '-u')
     argp.add_argument('--password', '-p', default='none')
     argp.add_argument('--node', default='127.0.0.1', help='Node to connect to.')
-    argp.add_argument('--port', default='9042', help='Port to connect to.')
+    argp.add_argument('--port', default=9042, help='Port to connect to.', type=int)
 
     args = argp.parse_args()
     res = validate_and_fix(args)
