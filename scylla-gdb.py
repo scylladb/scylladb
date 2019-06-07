@@ -889,6 +889,25 @@ class scylla_memory(gdb.Command):
                           str_real_dirty=dirty_mem_mgr(db['_streaming_dirty_memory_manager']).real_dirty(),
                           str_virt_dirty=dirty_mem_mgr(db['_streaming_dirty_memory_manager']).virt_dirty()))
 
+        sp = sharded(gdb.parse_and_eval('service::_the_storage_proxy')).local()
+        hm = std_optional(sp['_hints_manager']).get()
+        view_hm = sp['_hints_for_views_manager']
+
+        gdb.write('Coordinator:\n'
+          '  fg writes:  {fg_wr:>13}\n'
+          '  bg writes:  {bg_wr:>13}, {bg_wr_bytes:>} B\n'
+          '  fg reads:   {fg_rd:>13}\n'
+          '  bg reads:   {bg_rd:>13}\n'
+          '  hints:      {regular:>13} B\n'
+          '  view hints: {views:>13} B\n\n'
+          .format(fg_wr=int(sp['_stats']['writes']) - int(sp['_stats']['background_writes']),
+                  bg_wr=int(sp['_stats']['background_writes']),
+                  bg_wr_bytes=int(sp['_stats']['background_write_bytes']),
+                  fg_rd=int(sp['_stats']['foreground_reads']),
+                  bg_rd=int(sp['_stats']['reads']) - int(sp['_stats']['foreground_reads']),
+                  regular=int(hm['_stats']['size_of_hints_in_progress']),
+                  views=int(view_hm['_stats']['size_of_hints_in_progress'])))
+
         gdb.write('Small pools:\n')
         small_pools = cpu_mem['small_pools']
         nr = small_pools['nr_small_pools']
