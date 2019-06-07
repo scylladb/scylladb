@@ -434,7 +434,7 @@ private:
     memory::reclaimer _reclaimer;
     friend class region;
     friend class region_impl;
-    memory::reclaiming_result reclaim();
+    memory::reclaiming_result reclaim(seastar::memory::reclaimer::request);
 public:
     tracker();
     ~tracker();

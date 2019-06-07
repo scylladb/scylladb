@@ -379,7 +379,7 @@ public:
 
 tracker::tracker()
     : _impl(std::make_unique<impl>())
-    , _reclaimer([this] { return reclaim(); }, memory::reclaimer_scope::sync)
+    , _reclaimer([this] (seastar::memory::reclaimer::request r) { return reclaim(r); }, memory::reclaimer_scope::sync)
 { }
 
 tracker::~tracker() {
@@ -1644,8 +1644,8 @@ bool tracker::should_abort_on_bad_alloc() {
     return _impl->should_abort_on_bad_alloc();
 }
 
-memory::reclaiming_result tracker::reclaim() {
-    return reclaim(_impl->reclamation_step() * segment::size)
+memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r) {
+    return reclaim(std::max(r.bytes_to_reclaim, _impl->reclamation_step() * segment::size))
            ? memory::reclaiming_result::reclaimed_something
            : memory::reclaiming_result::reclaimed_nothing;
 }
