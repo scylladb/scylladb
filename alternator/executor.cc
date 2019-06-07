@@ -33,6 +33,8 @@
 #include "error.hh"
 #include "serialization.hh"
 #include "expressions.hh"
+#include "conditions.hh"
+#include "cql3/constants.hh"
 
 #include <boost/range/adaptors.hpp>
 
@@ -698,7 +700,8 @@ static future<json::json_return_type> do_query(schema_ptr schema,
         std::vector<query::clustering_range>&& ck_bounds,
         std::unordered_set<std::string>&& attrs_to_get,
         uint32_t limit,
-        db::consistency_level cl) {
+        db::consistency_level cl,
+        ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions) {
     ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
 
     if (!exclusive_start_key.empty()) {
@@ -723,7 +726,6 @@ static future<json::json_return_type> do_query(schema_ptr schema,
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
-    ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr;
     auto p = service::pager::query_pagers::pager(schema, selection, dummy_query_state, *query_options, command, std::move(partition_ranges), dummy_stats, filtering_restrictions);
 
     return p->fetch_page(limit, gc_clock::now(), db::no_timeout).then(
@@ -766,32 +768,7 @@ future<json::json_return_type> executor::scan(std::string content) {
     dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
     std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
 
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl);
-}
-
-enum class comparison_operator_type {
-    EQ, NE, LE, LT, GE, GT, IN, BETWEEN, CONTAINS, IS_NULL, NOT_NULL, BEGINS_WITH
-};
-
-static comparison_operator_type get_comparison_operator(const Json::Value& comparison_operator) {
-    static std::unordered_map<std::string, comparison_operator_type> ops = {
-            {"EQ", comparison_operator_type::EQ},
-            {"LE", comparison_operator_type::LE},
-            {"LT", comparison_operator_type::LT},
-            {"GE", comparison_operator_type::GE},
-            {"GT", comparison_operator_type::GT},
-            {"BETWEEN", comparison_operator_type::BETWEEN},
-            {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
-    }; //TODO(sarna): NE, IN, CONTAINS, NULL, NOT_NULL
-    if (!comparison_operator.isString()) {
-        throw api_error("ValidationException", format("Invalid comparison operator definition {}", comparison_operator.toStyledString()));
-    }
-    std::string op = comparison_operator.asString();
-    auto it = ops.find(op);
-    if (it == ops.end()) {
-        throw api_error("ValidationException", format("Unsupported comparison operator {}", op));
-    }
-    return it->second;
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, nullptr);
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, comparison_operator_type op, const Json::Value& attrs) {
@@ -917,7 +894,7 @@ future<json::json_return_type> executor::query(std::string content) {
     auto [partition_ranges, ck_bounds] = calculate_bounds(schema, conditions);
     auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
 
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl);
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, nullptr);
 }
 
 static void validate_limit(int limit) {
