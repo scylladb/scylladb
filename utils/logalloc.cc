@@ -43,6 +43,15 @@
 
 #include <random>
 
+#ifdef SEASTAR_ASAN_ENABLED
+#include "sanitizer/asan_interface.h"
+#define POISON(addr, size) ASAN_POISON_MEMORY_REGION(addr, size)
+#define UNPOISON(addr, size) ASAN_UNPOISON_MEMORY_REGION(addr, size)
+#else
+#define POISON(addr, size) ((void)(addr), (void)(size))
+#define UNPOISON(addr, size) ((void)(addr), (void)(size))
+#endif
+
 namespace bi = boost::intrusive;
 
 standard_allocation_strategy standard_allocation_strategy_instance;
@@ -755,6 +764,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
                 continue;
             }
             auto seg = new (p) segment;
+            POISON(seg, sizeof(segment));
             auto idx = _store.new_idx_for_segment(seg);
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
@@ -994,21 +1004,26 @@ class region_impl final : public basic_region_impl {
         void encode(char*& pos) const {
             uint64_t b = 64;
             auto n = _n;
+            auto start = pos;
             do {
                 b |= n & 63;
                 n >>= 6;
                 if (!n) {
                     b |= 128;
                 }
+                UNPOISON(pos, 1);
                 *pos++ = b;
                 b = 0;
             } while (n);
+            POISON(start, pos - start);
         }
 
         // non-canonical encoding to allow padding (for alignment); encoded_size must be
         // sufficient (greater than this->encoded_size())
         void encode(char*& pos, size_t encoded_size) const {
             uint64_t b = 64;
+            auto start = pos;
+            UNPOISON(start, encoded_size);
             auto n = _n;
             do {
                 b |= n & 63;
@@ -1019,6 +1034,7 @@ class region_impl final : public basic_region_impl {
                 *pos++ = b;
                 b = 0;
             } while (encoded_size);
+            POISON(start, pos - start);
         }
 
         static object_descriptor decode_forwards(const char*& pos) {
@@ -1027,6 +1043,7 @@ class region_impl final : public basic_region_impl {
             auto p = pos; // avoid aliasing; p++ doesn't touch memory
             uint8_t b;
             do {
+                UNPOISON(p, 1);
                 b = *p++;
                 if (shift < 32) {
                     // non-canonical encoding can cause large shift; undefined in C++
@@ -1034,6 +1051,7 @@ class region_impl final : public basic_region_impl {
                 }
                 shift += 6;
             } while ((b & 128) == 0);
+            POISON(pos, p - pos);
             pos = p;
             return object_descriptor(n);
         }
@@ -1043,9 +1061,12 @@ class region_impl final : public basic_region_impl {
             uint8_t b;
             auto p = pos; // avoid aliasing; --p doesn't touch memory
             do {
-                b = *--p;
+                --p;
+                UNPOISON(p, 1);
+                b = *p;
                 n = (n << 6) | (b & 63);
             } while ((b & 64) == 0);
+            POISON(p, pos - p);
             pos = p;
             return object_descriptor(n);
         }
@@ -1121,6 +1142,7 @@ private:
         auto pos = _active->at<char>(_active_offset);
         // Use non-canonical encoding to allow for alignment pad
         desc.encode(pos, obj_offset - _active_offset);
+        UNPOISON(pos, size);
         _active_offset = obj_offset + size;
         _active->record_alloc(_active_offset - old_active_offset);
         return pos;
@@ -1386,6 +1408,7 @@ public:
         desc = object_descriptor::make_dead(dead_size);
         auto npos = const_cast<char*>(pos);
         desc.encode(npos);
+        POISON(pos, dead_size);
 
         if (seg != _active) {
             _closed_occupancy -= seg->occupancy();
@@ -1507,13 +1530,16 @@ public:
             auto old_pos = pos;
             auto desc = object_descriptor::decode_forwards(pos);
             // Keep same size as before to maintain alignment
-            desc.encode(dpos, pos - old_pos);
+            size_t pad = pos - old_pos;
+            desc.encode(dpos, pad);
             if (desc.is_live()) {
-                offset += pos - old_pos;
+                offset += pad;
                 auto size = desc.live_size(pos);
                 offset += size;
                 _sanitizer.on_migrate(pos, size, dpos);
+                UNPOISON(dpos, size);
                 desc.migrator()->migrate(const_cast<char*>(pos), dpos, size);
+                POISON(old_pos, size + pad);
             } else {
                 offset += desc.dead_size();
             }
