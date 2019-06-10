@@ -22,6 +22,7 @@
 #pragma once
 
 #include <seastar/json/json_elements.hh>
+#include <type_traits>
 #include <boost/lexical_cast.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -231,7 +232,22 @@ public:
             return;
         }
         try {
-            value = T{boost::lexical_cast<Base>(param)};
+            // boost::lexical_cast does not use boolalpha. Converting a
+            // true/false throws exceptions. We don't want that.
+            if constexpr (std::is_same_v<Base, bool>) {
+                // Cannot use boolalpha because we (probably) want to
+                // accept 1 and 0 as well as true and false. And True. And fAlse.
+                std::transform(param.begin(), param.end(), param.begin(), ::tolower);
+                if (param == "true" || param == "1") {
+                    value = T(true);
+                } else if (param == "false" || param == "0") {
+                    value = T(false);
+                } else {
+                    throw boost::bad_lexical_cast{};
+                }
+            } else {
+                value = T{boost::lexical_cast<Base>(param)};
+            }
         } catch (boost::bad_lexical_cast&) {
             throw bad_param_exception(format("{} ({}): type error - should be {}", name, param, boost::units::detail::demangle(typeid(Base).name())));
         }
