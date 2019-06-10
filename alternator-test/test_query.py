@@ -200,3 +200,31 @@ def test_query_sort_order_number(test_table_sn):
     got_items = full_query(test_table_sn, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
     got_sort_keys = [x['c'] for x in got_items]
     assert got_sort_keys == numbers
+
+def test_query_filtering_attributes_equality(filled_test_table):
+    test_table, items = filled_test_table
+
+    query_filter = {
+        "attribute" : {
+            "AttributeValueList" : [ "xxxx" ],
+            "ComparisonOperator": "EQ"
+        }
+    }
+    got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}}, QueryFilter=query_filter)
+    print(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['attribute'] == 'xxxx']) == multiset(got_items)
+
+    query_filter = {
+        "attribute" : {
+            "AttributeValueList" : [ "xxxx" ],
+            "ComparisonOperator": "EQ"
+        },
+        "another" : {
+            "AttributeValueList" : [ "yy" ],
+            "ComparisonOperator": "EQ"
+        }
+    }
+
+    got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}}, QueryFilter=query_filter)
+    print(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['attribute'] == 'xxxx' and item['another'] == 'yy']) == multiset(got_items)
