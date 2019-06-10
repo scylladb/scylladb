@@ -95,3 +95,31 @@ def test_scan_attributes_to_get(dynamodb, filled_test_table):
         got_items = full_scan(table, AttributesToGet=wanted)
         expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
         assert multiset(expected_items) == multiset(got_items)
+
+def test_scan_with_attribute_equality_filtering(dynamodb, filled_test_table):
+    table, items = filled_test_table
+    scan_filter = {
+        "attribute" : {
+            "AttributeValueList" : [ "xxxxx" ],
+            "ComparisonOperator": "EQ"
+        }
+    }
+
+    got_items = full_scan(table, ScanFilter=scan_filter)
+    expected_items = [item for item in items if "attribute" in item.keys() and item["attribute"] == "xxxxx" ]
+    assert multiset(expected_items) == multiset(got_items)
+
+    scan_filter = {
+        "another" : {
+            "AttributeValueList" : [ "y" ],
+            "ComparisonOperator": "EQ"
+        },
+        "attribute" : {
+            "AttributeValueList" : [ "xxxxx" ],
+            "ComparisonOperator": "EQ"
+        }
+    }
+
+    got_items = full_scan(table, ScanFilter=scan_filter)
+    expected_items = [item for item in items if "attribute" in item.keys() and item["attribute"] == "xxxxx" and item["another"] == "y" ]
+    assert multiset(expected_items) == multiset(got_items)
