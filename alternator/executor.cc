@@ -893,11 +893,14 @@ future<json::json_return_type> executor::query(std::string content) {
 
     //FIXME(sarna): KeyConditions are deprecated in favor of KeyConditionExpression
     const Json::Value& conditions = request_info["KeyConditions"];
+    //FIXME(sarna): QueryFilter is deprecated in favor of FilterExpression
+    const Json::Value& query_filter = request_info["QueryFilter"];
 
     auto [partition_ranges, ck_bounds] = calculate_bounds(schema, conditions);
     auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
 
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, nullptr);
+    auto filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), query_filter);
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions));
 }
 
 static void validate_limit(int limit) {
