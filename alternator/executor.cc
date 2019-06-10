@@ -757,6 +757,8 @@ future<json::json_return_type> executor::scan(std::string content) {
     //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
     Json::Value attributes_to_get = request_info["AttributesToGet"];
     Json::Value exclusive_start_key = request_info["ExclusiveStartKey"];
+    //FIXME(sarna): ScanFilter is deprecated in favor of FilterExpression
+    const Json::Value& scan_filter = request_info["ScanFilter"];
     db::consistency_level cl = get_read_consistency(request_info);
     uint32_t limit = request_info.get("Limit", query::max_partitions).asUInt();
     if (limit <= 0) {
@@ -768,7 +770,8 @@ future<json::json_return_type> executor::scan(std::string content) {
     dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
     std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
 
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, nullptr);
+    auto filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), scan_filter);
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions));
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, comparison_operator_type op, const Json::Value& attrs) {
