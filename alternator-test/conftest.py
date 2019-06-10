@@ -150,8 +150,8 @@ def filled_test_table(dynamodb):
     items = items + [{
         'p': 'long',
         'c': str(i),
-        'attribute': "x" * 7,
-        'another': "y" * 16
+        'attribute': "x" * (1 + i % 7),
+        'another': "y" * (1 + i % 16)
     } for i in range(count)]
     items.append({'p': 'hello', 'c': 'world', 'str': 'and now for something completely different'})
 
