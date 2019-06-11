@@ -44,6 +44,11 @@ namespace db::view {
 // columns. When reading the results from the scylla_views_builds_in_progress
 // table, we adjust the clustering key (we shed the cpu_id column) and map
 // back the regular columns.
+// Since mutation fragment consumers expect clustering_row fragments
+// not to be duplicated for given primary key, previous clustering key
+// is stored between mutation fragments. If the clustering key becomes
+// the same as the previous one (as a result of trimming cpu_id),
+// the duplicated fragment is ignored.
 class build_progress_virtual_reader {
     database& _db;
 
@@ -55,6 +60,7 @@ class build_progress_virtual_reader {
         const query::partition_slice& _legacy_slice;
         query::partition_slice _slice;
         flat_mutation_reader _underlying;
+        std::optional<clustering_key> _previous_clustering_key;
 
         build_progress_reader(
                 schema_ptr legacy_schema,
@@ -79,7 +85,8 @@ class build_progress_virtual_reader {
                         pc,
                         std::move(trace_state),
                         fwd,
-                        fwd_mr)) {
+                        fwd_mr))
+                , _previous_clustering_key() {
         }
 
         const schema& underlying_schema() const {
@@ -127,8 +134,13 @@ class build_progress_virtual_reader {
                                 legacy_in_progress_row.append_cell(_legacy_generation_number_col, std::move(c));
                             }
                         });
+                        auto ck = adjust_ckey(scylla_in_progress_row.key());
+                        if (_previous_clustering_key && ck.equal(*_schema, *_previous_clustering_key)) {
+                            continue;
+                        }
+                        _previous_clustering_key = ck;
                         mf = clustering_row(
-                                adjust_ckey(scylla_in_progress_row.key()),
+                                std::move(ck),
                                 std::move(scylla_in_progress_row.tomb()),
                                 std::move(scylla_in_progress_row.marker()),
                                 std::move(legacy_in_progress_row));
@@ -140,6 +152,8 @@ class build_progress_virtual_reader {
                                 adjust_ckey(scylla_in_progress_rt.end),
                                 scylla_in_progress_rt.end_kind,
                                 scylla_in_progress_rt.tomb);
+                    } else if (mf.is_end_of_partition()) {
+                        _previous_clustering_key.reset();
                     }
                     push_mutation_fragment(std::move(mf));
                 }
