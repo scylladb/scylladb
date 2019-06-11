@@ -35,6 +35,12 @@ class thrift_server;
 class thrift_stats;
 class database;
 
+#ifdef THRIFT_USES_BOOST
+namespace thrift_std = boost;
+#else
+namespace thrift_std = std;
+#endif
+
 namespace cassandra {
 
 static const sstring thrift_version = "20.1.0";
@@ -80,12 +86,12 @@ class thrift_server {
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
         temporary_buffer<char> _in_tmp;
-        boost::shared_ptr<fake_transport> _transport;
-        boost::shared_ptr<apache::thrift::transport::TMemoryBuffer> _input;
-        boost::shared_ptr<apache::thrift::transport::TMemoryBuffer> _output;
-        boost::shared_ptr<apache::thrift::protocol::TProtocol> _in_proto;
-        boost::shared_ptr<apache::thrift::protocol::TProtocol> _out_proto;
-        boost::shared_ptr<apache::thrift::async::TAsyncProcessor> _processor;
+        thrift_std::shared_ptr<fake_transport> _transport;
+        thrift_std::shared_ptr<apache::thrift::transport::TMemoryBuffer> _input;
+        thrift_std::shared_ptr<apache::thrift::transport::TMemoryBuffer> _output;
+        thrift_std::shared_ptr<apache::thrift::protocol::TProtocol> _in_proto;
+        thrift_std::shared_ptr<apache::thrift::protocol::TProtocol> _out_proto;
+        thrift_std::shared_ptr<apache::thrift::async::TAsyncProcessor> _processor;
         promise<> _processor_promise;
     public:
         connection(thrift_server& server, connected_socket&& fd, socket_address addr);
@@ -101,9 +107,9 @@ class thrift_server {
 private:
     std::vector<server_socket> _listeners;
     std::unique_ptr<thrift_stats> _stats;
-    boost::shared_ptr<::cassandra::CassandraCobSvIfFactory> _handler_factory;
+    thrift_std::shared_ptr<::cassandra::CassandraCobSvIfFactory> _handler_factory;
     std::unique_ptr<apache::thrift::protocol::TProtocolFactory> _protocol_factory;
-    boost::shared_ptr<apache::thrift::async::TAsyncProcessorFactory> _processor_factory;
+    thrift_std::shared_ptr<apache::thrift::async::TAsyncProcessorFactory> _processor_factory;
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;

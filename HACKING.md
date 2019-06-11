@@ -25,7 +25,7 @@ Running `./install-dependencies.sh` (as root) installs the appropriate packages 
 On Ubuntu and Debian based Linux distributions, some packages
 required to build Scylla are missing in the official upstream:
 
-- libthrift-dev and libthrift, version 0.9 or 0.10 (0.11 won't work)
+- libthrift-dev and libthrift
 - antlr3-c++-dev
 
 Try running ```sudo ./scripts/scylla_current_repo``` to add Scylla upstream,
