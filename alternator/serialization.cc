@@ -93,7 +93,7 @@ Json::Value deserialize_item(bytes_view bv) {
         auto s = decimal_type->to_json_string(bytes(bv)); //FIXME(sarna): unnecessary copy
         deserialized[type_representation.ident] = Json::Value(reinterpret_cast<const char*>(s.data()), reinterpret_cast<const char*>(s.data()) + s.size());
     } else {
-        deserialized[type_representation.ident] = type_representation.dtype->to_json(bytes(bv)); //FIXME(sarna): unnecessary copy
+        deserialized[type_representation.ident] = json::to_json_value(type_representation.dtype->to_json_string(bytes(bv))); //FIXME(sarna): unnecessary copy
     }
 
     return deserialized;

@@ -669,7 +669,7 @@ static Json::Value encode_paging_state(const schema& schema, const service::page
     auto exploded_pk_it = exploded_pk.begin();
     for (const column_definition& cdef : schema.partition_key_columns()) {
         Json::Value& key_entry = last_evaluated_key[cdef.name_as_text()];
-        key_entry[type_to_string(cdef.type)] = cdef.type->to_json(*exploded_pk_it);
+        key_entry[type_to_string(cdef.type)] = json::to_json_value(cdef.type->to_json_string(*exploded_pk_it));
         ++exploded_pk_it;
     }
     auto ck = paging_state.get_clustering_key();
@@ -678,7 +678,7 @@ static Json::Value encode_paging_state(const schema& schema, const service::page
         auto exploded_ck_it = exploded_ck.begin();
         for (const column_definition& cdef : schema.clustering_key_columns()) {
             Json::Value& key_entry = last_evaluated_key[cdef.name_as_text()];
-            key_entry[type_to_string(cdef.type)] = cdef.type->to_json(*exploded_ck_it);
+            key_entry[type_to_string(cdef.type)] = json::to_json_value(cdef.type->to_json_string(*exploded_ck_it));
             ++exploded_ck_it;
         }
     }
