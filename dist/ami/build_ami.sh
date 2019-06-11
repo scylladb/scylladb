@@ -82,7 +82,7 @@ if [ $LOCALRPM -eq 1 ]; then
         cp build/redhat/RPMS/x86_64/$PRODUCT-server-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT-server.x86_64.rpm
         cp build/redhat/RPMS/x86_64/$PRODUCT-debuginfo-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/$PRODUCT-debuginfo.x86_64.rpm
     fi
-    branch_arg=${BRANCH:-$(git rev-parse --abbrev-ref HEAD)}
+    branch_arg=${BRANCH:-$(git rev-parse --abbrev-ref HEAD || echo -n)}
     if [ -n "$branch_arg" ]; then
         if [[ "$b" == '(HEAD detached at'* ]]; then
             branch_arg=$(echo "$branch_arg" | sed -e 's/^(HEAD detached at.*\///' -e 's/)$//')
