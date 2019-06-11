@@ -240,8 +240,7 @@ def find_headers(repodir, excluded_dirs):
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER',
-        # Disable vptr because of https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88684
-        'cxx_ld_flags': '-O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined -fno-sanitize=vptr',
+        'cxx_ld_flags': '',
     },
     'release': {
         'cxxflags': '',
@@ -1305,6 +1304,7 @@ with open(buildfile, 'w') as f:
                                             '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
         f.write('build {}: link.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
                                                 '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'))
+        f.write('   libs = $seastar_libs_{}\n'.format(mode))
         f.write(
             'build {mode}-objects: phony {objs}\n'.format(
                 mode=mode,
