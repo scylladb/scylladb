@@ -372,6 +372,10 @@ def rmtree(path):
     else:
         os.remove(path)
 
+def current_umask():
+    current = os.umask(0)
+    os.umask(current)
+    return current
 
 def dist_name():
     return platform.dist()[0]

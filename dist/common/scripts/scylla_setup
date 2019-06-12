@@ -219,6 +219,12 @@ if __name__ == '__main__':
     fstrim_setup = not args.no_fstrim_setup
     selinux_reboot_required = False
 
+    umask = current_umask()
+    # files have to be world-readable
+    if (umask & 0o7) != 0o2:
+        colorprint('{red}Scylla does not work with current umask setting ({umask}),\nplease restore umask to the default value (0022).{nocolor}', umask='{0:o}'.format(umask).zfill(4))
+        sys.exit(1)
+
     if interactive:
         colorprint('{green}Skip any of the following steps by answering \'no\'{nocolor}')
 
