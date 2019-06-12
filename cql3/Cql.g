@@ -1386,7 +1386,7 @@ serviceLevelOrRoleName returns [sstring name]
 						 std::transform($name.begin(), $name.end(), $name.begin(), ::tolower); }
 | t=STRING_LITERAL     { $name = sstring($t.text); }
 | t=QUOTED_NAME        { $name = sstring($t.text); }
-| k=unreserved_keyword { $name = sstring($t.text); 
+| k=unreserved_keyword { $name = k;
 						 std::transform($name.begin(), $name.end(), $name.begin(), ::tolower);}
 | QMARK {add_recognition_error("Bind variables cannot be used for service levels or role names");}
 ;
