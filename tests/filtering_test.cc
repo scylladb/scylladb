@@ -798,6 +798,15 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
             msg = e.execute_cql("SELECT e FROM t WHERE c = 5 AND b = 3 ALLOW FILTERING;").get0();
             assert_that(msg).is_rows().with_rows({{ int32_type->decompose(9), int32_type->decompose(3) }});
         });
+
+        auto schema = e.local_db().find_schema("ks", "t");
+        auto& partitioner = dht::global_partitioner();
+        bytes token_bytes = partitioner.token_to_bytes(partitioner.get_token(*schema, partition_key::from_exploded(std::vector<bytes>{int32_type->decompose(1)})));
+        int64_t token_num = value_cast<int64_t>(long_type->deserialize(token_bytes));
+        eventually([&] {
+            auto msg = e.execute_cql(format("SELECT e FROM t WHERE token(a) = {} AND b = 3;", token_num)).get0();
+            assert_that(msg).is_rows().with_rows({{ int32_type->decompose(9) }});
+        });
     });
 }
 
