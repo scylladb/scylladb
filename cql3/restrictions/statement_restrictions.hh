@@ -395,6 +395,14 @@ public:
         return !_nonprimary_key_restrictions->empty();
     }
 
+    bool pk_restrictions_need_filtering() const {
+        return _partition_key_restrictions->needs_filtering(*_schema);
+    }
+
+    bool ck_restrictions_need_filtering() const {
+        return _partition_key_restrictions->has_unrestricted_components(*_schema) || _clustering_columns_restrictions->needs_filtering(*_schema);
+    }
+
     /**
      * @return true if column is restricted by some restriction, false otherwise
      */
