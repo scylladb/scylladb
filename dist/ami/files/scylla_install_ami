@@ -71,7 +71,7 @@ if __name__ == '__main__':
         rpms = glob.glob('/home/centos/scylla*.*.rpm')
         run('yum install -y {}'.format(' '.join(rpms)))
     else:
-        run('yum install -y scylla-ami')
+        run('yum install -y scylla-ami scylla-debuginfo')
 
     if args.repo_for_install:
         os.remove('/etc/yum.repos.d/scylla_install.repo')
