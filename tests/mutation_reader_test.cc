@@ -1666,7 +1666,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
     }
 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
-        std::vector<bool> shards_touched(smp::count, false);
+        std::vector<std::atomic<bool>> shards_touched(smp::count);
         simple_schema s;
         auto factory = [&shards_touched] (
                 schema_ptr s,
