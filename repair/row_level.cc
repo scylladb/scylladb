@@ -975,12 +975,12 @@ private:
         }
         return to_repair_rows_list(rows).then([this, from, node_idx, update_buf, update_hash_set] (std::list<repair_row> row_diff) {
             return do_with(std::move(row_diff), [this, from, node_idx, update_buf, update_hash_set] (std::list<repair_row>& row_diff) {
-                auto sz = get_repair_rows_size(row_diff);
-                stats().rx_row_bytes += sz;
-                stats().rx_row_nr += row_diff.size();
-                stats().rx_row_nr_peer[from] += row_diff.size();
-                _metrics.rx_row_nr += row_diff.size();
-                _metrics.rx_row_bytes += sz;
+                if (_repair_master) {
+                    auto sz = get_repair_rows_size(row_diff);
+                    stats().rx_row_bytes += sz;
+                    stats().rx_row_nr += row_diff.size();
+                    stats().rx_row_nr_peer[from] += row_diff.size();
+                }
                 if (update_buf) {
                     std::list<repair_row> tmp;
                     tmp.swap(_working_row_buf);
@@ -1029,23 +1029,47 @@ private:
     };
 
     future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows) {
-        return do_with(std::move(rows), std::list<repair_row>(), lw_shared_ptr<const decorated_key_with_hash>(),
-          [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list, lw_shared_ptr<const decorated_key_with_hash>& dk_ptr) mutable {
-            return do_for_each(rows, [this, &dk_ptr, &row_list] (partition_key_and_mutation_fragments& x) mutable {
+        return do_with(std::move(rows), std::list<repair_row>(), lw_shared_ptr<const decorated_key_with_hash>(), lw_shared_ptr<mutation_fragment>(), position_in_partition::tri_compare(*_schema),
+          [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list, lw_shared_ptr<const decorated_key_with_hash>& dk_ptr, lw_shared_ptr<mutation_fragment>& last_mf, position_in_partition::tri_compare& cmp) mutable {
+            return do_for_each(rows, [this, &dk_ptr, &row_list, &last_mf, &cmp] (partition_key_and_mutation_fragments& x) mutable {
                 dht::decorated_key dk = dht::global_partitioner().decorate_key(*_schema, x.get_key());
                 if (!(dk_ptr && dk_ptr->dk.equal(*_schema, dk))) {
                     dk_ptr = make_lw_shared<const decorated_key_with_hash>(*_schema, dk, _seed);
                 }
-                return do_for_each(x.get_mutation_fragments(), [this, &dk_ptr, &row_list] (frozen_mutation_fragment& fmf) mutable {
-                    // Keep the mutation_fragment in repair_row as an
-                    // optimization to avoid unfreeze again when
-                    // mutation_fragment is needed by _repair_writer.do_write()
-                    // to apply the repair_row to disk
-                    auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema));
-                    auto hash = do_hash_for_mf(*dk_ptr, *mf);
-                    position_in_partition pos(mf->position());
-                    row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), std::move(mf)));
-                });
+                if (_repair_master) {
+                    return do_for_each(x.get_mutation_fragments(), [this, &dk_ptr, &row_list] (frozen_mutation_fragment& fmf) mutable {
+                        _metrics.rx_row_nr += 1;
+                        _metrics.rx_row_bytes += fmf.representation().size();
+                        // Keep the mutation_fragment in repair_row as an
+                        // optimization to avoid unfreeze again when
+                        // mutation_fragment is needed by _repair_writer.do_write()
+                        // to apply the repair_row to disk
+                        auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema));
+                        auto hash = do_hash_for_mf(*dk_ptr, *mf);
+                        position_in_partition pos(mf->position());
+                        row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), std::move(mf)));
+                    });
+                } else {
+                    last_mf = {};
+                    return do_for_each(x.get_mutation_fragments(), [this, &dk_ptr, &row_list, &last_mf, &cmp] (frozen_mutation_fragment& fmf) mutable {
+                        _metrics.rx_row_nr += 1;
+                        _metrics.rx_row_bytes += fmf.representation().size();
+                        auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema));
+                        position_in_partition pos(mf->position());
+                        // If the mutation_fragment has the same position as
+                        // the last mutation_fragment, it means they are the
+                        // same row with different contents. We can not feed
+                        // such rows into the sstable writer. Instead we apply
+                        // the mutation_fragment into the previous one.
+                        if (last_mf && cmp(last_mf->position(), pos) == 0 && last_mf->mergeable_with(*mf)) {
+                            last_mf->apply(*_schema, std::move(*mf));
+                        } else {
+                            last_mf = mf;
+                            // On repair follower node, only decorated_key_with_hash and the mutation_fragment inside repair_row are used.
+                            row_list.push_back(repair_row({}, {}, dk_ptr, {}, std::move(mf)));
+                        }
+                    });
+                }
             }).then([&row_list] {
                 return std::move(row_list);
             });
