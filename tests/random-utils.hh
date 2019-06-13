@@ -26,43 +26,35 @@
 #include <boost/range/algorithm/generate.hpp>
 #include <iostream>
 
+#include <seastar/testing/test_runner.hh>
+
 namespace tests::random {
 
-namespace internal {
-
-inline std::random_device::result_type get_seed()
-{
-    std::random_device rd;
-    auto seed = rd();
-    std::cout << "tests::random seed = " << seed << "\n";
-    return seed;
+inline std::default_random_engine& gen() {
+    return seastar::testing::local_random_engine;
 }
-
-}
-
-inline std::default_random_engine gen(internal::get_seed());
 
 template<typename T>
 T get_int() {
     std::uniform_int_distribution<T> dist;
-    return dist(gen);
+    return dist(gen());
 }
 
 template<typename T>
 T get_int(T max) {
     std::uniform_int_distribution<T> dist(0, max);
-    return dist(gen);
+    return dist(gen());
 }
 
 template<typename T>
 T get_int(T min, T max) {
     std::uniform_int_distribution<T> dist(min, max);
-    return dist(gen);
+    return dist(gen());
 }
 
 inline bool get_bool() {
     static std::bernoulli_distribution dist;
-    return dist(gen);
+    return dist(gen());
 }
 
 inline bytes get_bytes(size_t n) {

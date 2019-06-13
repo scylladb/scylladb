@@ -116,7 +116,7 @@ BOOST_AUTO_TEST_CASE(test_pod) {
     auto generate_object = [] {
         std::uniform_int_distribution<decltype(test_pod_type::x)> dist_x;
         std::uniform_int_distribution<decltype(test_pod_type::y)> dist_y;
-        return test_pod_type { dist_x(tests::random::gen), dist_y(tests::random::gen) };
+        return test_pod_type { dist_x(tests::random::gen()), dist_y(tests::random::gen()) };
     };
     using pod_type = imr::pod<test_pod_type>;
 
