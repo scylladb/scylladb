@@ -220,43 +220,62 @@ private:
 };
 
 class repair_row {
-    frozen_mutation_fragment _fm;
+    std::optional<frozen_mutation_fragment> _fm;
     lw_shared_ptr<const decorated_key_with_hash> _dk_with_hash;
-    repair_sync_boundary _boundary;
-    repair_hash _hash;
+    std::optional<repair_sync_boundary> _boundary;
+    std::optional<repair_hash> _hash;
     lw_shared_ptr<mutation_fragment> _mf;
 public:
     repair_row() = delete;
-    repair_row(frozen_mutation_fragment fm,
-            position_in_partition pos,
+    repair_row(std::optional<frozen_mutation_fragment> fm,
+            std::optional<position_in_partition> pos,
             lw_shared_ptr<const decorated_key_with_hash> dk_with_hash,
-            repair_hash hash,
+            std::optional<repair_hash> hash,
             lw_shared_ptr<mutation_fragment> mf = {})
             : _fm(std::move(fm))
             , _dk_with_hash(std::move(dk_with_hash))
-            , _boundary({_dk_with_hash->dk, std::move(pos)})
+            , _boundary(pos ? std::optional<repair_sync_boundary>(repair_sync_boundary{_dk_with_hash->dk, std::move(*pos)}) : std::nullopt)
             , _hash(std::move(hash))
             , _mf(std::move(mf)) {
     }
     mutation_fragment& get_mutation_fragment() {
         if (!_mf) {
-            throw std::runtime_error("get empty mutation_fragment");
+            throw std::runtime_error("empty mutation_fragment");
         }
         return *_mf;
     }
-    frozen_mutation_fragment& get_frozen_mutation() { return _fm; }
-    const frozen_mutation_fragment& get_frozen_mutation() const { return _fm; }
+    frozen_mutation_fragment& get_frozen_mutation() {
+        if (!_fm) {
+            throw std::runtime_error("empty frozen_mutation_fragment");
+        }
+        return *_fm;
+    }
+    const frozen_mutation_fragment& get_frozen_mutation() const {
+        if (!_fm) {
+            throw std::runtime_error("empty frozen_mutation_fragment");
+        }
+        return *_fm;
+    }
     const lw_shared_ptr<const decorated_key_with_hash>& get_dk_with_hash() const {
         return _dk_with_hash;
     }
     size_t size() const {
-        return _fm.representation().size();
+        if (!_fm) {
+            throw std::runtime_error("empty size due to empty frozen_mutation_fragment");
+        }
+        return _fm->representation().size();
     }
     const repair_sync_boundary& boundary() const {
-        return _boundary;
+        if (!_boundary) {
+            throw std::runtime_error("empty repair_sync_boundary");
+        }
+        return *_boundary;
     }
     const repair_hash& hash() const {
-        return _hash;
+        if (!_hash) {
+            throw std::runtime_error("empty hash");
+        }
+        return *_hash;
     }
 };
 
