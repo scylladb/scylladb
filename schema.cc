@@ -1264,3 +1264,8 @@ std::ostream& operator<<(std::ostream& os, const raw_view_info& view) {
 std::ostream& operator<<(std::ostream& os, const view_ptr& view) {
     return view ? os << *view : os << "null";
 }
+
+schema_mismatch_error::schema_mismatch_error(table_schema_version expected, const schema& access)
+    : std::runtime_error(fmt::format("Attempted to deserialize schema-dependent object of version {} using {}.{} {}",
+        expected, access.ks_name(), access.cf_name(), access.version()))
+{ }

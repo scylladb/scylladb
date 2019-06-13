@@ -107,6 +107,7 @@ frozen_mutation::frozen_mutation(const mutation& m)
 
 mutation
 frozen_mutation::unfreeze(schema_ptr schema) const {
+    check_schema_version(schema_version(), *schema);
     mutation m(schema, key(*schema));
     partition_builder b(*schema, m.partition());
     partition().accept(*schema, b);

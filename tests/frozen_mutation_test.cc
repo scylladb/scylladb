@@ -120,3 +120,45 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_deserialization_using_wrong_schema_throws) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        schema_ptr s1 = new_table()
+            .with_column("pk_col", bytes_type, column_kind::partition_key)
+            .with_column("reg_1", bytes_type)
+            .with_column("reg_2", bytes_type)
+            .build();
+
+        schema_ptr s2 = new_table()
+            .with_column("pk_col", bytes_type, column_kind::partition_key)
+            .with_column("reg_0", bytes_type)
+            .with_column("reg_1", bytes_type)
+            .with_column("reg_2", bytes_type)
+            .build();
+
+        schema_ptr s3 = new_table()
+            .with_column("pk_col", bytes_type, column_kind::partition_key)
+            .with_column("reg_3", bytes_type)
+            .without_column("reg_0", new_timestamp())
+            .without_column("reg_1", new_timestamp())
+            .build();
+
+        schema_ptr s4 = new_table()
+            .with_column("pk_col", bytes_type, column_kind::partition_key)
+            .with_column("reg_1", int32_type)
+            .with_column("reg_2", int32_type)
+            .build();
+
+        partition_key key = partition_key::from_single_value(*s1, bytes("key"));
+        clustering_key ck = clustering_key::make_empty();
+
+        mutation m(s1, key);
+        m.set_clustered_cell(ck, "reg_1", data_value(bytes("val1")), new_timestamp());
+        m.set_clustered_cell(ck, "reg_2", data_value(bytes("val2")), new_timestamp());
+
+        for (auto s : {s2, s3, s4}) {
+            BOOST_REQUIRE_THROW(freeze(m).unfreeze(s), schema_mismatch_error);
+        }
+    });
+}

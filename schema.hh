@@ -30,6 +30,7 @@
 
 #include "cql3/column_specification.hh"
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/util/backtrace.hh>
 #include "types.hh"
 #include "compound.hh"
 #include "gc_clock.hh"
@@ -848,3 +849,19 @@ public:
 std::ostream& operator<<(std::ostream& os, const view_ptr& view);
 
 utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name);
+
+
+// Thrown when attempted to access a schema-dependent object using
+// an incompatible version of the schema object.
+class schema_mismatch_error : public std::runtime_error {
+public:
+    schema_mismatch_error(table_schema_version expected, const schema& access);
+};
+
+// Throws schema_mismatch_error when a schema-dependent object of "expected" version
+// cannot be accessed using "access" schema.
+inline void check_schema_version(table_schema_version expected, const schema& access) {
+    if (expected != access.version()) {
+        throw_with_backtrace<schema_mismatch_error>(expected, access);
+    }
+}
