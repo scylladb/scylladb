@@ -407,7 +407,7 @@ public:
     }
 
     bool ck_restrictions_need_filtering() const {
-        return _clustering_columns_restrictions->needs_filtering(*_schema);
+        return _partition_key_restrictions->has_unrestricted_components(*_schema) || _clustering_columns_restrictions->needs_filtering(*_schema);
     }
 
     /**

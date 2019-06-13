@@ -508,10 +508,9 @@ bool statement_restrictions::need_filtering() const {
     int number_of_filtering_restrictions = _nonprimary_key_restrictions->size();
     // If the whole partition key is restricted, it does not imply filtering
     if (_partition_key_restrictions->has_unrestricted_components(*_schema) || !_partition_key_restrictions->is_all_eq()) {
-        number_of_filtering_restrictions += _partition_key_restrictions->size();
-        if (_clustering_columns_restrictions->has_unrestricted_components(*_schema)) {
-            number_of_filtering_restrictions += _clustering_columns_restrictions->size() - _clustering_columns_restrictions->prefix_size();
-        }
+        number_of_filtering_restrictions += _partition_key_restrictions->size() + _clustering_columns_restrictions->size();
+    } else if (_clustering_columns_restrictions->has_unrestricted_components(*_schema)) {
+        number_of_filtering_restrictions += _clustering_columns_restrictions->size() - _clustering_columns_restrictions->prefix_size();
     }
     return number_of_restricted_columns_for_indexing > 1
             || (number_of_restricted_columns_for_indexing == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
