@@ -853,8 +853,6 @@ tests_not_using_seastar_test_framework = set([
     'tests/perf/perf_hash',
     'tests/perf/perf_cql_parser',
     'tests/message',
-    'tests/perf/perf_simple_query',
-    'tests/perf/perf_fast_forward',
     'tests/perf/perf_cache_eviction',
     'tests/row_cache_stress_test',
     'tests/memory_footprint',

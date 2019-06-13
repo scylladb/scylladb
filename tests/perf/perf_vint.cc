@@ -21,6 +21,7 @@
  */
 
 #include <seastar/tests/perf/perf_tests.hh>
+#include <seastar/testing/test_runner.hh>
 
 #include <random>
 
@@ -37,7 +38,7 @@ public:
         : _integers(count)
         , _serialized(bytes::initialized_later{}, count * max_vint_length)
     {
-        auto eng = std::default_random_engine{std::random_device{}()};
+        auto eng = seastar::testing::local_random_engine;
         auto dist = std::uniform_int_distribution<uint64_t>{};
         std::generate_n(_integers.begin(), count, [&] { return dist(eng); });
 
