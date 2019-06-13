@@ -613,10 +613,13 @@ commitlog_total_space_in_mb: -1
 # compaction_throughput_mb_per_sec: 16
 
 # Log a warning when writing partitions larger than this value
-# compaction_large_partition_warning_threshold_mb: 100
+# compaction_large_partition_warning_threshold_mb: 1000
 
 # Log a warning when writing rows larger than this value
-# compaction_large_row_warning_threshold_mb: 50
+# compaction_large_row_warning_threshold_mb: 10
+
+# Log a warning when writing cells larger than this value
+# compaction_large_cell_warning_threshold_mb: 1
 
 # Log a warning when row number is larger than this value
 # compaction_rows_count_warning_threshold: 100000
