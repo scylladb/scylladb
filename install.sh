@@ -38,7 +38,7 @@ EOF
 }
 
 root=/
-prefix=/usr
+prefix=/opt/scylladb
 housekeeping=false
 target=centos
 python3=/opt/scylladb/python3/bin/python3
@@ -77,6 +77,7 @@ done
 
 rprefix="$root/$prefix"
 retc="$root/etc"
+rusr="$root/usr"
 rdoc="$rprefix/share/doc"
 
 MUSTACHE_DIST="\"redhat\": true, \"$target\": true, \"target\": \"$target\""
@@ -87,37 +88,36 @@ pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MU
 
 
 install -m755 -d "$retc/sysconfig" "$retc/security/limits.d"
-install -m755 -d "$retc/scylla.d" "$rprefix/lib/sysctl.d"
+install -m755 -d "$retc/scylla.d" "$rusr/lib/sysctl.d"
 install -m644 dist/common/sysconfig/scylla-server -Dt "$retc"/sysconfig
 install -m644 dist/common/limits.d/scylla.conf -Dt "$retc"/security/limits.d
 install -m644 dist/common/scylla.d/*.conf -Dt "$retc"/scylla.d
-install -m644 dist/common/sysctl.d/*.conf -Dt "$rprefix"/lib/sysctl.d
+install -m644 dist/common/sysctl.d/*.conf -Dt "$rusr"/lib/sysctl.d
 
 SYSCONFDIR="/etc/sysconfig"
 REPOFILES="'/etc/yum.repos.d/scylla*.repo'"
 
 
-install -d -m755 "$retc"/scylla "$rprefix/lib/systemd/system" "$rprefix/lib/scylla" "$rprefix/bin" "$root/opt/scylladb/bin" "$root/opt/scylladb/libexec" "$root/opt/scylladb/libreloc"
+install -d -m755 "$retc"/scylla "$rusr/lib/systemd/system" "$rusr/bin" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts"
 install -m644 conf/scylla.yaml -Dt "$retc"/scylla
 install -m644 conf/cassandra-rackdc.properties -Dt "$retc"/scylla
-install -m644 build/*.service -Dt "$rprefix"/lib/systemd/system
-install -m644 dist/common/systemd/*.service -Dt "$rprefix"/lib/systemd/system
-install -m644 dist/common/systemd/*.timer -Dt "$rprefix"/lib/systemd/system
-install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/lib/scylla/
-install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/lib/scylla/
-install -m755 bin/* -Dt "$root/opt/scylladb/bin"
+install -m644 build/*.service -Dt "$rusr"/lib/systemd/system
+install -m644 dist/common/systemd/*.service -Dt "$rusr"/lib/systemd/system
+install -m644 dist/common/systemd/*.timer -Dt "$rusr"/lib/systemd/system
+install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
+install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/scripts
+install -m755 bin/* -Dt "$rprefix/bin"
 # some files in libexec are symlinks, which "install" dereferences
 # use cp -P for the symlinks instead.
-install -m755 libexec/*.bin -Dt "$root/opt/scylladb/libexec"
+install -m755 libexec/*.bin -Dt "$rprefix/libexec"
 for f in libexec/*; do
     if [[ "$f" != *.bin ]]; then
-        cp -P "$f" "$root/opt/scylladb/libexec"
+        cp -P "$f" "$rprefix/libexec"
     fi
 done
-install -m755 libreloc/* -Dt "$root/opt/scylladb/libreloc"
-ln -srf "$root/opt/scylladb/bin/scylla" "$rprefix/bin/scylla"
-ln -srf "$root/opt/scylladb/bin/iotune" "$rprefix/bin/iotune"
-ln -srf "$rprefix/lib/scylla/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
+install -m755 libreloc/* -Dt "$rprefix/libreloc"
+ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
+ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
 
 if $housekeeping; then
     install -m644 conf/housekeeping.cfg -Dt "$retc"/scylla.d
@@ -136,22 +136,30 @@ install -m755 -d "$root"/var/lib/scylla/hints
 install -m755 -d "$root"/var/lib/scylla/view_hints
 install -m755 -d "$root"/var/lib/scylla/coredump
 install -m755 -d "$root"/var/lib/scylla-housekeeping
-install -m755 -d "$rprefix"/lib/scylla/swagger-ui
-cp -r swagger-ui/dist "$rprefix"/lib/scylla/swagger-ui
-install -d -m755 -d "$rprefix"/lib/scylla/api
-cp -r api/api-doc "$rprefix"/lib/scylla/api
-cp -r tools/scyllatop "$rprefix"/lib/scylla/scyllatop
-install -d "$rprefix"/sbin
-cp -P dist/common/sbin/* "$rprefix"/sbin
-install -m755 scylla-gdb.py -Dt "$rprefix"/lib/scylla/
+install -m755 -d "$rprefix"/swagger-ui
+cp -r swagger-ui/dist "$rprefix"/swagger-ui
+install -d -m755 -d "$rprefix"/api
+cp -r api/api-doc "$rprefix"/api
+cp -r tools/scyllatop "$rprefix"/scyllatop
+ln -srf "$rprefix/scyllatop/scyllatop.py" "$rusr/bin/scyllatop"
+
+cd dist/common/scripts/
+SBINFILES="scylla_*setup node_exporter_install node_health_check scylla_ec2_check scylla_kernel_check"
+cd -
+install -d "$rusr"/sbin
+for i in $SBINFILES; do
+    ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
+done
+
+install -m755 scylla-gdb.py -Dt "$rprefix"/scripts/
 
 find ./dist/common/scripts -type f -exec ./relocate_python_scripts.py \
-            --installroot $rprefix/lib/scylla/ --with-python3 "$root/$python3" {} +
+            --installroot $rprefix/scripts/ --with-python3 "$root/$python3" {} +
 
 ./relocate_python_scripts.py \
-            --installroot $rprefix/lib/scylla/ --with-python3 "$root/$python3" \
+            --installroot $rprefix/scripts/ --with-python3 "$root/$python3" \
             seastar/scripts/perftune.py seastar/scripts/seastar-addr2line seastar/scripts/perftune.py
 
 ./relocate_python_scripts.py \
-            --installroot $rprefix/lib/scylla/scyllatop/ --with-python3 "$root/$python3" \
+            --installroot $rprefix/scyllatop/ --with-python3 "$root/$python3" \
             tools/scyllatop/scyllatop.py

@@ -75,7 +75,10 @@ getent passwd scylla || /usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sh
 %post server
 # Upgrade coredump settings
 if [ -f /etc/systemd/coredump.conf ];then
-    /usr/lib/scylla/scylla_coredump_setup
+    /opt/scylladb/scripts/scylla_coredump_setup
+fi
+if [ -d /usr/lib/scylla ]; then
+    mv /usr/lib/scylla /usr/lib/scylla.old
 fi
 
 # Install capabilities.conf when AmbientCapabilities supported
@@ -106,6 +109,10 @@ if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
     rm -rf /tmp/%{name}-%{version}-%{release}/
 fi
 ln -sfT /etc/scylla /var/lib/scylla/conf
+if [ -d /usr/lib/scylla ]; then
+    mv /usr/lib/scylla /usr/lib/scylla.old
+fi
+ln -sfT /opt/scylladb/scripts /usr/lib/scylla
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -117,53 +124,21 @@ rm -rf $RPM_BUILD_ROOT
 %{_sysconfdir}/security/limits.d/scylla.conf
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf
-%{_docdir}/scylla/README.md
-%{_docdir}/scylla/README-DPDK.md
-%{_docdir}/scylla/NOTICE.txt
-%{_docdir}/scylla/ORIGIN
-%{_docdir}/scylla/licenses/
+/opt/scylladb/share/doc/scylla/*
+/opt/scylladb/share/doc/scylla/licenses/
 %{_unitdir}/*.service
 %{_unitdir}/*.timer
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
 %{_sbindir}/scylla*
-%{_prefix}/lib/scylla/scylla-blocktune
-%{_prefix}/lib/scylla/scylla_blocktune.py
-%{_prefix}/lib/scylla/scylla-housekeeping
-%{_prefix}/lib/scylla/scylla_prepare
-%{_prefix}/lib/scylla/scylla_stop
-%{_prefix}/lib/scylla/scylla_setup
-%{_prefix}/lib/scylla/node_exporter_install
 %{_sbindir}/node_exporter_install
-%{_prefix}/lib/scylla/node_health_check
 %{_sbindir}/node_health_check
-%{_prefix}/lib/scylla/scylla_coredump_setup
-%{_prefix}/lib/scylla/scylla_raid_setup
-%{_prefix}/lib/scylla/scylla_sysconfig_setup
-%{_prefix}/lib/scylla/scylla_bootparam_setup
-%{_prefix}/lib/scylla/scylla_ntp_setup
-%{_prefix}/lib/scylla/scylla_selinux_setup
-%{_prefix}/lib/scylla/scylla_io_setup
-%{_prefix}/lib/scylla/scylla_dev_mode_setup
-%{_prefix}/lib/scylla/scylla_ec2_check
-%{_prefix}/lib/scylla/scylla_kernel_check
-%{_prefix}/lib/scylla/scylla_cpuset_setup
-%{_prefix}/lib/scylla/scylla_cpuscaling_setup
-%{_prefix}/lib/scylla/scylla_fstrim
-%{_prefix}/lib/scylla/scylla_fstrim_setup
-%{_prefix}/lib/scylla/perftune.py
-%{_prefix}/lib/scylla/seastar-addr2line
-%{_prefix}/lib/scylla/seastar-cpu-map.sh
-%{_prefix}/lib/scylla/dpdk-devbind.py
-%{_prefix}/lib/scylla/hex2list.py
-%{_prefix}/lib/scylla/swagger-ui/dist/*
-%{_prefix}/lib/scylla/api/api-doc/*
-%{_prefix}/lib/scylla/scyllatop/*
-%{_prefix}/lib/scylla/scylla_config_get.py
-%{_prefix}/lib/scylla/scylla_util.py
-%{_prefix}/lib/scylla/scylla-gdb.py
-%{_prefix}/lib/scylla/libexec/*
+/opt/scylladb/scripts/*
+/opt/scylladb/swagger-ui/dist/*
+/opt/scylladb/api/api-doc/*
+/opt/scylladb/scyllatop/*
+/opt/scylladb/scripts/libexec/*
 /opt/scylladb/bin/*
 /opt/scylladb/libreloc/*
 /opt/scylladb/libexec/*
@@ -190,8 +165,8 @@ This package contains the main scylla configuration file.
 
 %post conf
 grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
-echo "api_ui_dir: /usr/lib/scylla/swagger-ui/dist/" >> /tmp/scylla.yaml
-echo "api_doc_dir: /usr/lib/scylla/api/api-doc/" >> /tmp/scylla.yaml
+echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> /tmp/scylla.yaml
+echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> /tmp/scylla.yaml
 mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
 
 # we need to refuse upgrade if current scylla < 1.7.3 && commitlog remains
@@ -201,14 +176,14 @@ if [ -n "$ver" ]; then
     ver_fmt=$(echo $ver | awk -F. '{printf "%d%02d%02d", $1,$2,$3}')
     if [ $ver_fmt -lt 10703 ]; then
         # for <scylla-1.2
-        if [ ! -f /usr/lib/scylla/scylla_config_get.py ]; then
+        if [ ! -f /opt/scylladb/lib/scylla/scylla_config_get.py ]; then
             echo
             echo "Error: Upgrading from scylla-$ver to scylla-{{version}} is not supported."
             echo "Please upgrade to scylla-1.7.3 or later, before upgrade to {{version}}."
             echo
             exit 1
         fi
-        commitlog_directory=$(/usr/lib/scylla/scylla_config_get.py -g commitlog_directory)
+        commitlog_directory=$(/opt/scylladb/lib/scylla/scylla_config_get.py -g commitlog_directory)
         commitlog_files=$(ls $commitlog_directory | wc -l)
         if [ $commitlog_files -ne 0 ]; then
             echo

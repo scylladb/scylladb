@@ -47,7 +47,7 @@ fi
 dpkg -i -G -E debs/python-minimal*.deb debs/python2.7-minimal*.deb debs/libpython2.7-minimal*.deb debs/python3-minimal*.deb  debs/python3.*-minimal*.deb debs/libpython3.*-minimal*.deb debs/libssl1.0.0*.deb debs/libexpat1*.deb
 dpkg -i -G -E -R debs
 if [ $SKIP_SETUP -eq 0 ]; then
-    /usr/lib/scylla/scylla_setup
+    /opt/scylladb/scripts/scylla_setup
 fi
 
 echo "Scylla offline package installation finished."

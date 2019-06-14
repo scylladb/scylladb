@@ -86,9 +86,9 @@ if __name__ == '__main__':
         for l in lines:
             if not re.match(r'^ - mounts\n$', l):
                 f.write(l)
-    run('/usr/lib/scylla/scylla_setup --ntp-domain amazon --no-coredump-setup --no-sysconfig-setup --no-raid-setup --no-io-setup --no-bootparam-setup --no-ec2-check')
-    run('/usr/lib/scylla/scylla_sysconfig_setup --ami')
-    run('/usr/lib/scylla/scylla_bootparam_setup --ami')
+    run('/opt/scylladb/scripts/scylla_setup --ntp-domain amazon --no-coredump-setup --no-sysconfig-setup --no-raid-setup --no-io-setup --no-bootparam-setup --no-ec2-check')
+    run('/opt/scylladb/scripts/scylla_sysconfig_setup --ami')
+    run('/opt/scylladb/scripts/scylla_bootparam_setup --ami')
     os.remove('/home/centos/.ssh/authorized_keys')
     os.remove('/var/lib/scylla-housekeeping/housekeeping.uuid')
 

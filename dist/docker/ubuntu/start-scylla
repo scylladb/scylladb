@@ -10,7 +10,7 @@ fi
 if [ "$SCYLLA_PRODUCTION" == "true" ]; then
 	DEV_MODE=""
 	if [ ! -f /var/lib/scylla/.io_setup_done ]; then
-		DATA_DIR=`/usr/lib/scylla/scylla_config_get.py --config $SCYLLA_CONF/scylla.yaml --get data_file_directories|head -n1`
+		DATA_DIR=`/opt/scylladb/scripts/scylla_config_get.py --config $SCYLLA_CONF/scylla.yaml --get data_file_directories|head -n1`
 		iotune --evaluation-directory $DATA_DIR --format envfile --options-file /var/lib/scylla/io.conf $CPUSET --timeout 600
 		if [ $? -ne 0 ]; then
 			echo "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
@@ -84,4 +84,4 @@ fi
 
 source /etc/default/scylla-jmx
 export SCYLLA_HOME SCYLLA_CONF
-exec /usr/lib/scylla/jmx/scylla-jmx -l /usr/lib/scylla/jmx &
+exec /opt/scylladb/scripts/jmx/scylla-jmx -l /opt/scylladb/scripts/jmx &

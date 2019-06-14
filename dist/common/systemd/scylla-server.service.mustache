@@ -20,9 +20,9 @@ EnvironmentFile=/etc/default/scylla-server
 EnvironmentFile=/etc/sysconfig/scylla-server
 {{/redhat}}
 EnvironmentFile=/etc/scylla.d/*.conf
-ExecStartPre=/usr/lib/scylla/scylla_prepare
+ExecStartPre=/opt/scylladb/scripts/scylla_prepare
 ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET
-ExecStopPost=/usr/lib/scylla/scylla_stop
+ExecStopPost=/opt/scylladb/scripts/scylla_stop
 TimeoutStartSec=900
 KillMode=process
 Restart=on-abnormal

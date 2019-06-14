@@ -27,6 +27,6 @@ script
   while [ 1 ]
   do
     sleep 7d
-    /usr/lib/scylla/scylla_delay_fstrim
+    /opt/scylladb/scripts/scylla_delay_fstrim
   done
 end script

@@ -9,20 +9,29 @@ override_dh_auto_build:
 
 override_dh_auto_clean:
 
-override_dh_auto_install:
+_override_dh_auto_install:
 	dh_auto_install
 	install -d $(CURDIR)/debian/{{product}}-server/usr/bin
 	ln -sf /opt/scylladb/bin/scylla $(CURDIR)/debian/{{product}}-server/usr/bin/scylla
 	ln -sf /opt/scylladb/bin/iotune $(CURDIR)/debian/{{product}}-server/usr/bin/iotune
-	ln -sf /usr/lib/scylla/scyllatop/scyllatop.py $(CURDIR)/debian/{{product}}-server/usr/bin/scyllatop
+	ln -sf /opt/scylladb/scyllatop/scyllatop.py $(CURDIR)/debian/{{product}}-server/usr/bin/scyllatop
 	find ./dist/common/scripts -type f -exec ./relocate_python_scripts.py \
-	--installroot $(CURDIR)/debian/{{product}}-server/usr/lib/scylla/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" {} +
+	--installroot $(CURDIR)/debian/{{product}}-server/opt/scylladb/scripts/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" {} +
 	./relocate_python_scripts.py \
-	--installroot $(CURDIR)/debian/{{product}}-server/usr/lib/scylla/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" \
+	--installroot $(CURDIR)/debian/{{product}}-server/opt/scylladb/scripts/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" \
 	seastar/scripts/perftune.py seastar/scripts/seastar-addr2line seastar/scripts/perftune.py
 	./relocate_python_scripts.py \
-	--installroot $(CURDIR)/debian/{{product}}-server/usr/lib/scylla/scyllatop/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" \
+	--installroot $(CURDIR)/debian/{{product}}-server/opt/scylladb/scyllatop/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" \
 	tools/scyllatop/scyllatop.py
+
+	install -d $(CURDIR)/debian/{{product}}-server/usr/sbin
+
+SBINFILES := $(shell cd dist/common/scripts/; echo scylla_*setup node_exporter_install node_health_check scylla_ec2_check scylla_kernel_check)
+
+$(addprefix $(CURDIR)/debian/{{product}}-server/usr/sbin/, $(SBINFILES)):
+	ln -srf $(addprefix /opt/scylladb/scripts/, $(notdir $@)) $@
+
+override_dh_auto_install: _override_dh_auto_install $(addprefix $(CURDIR)/debian/{{product}}-server/usr/sbin/, $(SBINFILES))
 
 override_dh_installinit:
 {{#scylla}}

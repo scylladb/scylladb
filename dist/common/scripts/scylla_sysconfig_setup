@@ -76,12 +76,12 @@ if __name__ == '__main__':
         rps_cpus = out('{} --tune net --nic {} --get-cpu-mask'.format(perftune_base_command(), ifname))
         if len(rps_cpus) > 0:
             cpuset = hex2list(rps_cpus)
-            run('/usr/lib/scylla/scylla_cpuset_setup --cpuset {}'.format(cpuset))
+            run('/opt/scylladb/scripts/scylla_cpuset_setup --cpuset {}'.format(cpuset))
 
     ethdrv = ''
     ethpciid = ''
     if network_mode == 'dpdk':
-        dpdk_status = out('/usr/lib/scylla/dpdk-devbind.py --status')
+        dpdk_status = out('/opt/scylladb/scripts/dpdk-devbind.py --status')
         match = re.search('if={} drv=(\S+)'.format(ifname), dpdk_status, flags=re.MULTILINE)
         ethdrv = match.group(1)
         match = re.search('^(\\S+:\\S+:\\S+\.\\S+) [^\n]+ if={} '.format(ifname), dpdk_status, flags=re.MULTILINE)

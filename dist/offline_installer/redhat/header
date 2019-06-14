@@ -51,7 +51,7 @@ EOS
 yum install --nogpgcheck -y scylla sudo ntp ntpdate net-tools kernel-tools
 rm -f /etc/yum.repos.d/scylla_offline.repo
 if [ $SKIP_SETUP -eq 0 ]; then
-    /usr/lib/scylla/scylla_setup
+    /opt/scylladb/scripts/scylla_setup
 fi
 
 echo "Scylla offline package installation finished."

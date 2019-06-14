@@ -136,6 +136,6 @@ if __name__ == "__main__":
                               "This is a non-supported setup, and performance is expected to be very bad.\n"
                               "For better performance, placing your data on XFS-formatted directories is required.\n"
                               "To override this error, enable developer mode as follow:\n"
-                              "sudo /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1", data_dirs)
+                              "sudo /opt/scylladb/scripts/scylla_dev_mode_setup --developer-mode 1", data_dirs)
                 sys.exit(1)
 

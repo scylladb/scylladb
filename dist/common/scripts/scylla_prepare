@@ -55,7 +55,7 @@ if __name__ == '__main__':
         nr_hugepages = cfg.get('NR_HUGEPAGES')
         run('modprobe uio')
         run('modprobe uio_pci_generic')
-        run('/usr/lib/scylla/dpdk-devbind.py --force --bind=uio_pci_generic {ETHPCIID}'.format(ETHPCIID=ethpciid))
+        run('/opt/scylladb/scripts/dpdk-devbind.py --force --bind=uio_pci_generic {ETHPCIID}'.format(ETHPCIID=ethpciid))
         for n in glob.glob('/sys/devices/system/node/node?'):
             with open('{n}/hugepages/hugepages-2048kB/nr_hugepages'.format(n=n), 'w') as f:
                 f.write(nr_hugepages)

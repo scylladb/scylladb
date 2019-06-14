@@ -30,12 +30,12 @@ class ScyllaSetup:
         subprocess.check_call(*args, **kwargs)
 
     def developerMode(self):
-        self._run(['/usr/lib/scylla/scylla_dev_mode_setup', '--developer-mode', self._developerMode])
+        self._run(['/opt/scylladb/scripts/scylla_dev_mode_setup', '--developer-mode', self._developerMode])
 
     def cpuSet(self):
         if self._cpuset is None:
             return
-        self._run(['/usr/lib/scylla/scylla_cpuset_setup', '--cpuset', self._cpuset])
+        self._run(['/opt/scylladb/scripts/scylla_cpuset_setup', '--cpuset', self._cpuset])
 
     def io(self):
         conf_dir = "/etc/scylla"
@@ -48,7 +48,7 @@ class ScyllaSetup:
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
 
-        self._run(['/usr/lib/scylla/scylla_io_setup'])
+        self._run(['/opt/scylladb/scripts/scylla_io_setup'])
 
     def cqlshrc(self):
         home = os.environ['HOME']

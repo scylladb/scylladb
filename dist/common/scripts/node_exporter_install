@@ -28,7 +28,7 @@ from scylla_util import *
 import argparse
 
 VERSION='0.17.0'
-INSTALL_DIR='/usr/lib/scylla/Prometheus/node_exporter'
+INSTALL_DIR='/opt/scylladb/Prometheus/node_exporter'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Download and install prometheus node_exporter')

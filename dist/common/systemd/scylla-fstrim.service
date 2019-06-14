@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/lib/scylla/scylla_fstrim
+ExecStart=/opt/scylladb/scripts/scylla_fstrim
 
 [Install]
 WantedBy=multi-user.target

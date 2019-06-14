@@ -30,5 +30,5 @@ task
 script
  # make sure scylla is up before checking for the version
   sleep 5
-  /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' -c /etc/scylla.d/housekeeping.cfg  -q version --mode r || true
+  /opt/scylladb/scripts/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' -c /etc/scylla.d/housekeeping.cfg  -q version --mode r || true
 end script

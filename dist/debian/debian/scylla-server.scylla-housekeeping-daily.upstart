@@ -30,6 +30,6 @@ script
   while [ 1 ]
   do
     sleep 1d
-    /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' -c /etc/scylla.d/housekeeping.cfg  -q version --mode d || true
+    /opt/scylladb/scripts/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' -c /etc/scylla.d/housekeeping.cfg  -q version --mode d || true
   done
 end script

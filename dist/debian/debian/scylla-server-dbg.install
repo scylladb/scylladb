@@ -1,1 +1,1 @@
-scylla-gdb.py usr/lib/scylla
+scylla-gdb.py opt/scylladb/scripts
