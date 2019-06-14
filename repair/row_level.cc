@@ -152,8 +152,8 @@ class fragment_hasher {
     xx_hasher& _hasher;
 private:
     void consume_cell(const column_definition& col, const atomic_cell_or_collection& cell) {
-        feed_hash(_hasher, col.name());
-        feed_hash(_hasher, col.type->name());
+        feed_hash(_hasher, col.kind);
+        feed_hash(_hasher, col.id);
         feed_hash(_hasher, cell, col);
     }
 public:
