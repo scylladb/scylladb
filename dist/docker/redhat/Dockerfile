@@ -28,7 +28,7 @@ ADD commandlineparser.py /commandlineparser.py
 ADD docker-entrypoint.py /docker-entrypoint.py
 ADD node_exporter_install /node_exporter_install
 # Install Scylla:
-RUN curl http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo -o /etc/yum.repos.d/scylla.repo && \
+RUN curl http://downloads.scylladb.com/rpm/centos/scylla-3.1.repo -o /etc/yum.repos.d/scylla.repo && \
     yum -y install epel-release && \
     yum -y clean expire-cache && \
     yum -y update && \
