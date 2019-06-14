@@ -654,7 +654,7 @@ private:
 
     // Writes single atomic cell
     void write_cell(bytes_ostream& writer, atomic_cell_view cell, const column_definition& cdef,
-                    const row_time_properties& properties, bytes_view cell_path = {});
+                    const row_time_properties& properties, std::optional<bytes_view> cell_path = {});
 
     // Writes information about row liveness (formerly 'row marker')
     void write_liveness_info(bytes_ostream& writer, const row_marker& marker);
@@ -957,7 +957,7 @@ void writer::consume(tombstone t) {
 }
 
 void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const column_definition& cdef,
-        const row_time_properties& properties, bytes_view cell_path) {
+        const row_time_properties& properties, std::optional<bytes_view> cell_path) {
 
     bool is_deleted = !cell.is_live();
     bool has_value = !is_deleted && !cell.value().empty();
@@ -998,9 +998,9 @@ void writer::write_cell(bytes_ostream& writer, atomic_cell_view cell, const colu
         }
     }
 
-    if (!cell_path.empty()) {
-        write_vint(writer, cell_path.size());
-        write(_sst.get_version(), writer, cell_path);
+    if (bool(cell_path)) {
+        write_vint(writer, cell_path->size());
+        write(_sst.get_version(), writer, *cell_path);
     }
 
     if (cdef.is_counter()) {
