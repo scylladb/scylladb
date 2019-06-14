@@ -62,6 +62,7 @@
 #include "disk-error-handler.hh"
 #include "gms/feature.hh"
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
 
 namespace cql_transport {
@@ -261,6 +262,13 @@ private:
 
     bool _joined = false;
 
+    seastar::rwlock _snapshot_lock;
+
+    template <typename Func>
+    static std::result_of_t<Func()> run_snapshot_modify_operation(Func&&);
+
+    template <typename Func>
+    static std::result_of_t<Func()> run_snapshot_list_operation(Func&&);
 public:
     enum class mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
 private:

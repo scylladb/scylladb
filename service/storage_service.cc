@@ -1997,6 +1997,20 @@ future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
     });
 }
 
+template <typename Func>
+std::result_of_t<Func()> storage_service::run_snapshot_modify_operation(Func&& f) {
+    return smp::submit_to(0, [f = std::move(f)] () mutable {
+        return with_lock(get_local_storage_service()._snapshot_lock.for_write(), std::move(f));
+    });
+}
+
+template <typename Func>
+std::result_of_t<Func()> storage_service::run_snapshot_list_operation(Func&& f) {
+    return smp::submit_to(0, [f = std::move(f)] () mutable {
+        return with_lock(get_local_storage_service()._snapshot_lock.for_read(), std::move(f));
+    });
+}
+
 future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
     if (tag.empty()) {
         throw std::runtime_error("You must supply a snapshot name.");
@@ -2006,12 +2020,12 @@ future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspa
         boost::copy(_db.local().get_keyspaces() | boost::adaptors::map_keys, std::back_inserter(keyspace_names));
     };
 
-    return smp::submit_to(0, [] {
+    return run_snapshot_modify_operation([tag = std::move(tag), keyspace_names = std::move(keyspace_names), this] {
         auto mode = get_local_storage_service()._operation_mode;
         if (mode == storage_service::mode::JOINING) {
             throw std::runtime_error("Cannot snapshot until bootstrap completes");
         }
-    }).then([tag = std::move(tag), keyspace_names = std::move(keyspace_names), this] {
+
         return parallel_for_each(keyspace_names, [tag, this] (auto& ks_name) {
             return check_snapshot_not_exist(_db.local(), ks_name, tag);
         }).then([this, tag, keyspace_names] {
@@ -2026,6 +2040,7 @@ future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspa
             });
         });
     });
+
 }
 
 future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag) {
@@ -2043,12 +2058,11 @@ future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring c
         throw std::runtime_error("You must supply a snapshot name.");
     }
 
-    return smp::submit_to(0, [] {
+    return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), cf_name = std::move(cf_name), tag = std::move(tag)] {
         auto mode = get_local_storage_service()._operation_mode;
         if (mode == storage_service::mode::JOINING) {
             throw std::runtime_error("Cannot snapshot until bootstrap completes");
         }
-    }).then([this, ks_name = std::move(ks_name), cf_name = std::move(cf_name), tag = std::move(tag)] {
         return check_snapshot_not_exist(_db.local(), ks_name, tag).then([this, ks_name, cf_name, tag] {
             return _db.invoke_on_all([ks_name, cf_name, tag] (database &db) {
                 auto& cf = db.find_column_family(ks_name, cf_name);
@@ -2059,7 +2073,9 @@ future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring c
 }
 
 future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
-    return _db.local().clear_snapshot(tag, keyspace_names);
+    return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names)] {
+        return _db.local().clear_snapshot(tag, keyspace_names);
+    });
 }
 
 future<std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>>
@@ -2095,8 +2111,8 @@ storage_service::get_snapshot_details() {
             return std::move(_result);
         }
     };
-
-    return _db.map_reduce(snapshot_reducer(), [] (database& db) {
+  return run_snapshot_list_operation([] {
+    return get_local_storage_service()._db.map_reduce(snapshot_reducer(), [] (database& db) {
         auto local_snapshots = make_lw_shared<snapshot_map>();
         return parallel_for_each(db.get_column_families(), [local_snapshots] (auto& cf_pair) {
             return cf_pair.second->get_snapshot_details().then([uuid = cf_pair.first, local_snapshots] (auto map) {
@@ -2111,13 +2127,13 @@ storage_service::get_snapshot_details() {
         }).then([local_snapshots] {
             return make_ready_future<snapshot_map>(std::move(*local_snapshots));
         });
-    }).then([this] (snapshot_map&& map) {
+    }).then([] (snapshot_map&& map) {
         std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>> result;
         for (auto&& pair: map) {
             std::vector<service::storage_service::snapshot_details> details;
 
             for (auto&& snap_map: pair.second) {
-                auto& cf = _db.local().find_column_family(snap_map.first);
+                auto& cf = get_local_storage_service()._db.local().find_column_family(snap_map.first);
                 details.push_back({ snap_map.second.live, snap_map.second.total, cf.schema()->cf_name(), cf.schema()->ks_name() });
             }
             result.emplace(pair.first, std::move(details));
@@ -2125,6 +2141,7 @@ storage_service::get_snapshot_details() {
 
         return make_ready_future<std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>>(std::move(result));
     });
+  });
 }
 
 future<int64_t> storage_service::true_snapshots_size() {
