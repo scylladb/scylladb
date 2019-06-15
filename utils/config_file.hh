@@ -169,6 +169,7 @@ public:
     typedef std::reference_wrapper<config_src> cfg_ref;
 
     config_file(std::initializer_list<cfg_ref> = {});
+    config_file(const config_file&) = delete;
 
     void add(cfg_ref);
     void add(std::initializer_list<cfg_ref>);

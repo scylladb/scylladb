@@ -519,7 +519,8 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
 
     sstring data_dir = "./tests/sstables/schema_digest_test";
 
-    db::config db_cfg;
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
     if (regenerate) {
         db_cfg.data_file_directories({data_dir}, db::config::config_source::CommandLine);
     } else {
@@ -585,5 +586,5 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
         expect_version("ks", "tbl", utils::UUID("5c9cadec-e5df-357e-81d0-0261530af64b"));
         expect_version("ks", "tbl_view", utils::UUID("1d91ad22-ea7c-3e7f-9557-87f0f3bb94d7"));
         expect_version("ks", "tbl_view_2", utils::UUID("2dcd4a37-cbb5-399b-b3c9-8eb1398b096b"));
-    }, db_cfg).then([tmp = std::move(tmp)] {});
+    }, db_cfg_ptr).then([tmp = std::move(tmp)] {});
 }

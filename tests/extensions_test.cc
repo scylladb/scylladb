@@ -69,7 +69,7 @@ SEASTAR_TEST_CASE(simple_schema_extension) {
             BOOST_REQUIRE(!ext->is_placeholder());
             BOOST_CHECK_EQUAL(ext->serialize(), dummy_ext(std::map<sstring, sstring>{{"king of", "swing"},{"ninja", "mission"}}).serialize());
         });
-    }, db::config(ext));
+    }, ::make_shared<db::config>(ext));
 }
 
 using namespace sstables;
@@ -108,6 +108,6 @@ SEASTAR_TEST_CASE(simple_sstable_extension) {
                 });
             });
         });
-    }, db::config(ext));
+    }, ::make_shared<db::config>(ext));
 }
 

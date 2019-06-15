@@ -40,8 +40,8 @@
 #include "tmpdir.hh"
 
 SEASTAR_TEST_CASE(test_safety_after_truncate) {
-    db::config cfg{};
-    cfg.auto_snapshot() = false;
+    auto cfg = make_shared<db::config>();
+    cfg->auto_snapshot() = false;
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
         auto& db = e.local_db();
@@ -157,7 +157,8 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
     using sst = sstables::sstable;
 
     tmpdir data_dir;
-    db::config db_cfg;
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
 
     db_cfg.data_file_directories({data_dir.path().string()}, db::config::config_source::CommandLine);
 
@@ -203,14 +204,15 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
         require_exist(sst::filename(sst_dir, ks, cf, sst::version_types::mc, 4, sst::format_types::big, component_type::Data), false);
 
         return make_ready_future<>();
-    }, db_cfg).get();
+    }, db_cfg_ptr).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
     using sst = sstables::sstable;
 
     tmpdir data_dir;
-    db::config db_cfg;
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
 
     db_cfg.data_file_directories({data_dir.path().string()}, db::config::config_source::CommandLine);
 
@@ -324,5 +326,5 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
         require_exist(pending_delete_dir + "/sstables-6-8.log", false);
 
         return make_ready_future<>();
-    }, db_cfg).get();
+    }, db_cfg_ptr).get();
 }

@@ -68,7 +68,7 @@ public:
 
     cql_test_config();
     cql_test_config(const cql_test_config&);
-    cql_test_config(const db::config&);
+    cql_test_config(shared_ptr<db::config>);
     ~cql_test_config();
 };
 

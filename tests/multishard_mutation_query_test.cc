@@ -948,8 +948,8 @@ run_fuzzy_test_workload(fuzzy_test_config cfg, distributed<database>& db, schema
 } // namespace
 
 SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
-    db::config db_cfg;
-    db_cfg.enable_commitlog(false);
+    auto db_cfg = make_shared<db::config>();
+    db_cfg->enable_commitlog(false);
 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         // REPLACE RANDOM SEED HERE.

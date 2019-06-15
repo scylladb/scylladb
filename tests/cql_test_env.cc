@@ -59,11 +59,11 @@
 using namespace std::chrono_literals;
 
 cql_test_config::cql_test_config()
-    : cql_test_config(db::config())
+    : cql_test_config(make_shared<db::config>())
 {}
 
-cql_test_config::cql_test_config(const db::config& cfg)
-    : db_config(seastar::make_shared<db::config>(cfg))
+cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
+    : db_config(cfg)
 {
     // This causes huge amounts of commitlog writes to allocate space on disk,
     // which all get thrown away when the test is done. This can cause timeouts

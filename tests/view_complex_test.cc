@@ -117,8 +117,8 @@ SEASTAR_TEST_CASE(test_partial_delete_unselected_column_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_partial_delete_unselected_column_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_partial_delete_unselected_column(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -309,8 +309,8 @@ SEASTAR_TEST_CASE(test_partial_delete_selected_column_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_partial_delete_selected_column_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_partial_delete_selected_column(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -385,8 +385,8 @@ SEASTAR_TEST_CASE(test_update_column_in_view_pk_with_ttl_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_update_column_in_view_pk_with_ttl_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_update_column_in_view_pk_with_ttl(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -505,8 +505,8 @@ SEASTAR_TEST_CASE(test_update_column_not_in_view_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_update_column_not_in_view_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_update_column_not_in_view(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -585,8 +585,8 @@ SEASTAR_TEST_CASE(test_partial_update_with_unselected_collections_without_flush)
 }
 
 SEASTAR_TEST_CASE(test_partial_update_with_unselected_collections_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_partial_update_with_unselected_collections(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -655,8 +655,8 @@ SEASTAR_TEST_CASE(test_unselected_columns_ttl_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_unselected_columns_ttl_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_unselected_columns_ttl(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -716,8 +716,8 @@ SEASTAR_TEST_CASE(test_partition_deletion_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_partition_deletion_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_partition_deletion(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -794,8 +794,8 @@ SEASTAR_TEST_CASE(test_commutative_row_deletion_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_commutative_row_deletion_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_commutative_row_deletion(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -917,8 +917,8 @@ SEASTAR_TEST_CASE(test_update_with_column_timestamp_smaller_than_pk_without_flus
 }
 
 SEASTAR_TEST_CASE(test_update_with_column_timestamp_smaller_than_pk_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_update_with_column_timestamp_smaller_than_pk(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -969,8 +969,8 @@ SEASTAR_TEST_CASE(test_expired_marker_with_limit_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_expired_marker_with_limit_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_expired_marker_with_limit(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -1067,8 +1067,8 @@ SEASTAR_TEST_CASE(test_update_with_column_timestamp_bigger_than_pk_without_flush
 }
 
 SEASTAR_TEST_CASE(test_update_with_column_timestamp_bigger_than_pk_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_update_with_column_timestamp_bigger_than_pk(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -1152,8 +1152,8 @@ SEASTAR_TEST_CASE(test_no_regular_base_column_in_view_pk_without_flush) {
 }
 
 SEASTAR_TEST_CASE(test_no_regular_base_column_in_view_pk_with_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_no_regular_base_column_in_view_pk(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -1223,8 +1223,8 @@ SEASTAR_TEST_CASE(test_marker_timestamp_is_not_shadowed_by_previous_update_witho
 }
 
 SEASTAR_TEST_CASE(test_marker_timestamp_is_not_shadowed_by_previous_updatewith_flush) {
-    db::config cfg;
-    cfg.enable_cache(false);
+    auto cfg = make_shared<db::config>();
+    cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_marker_timestamp_is_not_shadowed_by_previous_update(e, [&] {
             e.local_db().flush_all_memtables().get();

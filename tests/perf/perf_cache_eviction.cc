@@ -67,7 +67,8 @@ int main(int argc, char** argv) {
             test_log.set_level(seastar::log_level::trace);
         }
 
-        db::config cfg;
+        auto cfg_ptr = make_shared<db::config>();
+        auto& cfg = *cfg_ptr;
         cfg.enable_commitlog(false);
         cfg.enable_cache(true);
 
@@ -181,6 +182,6 @@ int main(int argc, char** argv) {
             reader.get();
             stats_printer.cancel();
             completion_timer.cancel();
-        }, cfg);
+        }, cfg_ptr);
     });
 }
