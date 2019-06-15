@@ -377,6 +377,17 @@ future<> utils::config_file::broadcast_to_all_shards() {
                     }
                 }
             }).get();
+        } else {
+            smp::invoke_on_all([this] {
+                if (s_shard_id != 0) {
+                    auto& shard_0_values = _per_shard_values[0];
+                    auto nr_values = shard_0_values.size();
+                    auto& this_shard_values = _per_shard_values[s_shard_id];
+                    for (size_t i = 0; i != nr_values; ++i) {
+                        this_shard_values[i]->update_from(shard_0_values[i].get());
+                    }
+                }
+            }).get();
         }
     });
 }

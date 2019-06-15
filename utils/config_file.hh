@@ -32,6 +32,8 @@
 #include <seastar/core/future.hh>
 #include <seastar/util/defer.hh>
 
+#include "utils/updateable_value.hh"
+
 #include "seastarx.hh"
 
 namespace seastar { class file; }
@@ -67,6 +69,7 @@ class config_file {
     struct any_value {
         virtual ~any_value() = default;
         virtual std::unique_ptr<any_value> clone() const = 0;
+        virtual void update_from(const any_value* source) = 0;
     };
     std::vector<std::vector<std::unique_ptr<any_value>>> _per_shard_values { 1 };
 public:
@@ -77,6 +80,11 @@ public:
         Used,
         Unused,
         Invalid,
+    };
+
+    enum class liveness {
+        LiveUpdate,
+        MustRestart,
     };
 
     enum class config_source : uint8_t {
@@ -129,17 +137,22 @@ public:
         value_status _value_status;
         struct the_value_type final : any_value {
             the_value_type(T value) : value(std::move(value)) {}
-            T value;
+            utils::updateable_value_source<T> value;
             virtual std::unique_ptr<any_value> clone() const override {
-                return std::make_unique<the_value_type>(value);
+                return std::make_unique<the_value_type>(value());
+            }
+            virtual void update_from(const any_value* source) override {
+                auto typed_source = static_cast<const the_value_type*>(source);
+                value.set(typed_source->value());
             }
         };
+        liveness _liveness;
     protected:
-        T& the_value() {
+        updateable_value_source<T>& the_value() {
             any_value* av =_cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
             return static_cast<the_value_type*>(av)->value;
         }
-        const T& the_value() const {
+        const updateable_value_source<T>& the_value() const {
             return const_cast<named_value*>(this)->the_value();
         }
         virtual const void* current_value() const override {
@@ -149,12 +162,17 @@ public:
         typedef T type;
         typedef named_value<T> MyType;
 
-        named_value(config_file* file, std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {},
+        named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
             : config_src(file, name, &config_type_for<T>, desc)
             , _value_status(vs)
+            , _liveness(liveness_)
         {
             file->add(*this, std::make_unique<the_value_type>(std::move(t)));
+        }
+        named_value(config_file* file, std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {},
+                std::initializer_list<T> allowed_values = {})
+                : named_value(file, name, liveness::MustRestart, vs, t, desc, allowed_values) {
         }
         value_status status() const override {
             return _value_status;
@@ -166,11 +184,11 @@ public:
             return _source > config_source::None;
         }
         MyType & operator()(const T& t) {
-            the_value() = t;
+            the_value().set(t);
             return *this;
         }
         MyType & operator()(T&& t, config_source src = config_source::None) {
-            the_value() = std::move(t);
+            the_value().set(std::move(t));
             if (src > config_source::None) {
                 _source = src;
             }
@@ -180,7 +198,11 @@ public:
             operator()(std::move(t), src);
         }
         const T& operator()() const {
-            return the_value();
+            return the_value().get();
+        }
+
+        operator updateable_value<T>() const & {
+            return updateable_value<T>(the_value());
         }
 
         void add_command_line_option(bpo::options_description_easy_init&,

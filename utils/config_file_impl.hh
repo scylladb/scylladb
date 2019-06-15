@@ -203,6 +203,10 @@ void utils::config_file::named_value<T>::add_command_line_option(
 
 template<typename T>
 void utils::config_file::named_value<T>::set_value(const YAML::Node& node) {
+    if (_source == config_source::SettingsFile && _liveness != liveness::LiveUpdate) {
+        // FIXME: warn if different?
+        return;
+    }
     (*this)(node.as<T>());
     _source = config_source::SettingsFile;
 }
