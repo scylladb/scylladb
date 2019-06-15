@@ -91,6 +91,7 @@
 #include "cache_temperature.hh"
 #include <unordered_set>
 #include "disk-error-handler.hh"
+#include "utils/updateable_value.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -323,7 +324,7 @@ public:
         bool enable_cache = true;
         bool enable_commitlog = true;
         bool enable_incremental_backups = false;
-        bool compaction_enforce_min_threshold = false;
+        utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
@@ -1099,7 +1100,7 @@ public:
         bool enable_disk_writes = true;
         bool enable_cache = true;
         bool enable_incremental_backups = false;
-        bool compaction_enforce_min_threshold = false;
+        utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;

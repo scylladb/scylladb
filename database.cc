@@ -1545,7 +1545,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_cache = false;
     }
     cfg.enable_dangerous_direct_import_of_cassandra_counters = _cfg->enable_dangerous_direct_import_of_cassandra_counters();
-    cfg.compaction_enforce_min_threshold = _cfg->compaction_enforce_min_threshold();
+    cfg.compaction_enforce_min_threshold = _cfg->compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.read_concurrency_semaphore = &_read_concurrency_sem;
