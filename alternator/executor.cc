@@ -32,6 +32,7 @@
 #include <functional>
 #include "error.hh"
 #include "serialization.hh"
+#include "expressions.hh"
 
 #include <boost/range/adaptors.hpp>
 
@@ -333,6 +334,35 @@ future<json::json_return_type> executor::batch_write_item(std::string content) {
     });
 }
 
+// resolve_update_path() takes a path given in an update expression, replaces
+// references like #name with the real name from ExpressionAttributeNames,
+// and returns the fixed path. We also verify that the top-level attribute
+// being modified is NOT one of the key attributes - those cannot be updated.
+// If one of the above checks fails, a validation exception is thrown.
+// FIXME: currently, we only support top-level attribute updates, and this
+// function returns the column name;
+static std::string resolve_update_path(const parsed::path& p, const Json::Value& update_info, const schema_ptr& schema) {
+    if (p.has_operators()) {
+        throw api_error("ValidationException", "UpdateItem does not yet support nested updates (FIXME)");
+    }
+    auto column_name = p.root();
+    if (column_name.size() > 0 && column_name[0] == '#') {
+        const Json::Value& value = update_info["ExpressionAttributeNames"].get(column_name, Json::nullValue);
+        if (!value.isString()) {
+            throw api_error("ValidationException",
+                    format("ExpressionAttributeNames missing entry '{}' required by UpdateExpression",
+                            column_name));
+        }
+        column_name = value.asString();
+    }
+    const column_definition* cdef = schema->get_column_definition(to_bytes(column_name));
+    if (cdef && cdef->is_primary_key()) {
+        throw api_error("ValidationException",
+                format("UpdateItem cannot update key column {}", column_name));
+    }
+    return column_name;
+}
+
 future<json::json_return_type> executor::update_item(std::string content) {
     _stats.api_operations.update_item++;
     Json::Value update_info = json::to_json_value(content);
@@ -358,10 +388,46 @@ future<json::json_return_type> executor::update_item(std::string content) {
                 format("UpdateItem does not allow both AttributeUpdates and UpdateExpression to be given together"));
     }
 
-    // FIXME: handle UpdateExpression
     if (update_expression) {
-        throw api_error("ValidationException",
-                format("UpdateItem does not yet support UpdateExpression"));
+        parsed::update_expression expression;
+        try {
+            expression = parse_update_expression(update_expression.asString());
+        } catch(expressions_syntax_error& e) {
+            throw api_error("ValidationException", e.what());
+        }
+        if (expression.empty()) {
+            throw api_error("ValidationException", "Empty expression in UpdateExpression is not allowed");
+        }
+        std::unordered_set<std::string> seen_column_names;
+        for (auto& action : expression.actions()) {
+            std::string column_name = resolve_update_path(action._path, update_info, schema);
+            // DynamoDB forbids multiple updates in the same expression to
+            // modify overlapping document paths. Updates of one expression
+            // have the same timestamp, so it's unclear which would "win".
+            // FIXME: currently, without full support for document paths,
+            // we only check if the paths' roots are the same.
+            if (!seen_column_names.insert(column_name).second) {
+                throw api_error("ValidationException",
+                        format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
+                                column_name, column_name));
+            }
+            if (action.is_set()) {
+                auto a = action.as_set();
+                // FIXME: this code is for rhs being a value reference - ":val". Need to support the other options!!
+                const Json::Value& value = update_info["ExpressionAttributeValues"].get(a._rhs, Json::nullValue);
+                if (value.isNull()) {
+                    throw api_error("ValidationException",
+                            format("ExpressionAttributeValues missing entry '{}' required by UpdateExpression", a._rhs));
+                }
+                bytes val = serialize_item(value);
+                attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
+            } else if (action.is_remove()) {
+                attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_dead(ts, gc_clock::now()));
+            } else if (action.is_add() || action.is_del()) {
+                // FIXME: implement ADD and DELETE.
+                throw api_error("ValidationException", "UpdateExpression: ADD and DELETE not yet supported.");
+            }
+        }
     }
 
     for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
