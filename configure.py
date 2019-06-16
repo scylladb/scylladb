@@ -778,6 +778,8 @@ alternator = [
        'alternator/stats.cc',
        'alternator/base64.cc',
        'alternator/serialization.cc',
+       'alternator/expressions.cc',
+       Antlr3Grammar('alternator/expressions.g')
 ]
 
 idls = ['idl/gossip_digest.idl.hh',
