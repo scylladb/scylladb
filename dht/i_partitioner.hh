@@ -430,7 +430,7 @@ private:
     friend class ring_position_comparator;
     friend class ring_position_ext;
     dht::token _token;
-    token_bound _token_bound; // valid when !_key
+    token_bound _token_bound{}; // valid when !_key
     std::optional<partition_key> _key;
 public:
     static ring_position min() {
@@ -970,5 +970,3 @@ struct hash<dht::decorated_key> {
 
 
 }
-
-
