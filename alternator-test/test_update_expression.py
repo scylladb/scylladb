@@ -201,6 +201,19 @@ def test_update_expression_multi_overlap(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #a1 = :v1, #a2 = :v2', ExpressionAttributeValues={':v1': 'yo', ':v2': 'he'}, ExpressionAttributeNames={'#a1': 'a', '#a2': 'a'})
 
+# The problem isn't just with identical paths - we can't modify two paths that
+# "overlap" in the sense that one is the ancestor of the other.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_multi_overlap_nested(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*overlap'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :val1, a.b = :val2',
+            ExpressionAttributeValues={':val1': {'b': 7}, ':val2': 'there'})
+    test_table_s.put_item(Item={'p': p, 'a': {'b': {'c': 2}}})
+    with pytest.raises(ClientError, match='ValidationException.*overlap'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a.b = :val1, a.b.c = :val2',
+            ExpressionAttributeValues={':val1': 'hi', ':val2': 'there'})
+
 # In the previous test we saw that *modifying* the same item twice in the same
 # update is forbidden; But it is allowed to *read* an item in the same update
 # that also modifies it, and we check this here.
@@ -213,7 +226,7 @@ def test_update_expression_multi_with_copy(test_table_s):
     # the value of 'a' is read before the actual REMOVE operation happens.
     test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE a SET b = a')
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hello'}
-    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET c = b remove b')
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET c = b REMOVE b')
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'c': 'hello'}
 
 
@@ -228,6 +241,16 @@ def test_update_expression_set_missing_value(test_table_s):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET b = :val1')
 
+# It is forbidden for ExpressionAttributeValues to contain values not used
+# by the expression. DynamoDB produces an error like: "Value provided in
+# ExpressionAttributeValues unused in expressions: keys: {:val1}"
+@pytest.mark.xfail(reason="need to test for unused values or names")
+def test_update_expression_spurious_value(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :val1',
+            ExpressionAttributeValues={':val1': 3, ':val2': 4})
+
 # Test case where a #name is referenced, without being defined
 def test_update_expression_set_missing_name(test_table_s):
     p = random_string()
@@ -240,6 +263,17 @@ def test_update_expression_set_missing_name(test_table_s):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET #name = :val1',
             ExpressionAttributeValues={':val2': 4})
+
+# It is forbidden for ExpressionAttributeNames to contain names not used
+# by the expression. DynamoDB produces an error like: "Value provided in
+# ExpressionAttributeNames unused in expressions: keys: {#b}"
+@pytest.mark.xfail(reason="need to test for unused values or names")
+def test_update_expression_spurious_name(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #a = :val1',
+            ExpressionAttributeNames={'#a': 'hello', '#b': 'hi'},
+            ExpressionAttributeValues={':val1': 3, ':val2': 4})
 
 # Test that the key attributes (hash key or sort key) cannot be modified
 # by an update
@@ -270,3 +304,449 @@ def test_update_expression_non_existant_clause(test_table_s):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='HELLO b = :val1',
             ExpressionAttributeValues={':val1': 4})
+
+# Test support for "SET a = :val1 + :val2", "SET a = :val1 - :val2"
+# Only exactly these combinations work - e.g., it's a syntax error to
+# try to add three. Trying to add a string fails.
+@pytest.mark.xfail(reason="plus and minus in SET not yet implemented")
+def test_update_expression_plus_basic(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val1 + :val2',
+        ExpressionAttributeValues={':val1': 4, ':val2': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 7}
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val1 - :val2',
+        ExpressionAttributeValues={':val1': 5, ':val2': 2})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 3}
+    # Only the addition of exactly two values is supported!
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = :val1 + :val2 + :val3',
+            ExpressionAttributeValues={':val1': 4, ':val2': 3, ':val3': 2})
+    # Trying to add a string value fails, saying "Incorrect operand type for
+    # operator or function; operator or function: +, operand type: S".
+    # Interestingly, this implies DynamoDB just handles + and - similarly to a
+    # two-parameter function, and we can do this in our implementation as well.
+    # But not quite: see test_update_expression_function_plus_nesting.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = :val1 + :val2',
+            ExpressionAttributeValues={':val1': 'dog', ':val2': 3})
+
+# Test support for "SET a = b + :val2" et al., i.e., a version of the
+# above test_update_expression_plus_basic with read before write.
+@pytest.mark.xfail(reason="attribute copy (read-before-write) not yet implemented")
+def test_update_expression_plus_rmw(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 2})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 2
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = a + :val1',
+        ExpressionAttributeValues={':val1': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 5
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = :val1 + a',
+        ExpressionAttributeValues={':val1': 4})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 9
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val1 + a',
+        ExpressionAttributeValues={':val1': 1})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 10
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = b + a')
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 19
+
+# Test the "list_append" function in SET
+# Also because this is the first test of functions in SET, we also test some
+# generic features of how functions are parsed.
+@pytest.mark.xfail(reason="list_append function not yet implemented")
+def test_update_expression_list_append(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = :val1',
+        ExpressionAttributeValues={':val1': ['hi', 2]})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] ==['hi', 2]
+    # Often, list_append is used to append items to a list attribute
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = list_append(a, :val1)',
+        ExpressionAttributeValues={':val1': [4, 'hello']})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['hi', 2, 4, 'hello']
+    # But it can also be used to just concatenate in other ways:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = list_append(:val1, a)',
+        ExpressionAttributeValues={':val1': ['dog']})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['dog', 'hi', 2, 4, 'hello']
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = list_append(a, :val1)',
+        ExpressionAttributeValues={':val1': ['cat']})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == ['dog', 'hi', 2, 4, 'hello', 'cat']
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET c = list_append(a, b)')
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == ['dog', 'hi', 2, 4, 'hello', 'dog', 'hi', 2, 4, 'hello', 'cat']
+    # Unlike the operation name "SET", function names are case-sensitive!
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = LIST_APPEND(a, :val1)',
+            ExpressionAttributeValues={':val1': [4, 'hello']})
+    # As usual, spaces are ignored by the parser
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = list_append ( a , :val1 ) ',
+        ExpressionAttributeValues={':val1': [7]})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['dog', 'hi', 2, 4, 'hello', 7]
+    # Also as usual, #references are allowed instead of inline names:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET #name1 = list_append(#name2,:val1)',
+        ExpressionAttributeValues={':val1': [8]},
+        ExpressionAttributeNames={'#name1': 'a', '#name2': 'a'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['dog', 'hi', 2, 4, 'hello', 7, 8]
+    # The list_append function only allows two parameters. The parser can
+    # correctly parse fewer or more, but then an error is generated: "Invalid
+    # UpdateExpression: Incorrect number of operands for operator or function;
+    # operator or function: list_append, number of operands: 1".
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(a)')
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(a, :val1, :val2)',
+            ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': [7]})
+    # If list_append is used on value which isn't a list, we get
+    # error: "Invalid UpdateExpression: Incorrect operand type for operator
+    # or function; operator or function: list_append, operand type: S"
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(:val1, :val2)',
+            ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': 'hi'})
+
+# Test the "if_not_exists" function in SET
+# The test also checks additional features of function-call parsing.
+@pytest.mark.xfail(reason="if_not_exists function not yet implemented")
+def test_update_expression_if_not_exists(test_table_s):
+    p = random_string()
+    # Since attribute a doesn't exist, set it:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = if_not_exists(a, :val1)',
+        ExpressionAttributeValues={':val1': 2})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 2
+    # Now the attribute does exist, so set does nothing:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = if_not_exists(a, :val1)',
+        ExpressionAttributeValues={':val1': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 2
+    # if_not_exists can also be used to check one attribute and set another,
+    # but note that if_not_exists(a, :val) means a's value if it exists,
+    # otherwise :val!
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = if_not_exists(c, :val1)',
+        ExpressionAttributeValues={':val1': 4})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 4
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 2
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = if_not_exists(c, :val1)',
+        ExpressionAttributeValues={':val1': 5})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 5
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = if_not_exists(a, :val1)',
+        ExpressionAttributeValues={':val1': 6})
+    # note how because 'a' does exist, its value is copied, overwriting b's
+    # value:
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 2
+    # The parser expects function parameters to be value references, paths,
+    # or nested call to functions. Other crap will cause syntax errors:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = if_not_exists(non@sense, :val1)',
+            ExpressionAttributeValues={':val1': 6})
+    # if_not_exists() requires that the first parameter be a path. However,
+    # the parser doesn't know this, and allows for a function parameter
+    # also a value reference or a function call. If try one of these other
+    # things the parser succeeds, but we get a later error, looking like:
+    # "Invalid UpdateExpression: Operator or function requires a document
+    # path; operator or function: if_not_exists"
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = if_not_exists(if_not_exists(a, :val2), :val1)',
+            ExpressionAttributeValues={':val1': 6, ':val2': 3})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = if_not_exists(:val2, :val1)',
+            ExpressionAttributeValues={':val1': 6, ':val2': 3})
+    # Surprisingly, if the wrong argument is a :val value reference, the
+    # parser first tries to look it up in ExpressionAttributeValues (and
+    # fails if it's missing), before realizing any value reference would be
+    # wrong... So the following fails like the above does - but with a
+    # different error message (which we do not check here): "Invalid
+    # UpdateExpression: An expression attribute value used in expression
+    # is not defined; attribute value: :val2"
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = if_not_exists(:val2, :val1)',
+            ExpressionAttributeValues={':val1': 6})
+
+# When the expression parser parses a function call f(value, value), each
+# value may itself be a function call - ad infinitum. So expressions like
+# list_append(if_not_exists(a, :val1), :val2) are legal and so is deeper
+# nesting.
+@pytest.mark.xfail(reason="SET functions not yet implemented")
+def test_update_expression_function_nesting(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = list_append(if_not_exists(a, :val1), :val2)',
+            ExpressionAttributeValues={':val1': ['a', 'b'], ':val2': ['cat', 'dog']})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['a', 'b', 'cat', 'dog']
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = list_append(if_not_exists(a, :val1), :val2)',
+            ExpressionAttributeValues={':val1': ['a', 'b'], ':val2': ['1', '2']})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['a', 'b', 'cat', 'dog', '1', '2']
+    # I don't understand why the following expression isn't accepted, but it
+    # isn't! It produces a "Invalid UpdateExpression: The function is not
+    # allowed to be used this way in an expression; function: list_append".
+    # I don't know how to explain it. In any case, the *parsing* works -
+    # this is not a syntax error - the failure is in some verification later.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(list_append(:val1, :val2), :val3)',
+                ExpressionAttributeValues={':val1': ['a'], ':val2': ['1'], ':val3': ['hi']})
+    # Ditto, the following passes the parser but fails some later check with
+    # the same error message as above.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(list_append(list_append(:val1, :val2), :val3), :val4)',
+                ExpressionAttributeValues={':val1': ['a'], ':val2': ['1'], ':val3': ['hi'], ':val4': ['yo']})
+
+# Verify how in SET expressions, "+" (or "-") nests with functions.
+# We discover that f(x)+f(y) works but f(x+y) does NOT (results in a syntax
+# error on the "+"). This means that the parser has two separate rules:
+# 1.  set_action: SET path = value + value
+# 2.  value: VALREF | NAME | NAME (value, ...)
+@pytest.mark.xfail(reason="SET functions not yet implemented")
+def test_update_expression_function_plus_nesting(test_table_s):
+    p = random_string()
+    # As explained above, this - with "+" outside the expression, works:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = if_not_exists(b, :val1)+:val2',
+            ExpressionAttributeValues={':val1': 2, ':val2': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 5
+    # ...but this - with the "+" inside an expression parameter, is a syntax
+    # error:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = if_not_exists(c, :val1+:val2)',
+                ExpressionAttributeValues={':val1': 5, ':val2': 4})
+
+# This test tries to use an undefined function "f". This, obviously, fails,
+# but where we to actually print the error we would see "Invalid
+# UpdateExpression: Invalid function name; function: f". Not a syntax error.
+# This means that the parser accepts any alphanumeric name as a function
+# name, and only later use of this function fails because it's not one of
+# the supported file.
+@pytest.mark.xfail(reason="SET functions not yet implemented")
+def test_update_expression_unknown_function(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*f'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = f(b,c,d)')
+    with pytest.raises(ClientError, match='ValidationException.*f123_hi'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = f123_hi(b,c,d)')
+    # Just like unreferenced column names parsed by the DynamoDB parser,
+    # function names must also start with an alphabetic character. Trying
+    # to use _f as a function name will result with an actual syntax error,
+    # on the "_" token.
+    with pytest.raises(ClientError, match='ValidationException.*Syntax error'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = _f(b,c,d)')
+
+# Test "ADD" operation for numbers
+@pytest.mark.xfail(reason="ADD not yet implemented")
+def test_update_expression_add_numbers(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 3, 'b': 'hi'})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='ADD a :val1',
+        ExpressionAttributeValues={':val1': 4})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 7
+    # If the value to be added isn't a number, we get an error like "Invalid
+    # UpdateExpression: Incorrect operand type for operator or function;
+    # operator: ADD, operand type: STRING".
+    with pytest.raises(ClientError, match='ValidationException.*type'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='ADD a :val1',
+            ExpressionAttributeValues={':val1': 'hello'})
+    # Similarly, if the attribute we're adding to isn't a number, we get an
+    # error like "An operand in the update expression has an incorrect data
+    # type"
+    with pytest.raises(ClientError, match='ValidationException.*type'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='ADD b :val1',
+            ExpressionAttributeValues={':val1': 1})
+
+# Test "ADD" operation for sets
+@pytest.mark.xfail(reason="ADD not yet implemented")
+def test_update_expression_add_sets(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': set(['dog', 'cat', 'mouse']), 'b': 'hi'})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='ADD a :val1',
+        ExpressionAttributeValues={':val1': set(['pig'])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == set(['dog', 'cat', 'mouse', 'pig'])
+    # The value to be added needs to be a set of the same type - it can't
+    # be a single element or anything else. If the value has the wrong type,
+    # we get an error like "Invalid UpdateExpression: Incorrect operand type
+    # for operator or function; operator: ADD, operand type: STRING".
+    with pytest.raises(ClientError, match='ValidationException.*type'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='ADD a :val1',
+            ExpressionAttributeValues={':val1': 'hello'})
+
+# Test "DELETE" operation for sets
+@pytest.mark.xfail(reason="DELETE not yet implemented")
+def test_update_expression_delete_sets(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': set(['dog', 'cat', 'mouse']), 'b': 'hi'})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='DELETE a :val1',
+        ExpressionAttributeValues={':val1': set(['cat', 'mouse'])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == set(['dog'])
+    # Deleting an element not present in the set is not an error - it just
+    # does nothing
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='DELETE a :val1',
+        ExpressionAttributeValues={':val1': set(['pig'])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == set(['dog'])
+    # The value to be deleted must be a set of the same type - it can't
+    # be a single element or anything else. If the value has the wrong type,
+    # we get an error like "Invalid UpdateExpression: Incorrect operand type
+    # for operator or function; operator: DELETE, operand type: STRING".
+    with pytest.raises(ClientError, match='ValidationException.*type'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='DELETE a :val1',
+            ExpressionAttributeValues={':val1': 'hello'})
+
+######## Tests for paths and nested attribute updates:
+
+# A dot inside a name in ExpressionAttributeNames is a literal dot, and
+# results in a top-level attribute with an actual dot in its name - not
+# a nested attribute path.
+def test_update_expression_dot_in_name(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #a = :val1',
+        ExpressionAttributeValues={':val1': 3},
+        ExpressionAttributeNames={'#a': 'a.b'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a.b': 3}
+
+# A basic test for direct update of a nested attribute: One of the top-level
+# attributes is itself a document, and we update only one of that document's
+# nested attributes.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_nested_attribute_dot(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'b': 3, 'c': 4}, 'd': 5})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': {'b': 3, 'c': 4}, 'd': 5}
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a.c = :val1',
+        ExpressionAttributeValues={':val1': 7})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': {'b': 3, 'c': 7}, 'd': 5}
+    # Of course we can also add new nested attributes, not just modify
+    # existing ones:
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a.d = :val1',
+        ExpressionAttributeValues={':val1': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': {'b': 3, 'c': 7, 'd': 3}, 'd': 5}
+
+# Similar test, for a list: one of the top-level attributes is a list, we
+# can update one of its items.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_nested_attribute_index(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': ['one', 'two', 'three']})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[1] = :val1',
+        ExpressionAttributeValues={':val1': 'hello'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': ['one', 'hello', 'three']}
+
+# Test that just like happens in top-level attributes, also in nested
+# attributes, setting them replaces the old value - potentially an entire
+# nested document, by the whole value (which may have a different type)
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_nested_different_type(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'b': 3, 'c': {'one': 1, 'two': 2}}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a.c = :val1',
+        ExpressionAttributeValues={':val1': 7})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': {'b': 3, 'c': 7}}
+
+# Yet another test of a nested attribute update. This one uses deeper
+# level of nesting (dots and indexes), adds #name references to the mix.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_nested_deep(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'b': 3, 'c': ['hi', {'x': {'y': [3, 5, 7]}}]}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a.c[1].#name.y[1] = :val1',
+        ExpressionAttributeValues={':val1': 9}, ExpressionAttributeNames={'#name': 'x'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] ==  {'b': 3, 'c': ['hi', {'x': {'y': [3, 9, 7]}}]}
+    # A deep path can also appear on the right-hand-side of an assignment
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a.z = a.c[1].#name.y[1]',
+        ExpressionAttributeNames={'#name': 'x'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a']['z'] ==  9
+
+# A REMOVE operation can be used to remove nested attributes, and also
+# individual list items.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_nested_remove(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'b': 3, 'c': ['hi', {'x': {'y': [3, 5, 7]}, 'q': 2}]}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE a.c[1].x.y[1], a.c[1].q')
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] ==  {'b': 3, 'c': ['hi', {'x': {'y': [3, 7]}}]}
+
+# The DynamoDB documentation specifies: "When you use SET to update a list
+# element, the contents of that element are replaced with the new data that
+# you specify. If the element does not already exist, SET will append the
+# new element at the end of the list."
+# So if we take a three-element list a[7], and set a[7], the new element
+# will be put at the end of the list, not position 7 specifically.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_nested_attribute_update_array_out_of_bounds(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': ['one', 'two', 'three']})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[7] = :val1',
+        ExpressionAttributeValues={':val1': 'hello'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': ['one', 'two', 'three', 'hello']}
+    # The DynamoDB documentation also says: "If you add multiple elements
+    # in a single SET operation, the elements are sorted in order by element
+    # number.
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[84] = :val1, a[37] = :val2',
+        ExpressionAttributeValues={':val1': 'a1', ':val2': 'a2'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': ['one', 'two', 'three', 'hello', 'a2', 'a1']}
+
+# Test what happens if we try to write to a.b, which would only make sense if
+# a were a nested document, but a doesn't exist, or exists and is NOT a nested
+# document but rather a scalar or list or something.
+# DynamoDB actually detects this case and prints an error:
+#   ClientError: An error occurred (ValidationException) when calling the
+#   UpdateItem operation: The document path provided in the update expression
+#   is invalid for update
+# Because Scylla doesn't read before write, it cannot detect this as an error,
+# so we'll probably want to allow for that possibility as well.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_nested_attribute_update_bad_path_dot(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hello', 'b': ['hi']})
+    with pytest.raises(ClientError, match='ValidationException.*path'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a.c = :val1',
+            ExpressionAttributeValues={':val1': 7})
+    with pytest.raises(ClientError, match='ValidationException.*path'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b.c = :val1',
+            ExpressionAttributeValues={':val1': 7})
+    with pytest.raises(ClientError, match='ValidationException.*path'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET c.c = :val1',
+            ExpressionAttributeValues={':val1': 7})
+
+
+# Similarly for other types of bad paths - using [0] on something which
+# isn't an array,
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_nested_attribute_update_bad_path_array(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hello'})
+    with pytest.raises(ClientError, match='ValidationException.*path'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[0] = :val1',
+            ExpressionAttributeValues={':val1': 7})
