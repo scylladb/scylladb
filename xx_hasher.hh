@@ -24,7 +24,11 @@
 #include "bytes.hh"
 #include "utils/serialization.hh"
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
 #include <xxHash/xxhash.h>
+#pragma GCC diagnostic pop
+
 #include <array>
 
 class xx_hasher {
