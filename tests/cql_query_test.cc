@@ -3703,7 +3703,7 @@ void require_rows(cql_test_env& e,
                   const std::vector<std::vector<bytes_opt>>& expected,
                   const source_location& loc = source_location::current()) {
     try {
-        assert_that(cquery_nofail(e, qstr, loc)).is_rows().with_rows_ignore_order(expected);
+        assert_that(cquery_nofail(e, qstr, nullptr, loc)).is_rows().with_rows_ignore_order(expected);
     }
     catch (const std::exception& e) {
         BOOST_FAIL(format("query '{}' failed: {}\n{}:{}: originally from here",
