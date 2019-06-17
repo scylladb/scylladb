@@ -100,6 +100,39 @@ SEASTAR_TEST_CASE(test_compaction) {
     });
 }
 
+SEASTAR_TEST_CASE(test_occupancy) {
+    return seastar::async([] {
+        region reg;
+        auto& alloc = reg.allocator();
+        auto* obj1 = alloc.construct<short>(42);
+#ifdef SEASTAR_ASAN_ENABLED
+        // The descriptor fits in 2 bytes, but the value has to be
+        // aligned to 8 bytes and we pad the end so that the next
+        // descriptor is aligned.
+        BOOST_REQUIRE_EQUAL(reg.occupancy().used_space(), 16);
+#else
+        BOOST_REQUIRE_EQUAL(reg.occupancy().used_space(), 4);
+#endif
+        auto* obj2 = alloc.construct<short>(42);
+
+#ifdef SEASTAR_ASAN_ENABLED
+        BOOST_REQUIRE_EQUAL(reg.occupancy().used_space(), 32);
+#else
+        BOOST_REQUIRE_EQUAL(reg.occupancy().used_space(), 8);
+#endif
+
+        alloc.destroy(obj1);
+
+#ifdef SEASTAR_ASAN_ENABLED
+        BOOST_REQUIRE_EQUAL(reg.occupancy().used_space(), 16);
+#else
+        BOOST_REQUIRE_EQUAL(reg.occupancy().used_space(), 4);
+#endif
+
+        alloc.destroy(obj2);
+    });
+}
+
 
 SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
     return seastar::async([] {

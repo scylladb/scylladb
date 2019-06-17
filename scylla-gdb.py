@@ -1502,6 +1502,10 @@ class scylla_lsa_segment(gdb.Command):
 
     def invoke(self, arg, from_tty):
         # See logalloc::region_impl::for_each_live()
+
+        logalloc_alignment = gdb.parse_and_eval("'::debug::logalloc_alignment'")
+        logalloc_alignment_mask = logalloc_alignment - 1
+
         ptr = int(arg, 0)
         seg = gdb.parse_and_eval('(char*)(%d & ~(\'logalloc\'::segment::size - 1))' % (ptr))
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
@@ -1510,6 +1514,7 @@ class scylla_lsa_segment(gdb.Command):
             desc = lsa_object_descriptor.decode(seg)
             print(desc)
             seg = desc.end_pos()
+            seg = gdb.parse_and_eval('(char*)((%d + %d) & ~%d)' % (seg, logalloc_alignment_mask, logalloc_alignment_mask))
 
 
 class scylla_timers(gdb.Command):

@@ -45,14 +45,47 @@
 
 #ifdef SEASTAR_ASAN_ENABLED
 #include "sanitizer/asan_interface.h"
+// For each aligned 8 byte segment, the algorithm used by address
+// sanitizer can represent any addressable prefix followd by a
+// poisoned suffix. The details are at:
+// https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm
+// For us this means that:
+// * The descriptor must be 8 byte aligned. If it was not, making the
+//   descriptor addressable would also make the end of the previous
+//   value addressable.
+// * Each value must be at least 8 byte aligned. If it was not, making
+//   the value addressable would also make the end of the descriptor
+//   addressable.
+namespace debug {
+constexpr size_t logalloc_alignment = 8;
+}
+template<typename T>
+static void align_up_for_asan(T& val) {
+    val = align_up(val, size_t(8));
+}
 template<typename T>
 void poison(const T* addr, size_t size) {
+    // Both values and descriptors must be aligned.
+    assert(uintptr_t(addr) % 8 == 0);
+    // This can be followed by
+    // * 8 byte aligned descriptor (this is a value)
+    // * 8 byte aligned value
+    // * dead value
+    // * end of segment
+    // In all cases, we can align up the size to guarantee that asan
+    // is able to poison this.
+    align_up_for_asan(size);
     ASAN_POISON_MEMORY_REGION(addr, size);
 }
 void unpoison(const char *addr, size_t size) {
     ASAN_UNPOISON_MEMORY_REGION(addr, size);
 }
 #else
+namespace debug {
+constexpr size_t logalloc_alignment = 1;
+}
+template<typename T>
+static void align_up_for_asan(T& val) { }
 template<typename T>
 void poison(const T* addr, size_t size) { }
 void unpoison(const char *addr, size_t size) { }
@@ -1139,6 +1172,7 @@ private:
         auto desc_encoded_size = desc.encoded_size();
 
         size_t obj_offset = align_up(_active_offset + desc_encoded_size, alignment);
+        align_up_for_asan(obj_offset);
         if (obj_offset + size > segment::size) {
             close_and_open();
             return alloc_small(migrator, size, alignment);
@@ -1150,6 +1184,9 @@ private:
         desc.encode(pos, obj_offset - _active_offset);
         unpoison(pos, size);
         _active_offset = obj_offset + size;
+
+        // Align the end of the value so that the next descriptor is aligned
+        align_up_for_asan(_active_offset);
         _active->record_alloc(_active_offset - old_active_offset);
         return pos;
     }
@@ -1162,6 +1199,7 @@ private:
 
         auto pos = seg->at<const char>(0);
         while (pos < seg->at<const char>(segment::size)) {
+            align_up_for_asan(pos);
             auto old_pos = pos;
             const auto desc = object_descriptor::decode_forwards(pos);
             if (desc.is_live()) {
@@ -1411,6 +1449,7 @@ public:
         auto old_pos = pos;
         auto desc = object_descriptor::decode_backwards(pos);
         auto dead_size = size + (old_pos - pos);
+        align_up_for_asan(dead_size);
         desc = object_descriptor::make_dead(dead_size);
         auto npos = const_cast<char*>(pos);
         desc.encode(npos);
@@ -1531,6 +1570,7 @@ public:
 
         size_t offset = 0;
         while (offset < segment_size) {
+            align_up_for_asan(offset);
             auto pos = src->at<const char>(offset);
             auto dpos = dst->at<char>(offset);
             auto old_pos = pos;
