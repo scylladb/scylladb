@@ -185,7 +185,7 @@ def alarm_handler(signum, frame):
 
 
 if __name__ == "__main__":
-    all_modes = ['debug', 'release', 'dev']
+    all_modes = ['debug', 'release', 'dev', 'sanitize']
 
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     testmem = 2e9
@@ -221,7 +221,7 @@ if __name__ == "__main__":
     }
 
     test_to_run = []
-    modes_to_run = all_modes if not args.modes else args.modes
+    modes_to_run =  ['debug', 'release', 'dev'] if not args.modes else args.modes
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
         standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()

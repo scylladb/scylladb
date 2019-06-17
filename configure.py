@@ -250,6 +250,10 @@ modes = {
         'cxxflags': '',
         'cxx_ld_flags': '-O1',
     },
+    'sanitize': {
+        'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER',
+        'cxx_ld_flags': '-Os',
+    }
 }
 
 scylla_tests = [
@@ -1035,6 +1039,7 @@ total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
 link_pool_depth = max(int(total_memory / 7e9), 1)
 
 selected_modes = args.selected_modes or modes.keys()
+default_modes = args.selected_modes or ['debug', 'release', 'dev']
 build_modes =  {m: modes[m] for m in selected_modes}
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
@@ -1067,8 +1072,8 @@ modes['debug']['cxxflags'] += ' -gz'
 flag_dest = 'cxx_ld_flags' if args.compress_exec_debuginfo else 'cxxflags'
 modes['release'][flag_dest] += ' -gz'
 
-modes['debug']['cxxflags'] += ' ' + dbgflag
-modes['release']['cxxflags'] += ' ' + dbgflag
+for m in ['debug', 'release', 'sanitize']:
+    modes[m]['cxxflags'] += ' ' + dbgflag
 
 seastar_cflags = args.user_cflags
 seastar_cflags += ' -Wno-error'
@@ -1389,7 +1394,7 @@ with open(buildfile, 'w') as f:
             description = CLEAN
         build clean: clean
         default {modes_list}
-        ''').format(modes_list=' '.join(build_modes), **globals()))
+        ''').format(modes_list=' '.join(default_modes), **globals()))
     f.write(textwrap.dedent('''\
         build always: phony
         rule scylla_version_gen
