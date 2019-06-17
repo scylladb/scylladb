@@ -1062,3 +1062,18 @@ SEASTAR_TEST_CASE(test_secondary_index_allow_some_column_drops) {
         BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop d").get(), exceptions::invalid_request_exception);
     });
 }
+
+// Reproduces issue #4539 - a partition key index should not influence a filtering decision for regular columns.
+// Previously, given sequence resulted in a "No index found" error.
+SEASTAR_TEST_CASE(test_secondary_index_on_partition_key_with_filtering) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE test_a(a int, b int, c int, PRIMARY KEY ((a, b)));").get();
+        e.execute_cql("CREATE INDEX ON test_a(a);").get();
+        e.execute_cql("INSERT INTO test_a (a, b, c) VALUES (1, 2, 3);").get();
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * FROM test_a WHERE a = 1 AND b = 2 AND c = 3 ALLOW FILTERING;").get0();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}}});
+        });
+    });
+}
