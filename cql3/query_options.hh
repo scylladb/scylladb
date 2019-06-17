@@ -102,7 +102,7 @@ private:
 
 public:
     query_options(query_options&&) = default;
-    query_options(const query_options&) = delete;
+    explicit query_options(const query_options&) = default;
 
     explicit query_options(db::consistency_level consistency,
                            const timeout_config& timeouts,
