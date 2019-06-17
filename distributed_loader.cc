@@ -610,7 +610,7 @@ future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir)
             fs::path dirpath = sstdir / de.name;
             if (sstables::sstable::is_temp_dir(dirpath)) {
                 dblog.info("Found temporary sstable directory: {}, removing", dirpath);
-                futures.push_back(lister::rmdir(dirpath));
+                futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
             }
             return make_ready_future<>();
         }).then([&futures] {
