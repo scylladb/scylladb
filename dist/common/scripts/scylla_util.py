@@ -476,6 +476,8 @@ def create_perftune_conf(nic='eth0'):
 
 
 def is_valid_nic(nic):
+    if len(nic) == 0:
+        return False
     return os.path.exists('/sys/class/net/{}'.format(nic))
 
 # Remove this when we do not support SET_NIC configuration value anymore
