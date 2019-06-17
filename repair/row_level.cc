@@ -1055,13 +1055,12 @@ private:
                         _metrics.rx_row_nr += 1;
                         _metrics.rx_row_bytes += fmf.representation().size();
                         auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema));
-                        position_in_partition pos(mf->position());
                         // If the mutation_fragment has the same position as
                         // the last mutation_fragment, it means they are the
                         // same row with different contents. We can not feed
                         // such rows into the sstable writer. Instead we apply
                         // the mutation_fragment into the previous one.
-                        if (last_mf && cmp(last_mf->position(), pos) == 0 && last_mf->mergeable_with(*mf)) {
+                        if (last_mf && cmp(last_mf->position(), mf->position()) == 0 && last_mf->mergeable_with(*mf)) {
                             last_mf->apply(*_schema, std::move(*mf));
                         } else {
                             last_mf = mf;
