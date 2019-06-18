@@ -260,7 +260,9 @@ private:
         while (!_reader->is_buffer_full()) {
             auto mfo = _range_tombstones.get_next(_fwd_end);
             if (!mfo) {
-                _reader->on_out_of_clustering_range();
+                if (!_reader->_partition_finished) {
+                    _reader->on_out_of_clustering_range();
+                }
                 break;
             }
             _reader->push_mutation_fragment(std::move(*mfo));
