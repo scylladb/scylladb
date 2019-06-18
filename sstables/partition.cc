@@ -413,7 +413,7 @@ private:
         return _initialize();
     }
 public:
-    void on_end_of_stream() {
+    void on_out_of_clustering_range() override {
         if (_fwd == streamed_mutation::forwarding::yes) {
             _end_of_stream = true;
         } else {

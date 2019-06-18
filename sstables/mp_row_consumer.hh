@@ -53,7 +53,12 @@ class mp_row_consumer_reader : public flat_mutation_reader::impl {
     friend class mp_row_consumer_m;
 public:
     mp_row_consumer_reader(schema_ptr s) : impl(std::move(s)) {}
-    virtual void on_end_of_stream() = 0;
+
+    // Called when all fragments relevant to the query range or fast forwarding window
+    // within the current partition have been pushed.
+    // If no skipping is required, this method may not be called before transitioning
+    // to the next partition.
+    virtual void on_out_of_clustering_range() = 0;
 };
 
 struct new_mutation {
@@ -255,7 +260,7 @@ private:
         while (!_reader->is_buffer_full()) {
             auto mfo = _range_tombstones.get_next(_fwd_end);
             if (!mfo) {
-                _reader->on_end_of_stream();
+                _reader->on_out_of_clustering_range();
                 break;
             }
             _reader->push_mutation_fragment(std::move(*mfo));
@@ -897,7 +902,7 @@ class mp_row_consumer_m : public consumer_m {
             break;
         case mutation_fragment_filter::result::store_and_finish:
             _stored_tombstone = std::move(rt);
-            _reader->on_end_of_stream();
+            _reader->on_out_of_clustering_range();
             return proceed::no;
         }
 
@@ -976,7 +981,7 @@ public:
 
     proceed push_ready_fragments() {
         if (!_mf_filter || _mf_filter->out_of_range()) {
-            _reader->on_end_of_stream();
+            _reader->on_out_of_clustering_range();
             return proceed::no;
         }
 
@@ -993,7 +998,7 @@ public:
                     }
                     break;
                 case mutation_fragment_filter::result::store_and_finish:
-                    _reader->on_end_of_stream();
+                    _reader->on_out_of_clustering_range();
                     return true;
                 }
             }
@@ -1113,7 +1118,7 @@ public:
             }
         case mutation_fragment_filter::result::store_and_finish:
             sstlog.trace("mp_row_consumer_m {}: store_and_finish", this);
-            _reader->on_end_of_stream();
+            _reader->on_out_of_clustering_range();
             return consumer_m::row_processing_result::retry_later;
         }
         abort();
