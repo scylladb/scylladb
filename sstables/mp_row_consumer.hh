@@ -702,9 +702,12 @@ public:
     // Sets streamed_mutation::_end_of_range when there are no more fragments for the query range.
     // Returns information whether the parser should continue to parse more
     // input and produce more fragments or we have collected enough and should yield.
+    // Returns proceed:yes only when all pending fragments have been pushed.
     proceed push_ready_fragments() {
         if (_ready) {
-            return push_ready_fragments_with_ready_set();
+            if (push_ready_fragments_with_ready_set() == proceed::no) {
+                return proceed::no;
+            }
         }
 
         if (_out_of_range) {
