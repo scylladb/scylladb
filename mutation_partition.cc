@@ -680,7 +680,7 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
     for (auto id : columns) {
         const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
         if (!cell_and_hash) {
-            return;
+            continue;
         }
         auto&& def = s.column_at(kind, id);
         if (def.is_atomic()) {
