@@ -889,6 +889,10 @@ class mp_row_consumer_m : public consumer_m {
             _reader->push_mutation_fragment(std::move(rt));
             break;
         case mutation_fragment_filter::result::ignore:
+            if (_mf_filter->out_of_range()) {
+                _reader->on_out_of_clustering_range();
+                return proceed::no;
+            }
             if (_mf_filter->is_current_range_changed()) {
                 return proceed::no;
             }
@@ -974,13 +978,9 @@ public:
 
     // See the RowConsumer concept
     void push_ready_fragments() {
-        if (!_mf_filter || _mf_filter->out_of_range()) {
-            _reader->on_out_of_clustering_range();
-            return;
-        }
-
         auto maybe_push = [this] (auto&& mfopt) {
             if (mfopt) {
+                assert(_mf_filter);
                 switch (_mf_filter->apply(*mfopt)) {
                 case mutation_fragment_filter::result::emit:
                     _reader->push_mutation_fragment(*std::exchange(mfopt, {}));
@@ -1021,6 +1021,7 @@ public:
 
     std::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point) {
         if (!_mf_filter) {
+            _reader->on_out_of_clustering_range();
             return {};
         }
         auto skip = _mf_filter->fast_forward_to(std::move(r));
@@ -1033,6 +1034,9 @@ public:
             if (_stored_tombstone && !less(_stored_tombstone->position(), *skip)) {
                 return {};
             }
+        }
+        if (_mf_filter->out_of_range()) {
+            _reader->on_out_of_clustering_range();
         }
         return skip;
     }
@@ -1100,6 +1104,14 @@ public:
             return consumer_m::row_processing_result::do_proceed;
         case mutation_fragment_filter::result::ignore:
             sstlog.trace("mp_row_consumer_m {}: ignore", this);
+            if (_mf_filter->out_of_range()) {
+                _reader->on_out_of_clustering_range();
+                // We actually want skip_later, which doesn't exist, but retry_later
+                // is ok because signalling out-of-range on the reader will cause it
+                // to either stop reading or skip to the next partition using index,
+                // not by ignoring fragments.
+                return consumer_m::row_processing_result::retry_later;
+            }
             if (_mf_filter->is_current_range_changed()) {
                 return consumer_m::row_processing_result::retry_later;
             } else {
