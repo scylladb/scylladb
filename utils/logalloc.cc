@@ -96,67 +96,60 @@ standard_allocation_strategy standard_allocation_strategy_instance;
 
 namespace {
 
+class migrators_base {
+protected:
+    std::vector<const migrate_fn_type*> _migrators;
+};
+
 #ifdef DEBUG_LSA_SANITIZER
 
-class migrators : public enable_lw_shared_from_this<migrators> {
-public:
-    static constexpr uint32_t maximum_id_value = std::numeric_limits<uint32_t>::max() / 2;
+class migrators : public migrators_base, public enable_lw_shared_from_this<migrators> {
 private:
-    struct migrator_entry {
-        const migrate_fn_type* _migrator;
+    struct backtrace_entry {
         saved_backtrace _registration;
         saved_backtrace _deregistration;
     };
-    std::unordered_map<uint32_t, migrator_entry> _migrators;
-    std::default_random_engine _random_engine { std::random_device()() };
-    std::uniform_int_distribution<uint32_t> _id_distribution { 0, maximum_id_value };
+    std::vector<std::unique_ptr<backtrace_entry>> _backtraces;
 
     static logging::logger _logger;
 private:
     void on_error() { abort(); }
 public:
     uint32_t add(const migrate_fn_type* m) {
-        while (true) {
-            auto id = _id_distribution(_random_engine);
-            if (_migrators.count(id)) {
-                continue;
-            }
-            _migrators.emplace(id, migrator_entry { m, current_backtrace(), {} });
-            return id;
-        }
+        _migrators.push_back(m);
+        _backtraces.push_back(std::make_unique<backtrace_entry>(backtrace_entry{current_backtrace(), {}}));
+        return _migrators.size() - 1;
     }
     void remove(uint32_t idx) {
-        auto it = _migrators.find(idx);
-        if (it == _migrators.end()) {
+        if (idx >= _migrators.size()) {
             _logger.error("Attempting to deregister migrator id {} which was never registered:\n{}",
                           idx, current_backtrace());
             on_error();
         }
-        if (!it->second._migrator) {
+        if (!_migrators[idx]) {
             _logger.error("Attempting to double deregister migrator id {}:\n{}\n"
                           "Previously deregistered at:\n{}\nRegistered at:\n{}",
-                          idx, current_backtrace(), it->second._deregistration,
-                          it->second._registration);
+                          idx, current_backtrace(), _backtraces[idx]->_deregistration,
+                          _backtraces[idx]->_registration);
             on_error();
         }
-        it->second._migrator = nullptr;
-        it->second._deregistration = current_backtrace();
+        _migrators[idx] = nullptr;
+        _backtraces[idx]->_deregistration = current_backtrace();
     }
     const migrate_fn_type*& operator[](uint32_t idx) {
-        auto it = _migrators.find(idx);
-        if (it == _migrators.end()) {
+        if (idx >= _migrators.size()) {
             _logger.error("Attempting to use migrator id {} that was never registered:\n{}",
                           idx, current_backtrace());
             on_error();
         }
-        if (!it->second._migrator) {
+        if (!_migrators[idx]) {
             _logger.error("Attempting to use deregistered migrator id {}:\n{}\n"
                           "Deregistered at:\n{}\nRegistered at:\n{}",
-                          idx, current_backtrace(), it->second._deregistration,
-                          it->second._registration);
+                          idx, current_backtrace(), _backtraces[idx]->_deregistration,
+                          _backtraces[idx]->_registration);
             on_error();
         }
-        return it->second._migrator;
+        return _migrators[idx];
     }
 };
 
@@ -164,12 +157,10 @@ logging::logger migrators::_logger("lsa-migrator-sanitizer");
 
 #else
 
-class migrators : public enable_lw_shared_from_this<migrators> {
-    std::vector<const migrate_fn_type*> _migrators;
+class migrators : public migrators_base, public enable_lw_shared_from_this<migrators> {
     std::deque<uint32_t> _unused_ids;
-public:
-    static constexpr uint32_t maximum_id_value = std::numeric_limits<uint32_t>::max() / 2;
 
+public:
     uint32_t add(const migrate_fn_type* m) {
         if (!_unused_ids.empty()) {
             auto idx = _unused_ids.front();
@@ -1002,9 +993,6 @@ class region_impl final : public basic_region_impl {
     private:
         explicit object_descriptor(uint32_t n) : _n(n) {}
     public:
-        static_assert(migrators::maximum_id_value <= std::numeric_limits<uint32_t>::max()
-            && uint64_t(migrators::maximum_id_value) * 2 + 1 <= std::numeric_limits<uint32_t>::max());
-
         object_descriptor(allocation_strategy::migrate_fn migrator)
                 : _n(migrator->index() * 2 + 1)
         { }
