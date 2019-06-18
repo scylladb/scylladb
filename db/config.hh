@@ -283,6 +283,8 @@ public:
     named_value<bool> enable_ipv6_dns_lookup;
     named_value<bool> abort_on_internal_error;
 
+    named_value<uint16_t> alternator_port;
+
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
     boost::program_options::options_description_easy_init&
