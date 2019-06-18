@@ -1062,11 +1062,13 @@ int main(int ac, char** av) {
                 }).get();
             }
 
-            static sharded<alternator::executor> alternator_executor;
-            alternator_executor.start(std::ref(proxy), std::ref(mm)).get();
-            static alternator::server alternator_server(alternator_executor);
-            alternator_server.init(alternator::server::DEFAULT_PORT).get();
-            startlog.info("Alternator server listening on {}", alternator::server::DEFAULT_PORT);
+            if (cfg->alternator_port()) {
+                static sharded<alternator::executor> alternator_executor;
+                alternator_executor.start(std::ref(proxy), std::ref(mm)).get();
+                static alternator::server alternator_server(alternator_executor);
+                alternator_server.init(cfg->alternator_port()).get();
+                startlog.info("Alternator server listening on {}", cfg->alternator_port());
+            }
 
             if (cfg->defragment_memory_on_idle()) {
                 smp::invoke_on_all([] () {

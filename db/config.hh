@@ -286,6 +286,8 @@ public:
     named_value<uint32_t> max_partition_key_restrictions_per_query;
     named_value<uint32_t> max_clustering_key_restrictions_per_query;
 
+    named_value<uint16_t> alternator_port;
+
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
     boost::program_options::options_description_easy_init&
