@@ -728,19 +728,8 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
   });
 }
 
-// Used to return the timestamp of the latest update to the row
-struct max_timestamp {
-    api::timestamp_type max = api::missing_timestamp;
-
-    void update(api::timestamp_type ts) {
-        max = std::max(max, ts);
-    }
-};
-
-template<>
-struct appending_hash<row> {
     template<typename Hasher>
-    void operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
+    void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
         for (auto id : columns) {
             const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
             if (!cell_and_hash) {
@@ -777,7 +766,6 @@ struct appending_hash<row> {
             }
         }
     }
-};
 
 cell_hash_opt row::cell_hash_for(column_id id) const {
     if (_type == storage_type::vector) {
