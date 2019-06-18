@@ -703,24 +703,17 @@ public:
         return std::exchange(_mutation, { });
     }
 
-    // Pushes ready fragments into the streamed_mutation's buffer.
-    // Tries to push as much as possible, but respects buffer limits.
-    // Sets streamed_mutation::_end_of_range when there are no more fragments for the query range.
-    // Returns information whether the parser should continue to parse more
-    // input and produce more fragments or we have collected enough and should yield.
-    // Returns proceed:yes only when all pending fragments have been pushed.
-    proceed push_ready_fragments() {
+    // See the RowConsumer concept
+    void push_ready_fragments() {
         if (_ready) {
             if (push_ready_fragments_with_ready_set() == proceed::no) {
-                return proceed::no;
+                return;
             }
         }
 
         if (_out_of_range) {
-            return push_ready_fragments_out_of_range();
+            push_ready_fragments_out_of_range();
         }
-
-        return proceed::yes;
     }
 
     virtual void reset(indexable_element el) override {
@@ -979,10 +972,11 @@ public:
 
     virtual ~mp_row_consumer_m() {}
 
-    proceed push_ready_fragments() {
+    // See the RowConsumer concept
+    void push_ready_fragments() {
         if (!_mf_filter || _mf_filter->out_of_range()) {
             _reader->on_out_of_clustering_range();
-            return proceed::no;
+            return;
         }
 
         auto maybe_push = [this] (auto&& mfopt) {
@@ -993,19 +987,15 @@ public:
                     break;
                 case mutation_fragment_filter::result::ignore:
                     mfopt.reset();
-                    if (_mf_filter->is_current_range_changed()) {
-                       return true;
-                    }
                     break;
                 case mutation_fragment_filter::result::store_and_finish:
                     _reader->on_out_of_clustering_range();
-                    return true;
+                    break;
                 }
             }
-            return false;
         };
 
-        return maybe_push(_stored_tombstone) ? proceed::no : proceed::yes;
+        maybe_push(_stored_tombstone);
     }
 
     std::optional<position_in_partition_view> maybe_skip() {
