@@ -39,6 +39,12 @@ mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
 if [[ "$ID" = "debian" && "$VERSION_ID" = "8" ]] || [[ "$ID" = "ubuntu" && "$VERSION_ID" = "14.04" ]]; then
     echo "kernel.core_pattern=|/opt/scylladb/scripts/scylla_save_coredump %e %t %p" > /etc/sysctl.d/99-scylla-coredump.conf
     echo "scylla ALL=(ALL) NOPASSWD: /opt/scylladb/scripts/scylla_prepare,/opt/scylladb/scripts/scylla_stop,/opt/scylladb/scripts/scylla_io_setup,/opt/scylladb/scripts/scylla-ami/scylla_ami_setup" > /etc/sudoers.d/scylla
+else
+    mkdir -p /etc/systemd/system/scylla-server.service.d/
+    cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
+[Service]
+AmbientCapabilities=CAP_SYS_NICE
+EOS
 fi
 
 if [ -d /run/systemd/system ]; then

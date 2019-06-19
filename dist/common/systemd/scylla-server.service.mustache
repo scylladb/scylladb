@@ -31,11 +31,6 @@ OOMScoreAdjust=-950
 StandardOutput=syslog
 StandardError=syslog
 SyslogLevelPrefix=false
-{{#debian}}
-{{^jessie}}
-AmbientCapabilities=CAP_SYS_NICE
-{{/jessie}}
-{{/debian}}
 
 [Install]
 WantedBy=multi-user.target
