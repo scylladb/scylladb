@@ -51,14 +51,36 @@ static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
 class mp_row_consumer_reader : public flat_mutation_reader::impl {
     friend class mp_row_consumer_k_l;
     friend class mp_row_consumer_m;
+protected:
+    shared_sstable _sst;
+
+    // Whether index lower bound is in current partition
+    bool _index_in_current_partition = false;
+
+    // True iff the consumer finished generating fragments for a partition and hasn't
+    // entered the new partition yet.
+    // Implies that partition_end was emitted for the last partition.
+    // Will cause the reader to skip to the next partition if !_before_partition.
+    bool _partition_finished = true;
+
+    // When set, the consumer is positioned right before a partition or at end of the data file.
+    // _index_in_current_partition applies to the partition which is about to be read.
+    bool _before_partition = true;
+
+    std::optional<dht::decorated_key> _current_partition_key;
 public:
-    mp_row_consumer_reader(schema_ptr s) : impl(std::move(s)) {}
+    mp_row_consumer_reader(schema_ptr s, shared_sstable sst)
+        : impl(std::move(s))
+        , _sst(std::move(sst))
+    { }
 
     // Called when all fragments relevant to the query range or fast forwarding window
     // within the current partition have been pushed.
     // If no skipping is required, this method may not be called before transitioning
     // to the next partition.
     virtual void on_out_of_clustering_range() = 0;
+
+    void on_next_partition(dht::decorated_key key, tombstone tomb);
 };
 
 struct new_mutation {

@@ -128,9 +128,7 @@ GCC6_CONCEPT(
     requires RowConsumer<Consumer>()
 )
 class sstable_mutation_reader : public mp_row_consumer_reader {
-    shared_sstable _sst;
     Consumer _consumer;
-    bool _index_in_current_partition = false; // Whether index lower bound is in current partition
     bool _will_likely_slice = false;
     bool _read_enabled = true;
     data_consume_context_opt<DataConsumeRowsContext> _context;
@@ -140,19 +138,13 @@ class sstable_mutation_reader : public mp_row_consumer_reader {
     std::function<future<> ()> _initialize;
     streamed_mutation::forwarding _fwd;
     read_monitor& _monitor;
-    std::optional<dht::decorated_key> _current_partition_key;
-    bool _partition_finished = true;
-    // when set, the consumer is positioned right before a partition.
-    // _index_in_current_partition applies to the partition which is about to be read.
-    bool _before_partition = true;
 public:
     sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc,
          reader_resource_tracker resource_tracker,
          streamed_mutation::forwarding fwd,
          read_monitor& mon)
-        : mp_row_consumer_reader(std::move(schema))
-        , _sst(std::move(sst))
+        : mp_row_consumer_reader(std::move(schema), std::move(sst))
         , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this] {
             _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer);
@@ -170,8 +162,7 @@ public:
          streamed_mutation::forwarding fwd,
          mutation_reader::forwarding fwd_mr,
          read_monitor& mon)
-        : mp_row_consumer_reader(std::move(schema))
-        , _sst(std::move(sst))
+        : mp_row_consumer_reader(std::move(schema), std::move(sst))
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this, pr, &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
             auto f = get_index_reader().advance_to(pr);
@@ -198,8 +189,7 @@ public:
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon)
-        : mp_row_consumer_reader(std::move(schema))
-        , _sst(std::move(sst))
+        : mp_row_consumer_reader(std::move(schema), std::move(sst))
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _single_partition_read(true)
         , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
@@ -386,15 +376,6 @@ private:
             });
         });
     }
-    void on_next_partition(dht::decorated_key key, tombstone tomb) {
-        _partition_finished = false;
-        _before_partition = false;
-        _end_of_stream = false;
-        _current_partition_key = std::move(key);
-        push_mutation_fragment(
-            mutation_fragment(partition_start(*_current_partition_key, tomb)));
-        _sst->get_stats().on_partition_read();
-    }
     bool is_initialized() const {
         return bool(_context);
     }
@@ -500,6 +481,16 @@ public:
         }
     }
 };
+
+void mp_row_consumer_reader::on_next_partition(dht::decorated_key key, tombstone tomb) {
+    _partition_finished = false;
+    _before_partition = false;
+    _end_of_stream = false;
+    _current_partition_key = std::move(key);
+    push_mutation_fragment(
+        mutation_fragment(partition_start(*_current_partition_key, tomb)));
+    _sst->get_stats().on_partition_read();
+}
 
 flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
     get_stats().on_sstable_partition_read();
