@@ -485,11 +485,19 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             return ::make_shared<service::pager::paging_state>(*paging_state);
         };
 
+        auto expect_more_pages = [] (::shared_ptr<cql_transport::messages::result_message> res, bool more_pages_expected) {
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            if(more_pages_expected != rows->rs().get_metadata().flags().contains(cql3::metadata::flag::HAS_MORE_PAGES)) {
+                throw std::runtime_error(format("Expected {}more pages", more_pages_expected ? "" : "no "));
+            }
+        };
+
         eventually([&] {
             auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
             auto paging_state = extract_paging_state(res);
+            expect_more_pages(res, true);
 
             assert_that(res).is_rows().with_rows({{
                 {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
@@ -498,6 +506,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+            expect_more_pages(res, true);
             paging_state = extract_paging_state(res);
 
             assert_that(res).is_rows().with_rows({{
@@ -507,10 +516,25 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+            paging_state = extract_paging_state(res);
 
             assert_that(res).is_rows().with_rows({{
                 {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
+
+            // Due to implementation differences from origin (Scylla is allowed to return empty pages with has_more_pages == true
+            // and it's a legal operation), paging indexes may result in finding an additional empty page at the end of the results,
+            // but never more than one. This case used to be buggy (see #4569).
+            try {
+                expect_more_pages(res, false);
+            } catch (...) {
+                qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                        cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+                res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+                assert_that(res).is_rows().with_size(0);
+                expect_more_pages(res, false);
+            }
+
         });
 
         eventually([&] {
