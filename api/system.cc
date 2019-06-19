@@ -30,6 +30,10 @@ namespace api {
 namespace hs = httpd::system_json;
 
 void set_system(http_context& ctx, routes& r) {
+    hs::get_system_uptime.set(r, [](const_req req) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(engine().uptime()).count();
+    });
+
     hs::get_all_logger_names.set(r, [](const_req req) {
         return logging::logger_registry().get_all_logger_names();
     });

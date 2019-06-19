@@ -53,6 +53,21 @@
          ]
       },
       {
+         "path":"/system/uptime_ms",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get system uptime, in milliseconds",
+               "type":"long",
+               "nickname":"get_system_uptime",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/system/logger/{name}",
          "operations":[
             {
