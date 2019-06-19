@@ -82,7 +82,6 @@ concept bool RowConsumer() {
         { t.io_priority() } -> const io_priority_class&;
         { t.is_mutation_end() } -> bool;
         { t.setup_for_partition(pk) } -> void;
-        { t.get_mutation() } -> std::optional<new_mutation>;
         { t.push_ready_fragments() } -> void
         { t.maybe_skip() } -> std::optional<position_in_partition_view>;
         { t.fast_forward_to(std::move(cr), timeout) } -> std::optional<position_in_partition_view>;
@@ -280,23 +279,7 @@ private:
     }
     future<> read_from_datafile() {
         sstlog.trace("reader {}: read from data file", this);
-        return _context->read().then_wrapped([this] (future<> f) {
-            try {
-                f.get();
-
-                auto& consumer = _consumer;
-                auto mut = consumer.get_mutation();
-                if (!mut) {
-                    sstlog.trace("reader {}: eof", this);
-                    return make_ready_future<>();
-                }
-                on_next_partition(dht::global_partitioner().decorate_key(*_schema, std::move(mut->key)), mut->tomb);
-            } catch (...) {
-                throw std::runtime_error(format("SSTable reader found an exception when reading sstable {} : {}",
-                        _sst->get_filename(), std::current_exception()));
-            }
-            return make_ready_future<>();
-        });
+        return _context->read();
     }
     // Assumes that we're currently positioned at partition boundary.
     future<> read_partition() {

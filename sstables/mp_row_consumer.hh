@@ -135,7 +135,6 @@ private:
     mutation_fragment_opt _in_progress;
     mutation_fragment_opt _ready;
 
-    std::optional<new_mutation> _mutation;
     bool _is_mutation_end = true;
     position_in_partition _fwd_end = position_in_partition::after_all_clustered_rows(); // Restricts the stream on top of _ck_ranges_walker.
     streamed_mutation::forwarding _fwd;
@@ -407,9 +406,11 @@ public:
         if (!_is_mutation_end) {
             return proceed::yes;
         }
-        _mutation = new_mutation{partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime)};
-        setup_for_partition(_mutation->key);
-        return proceed::no;
+        auto pk = partition_key::from_exploded(key.explode(*_schema));
+        setup_for_partition(pk);
+        auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+        _reader->on_next_partition(std::move(dk), tombstone(deltime));
+        return proceed::yes;
     }
 
     void setup_for_partition(const partition_key& pk) {
@@ -713,18 +714,14 @@ public:
     }
 
     // Returns true if the consumer is positioned at partition boundary,
-    // meaning that after next read either get_mutation() will
-    // return engaged mutation or end of stream was reached.
+    // meaning that after next read partition_start will be emitted
+    // or end of stream was reached.
     bool is_mutation_end() const {
         return _is_mutation_end;
     }
 
     bool is_out_of_range() const {
         return _out_of_range;
-    }
-
-    std::optional<new_mutation> get_mutation() {
-        return std::exchange(_mutation, { });
     }
 
     // See the RowConsumer concept
@@ -831,7 +828,6 @@ class mp_row_consumer_m : public consumer_m {
     const query::partition_slice& _slice;
     std::optional<mutation_fragment_filter> _mf_filter;
 
-    std::optional<new_mutation> _mutation;
     bool _is_mutation_end = true;
     streamed_mutation::forwarding _fwd;
     // For static-compact tables C* stores the only row in the static row but in our representation they're regular rows.
@@ -1039,10 +1035,6 @@ public:
         _mf_filter.emplace(*_schema, _slice, pk, _fwd);
     }
 
-    std::optional<new_mutation> get_mutation() {
-        return std::exchange(_mutation, { });
-    }
-
     std::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point) {
         if (!_mf_filter) {
             _reader->on_out_of_clustering_range();
@@ -1087,9 +1079,11 @@ public:
         if (!_is_mutation_end) {
             return proceed::yes;
         }
-        _mutation = new_mutation{partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime)};
-        setup_for_partition(_mutation->key);
-        return proceed::no;
+        auto pk = partition_key::from_exploded(key.explode(*_schema));
+        setup_for_partition(pk);
+        auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+        _reader->on_next_partition(std::move(dk), tombstone(deltime));
+        return proceed::yes;
     }
 
     virtual consumer_m::row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
@@ -1356,13 +1350,26 @@ public:
                 _reader->push_mutation_fragment(std::move(rt));
             }
         }
-        consume_partition_end();
+        if (!_reader->_partition_finished) {
+            consume_partition_end();
+        }
+        _reader->_end_of_stream = true;
     }
 
     virtual proceed consume_partition_end() override {
         sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", this);
         reset_for_new_partition();
-        return proceed::no;
+
+        if (_fwd == streamed_mutation::forwarding::yes) {
+            _reader->_end_of_stream = true;
+            return proceed::no;
+        }
+
+        _reader->_index_in_current_partition = false;
+        _reader->_partition_finished = true;
+        _reader->_before_partition = true;
+        _reader->push_mutation_fragment(mutation_fragment(partition_end()));
+        return proceed::yes;
     }
 
     virtual void reset(sstables::indexable_element el) override {
