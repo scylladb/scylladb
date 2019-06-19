@@ -260,9 +260,6 @@ private:
             _index_in_current_partition = false;
             return make_ready_future<>();
         }
-        if (_single_partition_read) {
-            return make_ready_future<>();
-        }
         return (_index_in_current_partition
                 ? _index_reader->advance_to_next_partition()
                 : get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
@@ -322,10 +319,6 @@ private:
         }
 
         if (!_consumer.is_mutation_end()) {
-            if (_single_partition_read) {
-                _read_enabled = false;
-                return make_ready_future<>();
-            }
             // FIXME: give more details from _context
             throw malformed_sstable_exception("consumer not at partition boundary", _sst->get_filename());
         }
@@ -360,7 +353,7 @@ private:
         // If next partition exists then on_next_partition will be called
         // and _end_of_stream will be set to false again.
         _end_of_stream = true;
-        if (!_read_enabled) {
+        if (!_read_enabled || _single_partition_read) {
             sstlog.trace("reader {}: eof", this);
             return make_ready_future<>();
         }
