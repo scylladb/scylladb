@@ -311,6 +311,7 @@ BOOST_AUTO_TEST_CASE(test_boolean_type_string_conversions) {
 
     BOOST_REQUIRE_EQUAL(boolean_type->to_string(boolean_type->decompose(false)), "false");
     BOOST_REQUIRE_EQUAL(boolean_type->to_string(boolean_type->decompose(true)), "true");
+    BOOST_REQUIRE_EQUAL(boolean_type->to_string(bytes()), "");
 }
 
 template<typename T>
@@ -773,6 +774,34 @@ struct test_case {
     data_type to;
     data_type from;
 };
+
+BOOST_AUTO_TEST_CASE(test_map_to_string) {
+    auto n = data_value(int32_t(42));
+    auto m = map_type_impl::get_instance(int32_type, int32_type, true);
+    using native_type = std::vector<std::pair<data_value, data_value>>;
+    native_type native{std::pair(n, n), std::pair(n, n)};
+    auto ptr = std::make_unique<native_type>(std::move(native));
+    auto v = data_value::make(m, std::move(ptr));
+    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize()), "{42 : 42}, {42 : 42}");
+}
+
+BOOST_AUTO_TEST_CASE(test_set_to_string) {
+    auto m = set_type_impl::get_instance(int32_type, true);
+    using native_type = std::vector<data_value>;
+    native_type native{data_value(int32_t(41)), data_value(int32_t(42))};
+    auto ptr = std::make_unique<native_type>(std::move(native));
+    auto v = data_value::make(m, std::move(ptr));
+    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize()), "41; 42");
+}
+
+BOOST_AUTO_TEST_CASE(test_list_to_string) {
+    auto m = list_type_impl::get_instance(int32_type, true);
+    using native_type = std::vector<data_value>;
+    native_type native{data_value(int32_t(41)), data_value(int32_t(42))};
+    auto ptr = std::make_unique<native_type>(std::move(native));
+    auto v = data_value::make(m, std::move(ptr));
+    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize()), "41, 42");
+}
 
 BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {
     auto m__bi = map_type_impl::get_instance(bytes_type, int32_type, true);
