@@ -723,13 +723,14 @@ int main(int ac, char** av) {
             // truncation record migration
             db::system_keyspace::migrate_truncation_records().get();
 
-            supervisor::notify("loading sstables");
+            supervisor::notify("loading system sstables");
 
             distributed_loader::ensure_system_table_directories(db).get();
 
-            supervisor::notify("loading sstables");
+            supervisor::notify("loading non-system sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
+            supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db), std::ref(proxy)).get();
             supervisor::notify("discovering staging sstables");
             db.invoke_on_all([] (database& db) {
