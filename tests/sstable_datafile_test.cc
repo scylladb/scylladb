@@ -54,6 +54,7 @@
 #include "tests/make_random_string.hh"
 #include "tests/normalizing_reader.hh"
 #include "sstable_run_based_compaction_strategy_for_tests.hh"
+#include "compatible_ring_position.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -3962,6 +3963,24 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
     }
 
     {
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+        sstable_set set = cs.make_sstable_set(s);
+
+        // triggers use-after-free, described in #4572, by operating on interval that relies on info of a destroyed sstable object.
+        {
+            auto sst = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 1);
+            set.insert(sst);
+            BOOST_REQUIRE(set.all()->size() == 1);
+        }
+
+        auto sst2 = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 1);
+        set.insert(sst2);
+        BOOST_REQUIRE(set.all()->size() == 2);
+
+        set.erase(sst2);
+    }
+
+    {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
         sstable_set set = cs.make_sstable_set(s);
 
@@ -4973,4 +4992,53 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_stop_tracking_compaction) {
         cf._data->cm.backlog();
         cf->get_compaction_strategy().get_backlog_tracker().backlog();
     });
+}
+
+static dht::token token_from_long(int64_t value) {
+    auto t = net::hton(value);
+    bytes b(bytes::initialized_later(), 8);
+    std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
+    return { dht::token::kind::key, std::move(b) };
+}
+
+SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
+    using value_set = std::unordered_set<int64_t>;
+    using interval_map_type = boost::icl::interval_map<compatible_ring_position, value_set>;
+    using interval_type = interval_map_type::interval_type;
+
+    interval_map_type map;
+
+        auto builder = schema_builder("tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+    auto make_pos = [&] (int64_t token) -> compatible_ring_position {
+        return compatible_ring_position(s, dht::ring_position::starting_at(token_from_long(token)));
+    };
+
+    auto add = [&] (int64_t start, int64_t end, int gen) {
+        map.insert({interval_type::closed(make_pos(start), make_pos(end)), value_set({gen})});
+    };
+
+    auto subtract = [&] (int64_t start, int64_t end, int gen) {
+        map.subtract({interval_type::closed(make_pos(start), make_pos(end)), value_set({gen})});
+    };
+
+    add(6052159333454473039, 9223347124876901511, 0);
+    add(957694089857623813, 6052133625299168475, 1);
+    add(-9223359752074096060, -4134836824175349559, 2);
+    add(-4134776408386727187, 957682147550689253, 3);
+    add(6092345676202690928, 9223332435915649914, 4);
+    add(-5395436281861775460, -1589168419922166021, 5);
+    add(-1589165560271708558, 6092259415972553765, 6);
+    add(-9223362900961284625, -5395452288575292639, 7);
+
+    subtract(-9223359752074096060, -4134836824175349559, 2);
+    subtract(-9223362900961284625, -5395452288575292639, 7);
+    subtract(-4134776408386727187, 957682147550689253, 3);
+    subtract(-5395436281861775460, -1589168419922166021, 5);
+    subtract(957694089857623813, 6052133625299168475, 1);
+
+    return make_ready_future<>();
 }
