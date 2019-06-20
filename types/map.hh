@@ -66,7 +66,7 @@ public:
     virtual size_t serialized_size(const void* value) const;
     virtual data_value deserialize(bytes_view v) const override;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
-    virtual sstring to_string(const bytes& b) const override;
+    virtual sstring to_string_impl(const data_value& v) const override;
     virtual sstring to_json_string(bytes_view bv) const override;
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
     virtual size_t hash(bytes_view v) const override;

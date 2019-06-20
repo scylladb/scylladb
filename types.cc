@@ -242,11 +242,12 @@ struct integer_type_impl : simple_type_impl<T> {
     virtual bytes from_string(sstring_view s) const override {
         return decompose_value(parse_int(s));
     }
-    virtual sstring to_string(const bytes& b) const override {
+    virtual sstring to_string_impl(const data_value& v) const override {
+        const auto& b = this->from_value(v);
         if (b.empty()) {
             return {};
         }
-        return to_sstring(compose_value(b));
+        return to_sstring(std::move(b).get());
     }
     virtual sstring to_json_string(bytes_view bv) const override {
         return to_sstring(compose_value(bv));
@@ -376,11 +377,8 @@ struct string_type_impl : public concrete_type<sstring> {
     virtual bytes from_string(sstring_view s) const override {
         return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return sstring(reinterpret_cast<const char*>(b.begin()), b.size());
-    }
-    sstring to_string(bytes_view bv) const {
-        return sstring(reinterpret_cast<const char *>(bv.data()), bv.size());
+    virtual sstring to_string_impl(const data_value& v) const override {
+        return from_value(v);
     }
     virtual sstring to_json_string(bytes_view bv) const override {
         return quote_json_string(to_string(bv));
@@ -454,11 +452,8 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     virtual bytes from_string(sstring_view s) const override {
         return from_hex(s);
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_hex(b);
-    }
-    sstring to_string(bytes_view bv) const {
-        return to_hex(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
+        return to_hex(from_value(v));
     }
     virtual sstring to_json_string(bytes_view bv) const override {
         return quote_json_string("0x" + to_string(bv));
@@ -542,17 +537,12 @@ struct boolean_type_impl : public simple_type_impl<bool> {
             throw marshal_exception(format("unable to make boolean from '{}'", s));
         }
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-        if (bv.empty()) {
+    virtual sstring to_string_impl(const data_value& v) const override {
+        const auto& b = this->from_value(v);
+        if (b.empty()) {
             return "";
         }
-        if (bv.size() != 1) {
-            throw marshal_exception(format("Unable to serialize boolean, got {:d} bytes", bv.size()));
-        }
-        return boolean_to_string(bv.front());
+        return boolean_to_string(std::move(b).get());
     }
     virtual sstring to_json_string(bytes_view bv) const override {
         return to_string(bv);
@@ -614,11 +604,7 @@ public:
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) const override;
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-        auto v = deserialize(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -738,11 +724,7 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         }
         return v.serialize();
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-        auto v = deserialize(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -918,11 +900,7 @@ public:
         std::copy_n(reinterpret_cast<const int8_t*>(&ts), sizeof(ts), b.begin());
         return b;
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-        auto v = deserialize(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -1041,11 +1019,7 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         days += 1UL << 31;
         return static_cast<uint32_t>(days);
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-        auto v = deserialize(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -1149,11 +1123,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         result += std::chrono::nanoseconds(nanoseconds);
         return result.count();
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-         auto v = deserialize(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
          if (v.is_null()) {
              return "";
          }
@@ -1244,11 +1214,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         utils::UUID v(s);
         return v.serialize();
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-        auto v = deserialize(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -1359,11 +1325,7 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
         serialize(&ip, out);
         return b;
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-        auto v = deserialize(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -1504,8 +1466,7 @@ struct floating_type_impl : public simple_type_impl<T> {
             throw marshal_exception(format("Invalid number format '{}'", s));
         }
     }
-    virtual sstring to_string(const bytes& b) const override {
-        auto v = deserialize(b);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -1643,8 +1604,7 @@ public:
         }
         return make_value(negative ? -num : num);
     }
-    virtual sstring to_string(const bytes& b) const override {
-        auto v = deserialize(b);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -1757,8 +1717,7 @@ public:
         auto real_varint_type = static_cast<const varint_type_impl*>(varint_type.get()); // yuck
         return make_value(big_decimal(scale, real_varint_type->from_value(unscaled).get()));
     }
-    virtual sstring to_string(const bytes& b) const override {
-        auto v = deserialize(b);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -1824,7 +1783,7 @@ public:
     virtual data_value deserialize(bytes_view v) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual sstring to_string(const bytes& b) const override {
+    virtual sstring to_string_impl(const data_value& v) const override {
         fail(unimplemented::cause::COUNTERS);
     }
     virtual sstring to_json_string(bytes_view bv) const override {
@@ -1989,11 +1948,7 @@ public:
             throw marshal_exception(e.what());
         }
     }
-    virtual sstring to_string(const bytes& b) const override {
-        return to_string(bytes_view(b));
-    }
-    sstring to_string(bytes_view bv) const {
-        auto v = deserialize(bv);
+    virtual sstring to_string_impl(const data_value& v) const override {
         if (v.is_null()) {
             return "";
         }
@@ -2069,7 +2024,7 @@ struct empty_type_impl : abstract_type {
     virtual data_value deserialize(bytes_view v) const override {
         return data_value::make_null(shared_from_this());
     }
-    virtual sstring to_string(const bytes& b) const override {
+    virtual sstring to_string_impl(const data_value& v) const override {
         return "";
     }
     virtual sstring to_json_string(bytes_view bv) const override {
@@ -2474,21 +2429,19 @@ void map_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
 }
 
 sstring
-map_type_impl::to_string(const bytes& b) const {
+map_type_impl::to_string_impl(const data_value& v) const {
     bool include_frozen_type = !is_multi_cell();
     std::ostringstream out;
     bool first = true;
-    auto v = bytes_view(b);
-    auto sf = cql_serialization_format::internal();
 
     if (include_frozen_type) {
         out << "(";
     }
 
-    auto size = read_collection_size(v, sf);
-    for (int i = 0; i < size; ++i) {
-        auto kb = read_collection_value(v, sf);
-        auto vb = read_collection_value(v, sf);
+    std::vector<std::pair<data_value, data_value>> m = from_value(v);
+    for (const auto& p : m) {
+        const auto& k = p.first;
+        const auto& v = p.second;
 
         if (first) {
             first = false;
@@ -2496,8 +2449,8 @@ map_type_impl::to_string(const bytes& b) const {
             out << ", ";
         }
 
-        out << "{" << _keys->to_string(bytes(kb.begin(), kb.end())) << " : ";
-        out << _values->to_string(bytes(vb.begin(), vb.end())) << "}";
+        out << "{" << _keys->to_string_impl(k) << " : ";
+        out << _values->to_string_impl(v) << "}";
     }
 
     if (include_frozen_type) {
@@ -3008,20 +2961,18 @@ set_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
 }
 
 sstring
-set_type_impl::to_string(const bytes& b) const {
-    using llpdi = listlike_partial_deserializing_iterator;
+set_type_impl::to_string_impl(const data_value& v) const {
     std::ostringstream out;
     bool first = true;
-    auto v = bytes_view(b);
-    auto sf = cql_serialization_format::internal();
-    std::for_each(llpdi::begin(v, sf), llpdi::end(v, sf), [&first, &out, this] (bytes_view e) {
+    std::vector<data_value> native = from_value(v);
+    for (const auto& e : native) {
         if (first) {
             first = false;
         } else {
             out << "; ";
         }
-        out << _elements->to_string(bytes(e.begin(), e.end()));
-    });
+        out << _elements->to_string_impl(e);
+    }
     return out.str();
 }
 
@@ -3245,20 +3196,18 @@ list_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
 }
 
 sstring
-list_type_impl::to_string(const bytes& b) const {
-    using llpdi = listlike_partial_deserializing_iterator;
+list_type_impl::to_string_impl(const data_value& v) const {
     std::ostringstream out;
     bool first = true;
-    auto v = bytes_view(b);
-    auto sf = cql_serialization_format::internal();
-    std::for_each(llpdi::begin(v, sf), llpdi::end(v, sf), [&first, &out, this] (bytes_view e) {
+    std::vector<data_value> native = from_value(v);
+    for (const auto& e : native) {
         if (first) {
             first = false;
         } else {
             out << ", ";
         }
-        out << _elements->to_string(bytes(e.begin(), e.end()));
-    });
+        out << _elements->to_string_impl(e);
+    }
     return out.str();
 }
 
@@ -3543,7 +3492,7 @@ tuple_type_impl::from_string(sstring_view s) const {
 }
 
 sstring
-tuple_type_impl::to_string(const bytes& b) const {
+tuple_type_impl::to_string_impl(const data_value&) const {
     throw std::runtime_error(format("{} not implemented", __PRETTY_FUNCTION__));
 }
 
@@ -4014,10 +3963,7 @@ std::ostream& operator<<(std::ostream& out, const data_value& v) {
     if (v.is_null()) {
         return out << "null";
     }
-    bytes b(bytes::initialized_later(), v.serialized_size());
-    auto i = b.begin();
-    v.serialize(i);
-    return out << v.type()->to_string(b);
+    return out << v.type()->to_string_impl(v);
 }
 
 /*
