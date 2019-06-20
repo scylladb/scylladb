@@ -214,9 +214,9 @@ if __name__ == "__main__":
     print_progress = print_status_verbose if args.verbose else print_progress_succint
 
     custom_seastar_args = {
-        "sstable_test": ['-c1'],
-        'sstable_datafile_test': ['-c1'],
-        "sstable_3_x_test": ['-c1'],
+        "sstable_test": ['-c1', '-m2G'],
+        'sstable_datafile_test': ['-c1', '-m2G'],
+        "sstable_3_x_test": ['-c1', '-m2G'],
         "mutation_reader_test": ['-c{}'.format(min(os.cpu_count(), 3)), '-m2G'],
     }
 
