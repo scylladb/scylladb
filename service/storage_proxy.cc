@@ -1102,6 +1102,22 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
                                      std::optional<clock_type::time_point> timeout_opt) {
     return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
+        // This function, mutate_begin(), is called after a preemption point
+        // so it's possible that other code besides our caller just ran. In
+        // particular, Scylla may have noticed that a remote node went down,
+        // called storage_proxy::on_down(), and removed some of the ongoing
+        // handlers, including this id. If this happens, we need to ignore
+        // this id - not try to look it up or start a send.
+        if (_response_handlers.find(response_id) == _response_handlers.end()) {
+            protected_response.release(); // Don't try to remove this id again
+            // Requests that time-out normally below after response_wait()
+            // result in an exception (see ~abstract_write_response_handler())
+            // However, here we no longer have the handler or its information
+            // to put in the exception. The exception is not needed for
+            // correctness (e.g., hints are written by timeout_cb(), not
+            // because of an exception here).
+            return make_exception_future<>(std::runtime_error("unstarted write cancelled"));
+        }
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
         // response_id handler will be removed, so we will have to do hint with separate
