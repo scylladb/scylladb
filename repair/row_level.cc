@@ -1029,11 +1029,16 @@ private:
         return do_with(repair_rows_on_wire(), std::move(row_list), [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list) {
             return do_for_each(row_list, [this, &rows] (repair_row& r) {
                 auto pk = r.get_dk_with_hash()->dk.key();
-                auto it = std::find_if(rows.begin(), rows.end(), [&pk, s=_schema] (partition_key_and_mutation_fragments& row) { return pk.legacy_equal(*s, row.get_key()); });
-                if (it == rows.end()) {
-                    rows.push_back(partition_key_and_mutation_fragments(std::move(pk), {std::move(r.get_frozen_mutation())}));
+                // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
+                if (rows.empty()) {
+                    rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
                 } else {
-                    it->push_mutation_fragment(std::move(r.get_frozen_mutation()));
+                    auto& row = rows.back();
+                    if (pk.legacy_equal(*_schema, row.get_key())) {
+                        row.push_mutation_fragment(std::move(r.get_frozen_mutation()));
+                    } else {
+                        rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
+                    }
                 }
             }).then([&rows] {
                 return std::move(rows);

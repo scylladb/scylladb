@@ -295,6 +295,7 @@ public:
     void push_mutation_fragment(frozen_mutation_fragment mf) { _mfs.push_back(std::move(mf)); }
 };
 
+using repair_row_on_wire = partition_key_and_mutation_fragments;
 using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
 
 enum class row_level_diff_detect_algorithm : uint8_t {
