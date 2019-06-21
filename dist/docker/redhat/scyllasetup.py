@@ -39,7 +39,7 @@ class ScyllaSetup:
 
     def io(self):
         conf_dir = "/etc/scylla"
-        cfg = yaml.load(open(os.path.join(conf_dir, "scylla.yaml")))
+        cfg = yaml.safe_load(open(os.path.join(conf_dir, "scylla.yaml")))
         data_dirs = cfg["data_file_directories"]
         if len(data_dirs) > 1:
             logging.warn("%d data directories found. scylla_io_setup currently lacks support for it, and only %s will be evaluated",

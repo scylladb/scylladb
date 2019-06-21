@@ -39,7 +39,7 @@ def main():
                         help='path to scylla.yaml')
     args = parser.parse_args()
     s = open(args.config).read()
-    cfg = yaml.load(s)
+    cfg = yaml.safe_load(s)
     mountpoints = set()
     for d in cfg['data_file_directories']:
         mountpoints.add(find_mount_point(d))

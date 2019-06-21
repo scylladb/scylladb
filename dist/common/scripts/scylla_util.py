@@ -420,7 +420,7 @@ def get_scylla_dirs():
     Verifies that mandatory parameters are set.
     """
     scylla_yaml_name = '/etc/scylla/scylla.yaml'
-    y = yaml.load(open(scylla_yaml_name))
+    y = yaml.safe_load(open(scylla_yaml_name))
 
     # Check that mandatory fields are set
     if 'data_file_directories' not in y or \
