@@ -66,7 +66,7 @@ void supervisor::try_notify_systemd(sstring msg, bool ready) {
 }
 
 void supervisor::notify(sstring msg, bool ready) {
-    startlog.trace("{}", msg);
+    startlog.info("{}", msg);
 
     if (try_notify_upstart(msg, ready) == true) {
         return;

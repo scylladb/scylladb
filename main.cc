@@ -461,6 +461,7 @@ int main(int ac, char** av) {
                 pctx.prefix = cfg->prometheus_prefix();
                 prometheus_server.start("prometheus").get();
                 stop_prometheus = ::make_shared(defer([&prometheus_server] {
+                    startlog.info("stopping prometheus API server");
                     prometheus_server.stop().get();
                 }));
                 prometheus::start(prometheus_server, pctx);
@@ -723,13 +724,14 @@ int main(int ac, char** av) {
             // truncation record migration
             db::system_keyspace::migrate_truncation_records().get();
 
-            supervisor::notify("loading sstables");
+            supervisor::notify("loading system sstables");
 
             distributed_loader::ensure_system_table_directories(db).get();
 
-            supervisor::notify("loading sstables");
+            supervisor::notify("loading non-system sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
+            supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db), std::ref(proxy)).get();
             supervisor::notify("discovering staging sstables");
             db.invoke_on_all([] (database& db) {
@@ -847,10 +849,16 @@ int main(int ac, char** av) {
             auto lb = make_shared<service::load_broadcaster>(db, gms::get_local_gossiper());
             lb->start_broadcasting();
             service::get_local_storage_service().set_load_broadcaster(lb);
-            auto stop_load_broadcater = defer([lb = std::move(lb)] () { lb->stop_broadcasting().get(); });
+            auto stop_load_broadcater = defer([lb = std::move(lb)] () {
+                startlog.info("stopping load broadcaster");
+                lb->stop_broadcasting().get();
+            });
             supervisor::notify("starting cf cache hit rate calculator");
             cf_cache_hitrate_calculator.start(std::ref(db), std::ref(cf_cache_hitrate_calculator)).get();
-            auto stop_cache_hitrate_calculator = defer([&cf_cache_hitrate_calculator] { return cf_cache_hitrate_calculator.stop().get(); });
+            auto stop_cache_hitrate_calculator = defer([&cf_cache_hitrate_calculator] {
+                startlog.info("stopping cf cache hit rate calculator");
+                return cf_cache_hitrate_calculator.stop().get();
+            });
             cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
 
             supervisor::notify("starting view update backlog broker");
@@ -858,6 +866,7 @@ int main(int ac, char** av) {
             view_backlog_broker.start(std::ref(proxy), std::ref(gms::get_gossiper())).get();
             view_backlog_broker.invoke_on_all(&service::view_update_backlog_broker::start).get();
             auto stop_view_backlog_broker = defer([] {
+                startlog.info("stopping view update backlog broker");
                 view_backlog_broker.stop().get();
             });
 
@@ -911,23 +920,28 @@ int main(int ac, char** av) {
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto stop_repair = defer([] {
+                startlog.info("stopping repair");
                 repair_shutdown(service::get_local_storage_service().db()).get();
             });
 
             auto stop_view_update_generator = defer([] {
+                startlog.info("stopping view update generator");
                 view_update_generator.stop().get();
             });
 
             auto do_drain = defer([] {
+                startlog.info("draining local storage");
                 service::get_local_storage_service().drain_on_shutdown().get();
             });
 
             auto stop_view_builder = defer([] {
+                startlog.info("stopping view builder");
                 view_builder.stop().get();
             });
 
             auto stop_compaction_manager = defer([&db] {
                 db.invoke_on_all([](auto& db) {
+                    startlog.info("stopping compaction manager");
                     return db.get_compaction_manager().stop();
                 }).get();
             });
