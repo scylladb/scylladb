@@ -152,9 +152,9 @@ inline token_view::token_view(const token& token) : _kind(token._kind), _data(by
 token midpoint_unsigned(const token& t1, const token& t2);
 const token& minimum_token();
 const token& maximum_token();
-bool operator==(token_view t1, token_view t2);
-bool operator<(token_view t1, token_view t2);
 int tri_compare(token_view t1, token_view t2);
+inline bool operator==(token_view t1, token_view t2) { return tri_compare(t1, t2) == 0; }
+inline bool operator<(token_view t1, token_view t2) { return tri_compare(t1, t2) < 0; }
 
 inline bool operator!=(const token& t1, const token& t2) { return std::rel_ops::operator!=(t1, t2); }
 inline bool operator>(const token& t1, const token& t2) { return std::rel_ops::operator>(t1, t2); }

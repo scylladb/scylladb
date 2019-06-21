@@ -127,24 +127,6 @@ int tri_compare(token_view t1, token_view t2) {
     return 0;
 }
 
-bool operator==(token_view t1, token_view t2) {
-    if (t1._kind != t2._kind) {
-        return false;
-    } else if (t1._kind == token::kind::key) {
-        return global_partitioner().is_equal(t1, t2);
-    }
-    return true;
-}
-
-bool operator<(token_view t1, token_view t2) {
-    if (t1._kind < t2._kind) {
-        return true;
-    } else if (t1._kind == token::kind::key && t2._kind == token::kind::key) {
-        return global_partitioner().is_less(t1, t2);
-    }
-    return false;
-}
-
 std::ostream& operator<<(std::ostream& out, const token& t) {
     if (t._kind == token::kind::after_all_keys) {
         out << "maximum token";
