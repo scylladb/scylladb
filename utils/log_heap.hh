@@ -59,6 +59,11 @@ struct log_heap_options {
     }
 
     size_t bucket_of(size_t value) const {
+#ifdef __SANITIZE_ADDRESS__
+        if (value < min_size) {
+            return 0;
+        }
+#endif
         const auto min_mask = -size_t(value >= min_size); // 0 when below min_size, all bits on otherwise
         value = value - min_size + 1;
         const auto pow2_index = pow2_rank(value);
