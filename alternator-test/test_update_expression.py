@@ -244,7 +244,6 @@ def test_update_expression_set_missing_value(test_table_s):
 # It is forbidden for ExpressionAttributeValues to contain values not used
 # by the expression. DynamoDB produces an error like: "Value provided in
 # ExpressionAttributeValues unused in expressions: keys: {:val1}"
-@pytest.mark.xfail(reason="need to test for unused values or names")
 def test_update_expression_spurious_value(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException'):
@@ -267,7 +266,6 @@ def test_update_expression_set_missing_name(test_table_s):
 # It is forbidden for ExpressionAttributeNames to contain names not used
 # by the expression. DynamoDB produces an error like: "Value provided in
 # ExpressionAttributeNames unused in expressions: keys: {#b}"
-@pytest.mark.xfail(reason="need to test for unused values or names")
 def test_update_expression_spurious_name(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException'):
