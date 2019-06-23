@@ -47,7 +47,7 @@
 #include "compaction_strategy_impl.hh"
 #include "schema.hh"
 #include "sstable_set.hh"
-#include "compatible_ring_position_view.hh"
+#include "compatible_ring_position.hh"
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/icl/interval_map.hpp>
@@ -246,7 +246,7 @@ std::unique_ptr<incremental_selector_impl> bag_sstable_set::make_incremental_sel
 // e.g. leveled compaction strategy
 class partitioned_sstable_set : public sstable_set_impl {
     using value_set = std::unordered_set<shared_sstable>;
-    using interval_map_type = boost::icl::interval_map<compatible_ring_position_view, value_set>;
+    using interval_map_type = boost::icl::interval_map<compatible_ring_position_or_view, value_set>;
     using interval_type = interval_map_type::interval_type;
     using map_iterator = interval_map_type::const_iterator;
 private:
@@ -260,22 +260,24 @@ private:
 private:
     static interval_type make_interval(const schema& s, const dht::partition_range& range) {
         return interval_type::closed(
-                compatible_ring_position_view(s, range.start()->value()),
-                compatible_ring_position_view(s, range.end()->value()));
+                compatible_ring_position_or_view(s, dht::ring_position_view(range.start()->value())),
+                compatible_ring_position_or_view(s, dht::ring_position_view(range.end()->value())));
     }
     interval_type make_interval(const dht::partition_range& range) const {
         return make_interval(*_schema, range);
     }
-    static interval_type make_interval(const schema& s, const sstable& sst) {
+    static interval_type make_interval(const schema_ptr& s, const sstable& sst) {
         return interval_type::closed(
-                compatible_ring_position_view(s, sst.get_first_decorated_key()),
-                compatible_ring_position_view(s, sst.get_last_decorated_key()));
+                compatible_ring_position_or_view(s, dht::ring_position(sst.get_first_decorated_key())),
+                compatible_ring_position_or_view(s, dht::ring_position(sst.get_last_decorated_key())));
     }
-    interval_type make_interval(const sstable& sst) const {
-        return make_interval(*_schema, sst);
+    interval_type make_interval(const sstable& sst) {
+        return make_interval(_schema, sst);
     }
     interval_type singular(const dht::ring_position& rp) const {
-        auto crp = compatible_ring_position_view(*_schema, rp);
+        // We should use the view here, since this is used for queries.
+        auto rpv = dht::ring_position_view(rp);
+        auto crp = compatible_ring_position_or_view(*_schema, std::move(rpv));
         return interval_type::closed(crp, crp);
     }
     std::pair<map_iterator, map_iterator> query(const dht::partition_range& range) const {
@@ -297,10 +299,10 @@ private:
         return _use_level_metadata && sst->get_sstable_level() == 0;
     }
 public:
-    static dht::ring_position to_ring_position(const compatible_ring_position_view& crpv) {
+    static dht::ring_position to_ring_position(const compatible_ring_position_or_view& crp) {
         // Ring position views, representing bounds of sstable intervals are
         // guaranteed to have key() != nullptr;
-        const auto& pos = crpv.position();
+        const auto& pos = crp.position();
         return dht::ring_position(pos.token(), *pos.key());
     }
     static dht::partition_range to_partition_range(const interval_type& i) {
@@ -378,16 +380,16 @@ private:
             return dht::ring_position_view(_next_position, dht::ring_position_view::after_key(!boost::icl::is_left_closed(it->first.bounds())));
         }
     }
-    static bool is_before_interval(const compatible_ring_position_view& crpv, const interval_type& interval) {
+    static bool is_before_interval(const compatible_ring_position_or_view& crp, const interval_type& interval) {
         if (boost::icl::is_left_closed(interval.bounds())) {
-            return crpv < interval.lower();
+            return crp < interval.lower();
         } else {
-            return crpv <= interval.lower();
+            return crp <= interval.lower();
         }
     }
-    void maybe_invalidate_iterator(const compatible_ring_position_view& crpv) {
+    void maybe_invalidate_iterator(const compatible_ring_position_or_view& crp) {
         if (_last_known_leveled_sstables_change_cnt != _leveled_sstables_change_cnt) {
-            _it = _leveled_sstables.lower_bound(interval_type::closed(crpv, crpv));
+            _it = _leveled_sstables.lower_bound(interval_type::closed(crp, crp));
             _last_known_leveled_sstables_change_cnt = _leveled_sstables_change_cnt;
         }
     }
@@ -403,19 +405,19 @@ public:
         , _next_position(dht::ring_position::min()) {
     }
     virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_view> select(const dht::ring_position_view& pos) override {
-        auto crpv = compatible_ring_position_view(*_schema, pos);
+        auto crp = compatible_ring_position_or_view(*_schema, pos);
         auto ssts = _unleveled_sstables;
         using namespace dht;
 
-        maybe_invalidate_iterator(crpv);
+        maybe_invalidate_iterator(crp);
 
         while (_it != _leveled_sstables.end()) {
-            if (boost::icl::contains(_it->first, crpv)) {
+            if (boost::icl::contains(_it->first, crp)) {
                 ssts.insert(ssts.end(), _it->second.begin(), _it->second.end());
                 return std::make_tuple(partitioned_sstable_set::to_partition_range(_it->first), std::move(ssts), next_position(std::next(_it)));
             }
             // We don't want to skip current interval if pos lies before it.
-            if (is_before_interval(crpv, _it->first)) {
+            if (is_before_interval(crp, _it->first)) {
                 return std::make_tuple(partitioned_sstable_set::to_partition_range(pos, _it->first), std::move(ssts), next_position(_it));
             }
             _it++;
