@@ -341,7 +341,10 @@ future<json::json_return_type> executor::batch_write_item(std::string content) {
 // If one of the above checks fails, a validation exception is thrown.
 // FIXME: currently, we only support top-level attribute updates, and this
 // function returns the column name;
-static std::string resolve_update_path(const parsed::path& p, const Json::Value& update_info, const schema_ptr& schema) {
+static std::string resolve_update_path(const parsed::path& p,
+        const Json::Value& update_info,
+        const schema_ptr& schema,
+        std::unordered_set<std::string>& used_attribute_names) {
     if (p.has_operators()) {
         throw api_error("ValidationException", "UpdateItem does not yet support nested updates (FIXME)");
     }
@@ -353,6 +356,7 @@ static std::string resolve_update_path(const parsed::path& p, const Json::Value&
                     format("ExpressionAttributeNames missing entry '{}' required by UpdateExpression",
                             column_name));
         }
+        used_attribute_names.emplace(std::move(column_name));
         column_name = value.asString();
     }
     const column_definition* cdef = schema->get_column_definition(to_bytes(column_name));
@@ -361,6 +365,20 @@ static std::string resolve_update_path(const parsed::path& p, const Json::Value&
                 format("UpdateItem cannot update key column {}", column_name));
     }
     return column_name;
+}
+
+// Fail the expression if it has unused attribute names or values. This is
+// how DynamoDB behaves, so we do too.
+static void verify_all_are_used(const Json::Value& req, const char* field,
+        const std::unordered_set<std::string>& used) {
+    auto& attribute_names = req[field];
+    for (auto it = attribute_names.begin(); it != attribute_names.end(); ++it) {
+        if (!used.count(it.key().asString())) {
+            throw api_error("ValidationException",
+                format("{} has spurious '{}', not used in UpdateExpression",
+                       field, it.key().asString()));
+        }
+    }
 }
 
 future<json::json_return_type> executor::update_item(std::string content) {
@@ -399,8 +417,10 @@ future<json::json_return_type> executor::update_item(std::string content) {
             throw api_error("ValidationException", "Empty expression in UpdateExpression is not allowed");
         }
         std::unordered_set<std::string> seen_column_names;
+        std::unordered_set<std::string> used_attribute_values;
+        std::unordered_set<std::string> used_attribute_names;
         for (auto& action : expression.actions()) {
-            std::string column_name = resolve_update_path(action._path, update_info, schema);
+            std::string column_name = resolve_update_path(action._path, update_info, schema, used_attribute_names);
             // DynamoDB forbids multiple updates in the same expression to
             // modify overlapping document paths. Updates of one expression
             // have the same timestamp, so it's unclear which would "win".
@@ -419,6 +439,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
                     throw api_error("ValidationException",
                             format("ExpressionAttributeValues missing entry '{}' required by UpdateExpression", a._rhs));
                 }
+                used_attribute_values.emplace(std::move(a._rhs));
                 bytes val = serialize_item(value);
                 attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
             } else if (action.is_remove()) {
@@ -428,6 +449,8 @@ future<json::json_return_type> executor::update_item(std::string content) {
                 throw api_error("ValidationException", "UpdateExpression: ADD and DELETE not yet supported.");
             }
         }
+        verify_all_are_used(update_info, "ExpressionAttributeNames", used_attribute_names);
+        verify_all_are_used(update_info, "ExpressionAttributeValues", used_attribute_values);
     }
 
     for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
