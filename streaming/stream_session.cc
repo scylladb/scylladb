@@ -58,7 +58,7 @@
 #include "service/priority_manager.hh"
 #include "query-request.hh"
 #include "schema_registry.hh"
-#include "multishard_writer.hh"
+#include "mutation_writer/multishard_writer.hh"
 #include "sstables/sstables.hh"
 #include "db/system_keyspace.hh"
 #include "db/view/view_update_checks.hh"
@@ -185,7 +185,7 @@ void stream_session::init_messaging_service_handler() {
                             }
                         });
                     };
-                    distribute_reader_and_consume_on_shards(s, dht::global_partitioner(),
+                    mutation_writer::distribute_reader_and_consume_on_shards(s, dht::global_partitioner(),
                         make_generating_reader(s, std::move(get_next_mutation_fragment)),
                         [plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
                             auto& cf = get_local_db().find_column_family(reader.schema());

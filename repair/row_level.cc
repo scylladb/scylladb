@@ -23,7 +23,7 @@
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
 #include "mutation_fragment.hh"
-#include "multishard_writer.hh"
+#include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
 #include "to_string.hh"
 #include "xx_hasher.hh"
@@ -410,7 +410,7 @@ public:
         };
         auto& db = service::get_local_storage_service().db();
         table& t = db.local().find_column_family(_schema->id());
-        _writer_done[node_idx] = distribute_reader_and_consume_on_shards(_schema, dht::global_partitioner(),
+        _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema, dht::global_partitioner(),
                 make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
                 [&db, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
             auto& t = db.local().find_column_family(reader.schema());

@@ -27,8 +27,10 @@
 #include "mutation_fragment.hh"
 #include "mutation_source_test.hh"
 #include "flat_mutation_reader.hh"
-#include "multishard_writer.hh"
+#include "mutation_writer/multishard_writer.hh"
 #include "tests/cql_test_env.hh"
+
+using namespace mutation_writer;
 
 struct generate_error_tag { };
 using generate_error = bool_class<generate_error_tag>;
