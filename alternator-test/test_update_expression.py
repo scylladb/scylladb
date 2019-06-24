@@ -140,6 +140,14 @@ def test_update_expression_name_token(test_table_s):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #hi-there = :val1', ExpressionAttributeValues={':val1': 7}, ExpressionAttributeNames={'#hi-there': silly_name})
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #!hi = :val1', ExpressionAttributeValues={':val1': 7}, ExpressionAttributeNames={'#!hi': silly_name})
+    # Just a "#" is not enough as a token. Interestingly, DynamoDB will
+    # find the bad name in ExpressionAttributeNames before it actually tries
+    # to parse UpdateExpression, but we can verify the parse fails too by
+    # using a valid but irrelevant name in ExpressionAttributeNames:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET # = :val1', ExpressionAttributeValues={':val1': 7}, ExpressionAttributeNames={'#': silly_name})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET # = :val1', ExpressionAttributeValues={':val1': 7}, ExpressionAttributeNames={'#a': silly_name})
 
     # There is also the value references, ":reference", for the right-hand
     # side of an assignment. These have similar naming rules like "#reference".
@@ -153,6 +161,11 @@ def test_update_expression_name_token(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 11
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :hi!there', ExpressionAttributeValues={':hi!there': 12})
+    # Just a ":" is not enough as a token.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :', ExpressionAttributeValues={':': 7})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :', ExpressionAttributeValues={':a': 7})
     # Trying to use a :reference on the left-hand side of an assignment will
     # not work. In DynamoDB, it's a different type of token (and generates
     # syntax error).
