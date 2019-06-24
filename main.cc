@@ -916,8 +916,10 @@ int main(int ac, char** av) {
                 service::get_local_storage_service().drain_on_shutdown().get();
             });
 
-            auto stop_view_builder = defer([] {
-                view_builder.stop().get();
+            auto stop_view_builder = defer([cfg] {
+                if (cfg->view_building()) {
+                    view_builder.stop().get();
+                }
             });
 
             auto stop_compaction_manager = defer([&db] {
