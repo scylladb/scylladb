@@ -1,3 +1,63 @@
+
+# Code style
+
+Code should conform to the project's coding style. We use Seastar's
+coding style, see seastar/coding-style.md.
+
+# Naming
+
+Names should avoid abbreviations (industry-standard abbreviations
+are acceptable) as they make the code opaque to newcomers. Within
+a restricted scope such as a function or a class, local or private
+variables can be given abbreviated names.
+
+# Micro-performance
+
+The following should be avoided:
+ - computational loops without preemption checks and yields
+ - allocation of large contiguous memory blocks in non-initialization
+   code
+ - quadratic (or worse) behavior on user-controlled inputs
+
+# Concurrency
+
+Code that generates concurrent behavior should include means to control
+the amount of concurrency, placing an upper bound on the amount of memory
+in use by concurrent operations.
+
+If a component performs work in the background, it would include a mechanism
+(`stop()` or `close()`) to wait for background work to complete. If background
+work is unbounded in time, the code should be able to abort in-progress work.
+
+# Unit testing
+
+Patches should be accompanied by unit test when feasible.
+ - patches that fix a bug should be accompanied by a test that fails
+   before the patch is applied and passes after it is applied
+ - patches that introduce generic code (such as a container) should
+   test all aspects of that code, not just those that are used by
+   the patchset.
+
+# Templates
+
+In non performance sensitive code, type erasure should be preferred
+to templates in order to reduce code and compile time bloat. In performance
+sensitive code, template bloat can be justified.
+
+Template parameters should be constrained by C++ concepts, both as
+code documentation, and to enable early error checking by the compiler.
+
+Templates should not be used as an ad-hoc method to reduce code duplication;
+rather they should be used when a common concept can be captured in
+template code and reused.
+
+# Singletons
+
+The singleton pattern should be avoided when it can introduce
+confusion about initialization order or make unit testing difficult. Instead,
+dependencies should be passed via constructor parameters (the "dependency
+injection" pattern).
+
 # Invariant checking in scylla
 
 Non obvious invariants should be checked. There are three ways of
