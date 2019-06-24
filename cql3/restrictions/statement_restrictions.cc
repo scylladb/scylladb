@@ -363,8 +363,9 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
                 }
             }
         }
-        if (_clustering_columns_restrictions->needs_filtering(*_schema)) {
-            column_id first_filtering_id = _schema->clustering_key_columns().begin()->id +
+        const bool pk_has_unrestricted_components = _partition_key_restrictions->has_unrestricted_components(*_schema);
+        if (pk_has_unrestricted_components || _clustering_columns_restrictions->needs_filtering(*_schema)) {
+            column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
                     _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : _clustering_columns_restrictions->get_column_defs()) {
                 if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef)) {
@@ -479,10 +480,9 @@ bool statement_restrictions::need_filtering() const {
     int number_of_filtering_restrictions = _nonprimary_key_restrictions->size();
     // If the whole partition key is restricted, it does not imply filtering
     if (_partition_key_restrictions->has_unrestricted_components(*_schema) || !_partition_key_restrictions->is_all_eq()) {
-        number_of_filtering_restrictions += _partition_key_restrictions->size();
-        if (_clustering_columns_restrictions->has_unrestricted_components(*_schema)) {
-            number_of_filtering_restrictions += _clustering_columns_restrictions->size() - _clustering_columns_restrictions->prefix_size();
-        }
+        number_of_filtering_restrictions += _partition_key_restrictions->size() + _clustering_columns_restrictions->size();
+    } else if (_clustering_columns_restrictions->has_unrestricted_components(*_schema)) {
+        number_of_filtering_restrictions += _clustering_columns_restrictions->size() - _clustering_columns_restrictions->prefix_size();
     }
 
     if (_partition_key_restrictions->is_multi_column() || _clustering_columns_restrictions->is_multi_column()) {

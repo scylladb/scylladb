@@ -634,6 +634,13 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
                 }
             });
         });
+
+        eventually([&] {
+            auto msg = e.execute_cql("SELECT SUM(e) FROM t WHERE c = 5 AND b = 911 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().with_rows({{ int32_type->decompose(0), {} }});
+            msg = e.execute_cql("SELECT e FROM t WHERE c = 5 AND b = 3 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().with_rows({{ int32_type->decompose(9), int32_type->decompose(3) }});
+        });
     });
 }
 
