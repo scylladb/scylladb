@@ -68,8 +68,8 @@ class select_statement : public cql_statement {
 public:
     using parameters = raw::select_statement::parameters;
     using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
-protected:
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
+protected:
     static thread_local const ::shared_ptr<parameters> _default_parameters;
     schema_ptr _schema;
     uint32_t _bound_terms;
