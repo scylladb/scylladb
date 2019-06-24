@@ -130,6 +130,18 @@ query_options::query_options(std::unique_ptr<query_options> qo, ::shared_ptr<ser
 
 }
 
+query_options::query_options(std::unique_ptr<query_options> qo, ::shared_ptr<service::pager::paging_state> paging_state, int32_t page_size)
+        : query_options(qo->_consistency,
+        qo->get_timeout_config(),
+        std::move(qo->_names),
+        std::move(qo->_values),
+        std::move(qo->_value_views),
+        qo->_skip_metadata,
+        std::move(query_options::specific_options{page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}),
+        qo->_cql_serialization_format) {
+
+}
+
 query_options::query_options(std::vector<cql3::raw_value> values)
     : query_options(
           db::consistency_level::ONE, infinite_timeout_config, std::move(values))
