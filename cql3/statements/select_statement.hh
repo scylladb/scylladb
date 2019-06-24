@@ -68,8 +68,8 @@ class select_statement : public cql_statement {
 public:
     using parameters = raw::select_statement::parameters;
     using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
-protected:
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
+protected:
     static thread_local const ::shared_ptr<parameters> _default_parameters;
     schema_ptr _schema;
     uint32_t _bound_terms;
@@ -236,6 +236,14 @@ private:
     lw_shared_ptr<query::read_command>
     prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now, bool use_paging);
 
+    future<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>
+    do_execute_base_query(
+            service::storage_proxy& proxy,
+            dht::partition_range_vector&& partition_ranges,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            ::shared_ptr<const service::pager::paging_state> paging_state);
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
             service::storage_proxy& proxy,
@@ -245,6 +253,23 @@ private:
             gc_clock::time_point now,
             ::shared_ptr<const service::pager::paging_state> paging_state);
 
+    // Function for fetching the selected columns from a list of clustering rows.
+    // It is currently used only in our Secondary Index implementation - ordinary
+    // CQL SELECT statements do not have the syntax to request a list of rows.
+    // FIXME: The current implementation is very inefficient - it requests each
+    // row separately (and, incrementally, in parallel). Even multiple rows from a single
+    // partition are requested separately. This last case can be easily improved,
+    // but to implement the general case (multiple rows from multiple partitions)
+    // efficiently, we will need more support from other layers.
+    // Keys are ordered in token order (see #3423)
+    future<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>
+    do_execute_base_query(
+            service::storage_proxy& proxy,
+            std::vector<primary_key>&& primary_keys,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            ::shared_ptr<const service::pager::paging_state> paging_state);
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
             service::storage_proxy& proxy,

@@ -102,7 +102,7 @@ private:
 
 public:
     query_options(query_options&&) = default;
-    query_options(const query_options&) = delete;
+    explicit query_options(const query_options&) = default;
 
     explicit query_options(db::consistency_level consistency,
                            const timeout_config& timeouts,
@@ -155,6 +155,7 @@ public:
     explicit query_options(db::consistency_level, const timeout_config& timeouts,
             std::vector<cql3::raw_value> values, specific_options options = specific_options::DEFAULT);
     explicit query_options(std::unique_ptr<query_options>, ::shared_ptr<service::pager::paging_state> paging_state);
+    explicit query_options(std::unique_ptr<query_options>, ::shared_ptr<service::pager::paging_state> paging_state, int32_t page_size);
 
     const timeout_config& get_timeout_config() const { return _timeout_config; }
 
