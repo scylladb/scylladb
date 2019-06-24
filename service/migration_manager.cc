@@ -996,4 +996,22 @@ future<schema_ptr> get_schema_for_write(table_schema_version v, netw::messaging_
     });
 }
 
+future<> migration_manager::sync_schema(const database& db, const std::vector<gms::inet_address>& nodes) {
+    using schema_and_hosts = std::unordered_map<utils::UUID, std::vector<gms::inet_address>>;
+    return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, utils::UUID& my_version) {
+        return parallel_for_each(nodes, [this, &schema_map, &my_version] (const gms::inet_address& node) {
+            return netw::get_messaging_service().local().send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (utils::UUID remote_version) {
+                if (my_version != remote_version) {
+                    schema_map[remote_version].emplace_back(node);
+                }
+            });
+        }).then([this, &schema_map] {
+            return parallel_for_each(schema_map, [this] (auto& x) {
+                mlogger.debug("Pulling schema {} from {}", x.first, x.second.front());
+                return submit_migration_task(x.second.front());
+            });
+        });
+    });
+}
+
 }
