@@ -195,24 +195,24 @@ void stream_session::init_messaging_service_handler() {
                                 auto metadata = mutation_source_metadata{};
                                 auto& cs = cf->get_compaction_strategy();
                                 const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
-                              auto consumer = cf->get_compaction_strategy().make_interposer_consumer(metadata,
+                                auto consumer = cf->get_compaction_strategy().make_interposer_consumer(metadata,
                                         [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path] (flat_mutation_reader reader) {
-                                sstables::shared_sstable sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
-                                schema_ptr s = reader.schema();
-                                auto& pc = service::get_local_streaming_write_priority();
+                                    sstables::shared_sstable sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
+                                    schema_ptr s = reader.schema();
+                                    auto& pc = service::get_local_streaming_write_priority();
 
-                                return sst->write_components(std::move(reader), std::max(1ul, adjusted_estimated_partitions), s,
-                                                             sstables::sstable_writer_config{}, encoding_stats{}, pc).then([sst] {
-                                    return sst->open_data();
-                                }).then([cf, sst] {
-                                    return cf->add_sstable_and_update_cache(sst);
-                                }).then([cf, s, sst, use_view_update_path]() mutable -> future<> {
-                                    if (!use_view_update_path) {
-                                        return make_ready_future<>();
-                                    }
-                                    return _view_update_generator->local().register_staging_sstable(sst, std::move(cf));
+                                    return sst->write_components(std::move(reader), std::max(1ul, adjusted_estimated_partitions), s,
+                                                                 sstables::sstable_writer_config{}, encoding_stats{}, pc).then([sst] {
+                                        return sst->open_data();
+                                    }).then([cf, sst] {
+                                        return cf->add_sstable_and_update_cache(sst);
+                                    }).then([cf, s, sst, use_view_update_path]() mutable -> future<> {
+                                        if (!use_view_update_path) {
+                                            return make_ready_future<>();
+                                        }
+                                        return _view_update_generator->local().register_staging_sstable(sst, std::move(cf));
+                                    });
                                 });
-                              });
                                 return consumer(std::move(reader));
                             });
                         },
