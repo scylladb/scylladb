@@ -763,8 +763,11 @@ int main(int ac, char** av) {
                 return service::get_local_storage_service().drain_on_shutdown();
             });
 
-            engine().at_exit([] {
-                return view_builder.stop();
+            engine().at_exit([cfg] {
+                if (cfg->view_building()) {
+                    return view_builder.stop();
+                }
+                return make_ready_future<>();
             });
 
             engine().at_exit([&db] {
