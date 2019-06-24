@@ -1064,18 +1064,12 @@ SEASTAR_TEST_CASE(test_range_deletion_scenarios) {
             e.execute_cql(format("insert into cf (p, c, v) values (1, {:d}, 'abc');", i)).get();
         }
 
-        try {
-            e.execute_cql("delete from cf where p = 1 and c <= 3").get();
-            BOOST_FAIL("should've thrown");
-        } catch (...) { }
-        try {
-            e.execute_cql("delete from cf where p = 1 and c >= 0").get();
-            BOOST_FAIL("should've thrown");
-        } catch (...) { }
+        e.execute_cql("delete from cf where p = 1 and c <= 3").get();
+        e.execute_cql("delete from cf where p = 1 and c >= 8").get();
 
-        e.execute_cql("delete from cf where p = 1 and c >= 0 and c <= 3").get();
+        e.execute_cql("delete from cf where p = 1 and c >= 0 and c <= 5").get();
         auto msg = e.execute_cql("select * from cf").get0();
-        assert_that(msg).is_rows().with_size(6);
+        assert_that(msg).is_rows().with_size(2);
         e.execute_cql("delete from cf where p = 1 and c > 3 and c < 10").get();
         msg = e.execute_cql("select * from cf").get0();
         assert_that(msg).is_rows().with_size(0);
