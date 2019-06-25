@@ -1830,6 +1830,46 @@ future<> repair_put_row_diff_with_rpc_stream_handler(
     });
 }
 
+future<> repair_get_full_row_hashes_with_rpc_stream_handler(
+        gms::inet_address from,
+        uint32_t src_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_hash_with_cmd> sink,
+        rpc::source<repair_stream_cmd> source) {
+    return repeat([from, src_cpu_id, repair_meta_id, sink, source] () mutable {
+        return do_with(false, [from, src_cpu_id, repair_meta_id, sink, source] (bool& error) mutable {
+            return source().then([from, src_cpu_id, repair_meta_id, sink, source, &error] (std::optional<std::tuple<repair_stream_cmd>> status_opt) mutable {
+                if (status_opt) {
+                    if (error) {
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    }
+                    return repair_get_full_row_hashes_with_rpc_stream_process_op(from,
+                            src_cpu_id,
+                            repair_meta_id,
+                            sink,
+                            source,
+                            error,
+                            std::move(status_opt)).handle_exception([sink, &error] (std::exception_ptr ep) mutable {
+                        error = true;
+                        return sink(repair_hash_with_cmd{repair_stream_cmd::error, repair_hash()}).then([sink] ()  mutable {
+                            return sink.close();
+                        }).then([sink] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
+                    });
+                } else {
+                    if (error) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                    return sink.close().then([sink] {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    });
+                }
+            });
+        });
+    });
+}
+
 future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
