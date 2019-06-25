@@ -368,10 +368,49 @@ def test_update_expression_plus_rmw(test_table_s):
         UpdateExpression='SET a = b + a')
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 19
 
-# Test the "list_append" function in SET
-# Also because this is the first test of functions in SET, we also test some
-# generic features of how functions are parsed.
-@pytest.mark.xfail(reason="list_append function not yet implemented")
+# Test the list_append() function in SET, for the most basic use case of
+# concatenating two value references. Because this is the first test of
+# functions in SET, we also test some generic features of how functions
+# are parsed.
+def test_update_expression_list_append_basic(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = list_append(:val1, :val2)',
+        ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': ['hi', 7]})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': [4, 'hello', 'hi', 7]}
+    # Unlike the operation name "SET", function names are case-sensitive!
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = LIST_APPEND(:val1, :val2)',
+            ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': ['hi', 7]})
+    # As usual, spaces are ignored by the parser
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = list_append(:val1, :val2)',
+        ExpressionAttributeValues={':val1': ['a'], ':val2': ['b']})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': ['a', 'b']}
+    # The list_append function only allows two parameters. The parser can
+    # correctly parse fewer or more, but then an error is generated: "Invalid
+    # UpdateExpression: Incorrect number of operands for operator or function;
+    # operator or function: list_append, number of operands: 1".
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(:val1)',
+            ExpressionAttributeValues={':val1': ['a']})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(:val1, :val2, :val3)',
+            ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': [7], ':val3': ['a']})
+    # If list_append is used on value which isn't a list, we get
+    # error: "Invalid UpdateExpression: Incorrect operand type for operator
+    # or function; operator or function: list_append, operand type: S"
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(:val1, :val2)',
+            ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': 'hi'})
+
+# Additional list_append() tests, also using attribute paths as parameters
+# (i.e., read-modify-write).
+@pytest.mark.xfail(reason="attribute copy (read-before-write) not yet implemented")
 def test_update_expression_list_append(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -395,40 +434,12 @@ def test_update_expression_list_append(test_table_s):
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='SET c = list_append(a, b)')
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == ['dog', 'hi', 2, 4, 'hello', 'dog', 'hi', 2, 4, 'hello', 'cat']
-    # Unlike the operation name "SET", function names are case-sensitive!
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = LIST_APPEND(a, :val1)',
-            ExpressionAttributeValues={':val1': [4, 'hello']})
-    # As usual, spaces are ignored by the parser
-    test_table_s.update_item(Key={'p': p},
-        UpdateExpression='SET a = list_append ( a , :val1 ) ',
-        ExpressionAttributeValues={':val1': [7]})
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['dog', 'hi', 2, 4, 'hello', 7]
-    # Also as usual, #references are allowed instead of inline names:
+    # As usual, #references are allowed instead of inline names:
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='SET #name1 = list_append(#name2,:val1)',
         ExpressionAttributeValues={':val1': [8]},
         ExpressionAttributeNames={'#name1': 'a', '#name2': 'a'})
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['dog', 'hi', 2, 4, 'hello', 7, 8]
-    # The list_append function only allows two parameters. The parser can
-    # correctly parse fewer or more, but then an error is generated: "Invalid
-    # UpdateExpression: Incorrect number of operands for operator or function;
-    # operator or function: list_append, number of operands: 1".
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(a)')
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(a, :val1, :val2)',
-            ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': [7]})
-    # If list_append is used on value which isn't a list, we get
-    # error: "Invalid UpdateExpression: Incorrect operand type for operator
-    # or function; operator or function: list_append, operand type: S"
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(:val1, :val2)',
-            ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': 'hi'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['dog', 'hi', 2, 4, 'hello', 8]
 
 # Test the "if_not_exists" function in SET
 # The test also checks additional features of function-call parsing.
