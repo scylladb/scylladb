@@ -78,3 +78,14 @@ enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set,
     send_full_set_rpc_stream,
 };
+
+enum class repair_stream_cmd : uint8_t {
+    error,
+    hash_data,
+    row_data,
+    end_of_current_hash_set,
+    needs_all_rows,
+    end_of_current_rows,
+    get_full_row_hashes,
+    put_rows_done,
+};
