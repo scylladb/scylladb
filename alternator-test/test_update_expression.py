@@ -552,7 +552,6 @@ def test_update_expression_function_plus_nesting(test_table_s):
 # This means that the parser accepts any alphanumeric name as a function
 # name, and only later use of this function fails because it's not one of
 # the supported file.
-@pytest.mark.xfail(reason="SET functions not yet implemented")
 def test_update_expression_unknown_function(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*f'):
@@ -565,7 +564,7 @@ def test_update_expression_unknown_function(test_table_s):
     # function names must also start with an alphabetic character. Trying
     # to use _f as a function name will result with an actual syntax error,
     # on the "_" token.
-    with pytest.raises(ClientError, match='ValidationException.*Syntax error'):
+    with pytest.raises(ClientError, match='ValidationException.*yntax error'):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET a = _f(b,c,d)')
 

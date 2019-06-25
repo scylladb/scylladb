@@ -148,9 +148,22 @@ path returns [parsed::path p]:
       | '[' INTEGER ']'           { $p.add_index(std::stoi($INTEGER.text)); }
     )*;
 
-// FIXME: set action supports additional types of rhs besides VALREF.
+update_expression_set_value returns [parsed::value v]:
+      VALREF                             { $v.set_valref($VALREF.text); }
+    | path                               { $v.set_path($path.p); }
+    | NAME                               { $v.set_func_name($NAME.text); }
+     '(' x=update_expression_set_value   { $v.add_func_parameter($x.v); }
+     (',' x=update_expression_set_value  { $v.add_func_parameter($x.v); })*
+     ')'
+    ;
+
+// TODO: rhs can also be value+value or value-value.
+update_expression_set_rhs returns [parsed::value v]:
+    update_expression_set_value  { $v = $update_expression_set_value.v; }
+    ;
+
 update_expression_set_action returns [parsed::update_expression::action a]:
-    path '=' VALREF { $a.assign_set($path.p, $VALREF.text); };
+    path '=' rhs=update_expression_set_rhs { $a.assign_set($path.p, $rhs.v); };
 
 update_expression_remove_action returns [parsed::update_expression::action a]:
     path { $a.assign_remove($path.p); };

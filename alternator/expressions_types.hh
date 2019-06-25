@@ -52,14 +52,60 @@ public:
     }
 };
 
+// "value" is is a value used in the right hand side of an assignment
+// expression, "SET a = ...". It can be a reference to a value included in
+// the request (":val"), a path to an attribute from the existing item
+// (e.g., "a.b[3].c"), or a function of other such values.
+// Note that the real right-hand-side of an assignment is actually a bit
+// more general - it allows either a value, or a value+value or value-value.
+class value {
+public:
+    struct function_call {
+        std::string _function_name;
+        std::vector<value> _parameters;
+    };
+private:
+    std::variant<std::string, path, function_call> _value;
+public:
+    void set_valref(std::string s) {
+        _value = std::move(s);
+    }
+    void set_path(path p) {
+        _value = std::move(p);
+    }
+    void set_func_name(std::string s) {
+        _value = function_call {std::move(s), {}};
+    }
+    void add_func_parameter(value v) {
+        std::get<function_call>(_value)._parameters.emplace_back(std::move(v));
+    }
+    bool is_valref() const {
+        return std::holds_alternative<std::string>(_value);
+    }
+    bool is_function_call() const {
+        return std::holds_alternative<function_call>(_value);
+    }
+    bool is_path() const {
+        return std::holds_alternative<path>(_value);
+    }
+    const std::string& as_valref() const {
+        return std::get<std::string>(_value);
+    }
+    const function_call& as_function_call() const {
+        return std::get<function_call>(_value);
+    }
+    const path& as_path() const {
+        return std::get<path>(_value);
+    }
+};
+
 class update_expression {
 public:
     struct action {
         path _path;
         struct set {
-            // TODO: rhs can actually also be a path, function, or rhs+rhs, or rhs-rhs.
-            // Not just a ":valname" string.
-            std::string _rhs;
+            // TODO: needs to be rhs type, not just value (also value+value, value-value)
+            value _rhs;
         };
         struct remove {
         };
@@ -71,7 +117,8 @@ public:
         };
         std::variant<set, remove, add, del> _action;
 
-        void assign_set(path p, std::string v) {
+        // FIXME: rhs type, not just one value, also value+value, value-value
+        void assign_set(path p, value v) {
             _path = std::move(p);
             _action = set { std::move(v) };
         }
