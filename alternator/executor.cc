@@ -383,6 +383,37 @@ static void verify_all_are_used(const Json::Value& req, const char* field,
     }
 }
 
+// Check if a given JSON object encodes a list (i.e., it is a {"L": [...]}
+// and returns a pointer to that list.
+static const Json::Value* unwrap_list(const Json::Value& v) {
+    if (!v.isObject() || v.size() != 1) {
+        return nullptr;
+    }
+    auto it = v.begin();
+    if (it.key() != "L") {
+        return nullptr;
+    }
+    return &(*it);
+}
+
+// Take two JSON-encoded list values (remember that a list value is
+// {"L": [...the actual list]}) and return the concatenation, again as
+// a list value.
+static Json::Value list_concatenate(const Json::Value& v1, const Json::Value& v2) {
+    const Json::Value* list1 = unwrap_list(v1);
+    const Json::Value* list2 = unwrap_list(v2);
+    if (!list1 || !list2) {
+        throw api_error("ValidationException", "UpdateExpression: list_append() given a non-list");
+    }
+    Json::Value cat = *list1;
+    for (const auto& a : *list2) {
+        cat.append(a);
+    }
+    Json::Value ret(Json::objectValue);
+    ret["L"] = std::move(cat);
+    return ret;
+}
+
 // Given a parsed::value, which can refer either to a constant value from
 // ExpressionAttributeValues, to the value of some attribute, or to a function
 // of other values, this function calculates the resulting value.
@@ -400,12 +431,24 @@ static Json::Value calculate_value(const parsed::value& v,
         return value;
     } else if (v.is_function_call()) {
         auto& f = v.as_function_call();
-        // FIXME: calculate parameter values and support the known functions
-        throw api_error("ValidationException",
-            format("UpdateExpression: unsupported function '{}' called.", f._function_name));
+        if (f._function_name == "list_append") {
+            if (f._parameters.size() != 2) {
+                throw api_error("ValidationException",
+                    format("UpdateExpression: list_append() accepts 2 parameters, got {}", f._parameters.size()));
+            }
+            Json::Value v1 = calculate_value(f._parameters[0], expression_attribute_values, used_attribute_values);
+            Json::Value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_values);
+            return list_concatenate(v1, v2);
+        } else if (f._function_name == "if_not_exists") {
+            // FIXME
+            throw api_error("ValidationException", "UpdateExpression: if_not_exists not yet supported");
+        } else {
+            throw api_error("ValidationException",
+                format("UpdateExpression: unknown function '{}' called.", f._function_name));
+        }
     } else if (v.is_path()) {
         // FIXME: support path value (read before write).
-        throw api_error("ValidationException", "UpdateExpression: unsupported value type.");
+        throw api_error("ValidationException", "UpdateExpression: unsupported value type");
     }
     // Can't happen
     return Json::Value::null;
