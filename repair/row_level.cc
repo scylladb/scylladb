@@ -1198,6 +1198,36 @@ public:
         });
     }
 
+private:
+    future<> get_full_row_hashes_source_op(
+            lw_shared_ptr<std::unordered_set<repair_hash>> current_hashes,
+            gms::inet_address remote_node,
+            unsigned node_idx,
+            rpc::source<repair_hash_with_cmd>& source) {
+        return repeat([this, current_hashes, remote_node, node_idx, &source] () mutable {
+            return source().then([this, current_hashes, remote_node, node_idx] (std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt) mutable {
+                if (hash_cmd_opt) {
+                    repair_hash_with_cmd hash_cmd = std::get<0>(hash_cmd_opt.value());
+                    rlogger.trace("get_full_row_hashes: Got repair_hash_with_cmd from peer={}, hash={}, cmd={}", remote_node, hash_cmd.hash, int(hash_cmd.cmd));
+                    if (hash_cmd.cmd == repair_stream_cmd::hash_data) {
+                        current_hashes->insert(hash_cmd.hash);
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    } else if (hash_cmd.cmd == repair_stream_cmd::end_of_current_hash_set) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    } else if (hash_cmd.cmd == repair_stream_cmd::error) {
+                        throw std::runtime_error("get_full_row_hashes: Peer failed to process");
+                    } else {
+                        throw std::runtime_error("get_full_row_hashes: Got unexpected repair_stream_cmd");
+                    }
+                } else {
+                    _sink_source_for_get_full_row_hashes.mark_source_closed(node_idx);
+                    throw std::runtime_error("get_full_row_hashes: Got unexpected end of stream");
+                }
+            });
+        });
+    }
+
+public:
     // RPC handler
     future<std::unordered_set<repair_hash>>
     get_full_row_hashes_handler() {
