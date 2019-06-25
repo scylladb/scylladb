@@ -1748,6 +1748,47 @@ future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process_op(
     }
 }
 
+future<> repair_get_row_diff_with_rpc_stream_handler(
+        gms::inet_address from,
+        uint32_t src_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_row_on_wire_with_cmd> sink,
+        rpc::source<repair_hash_with_cmd> source) {
+    return do_with(false, std::unordered_set<repair_hash>(), [from, src_cpu_id, repair_meta_id, sink, source] (bool& error, std::unordered_set<repair_hash>& current_set_diff) mutable {
+        return repeat([from, src_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] () mutable {
+            return source().then([from, src_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] (std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt) mutable {
+                if (hash_cmd_opt) {
+                    if (error) {
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    }
+                    return repair_get_row_diff_with_rpc_stream_process_op(from,
+                            src_cpu_id,
+                            repair_meta_id,
+                            sink,
+                            source,
+                            error,
+                            current_set_diff,
+                            std::move(hash_cmd_opt)).handle_exception([sink, &error] (std::exception_ptr ep) mutable {
+                        error = true;
+                        return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::error, repair_row_on_wire()}).then([sink] ()  mutable {
+                            return sink.close();
+                        }).then([sink] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
+                    });
+                } else {
+                    if (error) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                    return sink.close().then([sink] {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    });
+                }
+            });
+        });
+    });
+}
+
 future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
