@@ -94,3 +94,8 @@ struct repair_hash_with_cmd {
     repair_stream_cmd cmd;
     repair_hash hash;
 };
+
+struct repair_row_on_wire_with_cmd {
+    repair_stream_cmd cmd;
+    partition_key_and_mutation_fragments row;
+};
