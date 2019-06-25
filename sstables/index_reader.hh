@@ -222,30 +222,28 @@ public:
                 _num_pi_blocks = get_uint32();
             }
             auto data_size = data.size();
-            std::optional<input_stream<char>> promoted_index_stream;
-            if ((_trust_pi == trust_promoted_index::yes) && (promoted_index_size > 0)) {
-                if (promoted_index_size <= data_size) {
-                    auto buf = data.share();
-                    buf.trim(promoted_index_size);
-                    promoted_index_stream = make_buffer_input_stream(std::move(buf));
-                } else {
-                    promoted_index_stream = make_prepended_input_stream(
-                            std::move(data),
-                            make_file_input_stream(_index_file, this->position(), promoted_index_size - data_size, _options).detach());
-                }
-            } else {
-                _num_pi_blocks = 0;
-            }
             std::unique_ptr<promoted_index> index;
-            if (promoted_index_stream) {
+            if ((_trust_pi == trust_promoted_index::yes) && (promoted_index_size > 0)) {
+                input_stream<char> promoted_index_stream = [&] {
+                    if (promoted_index_size <= data_size) {
+                        auto buf = data.share();
+                        buf.trim(promoted_index_size);
+                        return make_buffer_input_stream(std::move(buf));
+                    } else {
+                        return make_prepended_input_stream(std::move(data),
+                            make_file_input_stream(_index_file, this->position(), promoted_index_size - data_size, _options).detach());
+                    }
+                }();
                 if (is_mc_format()) {
-                    index = std::make_unique<promoted_index>(_s, continuous_data_consumer::_permit, *_deletion_time, std::move(*promoted_index_stream),
+                    index = std::make_unique<promoted_index>(_s, continuous_data_consumer::_permit, *_deletion_time, std::move(promoted_index_stream),
                                   promoted_index_size,
                                   _num_pi_blocks, *_ck_values_fixed_lengths);
                 } else {
-                     index = std::make_unique<promoted_index>(_s, continuous_data_consumer::_permit, *_deletion_time, std::move(*promoted_index_stream),
+                     index = std::make_unique<promoted_index>(_s, continuous_data_consumer::_permit, *_deletion_time, std::move(promoted_index_stream),
                                    promoted_index_size, _num_pi_blocks);
                 }
+            } else {
+                _num_pi_blocks = 0;
             }
             _consumer.consume_entry(index_entry{_s, std::move(_key), _position, std::move(index)}, _entry_offset);
             _deletion_time = std::nullopt;
