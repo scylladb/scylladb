@@ -447,10 +447,16 @@ SEASTAR_TEST_CASE(test_notifications) {
             BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 2);
             BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 2);
 
-            e.execute_cql("alter table tests.table1 alter s1 type blob;").get();
 
-            BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 3);
-            BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 3);
+            // In cql spec 3.4.4 the alter column was deprecated since it was not a major version,
+            // the solution was to keep the parsing capability but throw an exception that will indicate
+            // thet the operation is no longer supported.
+            // See CASSANDRA-12443
+            BOOST_REQUIRE_THROW(e.execute_cql("alter table tests.table1 alter s1 type blob;").get() ,
+                                    exceptions::invalid_request_exception);
+
+            BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 2);
+            BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 2);
 
             e.execute_cql("drop table tests.table1;").get();
 

@@ -2741,28 +2741,25 @@ SEASTAR_TEST_CASE(test_alter_table) {
             return e.execute_cql("alter table tat with comment = 'This is a comment.';").discard_result();
         }).then([&e] {
             BOOST_REQUIRE_EQUAL(e.local_db().find_schema("ks", "tat")->comment(), sstring("This is a comment."));
-            return e.execute_cql("alter table tat alter r2 type blob;").discard_result();
-        }).then([&e] {
             return e.execute_cql("select pk1, c1, ck2, r1, r2 from tat;");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows({
                 { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4), int32_type->decompose(5) },
             });
         }).then([&e] {
-            return e.execute_cql("insert into tat (pk1, c1, ck2, r2) values (1, 2, 3, 0x1234567812345678);").discard_result();
+            return e.execute_cql("insert into tat (pk1, c1, ck2, r2) values (1, 2, 3, 4);").discard_result();
         }).then([&e] {
             return e.execute_cql("select pk1, c1, ck2, r1, r2 from tat;");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4), from_hex("1234567812345678") },
+                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4), int32_type->decompose(4) },
             });
-        }).then([&e] {
             return e.execute_cql("alter table tat rename pk1 to p1 and ck2 to c2;").discard_result();
         }).then([&e] {
             return e.execute_cql("select p1, c1, c2, r1, r2 from tat;");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4), from_hex("1234567812345678") },
+                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4), int32_type->decompose(4) },
             });
             return e.execute_cql("alter table tat add r1_2 int;").discard_result();
         }).then([&e] {
@@ -2771,21 +2768,21 @@ SEASTAR_TEST_CASE(test_alter_table) {
             return e.execute_cql("select * from tat;");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4), int32_type->decompose(6), from_hex("1234567812345678") },
+                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4), int32_type->decompose(6), int32_type->decompose(4) },
             });
             return e.execute_cql("alter table tat drop r1;").discard_result();
         }).then([&e] {
             return e.execute_cql("select * from tat;");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(6), from_hex("1234567812345678") },
+                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(6), int32_type->decompose(4) },
             });
             return e.execute_cql("alter table tat add r1 int;").discard_result();
         }).then([&e] {
             return e.execute_cql("select * from tat;");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), {}, int32_type->decompose(6), from_hex("1234567812345678") },
+                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), {}, int32_type->decompose(6), int32_type->decompose(4) },
             });
             return e.execute_cql("alter table tat drop r2;").discard_result();
         }).then([&e] {

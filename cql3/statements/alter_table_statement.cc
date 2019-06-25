@@ -77,64 +77,6 @@ void alter_table_statement::validate(service::storage_proxy& proxy, const servic
     // validated in announce_migration()
 }
 
-static data_type validate_alter(schema_ptr schema, const column_definition& def, const cql3_type& validator)
-{
-    auto type = def.type->is_reversed() && !validator.get_type()->is_reversed()
-              ? reversed_type_impl::get_instance(validator.get_type())
-              : validator.get_type();
-    switch (def.kind) {
-    case column_kind::partition_key:
-        if (type->is_counter()) {
-            throw exceptions::invalid_request_exception(
-                    format("counter type is not supported for PRIMARY KEY part {}", def.name_as_text()));
-        }
-
-        if (!type->is_value_compatible_with(*def.type)) {
-            throw exceptions::configuration_exception(
-                    format("Cannot change {} from type {} to type {}: types are incompatible.",
-                           def.name_as_text(),
-                           def.type->as_cql3_type(),
-                           validator));
-        }
-        break;
-
-    case column_kind::clustering_key:
-        if (!schema->is_cql3_table()) {
-            throw exceptions::invalid_request_exception(
-                    format("Cannot alter clustering column {} in a non-CQL3 table", def.name_as_text()));
-        }
-
-        // Note that CFMetaData.validateCompatibility already validate the change we're about to do. However, the error message it
-        // sends is a bit cryptic for a CQL3 user, so validating here for a sake of returning a better error message
-        // Do note that we need isCompatibleWith here, not just isValueCompatibleWith.
-        if (!type->is_compatible_with(*def.type)) {
-            throw exceptions::configuration_exception(
-                    format("Cannot change {} from type {} to type {}: types are not order-compatible.",
-                           def.name_as_text(),
-                           def.type->as_cql3_type(),
-                           validator));
-        }
-        break;
-
-    case column_kind::regular_column:
-    case column_kind::static_column:
-        // Thrift allows to change a column validator so CFMetaData.validateCompatibility will let it slide
-        // if we change to an incompatible type (contrarily to the comparator case). But we don't want to
-        // allow it for CQL3 (see #5882) so validating it explicitly here. We only care about value compatibility
-        // though since we won't compare values (except when there is an index, but that is validated by
-        // ColumnDefinition already).
-        if (!type->is_value_compatible_with(*def.type)) {
-            throw exceptions::configuration_exception(
-                    format("Cannot change {} from type {} to type {}: types are incompatible.",
-                           def.name_as_text(),
-                           def.type->as_cql3_type(),
-                           validator));
-        }
-        break;
-    }
-    return type;
-}
-
 static void validate_column_rename(database& db, const schema& schema, const column_identifier& from, const column_identifier& to)
 {
     auto def = schema.get_column_definition(from.name());
@@ -229,28 +171,6 @@ void alter_table_statement::add_column(schema_ptr schema, const table& cf, schem
     }
 }
 
-void alter_table_statement::alter_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static) {
-    if (!def) {
-        throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
-    }
-
-    auto type = validate_alter(schema, *def, validator);
-    // In any case, we update the column definition
-    cfm.alter_column_type(column_name->name(), type);
-
-    // We also have to validate the view types here. If we have a view which includes a column as part of
-    // the clustering key, we need to make sure that it is indeed compatible.
-    for (auto&& view : cf.views()) {
-        auto* view_def = view->get_column_definition(column_name->name());
-        if (view_def) {
-            schema_builder builder(view);
-            auto view_type = validate_alter(view, *view_def, validator);
-            builder.alter_column_type(column_name->name(), std::move(view_type));
-            view_updates.push_back(view_ptr(builder.build()));
-        }
-    }
-}
-
 void alter_table_statement::drop_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static) {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
@@ -320,8 +240,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         break;
 
     case alter_table_statement::type::alter:
-        assert(_column_changes.size() == 1);
-        invoke_column_change_fn(std::mem_fn(&alter_table_statement::alter_column));
+        throw exceptions::invalid_request_exception("Altering of types is not allowed");
         break;
 
     case alter_table_statement::type::drop:
