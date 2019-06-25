@@ -516,15 +516,26 @@ void compaction_manager::submit(column_family* cf) {
                 postpone_compaction_for_column_family(&cf);
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
+
+            _stats.pending_tasks--;
+            // Do this before constructing weight registration, otherwise its destructor will call for a
+            // reevaluation
+            if ((descriptor.idle) && ((_stats.pending_tasks > 0) || (_stats.active_tasks > 0))) {
+                cmlog.debug("Idle compaction job postponed, with {} sstable(s), table {}:{}. Pending {}, Active {}",
+                    descriptor.sstables.size(), cf.schema()->ks_name(), cf.schema()->cf_name(), _stats.pending_tasks, _stats.active_tasks);
+                postpone_compaction_for_column_family(&cf);
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+
             auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
             descriptor.weight_registration = compaction_weight_registration(this, weight);
             descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting->release_compacting(exhausted_sstables);
             };
-            cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
+            cmlog.debug("Accepted {} compaction job ({} sstable(s)) of weight {} for {}.{}",
+                descriptor.idle ? "idle" : "",
                 descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
 
-            _stats.pending_tasks--;
             _stats.active_tasks++;
             task->compaction_running = true;
             return cf.run_compaction(std::move(descriptor)).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
@@ -551,6 +562,9 @@ void compaction_manager::submit(column_family* cf) {
           });
         });
     }).finally([this, task] {
+        if ((!_stats.pending_tasks) && (!_stats.active_tasks)) {
+            reevaluate_postponed_compactions();
+        }
         _tasks.remove(task);
     });
 }

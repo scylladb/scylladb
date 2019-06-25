@@ -319,7 +319,9 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
         auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
             return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
         });
-        return sstables::compaction_descriptor({ *it });
+        auto desc = sstables::compaction_descriptor({ *it });
+        desc.idle = true;
+        return desc;
     }
     return sstables::compaction_descriptor();
 }

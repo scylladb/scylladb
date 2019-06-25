@@ -44,6 +44,8 @@ namespace sstables {
         // Calls compaction manager's task for this compaction to release reference to exhausted sstables.
         std::function<void(const std::vector<shared_sstable>& exhausted_sstables)> release_exhausted;
 
+        bool idle = false;
+
         compaction_descriptor() = default;
 
         explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = 0, uint64_t max_sstable_bytes = std::numeric_limits<uint64_t>::max())

@@ -266,6 +266,7 @@ public:
             }
         }
 
+        // Nothing better to do, push data into the highest levels.
         for (size_t i = _generations.size() - 1; i > 0; --i) {
             auto& sstables = get_level(i);
             if (sstables.empty()) {
@@ -277,6 +278,7 @@ public:
             }
             auto descriptor = get_descriptor_for_level(i-1, last_compacted_keys, compaction_counter);
             if (descriptor.sstables.size() > 0) {
+                descriptor.idle = true;
                 return descriptor;
             }
         }
