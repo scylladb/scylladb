@@ -1579,6 +1579,28 @@ private:
         });
     }
 
+    future<> put_row_diff_sink_op(
+            repair_rows_on_wire rows,
+            rpc::sink<repair_row_on_wire_with_cmd>& sink,
+            gms::inet_address remote_node) {
+        return do_with(std::move(rows), [&sink, remote_node] (repair_rows_on_wire& rows) mutable {
+            return do_for_each(rows, [&sink] (repair_row_on_wire& row) mutable {
+                rlogger.trace("put_row_diff: send row");
+                return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)});
+            }).then([&sink] () mutable {
+                rlogger.trace("put_row_diff: send empty row");
+                return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()}).then([&sink] () mutable {
+                    rlogger.trace("put_row_diff: send done");
+                    return sink.flush();
+                });
+            });
+        }).handle_exception([&sink] (std::exception_ptr ep) {
+            return sink.close().then([ep = std::move(ep)] () mutable {
+                return make_exception_future<>(std::move(ep));
+            });
+        });
+    }
+
 public:
     // RPC handler
     future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
