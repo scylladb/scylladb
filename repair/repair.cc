@@ -941,6 +941,7 @@ static future<> repair_cf_range(repair_info& ri,
 static future<> repair_range(repair_info& ri, const dht::token_range& range) {
     auto id = utils::UUID_gen::get_time_UUID();
     return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (const auto& neighbors) {
+      return ::service::get_local_migration_manager().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
         rlogger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, ri.keyspace, ri.cfs);
         return do_for_each(ri.cfs.begin(), ri.cfs.end(), [&ri, &neighbors, range] (auto&& cf) {
             ri._sub_ranges_nr++;
@@ -950,6 +951,7 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
                 return repair_cf_range(ri, cf, range, neighbors);
             }
         });
+      });
     });
 }
 
