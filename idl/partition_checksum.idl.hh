@@ -76,4 +76,5 @@ struct get_combined_row_hash_response {
 
 enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set,
+    send_full_set_rpc_stream,
 };
