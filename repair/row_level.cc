@@ -2216,13 +2216,26 @@ private:
 
             // Fast path: if local has zero row and remote has rows, request them all.
             if (master.working_row_buf_combined_hash() == repair_hash() && combined_hashes[node_idx + 1] != repair_hash()) {
-                master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx).get();
+                master.peer_row_hash_sets(node_idx).clear();
+                if (master.use_rpc_stream()) {
+                    rlogger.debug("FastPath: get_row_diff with needs_all_rows_t::yes rpc stream");
+                    master.get_row_diff_with_rpc_stream({}, repair_meta::needs_all_rows_t::yes, repair_meta::update_peer_row_hash_sets::yes, node, node_idx).get();
+                } else {
+                    rlogger.debug("FastPath: get_row_diff with needs_all_rows_t::yes rpc verb");
+                    master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx).get();
+                }
                 continue;
             }
 
+            rlogger.debug("Before master.get_full_row_hashes for node {}, hash_sets={}",
+                node, master.peer_row_hash_sets(node_idx).size());
             // Ask the peer to send the full list hashes in the working row buf.
-            master.peer_row_hash_sets(node_idx) = master.get_full_row_hashes(node).get0();
-            rlogger.debug("Calling master.get_full_row_hashes for node {}, hash_sets={}",
+            if (master.use_rpc_stream()) {
+                master.peer_row_hash_sets(node_idx) = master.get_full_row_hashes_with_rpc_stream(node, node_idx).get0();
+            } else {
+                master.peer_row_hash_sets(node_idx) = master.get_full_row_hashes(node).get0();
+            }
+            rlogger.debug("After master.get_full_row_hashes for node {}, hash_sets={}",
                 node, master.peer_row_hash_sets(node_idx).size());
 
             // With hashes of rows from peer node, we can figure out
@@ -2234,12 +2247,16 @@ private:
             // between repair master and repair follower 2.
             std::unordered_set<repair_hash> set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes());
             // Request missing sets from peer node
-            rlogger.debug("Calling master.get_row_diff to node {}, local={}, peer={}, set_diff={}",
-                    node, master.working_row_hashes().size(), master.peer_row_hash_sets(node_idx).size(), set_diff);
+            rlogger.debug("Before get_row_diff to node {}, local={}, peer={}, set_diff={}",
+                    node, master.working_row_hashes().size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
             // If we need to pull all rows from the peer. We can avoid
             // sending the row hashes on wire by setting needs_all_rows flag.
             auto needs_all_rows = repair_meta::needs_all_rows_t(set_diff.size() == master.peer_row_hash_sets(node_idx).size());
-            master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx).get();
+            if (master.use_rpc_stream()) {
+                master.get_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, repair_meta::update_peer_row_hash_sets::no, node, node_idx).get();
+            } else {
+                master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx).get();
+            }
             rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().size());
         }
         return op_status::next_step;
@@ -2256,7 +2273,11 @@ private:
             auto set_diff = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
             auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());
             rlogger.debug("Calling master.put_row_diff to node {}, set_diff={}, needs_all_rows={}", _all_live_peer_nodes[idx], set_diff.size(), needs_all_rows);
-            return master.put_row_diff(set_diff, needs_all_rows, _all_live_peer_nodes[idx]);
+            if (master.use_rpc_stream()) {
+                return master.put_row_diff_with_rpc_stream(set_diff, needs_all_rows, _all_live_peer_nodes[idx], idx);
+            } else {
+                return master.put_row_diff(set_diff, needs_all_rows, _all_live_peer_nodes[idx]);
+            }
         }).get();
         master.stats().round_nr_slow_path++;
     }
