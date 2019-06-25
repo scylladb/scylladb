@@ -1682,6 +1682,37 @@ future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
     }
 }
 
+future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
+        gms::inet_address from,
+        uint32_t src_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_stream_cmd> sink,
+        rpc::source<repair_row_on_wire_with_cmd> source,
+        bool& error,
+        repair_rows_on_wire& current_rows,
+        std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt) {
+    auto row = std::move(std::get<0>(row_opt.value()));
+    if (row.cmd == repair_stream_cmd::row_data) {
+        rlogger.trace("Got repair_rows_on_wire from peer={}, got row_data", from);
+        current_rows.push_back(std::move(row.row));
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
+        rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
+        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, rows = std::move(current_rows)] () mutable {
+            auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+            return rm->put_row_diff_handler(std::move(rows), from);
+        }).then([sink] () mutable {
+            return sink(repair_stream_cmd::put_rows_done);
+        }).then([sink] () mutable {
+            return sink.flush();
+        }).then([sink] {
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
+    } else {
+        return make_exception_future<stop_iteration>(std::runtime_error("Got unexpected repair_stream_cmd"));
+    }
+}
+
 future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
