@@ -291,6 +291,9 @@ class partition_key_and_mutation_fragments {
     partition_key _key;
     std::list<frozen_mutation_fragment> _mfs;
 public:
+    partition_key_and_mutation_fragments()
+        : _key(std::vector<bytes>() ) {
+    }
     partition_key_and_mutation_fragments(partition_key key, std::list<frozen_mutation_fragment> mfs)
         : _key(std::move(key))
         , _mfs(std::move(mfs)) {
