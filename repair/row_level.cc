@@ -168,6 +168,7 @@ static thread_local row_level_repair_metrics _metrics;
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
         row_level_diff_detect_algorithm::send_full_set,
+        row_level_diff_detect_algorithm::send_full_set_rpc_stream,
     };
     return _algorithms;
 };
