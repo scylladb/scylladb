@@ -123,6 +123,8 @@ public:
     }
 };
 
+using sink_source_for_get_full_row_hashes = sink_source_for_repair<repair_stream_cmd, repair_hash_with_cmd>;
+
 struct row_level_repair_metrics {
     seastar::metrics::metric_groups _metrics;
     uint64_t tx_row_nr{0};
