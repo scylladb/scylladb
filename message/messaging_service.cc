@@ -464,6 +464,9 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_ESTIMATED_PARTITIONS:
     case messaging_verb::REPAIR_SET_ESTIMATED_PARTITIONS:
     case messaging_verb::REPAIR_GET_DIFF_ALGORITHMS:
+    case messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM:
+    case messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM:
+    case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
