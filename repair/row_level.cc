@@ -1465,6 +1465,36 @@ private:
             });
         });
     }
+
+    future<> get_row_diff_sink_op(
+            std::unordered_set<repair_hash> set_diff,
+            needs_all_rows_t needs_all_rows,
+            rpc::sink<repair_hash_with_cmd>& sink,
+            gms::inet_address remote_node) {
+        return do_with(std::move(set_diff), [needs_all_rows, remote_node, &sink] (std::unordered_set<repair_hash>& set_diff) mutable {
+            if (inject_rpc_stream_error) {
+                return make_exception_future<>(std::runtime_error("get_row_diff: Inject sender error in sink loop"));
+            }
+            if (needs_all_rows) {
+                rlogger.trace("get_row_diff: request with repair_stream_cmd::needs_all_rows");
+                return sink(repair_hash_with_cmd{repair_stream_cmd::needs_all_rows, repair_hash()}).then([&sink] () mutable {
+                    return sink.flush();
+                });
+            }
+            return do_for_each(set_diff, [&sink] (const repair_hash& hash) mutable {
+                return sink(repair_hash_with_cmd{repair_stream_cmd::hash_data, hash});
+            }).then([&sink] () mutable {
+                return sink(repair_hash_with_cmd{repair_stream_cmd::end_of_current_hash_set, repair_hash()});
+            }).then([&sink] () mutable {
+                return sink.flush();
+            });
+        }).handle_exception([&sink] (std::exception_ptr ep) {
+            return sink.close().then([ep = std::move(ep)] () mutable {
+                return make_exception_future<>(std::move(ep));
+            });
+        });
+    }
+
 public:
     // RPC handler
     future<repair_rows_on_wire> get_row_diff_handler(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows) {
