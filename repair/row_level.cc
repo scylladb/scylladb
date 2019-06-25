@@ -1325,8 +1325,8 @@ public:
             return make_exception_future<>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
                     utils::fb_utilities::get_broadcast_address())));
         }
-        rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}",
-            utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range);
+        rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
+            utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         return insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version));
     }
 
@@ -2062,9 +2062,6 @@ class row_level_repair {
     // A flag indicates any error during the repair
     bool _failed = false;
 
-    // Max buffer size per repair round
-    static constexpr size_t _max_row_buf_size = 256 * 1024;
-
     // Seed for the repair row hashing. If we ever had a hash conflict for a row
     // and we are not using stable hash, there is chance we will fix the row in
     // the next repair.
@@ -2090,6 +2087,11 @@ private:
         next_step,
         all_done,
     };
+
+    size_t get_max_row_buf_size(row_level_diff_detect_algorithm algo) {
+        // Max buffer size per repair round
+        return is_rpc_stream_supported(algo) ?  32 * 1024 * 1024 : 256 * 1024;
+    }
 
     // Step A: Negotiate sync boundary to use
     op_status negotiate_sync_boundary(repair_meta& master) {
@@ -2289,6 +2291,7 @@ public:
             _ri.check_in_abort();
             auto repair_meta_id = repair_meta::get_next_repair_meta_id().get0();
             auto algorithm = get_common_diff_detect_algorithm(_all_live_peer_nodes);
+            auto max_row_buf_size = get_max_row_buf_size(algorithm);
             auto master_node_shard_config = shard_config {
                     engine().cpu_id(),
                     dht::global_partitioner().shard_count(),
@@ -2303,7 +2306,7 @@ public:
                     s,
                     _range,
                     algorithm,
-                    _max_row_buf_size,
+                    max_row_buf_size,
                     _seed,
                     repair_meta::repair_master::yes,
                     repair_meta_id,
@@ -2313,8 +2316,8 @@ public:
             // All nodes including the node itself.
             _all_nodes.insert(_all_nodes.begin(), master.myip());
 
-            rlogger.debug(">>> Started Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}",
-                    master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _ri.keyspace, _cf_name, schema_version, _range, _seed);
+            rlogger.debug(">>> Started Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_size={}",
+                    master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _ri.keyspace, _cf_name, schema_version, _range, _seed, max_row_buf_size);
 
 
             try {
