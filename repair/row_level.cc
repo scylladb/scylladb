@@ -1227,6 +1227,16 @@ private:
         });
     }
 
+    future<> get_full_row_hashes_sink_op(rpc::sink<repair_stream_cmd>& sink) {
+        return sink(repair_stream_cmd::get_full_row_hashes).then([&sink] {
+            return sink.flush();
+        }).handle_exception([&sink] (std::exception_ptr ep) {
+            return sink.close().then([ep = std::move(ep)] () mutable {
+                return make_exception_future<>(std::move(ep));
+            });
+        });
+    }
+
 public:
     // RPC handler
     future<std::unordered_set<repair_hash>>
