@@ -328,6 +328,7 @@ struct repair_row_on_wire_with_cmd {
 
 enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set,
+    send_full_set_rpc_stream,
 };
 
 std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo);

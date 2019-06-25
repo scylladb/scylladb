@@ -69,6 +69,8 @@ std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo
     switch (algo) {
     case row_level_diff_detect_algorithm::send_full_set:
         return out << "send_full_set";
+    case row_level_diff_detect_algorithm::send_full_set_rpc_stream:
+        return out << "send_full_set_rpc_stream";
     };
     return out << "unknown";
 }
