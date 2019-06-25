@@ -64,7 +64,12 @@ cql_test_config::cql_test_config()
 
 cql_test_config::cql_test_config(const db::config& cfg)
     : db_config(seastar::make_shared<db::config>(cfg))
-{}
+{
+    // This causes huge amounts of commitlog writes to allocate space on disk,
+    // which all get thrown away when the test is done. This can cause timeouts
+    // if /tmp is not tmpfs.
+    db_config->commitlog_use_o_dsync() = false;
+}
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;
 cql_test_config::~cql_test_config() = default;
