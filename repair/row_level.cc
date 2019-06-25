@@ -1538,12 +1538,12 @@ public:
 
     // RPC API
     // Send rows in the _working_row_buf with hash within the given sef_diff
-    future<> put_row_diff(const std::unordered_set<repair_hash>& set_diff, gms::inet_address remote_node) {
+    future<> put_row_diff(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node) {
         if (!set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
             }
-            std::list<repair_row> row_diff = get_row_diff(set_diff);
+            std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
             if (row_diff.size() != set_diff.size()) {
                 throw std::runtime_error("row_diff.size() != set_diff.size()");
             }
@@ -2246,8 +2246,9 @@ private:
         std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes();
         parallel_for_each(boost::irange(size_t(0), _all_live_peer_nodes.size()), [&, this] (size_t idx) {
             auto set_diff = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
-            rlogger.trace("Calling master.put_row_diff to node {}, set_diff={}", _all_live_peer_nodes[idx], set_diff.size());
-            return master.put_row_diff(set_diff, _all_live_peer_nodes[idx]);
+            auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());
+            rlogger.debug("Calling master.put_row_diff to node {}, set_diff={}, needs_all_rows={}", _all_live_peer_nodes[idx], set_diff.size(), needs_all_rows);
+            return master.put_row_diff(set_diff, needs_all_rows, _all_live_peer_nodes[idx]);
         }).get();
         master.stats().round_nr_slow_path++;
     }
