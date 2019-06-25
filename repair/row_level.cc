@@ -124,6 +124,7 @@ public:
 };
 
 using sink_source_for_get_full_row_hashes = sink_source_for_repair<repair_stream_cmd, repair_hash_with_cmd>;
+using sink_source_for_get_row_diff = sink_source_for_repair<repair_hash_with_cmd, repair_row_on_wire_with_cmd>;
 
 struct row_level_repair_metrics {
     seastar::metrics::metric_groups _metrics;
