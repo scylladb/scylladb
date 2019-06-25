@@ -199,6 +199,11 @@ static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(const st
     return common_algorithms.back();
 }
 
+bool is_rpc_stream_supported(row_level_diff_detect_algorithm algo) {
+    // send_full_set is the only algorithm that does not support rpc stream
+    return algo != row_level_diff_detect_algorithm::send_full_set;
+}
+
 static uint64_t get_random_seed() {
     static thread_local std::default_random_engine random_engine{std::random_device{}()};
     static thread_local std::uniform_int_distribution<uint64_t> random_dist{};
