@@ -315,6 +315,11 @@ enum class repair_stream_cmd : uint8_t {
     get_full_row_hashes,
     put_rows_done,
 };
+
+struct repair_hash_with_cmd {
+    repair_stream_cmd cmd;
+    repair_hash hash;
+};
 enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set,
 };
