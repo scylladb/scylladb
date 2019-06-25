@@ -59,6 +59,70 @@ struct shard_config {
 distributed<db::system_distributed_keyspace>* _sys_dist_ks;
 distributed<db::view::view_update_generator>* _view_update_generator;
 
+// Wraps sink and source objects for repair master or repair follower nodes.
+// For repair master, it stores sink and source pair for each of the followers.
+// For repair follower, it stores one sink and source pair for repair master.
+template<class SinkType, class SourceType>
+class sink_source_for_repair {
+    uint32_t _repair_meta_id;
+    using get_sink_source_fn_type = std::function<future<rpc::sink<SinkType>, rpc::source<SourceType>> (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr)>;
+    using sink_type  = std::reference_wrapper<rpc::sink<SinkType>>;
+    using source_type = std::reference_wrapper<rpc::source<SourceType>>;
+    // The vectors below store sink and source object for peer nodes.
+    std::vector<std::optional<rpc::sink<SinkType>>> _sinks;
+    std::vector<std::optional<rpc::source<SourceType>>> _sources;
+    std::vector<bool> _sources_closed;
+    get_sink_source_fn_type _fn;
+public:
+    sink_source_for_repair(uint32_t repair_meta_id, size_t nr_peer_nodes, get_sink_source_fn_type fn)
+        : _repair_meta_id(repair_meta_id)
+        , _sinks(nr_peer_nodes)
+        , _sources(nr_peer_nodes)
+        , _sources_closed(nr_peer_nodes, false)
+        , _fn(std::move(fn)) {
+    }
+    void mark_source_closed(unsigned node_idx) {
+        _sources_closed[node_idx] = true;
+    }
+    future<sink_type, source_type> get_sink_source(gms::inet_address remote_node, unsigned node_idx) {
+        if (_sinks[node_idx] && _sources[node_idx]) {
+            return make_ready_future<sink_type, source_type>(_sinks[node_idx].value(), _sources[node_idx].value());
+        }
+        if (_sinks[node_idx] || _sources[node_idx]) {
+            return make_exception_future<sink_type, source_type>(std::runtime_error(format("sink or source is missing for node {}", remote_node)));
+        }
+        return _fn(_repair_meta_id, netw::messaging_service::msg_addr(remote_node)).then([this, node_idx] (rpc::sink<SinkType> sink, rpc::source<SourceType> source) mutable {
+            _sinks[node_idx].emplace(std::move(sink));
+            _sources[node_idx].emplace(std::move(source));
+            return make_ready_future<sink_type, source_type>(_sinks[node_idx].value(), _sources[node_idx].value());
+        });
+    }
+    future<> close() {
+        return parallel_for_each(boost::irange(unsigned(0), unsigned(_sources.size())), [this] (unsigned node_idx) mutable {
+            std::optional<rpc::sink<SinkType>>& sink_opt = _sinks[node_idx];
+            auto f = sink_opt ? sink_opt->close() : make_ready_future<>();
+            return f.finally([this, node_idx] {
+                std::optional<rpc::source<SourceType>>& source_opt = _sources[node_idx];
+                if (source_opt && !_sources_closed[node_idx]) {
+                    return repeat([&source_opt] () mutable {
+                        // Keep reading source until end of stream
+                        return (*source_opt)().then([] (std::optional<std::tuple<SourceType>> opt) mutable {
+                            if (opt) {
+                                return make_ready_future<stop_iteration>(stop_iteration::no);
+                            } else {
+                                return make_ready_future<stop_iteration>(stop_iteration::yes);
+                            }
+                        }).handle_exception([] (std::exception_ptr ep) {
+                            return make_ready_future<stop_iteration>(stop_iteration::yes);
+                        });
+                    });
+                }
+                return make_ready_future<>();
+            });
+        });
+    }
+};
+
 struct row_level_repair_metrics {
     seastar::metrics::metric_groups _metrics;
     uint64_t tx_row_nr{0};
