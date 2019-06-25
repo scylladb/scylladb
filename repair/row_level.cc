@@ -1238,6 +1238,23 @@ private:
     }
 
 public:
+    future<std::unordered_set<repair_hash>>
+    get_full_row_hashes_with_rpc_stream(gms::inet_address remote_node, unsigned node_idx) {
+        if (remote_node == _myip) {
+            return get_full_row_hashes_handler();
+        }
+        auto current_hashes = make_lw_shared<std::unordered_set<repair_hash>>();
+        return _sink_source_for_get_full_row_hashes.get_sink_source(remote_node, node_idx).then(
+                [this, current_hashes, remote_node, node_idx]
+                (rpc::sink<repair_stream_cmd>& sink, rpc::source<repair_hash_with_cmd>& source) mutable {
+            auto source_op = get_full_row_hashes_source_op(current_hashes, remote_node, node_idx, source);
+            auto sink_op = get_full_row_hashes_sink_op(sink);
+            return when_all_succeed(std::move(source_op), std::move(sink_op));
+        }).then([current_hashes] () mutable {
+            return std::move(*current_hashes);
+        });
+    }
+
     // RPC handler
     future<std::unordered_set<repair_hash>>
     get_full_row_hashes_handler() {
