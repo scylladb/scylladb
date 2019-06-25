@@ -694,6 +694,18 @@ void messaging_service::register_stream_mutation_fragments(std::function<future<
     register_handler(this, messaging_verb::STREAM_MUTATION_FRAGMENTS, std::move(func));
 }
 
+template<class SinkType, class SourceType>
+future<rpc::sink<SinkType>, rpc::source<SourceType>>
+do_make_sink_source(messaging_verb verb, uint32_t repair_meta_id, shared_ptr<messaging_service::rpc_protocol_client_wrapper> rpc_client, std::unique_ptr<messaging_service::rpc_protocol_wrapper>& rpc) {
+    return rpc_client->make_stream_sink<netw::serializer, SinkType>().then([&rpc, verb, repair_meta_id, rpc_client] (rpc::sink<SinkType> sink) mutable {
+        auto rpc_handler = rpc->make_client<rpc::source<SourceType> (uint32_t, rpc::sink<SinkType>)>(verb);
+        return rpc_handler(*rpc_client, repair_meta_id, sink).then_wrapped([sink, rpc_client] (future<rpc::source<SourceType>> source) mutable {
+            return (source.failed() ? sink.close() : make_ready_future<>()).then([sink = std::move(sink), source = std::move(source)] () mutable {
+                return make_ready_future<rpc::sink<SinkType>, rpc::source<SourceType>>(std::move(sink), std::move(source.get0()));
+            });
+        });
+    });
+}
 // Send a message for verb
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
