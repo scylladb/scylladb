@@ -583,6 +583,9 @@ private:
     std::vector<std::unordered_set<repair_hash>> _peer_row_hash_sets;
     // Gate used to make sure pending operation of meta data is done
     seastar::gate _gate;
+    sink_source_for_get_full_row_hashes _sink_source_for_get_full_row_hashes;
+    sink_source_for_get_row_diff _sink_source_for_get_row_diff;
+    sink_source_for_put_row_diff _sink_source_for_put_row_diff;
 public:
     repair_stats& stats() {
         return _stats;
@@ -642,14 +645,30 @@ public:
                     _seed,
                     repair_reader::is_local_reader(_repair_master || _same_sharding_config)
               )
-            , _repair_writer(_schema, _estimated_partitions, _nr_peer_nodes) {
+            , _repair_writer(_schema, _estimated_partitions, _nr_peer_nodes)
+            , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
+                    [] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return netw::get_local_messaging_service().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
+                })
+            , _sink_source_for_get_row_diff(_repair_meta_id, _nr_peer_nodes,
+                    [] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return netw::get_local_messaging_service().make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(repair_meta_id, addr);
+                })
+            , _sink_source_for_put_row_diff(_repair_meta_id, _nr_peer_nodes,
+                    [] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return netw::get_local_messaging_service().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
+                })
+            {
     }
 
 public:
     future<> stop() {
         auto gate_future = _gate.close();
         auto writer_future = _repair_writer.wait_for_writer_done();
-        return when_all_succeed(std::move(gate_future), std::move(writer_future));
+        auto f1 = _sink_source_for_get_full_row_hashes.close();
+        auto f2 = _sink_source_for_get_row_diff.close();
+        auto f3 = _sink_source_for_put_row_diff.close();
+        return when_all_succeed(std::move(gate_future), std::move(writer_future), std::move(f1), std::move(f2), std::move(f3));
     }
 
     static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map() {
