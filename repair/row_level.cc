@@ -1060,7 +1060,11 @@ private:
     get_row_diff(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
         std::list<repair_row> rows;
         if (needs_all_rows) {
-            rows = _working_row_buf;
+            if (!_repair_master || _nr_peer_nodes == 1) {
+                rows = std::move(_working_row_buf);
+            } else {
+                rows = _working_row_buf;
+            }
         } else {
             rows = boost::copy_range<std::list<repair_row>>(_working_row_buf |
                     boost::adaptors::filtered([&set_diff] (repair_row& r) { return set_diff.count(r.hash()) > 0; }));
