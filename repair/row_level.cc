@@ -612,6 +612,9 @@ public:
     const repair_hash& working_row_buf_combined_hash() const {
         return _working_row_buf_combined_hash;
     }
+    bool use_rpc_stream() const {
+        return is_rpc_stream_supported(_algo);
+    }
 
 public:
     repair_meta(
