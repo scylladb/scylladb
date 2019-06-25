@@ -383,6 +383,35 @@ static void verify_all_are_used(const Json::Value& req, const char* field,
     }
 }
 
+// Given a parsed::value, which can refer either to a constant value from
+// ExpressionAttributeValues, to the value of some attribute, or to a function
+// of other values, this function calculates the resulting value.
+static Json::Value calculate_value(const parsed::value& v,
+        const Json::Value& expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_values) {
+    if (v.is_valref()) {
+        auto& valref = v.as_valref();
+        const Json::Value& value = expression_attribute_values.get(valref, Json::nullValue);
+        if (value.isNull()) {
+            throw api_error("ValidationException",
+                format("ExpressionAttributeValues missing entry '{}' required by UpdateExpression", valref));
+        }
+        used_attribute_values.emplace(std::move(valref));
+        return value;
+    } else if (v.is_function_call()) {
+        auto& f = v.as_function_call();
+        // FIXME: calculate parameter values and support the known functions
+        throw api_error("ValidationException",
+            format("UpdateExpression: unsupported function '{}' called.", f._function_name));
+    } else if (v.is_path()) {
+        // FIXME: support path value (read before write).
+        throw api_error("ValidationException", "UpdateExpression: unsupported value type.");
+    }
+    // Can't happen
+    return Json::Value::null;
+
+}
+
 future<json::json_return_type> executor::update_item(std::string content) {
     _stats.api_operations.update_item++;
     Json::Value update_info = json::to_json_value(content);
@@ -435,13 +464,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
             }
             if (action.is_set()) {
                 auto a = action.as_set();
-                // FIXME: this code is for rhs being a value reference - ":val". Need to support the other options!!
-                const Json::Value& value = update_info["ExpressionAttributeValues"].get(a._rhs, Json::nullValue);
-                if (value.isNull()) {
-                    throw api_error("ValidationException",
-                            format("ExpressionAttributeValues missing entry '{}' required by UpdateExpression", a._rhs));
-                }
-                used_attribute_values.emplace(std::move(a._rhs));
+                auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_values);
                 bytes val = serialize_item(value);
                 attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
             } else if (action.is_remove()) {
