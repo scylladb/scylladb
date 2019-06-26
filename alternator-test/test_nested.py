@@ -29,6 +29,15 @@ def test_nested_document_attribute_overwrite(test_table_s):
     test_table_s.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': {'c': 5}, 'Action': 'PUT'}})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': {'c': 5}, 'd': 5}
 
+# Moreover, we can overwrite an entire nested document by, say, a string,
+# and that's also fine.
+def test_nested_document_attribute_overwrite_2(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'b': 3, 'c': 4}, 'd': 5})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': {'b': 3, 'c': 4}, 'd': 5}
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': 'hi', 'Action': 'PUT'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi', 'd': 5}
+
 # Verify that AttributeUpdates cannot be used to update a nested attribute -
 # trying to use a dot in the name of the attribute, will just create one with
 # an actual dot in its name.
