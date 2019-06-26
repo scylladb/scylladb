@@ -1491,6 +1491,7 @@ relationType returns [const cql3::operator_type* op = nullptr]
     | '>'  { $op = &cql3::operator_type::GT; }
     | '>=' { $op = &cql3::operator_type::GTE; }
     | '!=' { $op = &cql3::operator_type::NEQ; }
+    | K_LIKE { $op = &cql3::operator_type::LIKE; }
     ;
 
 relation[std::vector<cql3::relation_ptr>& clauses]
@@ -1736,6 +1737,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_JSON
         | K_CACHE
         | K_BYPASS
+        | K_LIKE
         | K_PER
         | K_PARTITION
         | K_GROUP
@@ -1890,7 +1892,9 @@ K_PARTITION:   P A R T I T I O N;
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
 
-K_GROUP:      G R O U P;
+K_GROUP:       G R O U P;
+
+K_LIKE:        L I K E;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
