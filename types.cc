@@ -2795,7 +2795,7 @@ collection_type_impl::merge(collection_mutation_view a, collection_mutation_view
             compare,
             merge);
     merged.tomb = std::max(aa.tomb, bb.tomb);
-    return serialize_mutation_form(merged);
+    return serialize_mutation_form(std::move(merged));
   });
  });
 }
@@ -2825,7 +2825,7 @@ collection_type_impl::difference(collection_mutation_view a, collection_mutation
     if (aa.tomb > bb.tomb) {
         diff.tomb = aa.tomb;
     }
-    return serialize_mutation_form(diff);
+    return serialize_mutation_form(std::move(diff));
   });
  });
 }
