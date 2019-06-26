@@ -1817,7 +1817,8 @@ class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subsc
 
 repair_service::repair_service(distributed<gms::gossiper>& gossiper)
     : _gossiper(gossiper)
-    , _gossip_helper(make_shared<row_level_repair_gossip_helper>()) {
+    , _gossip_helper(make_shared<row_level_repair_gossip_helper>())
+    , _tracker(smp::count) {
     _gossiper.local().register_(_gossip_helper);
 }
 

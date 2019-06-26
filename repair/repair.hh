@@ -205,6 +205,47 @@ public:
     }
 };
 
+// The repair_tracker tracks ongoing repair operations and their progress.
+// A repair which has already finished successfully is dropped from this
+// table, but a failed repair will remain in the table forever so it can
+// be queried about more than once (FIXME: reconsider this. But note that
+// failed repairs should be rare anwyay).
+// This object is not thread safe, and must be used by only one cpu.
+class tracker {
+private:
+    // Each repair_start() call returns a unique int which the user can later
+    // use to follow the status of this repair with repair_status().
+    // We can't use the number 0 - if repair_start() returns 0, it means it
+    // decide quickly that there is nothing to repair.
+    int _next_repair_command = 1;
+    // Note that there are no "SUCCESSFUL" entries in the "status" map:
+    // Successfully-finished repairs are those with id < _next_repair_command
+    // but aren't listed as running or failed the status map.
+    std::unordered_map<int, repair_status> _status;
+    // Used to allow shutting down repairs in progress, and waiting for them.
+    seastar::gate _gate;
+    // Set when the repair service is being shutdown
+    std::atomic_bool _shutdown alignas(seastar::cache_line_size);
+    // Map repair id into repair_info. The vector has smp::count elements, each
+    // element will be accessed by only one shard.
+    std::vector<std::unordered_map<int, lw_shared_ptr<repair_info>>> _repairs;
+public:
+    explicit tracker(size_t nr_shards);
+    ~tracker();
+    void start(int id);
+    void done(int id, bool succeeded);
+    repair_status get(int id);
+    int next_repair_command();
+    future<> shutdown();
+    void check_in_shutdown();
+    void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
+    void remove_repair_info(int id);
+    lw_shared_ptr<repair_info> get_repair_info(int id);
+    std::vector<int> get_active() const;
+    size_t nr_running_repair_jobs();
+    void abort_all_repairs();
+};
+
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range);
 
