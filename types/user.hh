@@ -35,7 +35,7 @@ private:
 public:
     using native_type = std::vector<data_value>;
     user_type_impl(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types)
-            : tuple_type_impl(make_name(keyspace, name, field_names, field_types, false /* frozen */), field_types)
+            : tuple_type_impl(kind::user, make_name(keyspace, name, field_names, field_types, false /* frozen */), field_types)
             , _keyspace(keyspace)
             , _name(name)
             , _field_names(field_names) {

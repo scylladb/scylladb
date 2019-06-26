@@ -436,6 +436,41 @@ class abstract_type : public enable_shared_from_this<abstract_type> {
     std::optional<uint32_t> _value_length_if_fixed;
     data::type_imr_descriptor _imr_state;
 public:
+    enum class kind : int8_t {
+        ascii,
+        boolean,
+        byte,
+        bytes,
+        counter,
+        date,
+        decimal,
+        double_kind,
+        duration,
+        empty,
+        float_kind,
+        inet,
+        int32,
+        list,
+        long_kind,
+        map,
+        reversed,
+        set,
+        short_kind,
+        simple_date,
+        time,
+        timestamp,
+        timeuuid,
+        tuple,
+        user,
+        utf8,
+        uuid,
+        varint,
+    };
+private:
+    kind _kind;
+public:
+    kind get_kind() const { return _kind; }
+
     enum class cql3_kind : int8_t {
         ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, EMPTY, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARINT, TIMEUUID, DATE, TIME, DURATION
     };
@@ -463,8 +498,8 @@ public:
         cql3_kind::DURATION>;
     using cql3_kind_enum_set = enum_set<cql3_kind_enum>;
 
-    abstract_type(sstring name, std::optional<uint32_t> value_length_if_fixed, data::type_info ti)
-        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti) {}
+    abstract_type(kind k, sstring name, std::optional<uint32_t> value_length_if_fixed, data::type_info ti)
+        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti), _kind(k) {}
     virtual ~abstract_type() {}
     const data::type_imr_descriptor& imr_state() const { return _imr_state; }
     virtual void serialize(const void* value, bytes::iterator& out) const = 0;
@@ -889,7 +924,7 @@ class reversed_type_impl : public abstract_type {
 
     data_type _underlying_type;
     reversed_type_impl(data_type t)
-        : abstract_type("org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
+        : abstract_type(kind::reversed, "org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
                         t->value_length_if_fixed(), t->imr_state().type_info())
         , _underlying_type(t)
     {}

@@ -50,8 +50,8 @@ public:
     const kind& _kind;
 
 protected:
-    explicit collection_type_impl(sstring name, const kind& k)
-            : abstract_type(std::move(name), {}, data::type_info::make_collection()), _kind(k) {}
+    explicit collection_type_impl(abstract_type::kind ak, sstring name, const kind& k)
+            : abstract_type(ak, std::move(name), {}, data::type_info::make_collection()), _kind(k) {}
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
     struct mutation {
