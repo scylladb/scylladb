@@ -118,11 +118,14 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     size_tiered_compaction_strategy_options _options;
     compaction_backlog_tracker _backlog_tracker;
 
-    // Return a list of pair of shared_sstable and its respective size.
+    // Return a vector of pair of shared_sstable and its respective size, sorted by its size
     std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) const;
 
-    // Group files of similar size into buckets.
+    // Group files of similar size into buckets, given a vector of SSTables.
     std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables) const;
+
+    // Group files of similar size into buckets, given a sorted vector of <sstable, size_of_sstable> pairs, sorted by sizes.
+    std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<std::pair<sstables::shared_sstable, uint64_t>>& sstables) const;
 
     // Maybe return a bucket of sstables to compact
     std::vector<sstables::shared_sstable>
@@ -187,17 +190,20 @@ size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vect
         sstable_length_pairs.emplace_back(sstable, sstable_size);
     }
 
+    std::sort(sstable_length_pairs.begin(), sstable_length_pairs.end(), [] (auto& i, auto& j) {
+        return i.second < j.second;
+    });
+
     return sstable_length_pairs;
 }
 
 inline std::vector<std::vector<sstables::shared_sstable>>
 size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables) const {
-    // sstables sorted by size of its data file.
-    auto sorted_sstables = create_sstable_and_length_pairs(sstables);
+    return get_buckets(create_sstable_and_length_pairs(sstables));
+}
 
-    std::sort(sorted_sstables.begin(), sorted_sstables.end(), [] (auto& i, auto& j) {
-        return i.second < j.second;
-    });
+inline std::vector<std::vector<sstables::shared_sstable>>
+size_tiered_compaction_strategy::get_buckets(const std::vector<std::pair<sstables::shared_sstable, uint64_t>>& sorted_sstables) const {
 
     std::map<size_t, std::vector<sstables::shared_sstable>> buckets;
 
@@ -289,7 +295,8 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
 
     // TODO: Add support to filter cold sstables (for reference: SizeTieredCompactionStrategy::filterColdSSTables).
 
-    auto buckets = get_buckets(candidates);
+    auto sorted_sstable_pairs = create_sstable_and_length_pairs(candidates);
+    auto buckets = get_buckets(sorted_sstable_pairs);
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
@@ -302,6 +309,16 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
         return sstables::compaction_descriptor(std::move(most_interesting));
     }
 
+    if (sorted_sstable_pairs.size() > 1) {
+        // There is really nothing else to do within a tier, meaning we don't have a single tier with at least two
+        // SSTables. So we start going cross-tier. We start with the smallest SSTables possible, in the hopes that we
+        // will not have to fire a many-TB compaction for no reason, and something better will appear for us to do in
+        // the mean time.
+        std::vector<sstables::shared_sstable> cross_tier({sorted_sstable_pairs[0].first, sorted_sstable_pairs[1].first});
+        auto desc = sstables::compaction_descriptor(std::move(cross_tier));
+        desc.idle = true;
+        return desc;
+    } else {
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
     // ratio is greater than threshold.
     // prefer oldest sstables from biggest size tiers because they will be easier to satisfy conditions for
@@ -322,6 +339,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
         auto desc = sstables::compaction_descriptor({ *it });
         desc.idle = true;
         return desc;
+    }
     }
     return sstables::compaction_descriptor();
 }
