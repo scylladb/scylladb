@@ -57,7 +57,8 @@ public:
 // the request (":val"), a path to an attribute from the existing item
 // (e.g., "a.b[3].c"), or a function of other such values.
 // Note that the real right-hand-side of an assignment is actually a bit
-// more general - it allows either a value, or a value+value or value-value.
+// more general - it allows either a value, or a value+value or value-value -
+// see class set_rhs below.
 class value {
 public:
     struct function_call {
@@ -99,13 +100,33 @@ public:
     }
 };
 
+// The right-hand-side of a SET in an update expression can be either a
+// single value (see above), or value+value, or value-value.
+class set_rhs {
+public:
+    char _op;  // '+', '-', or 'v''
+    value _v1;
+    value _v2;
+    void set_value(value&& v1) {
+        _op = 'v';
+        _v1 = std::move(v1);
+    }
+    void set_plus(value&& v2) {
+        _op = '+';
+        _v2 = std::move(v2);
+    }
+    void set_minus(value&& v2) {
+        _op = '-';
+        _v2 = std::move(v2);
+    }
+};
+
 class update_expression {
 public:
     struct action {
         path _path;
         struct set {
-            // TODO: needs to be rhs type, not just value (also value+value, value-value)
-            value _rhs;
+            set_rhs _rhs;
         };
         struct remove {
         };
@@ -118,9 +139,9 @@ public:
         std::variant<set, remove, add, del> _action;
 
         // FIXME: rhs type, not just one value, also value+value, value-value
-        void assign_set(path p, value v) {
+        void assign_set(path p, set_rhs rhs) {
             _path = std::move(p);
-            _action = set { std::move(v) };
+            _action = set { std::move(rhs) };
         }
         void assign_remove(path p) {
             _path = std::move(p);

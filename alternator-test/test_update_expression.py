@@ -5,6 +5,7 @@ import string
 
 import pytest
 from botocore.exceptions import ClientError
+from decimal import Decimal
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(length))
@@ -319,7 +320,6 @@ def test_update_expression_non_existant_clause(test_table_s):
 # Test support for "SET a = :val1 + :val2", "SET a = :val1 - :val2"
 # Only exactly these combinations work - e.g., it's a syntax error to
 # try to add three. Trying to add a string fails.
-@pytest.mark.xfail(reason="plus and minus in SET not yet implemented")
 def test_update_expression_plus_basic(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -335,15 +335,33 @@ def test_update_expression_plus_basic(test_table_s):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET b = :val1 + :val2 + :val3',
             ExpressionAttributeValues={':val1': 4, ':val2': 3, ':val3': 2})
-    # Trying to add a string value fails, saying "Incorrect operand type for
+    # Only numeric values can be added - other things like strings or lists
+    # cannot be added, and we get an error like "Incorrect operand type for
     # operator or function; operator or function: +, operand type: S".
-    # Interestingly, this implies DynamoDB just handles + and - similarly to a
-    # two-parameter function, and we can do this in our implementation as well.
-    # But not quite: see test_update_expression_function_plus_nesting.
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET b = :val1 + :val2',
             ExpressionAttributeValues={':val1': 'dog', ':val2': 3})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = :val1 + :val2',
+            ExpressionAttributeValues={':val1': ['a', 'b'], ':val2': ['1', '2']})
+
+# While most of the Alternator code just saves high-precision numbers
+# unchanged, the "+" and "-" operations need to calculate with them, and
+# we should check the calculation isn't done with some lower-precision
+# representation, e.g., double
+@pytest.mark.xfail(reason="plus and minus implemented with wrong precision")
+def test_update_expression_plus_precision(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val1 + :val2',
+        ExpressionAttributeValues={':val1': Decimal("1"), ':val2': Decimal("10000000000000000000000")})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': Decimal("10000000000000000000001")}
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val2 - :val1',
+        ExpressionAttributeValues={':val1': Decimal("1"), ':val2': Decimal("10000000000000000000000")})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': Decimal("9999999999999999999999")}
 
 # Test support for "SET a = b + :val2" et al., i.e., a version of the
 # above test_update_expression_plus_basic with read before write.
