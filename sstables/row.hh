@@ -1346,7 +1346,12 @@ public:
             _consumer.on_end_of_stream();
             return;
         }
-        if (_state != state::PARTITION_START || _prestate != prestate::NONE) {
+
+        // We may end up in state::DELETION_TIME after consuming last partition's end marker
+        // and proceeding to attempt to parse the next partition, since state::DELETION_TIME
+        // is the first state corresponding to the contents of a new partition.
+        if (_state != state::DELETION_TIME
+                && (_state != state::PARTITION_START || _prestate != prestate::NONE)) {
             throw malformed_sstable_exception("end of input, but not end of partition");
         }
     }

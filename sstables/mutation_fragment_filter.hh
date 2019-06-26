@@ -87,8 +87,8 @@ public:
             return result::store_and_finish;
         }
         bool inside_requested_ranges = _walker.advance_to(pos);
-        _out_of_range |= _walker.out_of_range();
         if (!inside_requested_ranges) {
+            _out_of_range |= _walker.out_of_range();
             return result::ignore;
         }
         return result::emit;
@@ -96,8 +96,8 @@ public:
 
     result apply(const range_tombstone& rt) {
         bool inside_requested_ranges = _walker.advance_to(rt.position(), rt.end_position());
-        _out_of_range |= _walker.out_of_range();
         if (!inside_requested_ranges) {
+            _out_of_range |= _walker.out_of_range();
             return result::ignore;
         }
         if (is_after_fwd_window(rt.position())) {
