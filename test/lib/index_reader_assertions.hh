@@ -35,10 +35,7 @@ public:
     { }
 
     index_reader_assertions& has_monotonic_positions(const schema& s) {
-        auto pos_cmp = [&s] (const sstables::promoted_index_block& lhs, const sstables::promoted_index_block& rhs) {
-            sstables::promoted_index_block_compare cmp(s);
-            return cmp(rhs.start(s), lhs.end(s));
-        };
+        auto pos_cmp = sstables::promoted_index_block_compare(s);
         auto rp_cmp = dht::ring_position_comparator(s);
         auto prev = dht::ring_position::min();
         _r->read_partition_data().get();
@@ -54,22 +51,14 @@ public:
 
             prev = rp;
 
-            while (e.get_read_pi_blocks_count() < e.get_total_pi_blocks_count()) {
-                e.get_next_pi_blocks().get();
-                auto* infos = e.get_pi_blocks();
-                if (infos->empty()) {
-                    continue;
+            sstables::clustered_index_cursor& cur = e.get_promoted_index()->cursor();
+            std::optional<sstables::promoted_index_block_position> prev_end;
+            while (auto ei_opt = cur.next_entry().get0()) {
+                sstables::clustered_index_cursor::entry_info& ei = *ei_opt;
+                if (prev_end && pos_cmp(ei.start, *prev_end)) {
+                    BOOST_FAIL(format("Index blocks are not monotonic: {} > {}", *prev_end, ei.start));
                 }
-                auto it = std::adjacent_find(infos->begin(), infos->end(), pos_cmp);
-                if (it != infos->end()) {
-                    std::cout << "promoted index:\n";
-                    for (auto& e : *infos) {
-                        std::cout << "  " << e.start(s) << "-" << e.end(s)
-                                  << ": +" << e.offset() << " len=" << e.width() << std::endl;
-                    }
-                    auto next = std::next(it);
-                    BOOST_FAIL(format("Index blocks are not monotonic: {} >= {}", it->end(s), next->start(s)));
-                }
+                prev_end = ei.end;
             }
             _r->advance_to_next_partition().get();
         }
@@ -79,7 +68,8 @@ public:
     index_reader_assertions& is_empty(const schema& s) {
         _r->read_partition_data().get();
         while (!_r->eof()) {
-            BOOST_REQUIRE(_r->current_partition_entry().get_total_pi_blocks_count() == 0);
+            sstables::index_entry& ie = _r->current_partition_entry();
+            BOOST_REQUIRE(!ie.get_promoted_index() || ie.get_promoted_index()->get_promoted_index_size() == 0);
             _r->advance_to_next_partition().get();
         }
         return *this;

@@ -484,60 +484,99 @@ public:
     void switch_to_consume_until_mode(position_in_partition_view pos) { _pos = pos; _mode = consuming_mode::consume_until; }
     promoted_index_blocks& get_pi_blocks() { return _pi_blocks; };
 
-    // This constructor is used for ka/la format which does not have information about columns fixed lengths
-    promoted_index_blocks_reader(reader_permit permit, input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
-                                 const schema& s, uint64_t start, uint64_t maxlen)
-        : continuous_data_consumer(std::move(permit), std::move(promoted_index_stream), start, maxlen)
-        , _total_num_blocks(num_blocks)
-        , _num_blocks_left(num_blocks)
-        , _s(s)
-    {}
-
-    // This constructor is used for mc format which requires information about columns fixed lengths for parsing
+    // For the mc format clustering_values_fixed_lengths must be engaged. When not engaged ka/la is assumed.
     promoted_index_blocks_reader(reader_permit permit, input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
                                  const schema& s, uint64_t start, uint64_t maxlen,
-                                 column_values_fixed_lengths&& clustering_values_fixed_lengths)
-        : continuous_data_consumer(std::move(permit), std::move(promoted_index_stream), start, maxlen)
+                                 std::optional<column_values_fixed_lengths> clustering_values_fixed_lengths)
+        : continuous_data_consumer(permit, std::move(promoted_index_stream), start, maxlen)
         , _total_num_blocks{num_blocks}
         , _num_blocks_left{num_blocks}
         , _s{s}
-        , _ctx{m_parser_context{std::move(clustering_values_fixed_lengths)}}
-    {}
+    {
+        if (clustering_values_fixed_lengths) {
+            _ctx.emplace<m_parser_context>(m_parser_context{std::move(*clustering_values_fixed_lengths)});
+        }
+    }
+};
+
+// Cursor over the index for clustered elements of a single partition.
+//
+// The user is expected to call advance_to() for monotonically increasing positions
+// in order to check if the index has information about more precise location
+// of the fragments relevant for the range starting at given position.
+//
+// The user must serialize all async methods. The next call may start only when the future
+// returned by the previous one has resolved.
+//
+// The user must call close() and wait for it to resolve before destroying.
+//
+class clustered_index_cursor {
+public:
+    // Position of indexed elements in the data file realative to the start of the partition.
+    using offset_in_partition = uint64_t;
+
+    struct skip_info {
+        offset_in_partition offset;
+        tombstone active_tombstone;
+        position_in_partition active_tombstone_pos;
+    };
+
+    struct entry_info {
+        promoted_index_block_position start;
+        promoted_index_block_position end;
+        offset_in_partition offset;
+    };
+
+    virtual ~clustered_index_cursor() {};
+    virtual future<> close() = 0;
+
+    // Advances the cursor to given position. When the cursor has more accurate information about
+    // location of the fragments from the range [pos, +inf) in the data file (since it was last advanced)
+    // it resolves with an engaged optional containing skip_info.
+    //
+    // The index may not be precise, so fragments from the range [pos, +inf) may be located after the
+    // position indicated by skip_info. It is guaranteed that no such fragments are located before the returned position.
+    //
+    // Offsets returned in skip_info are monotonically increasing.
+    //
+    // Must be called for non-decreasing positions.
+    // The caller must ensure that pos remains valid until the future resolves.
+    virtual future<std::optional<skip_info>> advance_to(position_in_partition_view pos) = 0;
+
+    // Determines the data file offset relative to the start of the partition such that fragments
+    // from the range (-inf, pos] are located before that offset.
+    //
+    // If such offset cannot be determined in a cheap way, returns a disengaged optional.
+    //
+    // Does not advance the cursor.
+    //
+    // The caller must ensure that pos remains valid until the future resolves.
+    virtual future<std::optional<offset_in_partition>> probe_upper_bound(position_in_partition_view pos) = 0;
+
+    // Returns skip information about the next position after the cursor
+    // or nullopt if there is no information about further positions.
+    //
+    // When entry_info is returned, the cursor was advanced to entry_info::start.
+    virtual future<std::optional<entry_info>> next_entry() = 0;
 };
 
 class promoted_index {
     deletion_time _del_time;
     uint32_t _promoted_index_size;
-    promoted_index_blocks_reader _reader;
+    std::unique_ptr<clustered_index_cursor> _cursor;
     bool _reader_closed = false;
-
 public:
-    promoted_index(const schema& s, reader_permit permit, deletion_time del_time, input_stream<char>&& promoted_index_stream,
-                   uint32_t promoted_index_size, uint32_t blocks_count)
+    promoted_index(const schema& s, deletion_time del_time, uint32_t promoted_index_size, std::unique_ptr<clustered_index_cursor> index)
             : _del_time{del_time}
             , _promoted_index_size(promoted_index_size)
-            , _reader{std::move(permit), std::move(promoted_index_stream), blocks_count, s, 0, promoted_index_size}
-    {}
-
-    promoted_index(const schema& s, reader_permit permit, deletion_time del_time, input_stream<char>&& promoted_index_stream,
-                   uint32_t promoted_index_size, uint32_t blocks_count, column_values_fixed_lengths clustering_values_fixed_lengths)
-            : _del_time{del_time}
-            , _promoted_index_size(promoted_index_size)
-            , _reader{std::move(permit), std::move(promoted_index_stream), blocks_count, s, 0, promoted_index_size, std::move(clustering_values_fixed_lengths)}
-    {}
+            , _cursor(std::move(index))
+    { }
 
     [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }
     [[nodiscard]] uint32_t get_promoted_index_size() const { return _promoted_index_size; }
-    [[nodiscard]] promoted_index_blocks_reader& get_reader() { return _reader; };
-    [[nodiscard]] const promoted_index_blocks_reader& get_reader() const { return _reader; };
-    future<> close_reader() {
-        if (!_reader_closed) {
-            _reader_closed = true;
-            return _reader.close();
-        }
-
-        return make_ready_future<>();
-    }
+    [[nodiscard]] clustered_index_cursor& cursor() { return *_cursor; };
+    [[nodiscard]] const clustered_index_cursor& cursor() const { return *_cursor; };
+    future<> close_reader() { return _cursor->close(); }
 };
 
 class index_entry {
@@ -575,8 +614,6 @@ public:
         return {};
     }
 
-    uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
-
     index_entry(const schema& s, temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
         : _s(std::cref(s))
         , _key(std::move(key))
@@ -587,45 +624,11 @@ public:
     index_entry(index_entry&&) = default;
     index_entry& operator=(index_entry&&) = default;
 
-    // Reads promoted index blocks from the stream until it finds the upper bound
-    // for a given position.
-    // Returns the index of the element right before the upper bound one.
-    future<size_t> get_pi_blocks_until(position_in_partition_view pos) {
-        if (!_index) {
-            return make_ready_future<size_t>(0);
-        }
+    // Can be nullptr
+    const std::unique_ptr<promoted_index>& get_promoted_index() const { return _index; }
+    std::unique_ptr<promoted_index>& get_promoted_index() { return _index; }
+    uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
 
-        auto& reader = _index->get_reader();
-        reader.switch_to_consume_until_mode(pos);
-        promoted_index_blocks& blocks = reader.get_pi_blocks();
-        erase_all_but_last_two(blocks);
-        return reader.consume_input().then([this, &reader] {
-            return reader.get_current_pi_index();
-        });
-    }
-
-    // Unconditionally reads the promoted index blocks from the next data buffer
-    future<> get_next_pi_blocks() {
-        if (!_index) {
-            return make_ready_future<>();
-        }
-
-        auto& reader = _index->get_reader();
-        promoted_index_blocks& blocks = reader.get_pi_blocks();
-        blocks = promoted_index_blocks{};
-        reader.switch_to_consume_next_mode();
-        return reader.consume_input();
-    }
-
-    [[nodiscard]] uint32_t get_total_pi_blocks_count() const {
-        return _index ? _index->get_reader().get_total_num_blocks() : 0;
-    }
-    [[nodiscard]] uint32_t get_read_pi_blocks_count() const {
-        return _index ? _index->get_reader().get_read_num_blocks() : 0;
-    }
-    [[nodiscard]] promoted_index_blocks* get_pi_blocks() {
-        return _index ? &_index->get_reader().get_pi_blocks() : nullptr;
-    }
     future<> close_pi_stream() {
         if (_index) {
             return _index->close_reader();
