@@ -19,13 +19,15 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "multishard_writer.hh"
+#include "mutation_writer/multishard_writer.hh"
 #include "mutation_reader.hh"
 #include "mutation_fragment.hh"
 #include "schema_registry.hh"
 #include <vector>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/queue.hh>
+
+namespace mutation_writer {
 
 class shard_writer {
 private:
@@ -195,3 +197,5 @@ future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
         return writer();
     });
 }
+
+} // namespace mutation_writer

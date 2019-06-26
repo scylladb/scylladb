@@ -58,6 +58,8 @@
 #include "time_window_compaction_strategy.hh"
 #include "sstables/compaction_backlog_manager.hh"
 #include "sstables/size_tiered_backlog_tracker.hh"
+#include "mutation_source_metadata.hh"
+#include "mutation_writer/timestamp_based_splitting_writer.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
 logging::logger leveled_manifest::logger("LeveledManifest");
@@ -473,6 +475,14 @@ compaction_strategy_impl::get_resharding_jobs(column_family& cf, std::vector<sst
     return jobs;
 }
 
+uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
+    return partition_estimate;
+}
+
+reader_consumer compaction_strategy_impl::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) {
+    return end_consumer;
+}
+
 // The backlog for TWCS is just the sum of the individual backlogs in each time window.
 // We'll keep various SizeTiered backlog tracker objects-- one per window for the static SSTables.
 // We then scan the current compacting and in-progress writes and matching them to existing time
@@ -720,6 +730,61 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
     _use_clustering_key_filter = true;
 }
 
+uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
+    if (!ms_meta.min_timestamp || !ms_meta.max_timestamp) {
+        // Not enough information, we assume the worst
+        return partition_estimate / max_data_segregation_window_count;
+    }
+    const auto min_window = get_window_for(_options, *ms_meta.min_timestamp);
+    const auto max_window = get_window_for(_options, *ms_meta.max_timestamp);
+    return partition_estimate / (max_window - min_window + 1);
+}
+
+namespace {
+
+class classify_by_timestamp {
+    time_window_compaction_strategy_options _options;
+    std::vector<int64_t> _known_windows;
+
+public:
+    explicit classify_by_timestamp(time_window_compaction_strategy_options options) : _options(std::move(options)) { }
+    int64_t operator()(api::timestamp_type ts) {
+        const auto window = time_window_compaction_strategy::get_window_for(_options, ts);
+        if (const auto it = boost::find(_known_windows, window); it != _known_windows.end()) {
+            std::swap(*it, _known_windows.front());
+            return window;
+        }
+        if (_known_windows.size() <= time_window_compaction_strategy::max_data_segregation_window_count) {
+            _known_windows.push_back(window);
+            return window;
+        }
+        int64_t closest_window;
+        int64_t min_diff = std::numeric_limits<int64_t>::max();
+        for (const auto known_window : _known_windows) {
+            if (const auto diff = std::abs(known_window - window); diff < min_diff) {
+                min_diff = diff;
+                closest_window = known_window;
+            }
+        }
+        return closest_window;
+    };
+};
+
+} // anonymous namespace
+
+reader_consumer time_window_compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) {
+    if (ms_meta.min_timestamp && ms_meta.max_timestamp
+            && get_window_for(_options, *ms_meta.min_timestamp) == get_window_for(_options, *ms_meta.max_timestamp)) {
+        return end_consumer;
+    }
+    return [options = _options, end_consumer = std::move(end_consumer)] (flat_mutation_reader rd) mutable -> future<> {
+        return mutation_writer::segregate_by_timestamp(
+                std::move(rd),
+                classify_by_timestamp(std::move(options)),
+                std::move(end_consumer));
+    };
+}
+
 date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
     : compaction_strategy_impl(options)
     , _manifest(options)
@@ -801,6 +866,14 @@ compaction_strategy::make_sstable_set(schema_ptr schema) const {
 
 compaction_backlog_tracker& compaction_strategy::get_backlog_tracker() {
     return _compaction_strategy_impl->get_backlog_tracker();
+}
+
+uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
+    return _compaction_strategy_impl->adjust_partition_estimate(ms_meta, partition_estimate);
+}
+
+reader_consumer compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) {
+    return _compaction_strategy_impl->make_interposer_consumer(ms_meta, std::move(end_consumer));
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {

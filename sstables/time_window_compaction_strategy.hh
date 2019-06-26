@@ -143,6 +143,12 @@ class time_window_compaction_strategy : public compaction_strategy_impl {
     size_tiered_compaction_strategy_options _stcs_options;
     compaction_backlog_tracker _backlog_tracker;
 public:
+    // The maximum amount of buckets we segregate data into when writing into sstables.
+    // To prevent an explosion in the number of sstables we cap it.
+    // Better co-locate some windows into the same sstables than OOM.
+    static const uint64_t max_data_segregation_window_count = 100;
+
+public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cf, std::vector<shared_sstable> candidates) override {
         auto gc_before = gc_clock::now() - cf.schema()->gc_grace_seconds();
@@ -294,6 +300,11 @@ public:
         bucket.resize(n);
         return bucket;
     }
+
+    static int64_t
+    get_window_for(const time_window_compaction_strategy_options& options, api::timestamp_type ts) {
+        return get_window_lower_bound(options.sstable_window_size, to_timestamp_type(options.timestamp_resolution, ts));
+    }
 private:
     void update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks, int min_threshold) {
         int64_t n = 0;
@@ -326,6 +337,10 @@ public:
     virtual compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
+
+    virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) override;
+
+    virtual reader_consumer make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) override;
 };
 
 }
