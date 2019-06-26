@@ -1085,23 +1085,45 @@ private:
         });
     }
 
+    future<std::list<repair_row>>
+    copy_rows_from_working_row_buf() {
+        return do_with(std::list<repair_row>(), [this] (std::list<repair_row>& rows) {
+            return do_for_each(_working_row_buf, [this, &rows] (const repair_row& r) {
+                rows.push_back(r);
+            }).then([&rows] {
+                return std::move(rows);
+            });
+        });
+    }
+
+    future<std::list<repair_row>>
+    copy_rows_from_working_row_buf_within_set_diff(std::unordered_set<repair_hash> set_diff) {
+        return do_with(std::list<repair_row>(), std::move(set_diff),
+                [this] (std::list<repair_row>& rows, std::unordered_set<repair_hash>& set_diff) {
+            return do_for_each(_working_row_buf, [this, &set_diff, &rows] (const repair_row& r) {
+                if (set_diff.count(r.hash()) > 0) {
+                    rows.push_back(r);
+                }
+            }).then([&rows] {
+                return std::move(rows);
+            });
+        });
+    }
+
     // Return rows in the _working_row_buf with hash within the given sef_diff
     // Give a set of row hashes, return the corresponding rows
     // If needs_all_rows is set, return all the rows in _working_row_buf, ignore the set_diff
-    std::list<repair_row>
-    get_row_diff(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
-        std::list<repair_row> rows;
+    future<std::list<repair_row>>
+    get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
         if (needs_all_rows) {
+            std::list<repair_row> rows;
             if (!_repair_master || _nr_peer_nodes == 1) {
-                rows = std::move(_working_row_buf);
-            } else {
-                rows = _working_row_buf;
+                return make_ready_future<std::list<repair_row>>(std::move(_working_row_buf));
             }
+            return copy_rows_from_working_row_buf();
         } else {
-            rows = boost::copy_range<std::list<repair_row>>(_working_row_buf |
-                    boost::adaptors::filtered([&set_diff] (repair_row& r) { return set_diff.count(r.hash()) > 0; }));
+            return copy_rows_from_working_row_buf_within_set_diff(std::move(set_diff));
         }
-        return rows;
     }
 
     // Give a list of rows, apply the rows to disk and update the _working_row_buf and _peer_row_hash_sets if requested
@@ -1569,30 +1591,33 @@ public:
     }
 
     // RPC handler
-    future<repair_rows_on_wire> get_row_diff_handler(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows) {
-        return with_gate(_gate, [this, &set_diff, needs_all_rows] {
-            std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
-            return to_repair_rows_on_wire(std::move(row_diff));
+    future<repair_rows_on_wire> get_row_diff_handler(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows) {
+        return with_gate(_gate, [this, set_diff = std::move(set_diff), needs_all_rows] () mutable {
+            return get_row_diff(std::move(set_diff), needs_all_rows).then([this] (std::list<repair_row> row_diff) {
+                return to_repair_rows_on_wire(std::move(row_diff));
+            });
         });
     }
 
     // RPC API
     // Send rows in the _working_row_buf with hash within the given sef_diff
-    future<> put_row_diff(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node) {
+    future<> put_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node) {
         if (!set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
             }
-            std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
-            if (row_diff.size() != set_diff.size()) {
-                throw std::runtime_error("row_diff.size() != set_diff.size()");
-            }
-            stats().tx_row_nr += row_diff.size();
-            stats().tx_row_nr_peer[remote_node] += row_diff.size();
-            stats().tx_row_bytes += get_repair_rows_size(row_diff);
-            stats().rpc_call_nr++;
-            return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node] (repair_rows_on_wire rows)  {
-                return netw::get_local_messaging_service().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
+            auto sz = set_diff.size();
+            return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, sz] (std::list<repair_row> row_diff) {
+                if (row_diff.size() != sz) {
+                    throw std::runtime_error("row_diff.size() != set_diff.size()");
+                }
+                stats().tx_row_nr += row_diff.size();
+                stats().tx_row_nr_peer[remote_node] += row_diff.size();
+                stats().tx_row_bytes += get_repair_rows_size(row_diff);
+                stats().rpc_call_nr++;
+                return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node] (repair_rows_on_wire rows)  {
+                    return netw::get_local_messaging_service().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
+                });
             });
         }
         return make_ready_future<>();
@@ -1647,28 +1672,30 @@ private:
 
 public:
     future<> put_row_diff_with_rpc_stream(
-            const std::unordered_set<repair_hash>& set_diff,
+            std::unordered_set<repair_hash> set_diff,
             needs_all_rows_t needs_all_rows,
             gms::inet_address remote_node, unsigned node_idx) {
         if (!set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
             }
-            std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
-            if (row_diff.size() != set_diff.size()) {
-                throw std::runtime_error("row_diff.size() != set_diff.size()");
-            }
-            stats().tx_row_nr += row_diff.size();
-            stats().tx_row_nr_peer[remote_node] += row_diff.size();
-            stats().tx_row_bytes += get_repair_rows_size(row_diff);
-            stats().rpc_call_nr++;
-            return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
-                return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then(
-                        [this, rows = std::move(rows), remote_node, node_idx]
-                        (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
-                    auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
-                    auto sink_op = put_row_diff_sink_op(std::move(rows), sink, remote_node);
-                    return when_all_succeed(std::move(source_op), std::move(sink_op));
+            auto sz = set_diff.size();
+            return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, node_idx, sz] (std::list<repair_row> row_diff) {
+                if (row_diff.size() != sz) {
+                    throw std::runtime_error("row_diff.size() != set_diff.size()");
+                }
+                stats().tx_row_nr += row_diff.size();
+                stats().tx_row_nr_peer[remote_node] += row_diff.size();
+                stats().tx_row_bytes += get_repair_rows_size(row_diff);
+                stats().rpc_call_nr++;
+                return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
+                    return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then(
+                            [this, rows = std::move(rows), remote_node, node_idx]
+                            (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
+                        auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
+                        auto sink_op = put_row_diff_sink_op(std::move(rows), sink, remote_node);
+                        return when_all_succeed(std::move(source_op), std::move(sink_op));
+                    });
                 });
             });
         }
@@ -1704,7 +1731,7 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
         return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, set_diff = std::move(current_set_diff)] {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-            return rm->get_row_diff_handler(set_diff, repair_meta::needs_all_rows_t(needs_all_rows));
+            return rm->get_row_diff_handler(std::move(set_diff), repair_meta::needs_all_rows_t(needs_all_rows));
         }).then([sink] (repair_rows_on_wire rows_on_wire) mutable {
             if (rows_on_wire.empty()) {
                 return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
@@ -1995,7 +2022,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, set_diff = std::move(set_diff), needs_all_rows] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->get_row_diff_handler(set_diff, repair_meta::needs_all_rows_t(needs_all_rows));
+                return rm->get_row_diff_handler(std::move(set_diff), repair_meta::needs_all_rows_t(needs_all_rows));
             });
         });
         ms.register_repair_put_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
@@ -2308,9 +2335,9 @@ private:
             auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());
             rlogger.debug("Calling master.put_row_diff to node {}, set_diff={}, needs_all_rows={}", _all_live_peer_nodes[idx], set_diff.size(), needs_all_rows);
             if (master.use_rpc_stream()) {
-                return master.put_row_diff_with_rpc_stream(set_diff, needs_all_rows, _all_live_peer_nodes[idx], idx);
+                return master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx);
             } else {
-                return master.put_row_diff(set_diff, needs_all_rows, _all_live_peer_nodes[idx]);
+                return master.put_row_diff(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx]);
             }
         }).get();
         master.stats().round_nr_slow_path++;
