@@ -415,6 +415,10 @@ public:
         return index.supports_expression(_column_def, cql3::operator_type::LIKE);
     }
 
+    virtual bool is_LIKE() const override {
+        return true;
+    }
+
     virtual sstring to_string() const override {
         return format("LIKE({})", _value->to_string());
     }
