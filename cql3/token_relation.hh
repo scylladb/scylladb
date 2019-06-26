@@ -114,6 +114,10 @@ public:
             ::shared_ptr<variable_specifications> bound_names, bool isKey)
                     override;
 
+    ::shared_ptr<restrictions::restriction> new_LIKE_restriction(database& db,
+            schema_ptr schema,
+            ::shared_ptr<variable_specifications> bound_names) override;
+
     ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override;
 
     sstring to_string() const override;

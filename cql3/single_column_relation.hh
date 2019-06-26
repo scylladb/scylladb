@@ -183,6 +183,9 @@ protected:
         return ::make_shared<restrictions::single_column_restriction::contains>(column_def, std::move(term), is_key);
     }
 
+    virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(
+            database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) override;
+
     virtual ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override {
         return *_entity == from
             ? ::make_shared(single_column_relation(

@@ -160,6 +160,8 @@ public:
             // This case is not supposed to happen: statement_restrictions
             // constructor does not call this function for views' IS_NOT.
             throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", to_string()));
+        } else if (_relation_type == operator_type::LIKE) {
+            return new_LIKE_restriction(db, schema, bound_names);
         } else {
             throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {}", to_string()));
         }
@@ -219,6 +221,12 @@ public:
      */
     virtual ::shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names, bool isKey) = 0;
+
+    /**
+     * Creates a new LIKE restriction instance.
+     */
+    virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(database& db, schema_ptr schema,
+        ::shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
      * Renames an identifier in this Relation, if applicable.

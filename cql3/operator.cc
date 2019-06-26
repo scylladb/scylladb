@@ -53,5 +53,6 @@ const operator_type operator_type::CONTAINS(5, operator_type::CONTAINS, "CONTAIN
 const operator_type operator_type::CONTAINS_KEY(6, operator_type::CONTAINS_KEY, "CONTAINS_KEY");
 const operator_type operator_type::NEQ(8, operator_type::NEQ, "!=");
 const operator_type operator_type::IS_NOT(9, operator_type::IS_NOT, "IS NOT");
+const operator_type operator_type::LIKE(10, operator_type::LIKE, "LIKE");
 
 }
