@@ -414,6 +414,44 @@ static Json::Value list_concatenate(const Json::Value& v1, const Json::Value& v2
     return ret;
 }
 
+// Check if a given JSON object encodes a number (i.e., it is a {"N": [...]}
+// and returns an object representing it.
+// FIXME: returning double is wrong! It loses precision.
+static double unwrap_number(const Json::Value& v) {
+    if (!v.isObject() || v.size() != 1) {
+        throw api_error("ValidationException", "UpdateExpression: invalid number object");
+    }
+    auto it = v.begin();
+    if (it.key() != "N") {
+        throw api_error("ValidationException",
+                format("UpdateExpression: expected number, found type '{}'", it.key()));
+    }
+    if (!it->isString()) {
+        throw api_error("ValidationException", "UpdateExpression: improperly formatted number constant");
+    }
+    // FIXME: to not lose precision, we really need to do something like:
+    // return decimal_type->from_string(it->asString());
+    return std::stod(it->asString());
+}
+
+// Take two JSON-encoded numeric values ({"N": "thenumber"}) and return the
+// sum, again as a JSON-encoded number.
+static Json::Value number_add(const Json::Value& v1, const Json::Value& v2) {
+    auto n1 = unwrap_number(v1);
+    auto n2 = unwrap_number(v2);
+    Json::Value ret(Json::objectValue);
+    ret["N"] = n1 + n2; // FIXME: should convert to string without losing precision.
+    return ret;
+}
+
+static Json::Value number_subtract(const Json::Value& v1, const Json::Value& v2) {
+    auto n1 = unwrap_number(v1);
+    auto n2 = unwrap_number(v2);
+    Json::Value ret(Json::objectValue);
+    ret["N"] = n1 - n2; // FIXME: should convert to string without losing precision.
+    return ret;
+}
+
 // Given a parsed::value, which can refer either to a constant value from
 // ExpressionAttributeValues, to the value of some attribute, or to a function
 // of other values, this function calculates the resulting value.
@@ -454,6 +492,30 @@ static Json::Value calculate_value(const parsed::value& v,
     return Json::Value::null;
 
 }
+
+// Same as calculate_value() above, except takes a set_rhs, which may be
+// either a single value, or v1+v2 or v1-v2.
+static Json::Value calculate_value(const parsed::set_rhs& rhs,
+        const Json::Value& expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_values) {
+    switch(rhs._op) {
+    case 'v':
+        return calculate_value(rhs._v1, expression_attribute_values, used_attribute_values);
+    case '+': {
+        Json::Value v1 = calculate_value(rhs._v1, expression_attribute_values, used_attribute_values);
+        Json::Value v2 = calculate_value(rhs._v2, expression_attribute_values, used_attribute_values);
+        return number_add(v1, v2);
+    }
+    case '-': {
+        Json::Value v1 = calculate_value(rhs._v1, expression_attribute_values, used_attribute_values);
+        Json::Value v2 = calculate_value(rhs._v2, expression_attribute_values, used_attribute_values);
+        return number_subtract(v1, v2);
+    }
+    }
+    // Can't happen
+    return Json::Value::null;
+}
+
 
 future<json::json_return_type> executor::update_item(std::string content) {
     _stats.api_operations.update_item++;

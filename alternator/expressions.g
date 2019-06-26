@@ -157,13 +157,15 @@ update_expression_set_value returns [parsed::value v]:
      ')'
     ;
 
-// TODO: rhs can also be value+value or value-value.
-update_expression_set_rhs returns [parsed::value v]:
-    update_expression_set_value  { $v = $update_expression_set_value.v; }
+update_expression_set_rhs returns [parsed::set_rhs rhs]:
+    v=update_expression_set_value  { $rhs.set_value(std::move($v.v)); }
+    (   '+' v=update_expression_set_value  { $rhs.set_plus(std::move($v.v)); }
+      | '-' v=update_expression_set_value  { $rhs.set_minus(std::move($v.v)); }
+    )?
     ;
 
 update_expression_set_action returns [parsed::update_expression::action a]:
-    path '=' rhs=update_expression_set_rhs { $a.assign_set($path.p, $rhs.v); };
+    path '=' rhs=update_expression_set_rhs { $a.assign_set($path.p, $rhs.rhs); };
 
 update_expression_remove_action returns [parsed::update_expression::action a]:
     path { $a.assign_remove($path.p); };
