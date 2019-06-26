@@ -807,6 +807,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
     'tests/mutation_source_test.cc',
     'tests/data_model.cc',
     'tests/exception_utils.cc',
+    'tests/random_schema.cc',
 ]
 
 deps = {

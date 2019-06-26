@@ -317,6 +317,11 @@ using maybe_empty =
 class abstract_type;
 class data_value;
 
+struct ascii_native_type {
+    using primary_type = sstring;
+    primary_type string;
+};
+
 struct simple_date_native_type {
     using primary_type = uint32_t;
     primary_type days;
@@ -363,6 +368,7 @@ public:
     explicit data_value(bytes);
     data_value(sstring);
     data_value(const char*);
+    data_value(ascii_native_type);
     data_value(bool);
     data_value(int8_t);
     data_value(int16_t);
