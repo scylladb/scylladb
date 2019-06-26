@@ -119,6 +119,11 @@ private:
     void apply_properties_to(schema_builder& builder, const database&);
 
     void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind);
+
+    template <typename CreateTable>
+    future<shared_ptr<cql_transport::event::schema_change>> create_table_with_cdc(service::storage_proxy& proxy,
+                                                                                  schema_ptr,
+                                                                                  CreateTable&&);
 };
 
 class create_table_statement::raw_statement : public raw::cf_statement {
