@@ -54,19 +54,29 @@ inline bool operator!=(const processing_result& result, proceed value) {
     return !(result == value);
 }
 
-template <typename StateProcessor>
-class continuous_data_consumer {
-    using proceed = data_consumer::proceed;
-    StateProcessor& state_processor() {
-        return static_cast<StateProcessor&>(*this);
-    };
-protected:
-    reader_permit _permit;
-    input_stream<char> _input;
-    sstables::reader_position_tracker _stream_position;
-    // remaining length of input to read (if <0, continue until end of file).
-    uint64_t _remain;
+enum class read_status { ready, waiting };
 
+// Incremental parser for primitive data types.
+//
+// The parser is first programmed to read particular data type using
+// one of the read_*() methods and fed with buffers until it reaches
+// its final state.
+// When the final state is reached, the value can be collected from
+// the member field designated by the read method as the holder for
+// the result.
+//
+// Example usage:
+//
+//   Assuming that next_buf() provides the next temporary_buffer.
+//
+//   primitive_consumer pc;
+//   if (pc.read_32(next_buf()) == read_status::waiting) {
+//      while (pc.consume(next_buf()) == read_status::waiting) {}
+//   }
+//   return pc._u32;
+//
+class primitive_consumer {
+private:
     // state machine progress:
     enum class prestate {
         NONE,
@@ -84,6 +94,7 @@ protected:
         READING_SIGNED_VINT_WITH_LEN,
     } _prestate = prestate::NONE;
 
+public:
     // state for non-NONE prestates
     uint32_t _pos;
     // state for READING_U8, READING_U16, READING_U32, READING_U64 prestate
@@ -92,6 +103,8 @@ protected:
     uint32_t _u32;
     uint64_t _u64;
     int64_t _i64; // for reading signed vints
+    reader_permit _permit;
+private:
     union {
         char bytes[sizeof(uint64_t)];
         uint64_t uint64;
@@ -99,12 +112,11 @@ protected:
         uint16_t uint16;
         uint8_t  uint8;
     } _read_int;
+
     // state for READING_BYTES prestate
     temporary_buffer<char> _read_bytes;
     temporary_buffer<char>* _read_bytes_where; // which temporary_buffer to set, _key or _val?
 
-    enum class read_status { ready, waiting };
-private:
     inline read_status read_partial_int(temporary_buffer<char>& data, prestate next_state) {
         std::copy(data.begin(), data.end(), _read_int.bytes);
         _pos = data.size();
@@ -136,7 +148,7 @@ private:
         }
     }
     template <typename VintType, typename T>
-    inline void read_vint_with_len(temporary_buffer<char>& data, T& dest) {
+    inline read_status read_vint_with_len(temporary_buffer<char>& data, T& dest) {
         static_assert(std::is_same_v<T, typename VintType::value_type>, "Destination type mismatch");
         const auto n = std::min(_read_bytes.size() - _pos, data.size());
         std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
@@ -146,9 +158,13 @@ private:
             dest = VintType::deserialize(
                     bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size()));
             _prestate = prestate::NONE;
+            return read_status::ready;
         }
+        return read_status::waiting;
     };
-protected:
+public:
+    primitive_consumer(reader_permit permit) : _permit(std::move(permit)) {}
+
     inline read_status read_8(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint8_t)) {
             _u8 = consume_be<uint8_t>(data);
@@ -203,16 +219,6 @@ protected:
             return read_status::waiting;
         }
     }
-    data_consumer::processing_result skip(temporary_buffer<char>& data, uint32_t len) {
-        if (data.size() >= len) {
-            data.trim_front(len);
-            return proceed::yes;
-        } else {
-            auto left = len - data.size();
-            data.trim(0);
-            return skip_bytes{left};
-        }
-    }
     inline read_status read_short_length_bytes(temporary_buffer<char>& data, temporary_buffer<char>& where) {
         if (data.size() >= sizeof(uint16_t)) {
             _u16 = consume_be<uint16_t>(data);
@@ -257,12 +263,6 @@ protected:
             }
         }
     }
-
-    inline void process_buffer(temporary_buffer<char>& data) {
-        if (__builtin_expect((_prestate != prestate::NONE), 0)) {
-            do_process_buffer(data);
-        }
-    }
 private:
     // Reads bytes belonging to an integer of size len. Returns true
     // if a full integer is now available.
@@ -274,39 +274,43 @@ private:
         _pos += n;
         return _pos == len;
     }
-
-    // This is separated so that the compiler can inline "process_buffer". Because this chunk is too big,
-    // it usually won't if this is part of the main function
-    void do_process_buffer(temporary_buffer<char>& data) {
+public:
+    // Feeds data into the state machine.
+    // After the call, when data is not empty then active() can be assumed to be false.
+    read_status consume(temporary_buffer<char>& data) {
+        if (__builtin_expect(_prestate == prestate::NONE, true)) {
+            return read_status::ready;
+        }
         // We're in the middle of reading a basic type, which crossed
         // an input buffer. Resume that read before continuing to
         // handle the current state:
         switch (_prestate) {
         case prestate::NONE:
-            // This is handled by process_buffer
+            // This is handled above
             __builtin_unreachable();
             break;
         case prestate::READING_UNSIGNED_VINT:
             if (read_unsigned_vint(data) == read_status::ready) {
                 _prestate = prestate::NONE;
+                return read_status::ready;
             }
             break;
         case prestate::READING_SIGNED_VINT:
             if (read_signed_vint(data) == read_status::ready) {
                 _prestate = prestate::NONE;
+                return read_status::ready;
             }
             break;
         case prestate::READING_UNSIGNED_VINT_LENGTH_BYTES:
             if (read_unsigned_vint_length_bytes(data, *_read_bytes_where) == read_status::ready) {
                 _prestate = prestate::NONE;
+                return read_status::ready;
             }
             break;
         case prestate::READING_UNSIGNED_VINT_WITH_LEN:
-            read_vint_with_len<unsigned_vint>(data, _u64);
-            break;
+            return read_vint_with_len<unsigned_vint>(data, _u64);
         case prestate::READING_SIGNED_VINT_WITH_LEN:
-            read_vint_with_len<signed_vint>(data, _i64);
-            break;
+            return read_vint_with_len<signed_vint>(data, _i64);
         case prestate::READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN: {
             const auto n = std::min(_read_bytes.size() - _pos, data.size());
             std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
@@ -317,6 +321,7 @@ private:
                         bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size()));
                 if (read_bytes(data, _u64, *_read_bytes_where) == read_status::ready) {
                     _prestate = prestate::NONE;
+                    return read_status::ready;
                 }
             }
             break;
@@ -330,6 +335,7 @@ private:
             if (_pos == _read_bytes.size()) {
                 *_read_bytes_where = std::move(_read_bytes);
                 _prestate = prestate::NONE;
+                return read_status::ready;
             }
             break;
         }
@@ -337,46 +343,87 @@ private:
             if (process_int(data, sizeof(uint8_t))) {
                 _u8 = _read_int.uint8;
                 _prestate = prestate::NONE;
+                return read_status::ready;
             }
             break;
         case prestate::READING_U16:
             if (process_int(data, sizeof(uint16_t))) {
                 _u16 = net::ntoh(_read_int.uint16);
                 _prestate = prestate::NONE;
+                return read_status::ready;
             }
             break;
         case prestate::READING_U16_BYTES:
             if (process_int(data, sizeof(uint16_t))) {
                 _u16 = net::ntoh(_read_int.uint16);
                 _prestate = prestate::NONE;
-                read_bytes(data, _u16, *_read_bytes_where);
-                return;
+                return read_bytes(data, _u16, *_read_bytes_where);
             }
             break;
         case prestate::READING_U32:
             if (process_int(data, sizeof(uint32_t))) {
                 _u32 = net::ntoh(_read_int.uint32);
                 _prestate = prestate::NONE;
+                return read_status::ready;
             }
             break;
         case prestate::READING_U64:
             if (process_int(data, sizeof(uint64_t))) {
                 _u64 = net::ntoh(_read_int.uint64);
                 _prestate = prestate::NONE;
+                return read_status::ready;
             }
             break;
         }
+        return read_status::waiting;
+    }
+
+    void reset() {
+        _prestate = prestate::NONE;
+    }
+
+    bool active() const {
+        return _prestate != prestate::NONE;
+    }
+};
+
+template <typename StateProcessor>
+class continuous_data_consumer : protected primitive_consumer {
+    using proceed = data_consumer::proceed;
+    StateProcessor& state_processor() {
+        return static_cast<StateProcessor&>(*this);
+    };
+protected:
+    input_stream<char> _input;
+    sstables::reader_position_tracker _stream_position;
+    // remaining length of input to read (if <0, continue until end of file).
+    uint64_t _remain;
+public:
+    using read_status = data_consumer::read_status;
+
+    continuous_data_consumer(reader_permit permit, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
+            : primitive_consumer(std::move(permit))
+            , _input(std::move(input))
+            , _stream_position(sstables::reader_position_tracker{start, maxlen})
+            , _remain(maxlen) {}
+
+    future<> consume_input() {
+        return _input.consume(state_processor());
     }
 
     void verify_end_state() {
         state_processor().verify_end_state();
     }
-public:
-    continuous_data_consumer(reader_permit permit, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-            : _permit(std::move(permit)), _input(std::move(input)), _stream_position(sstables::reader_position_tracker{start, maxlen}), _remain(maxlen) {}
 
-    future<> consume_input() {
-        return _input.consume(state_processor());
+    data_consumer::processing_result skip(temporary_buffer<char>& data, uint32_t len) {
+        if (data.size() >= len) {
+            data.trim_front(len);
+            return proceed::yes;
+        } else {
+            auto left = len - data.size();
+            data.trim(0);
+            return skip_bytes{left};
+        }
     }
 
     // some states do not consume input (its only exists to perform some
@@ -391,15 +438,9 @@ public:
     using consumption_result_type = consumption_result<char>;
 
     inline processing_result process(temporary_buffer<char>& data) {
-        while (data || non_consuming()) {
-            process_buffer(data);
-            // If _prestate is set to something other than prestate::NONE
-            // after process_buffer was called, it means that data wasn't
-            // enough to complete the prestate. That can happen specially
-            // when reading a large buf. Thefore, we need to ask caller
-            // to read more data until prestate is completed.
-            if (__builtin_expect((_prestate != prestate::NONE), 0)) {
-                // assert that data was all consumed by process_buffer.
+        while (data || (!primitive_consumer::active() && non_consuming())) {
+            // The primitive_consumer must finish before the enclosing state machine can continue.
+            if (__builtin_expect(primitive_consumer::consume(data) == read_status::waiting, false)) {
                 assert(data.size() == 0);
                 return proceed::yes;
             }
@@ -471,7 +512,7 @@ public:
         assert(end >= _stream_position.position);
         _remain = end - _stream_position.position;
 
-        _prestate = prestate::NONE;
+        primitive_consumer::reset();
         return _input.skip(n);
     }
 
