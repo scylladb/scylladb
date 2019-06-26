@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "types.hh"
+#include "utils/chunked_vector.hh"
 
 class collection_type_impl : public abstract_type {
     static logging::logger _logger;
@@ -52,7 +53,7 @@ public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
     struct mutation {
         tombstone tomb;
-        std::vector<std::pair<bytes, atomic_cell>> cells;
+        utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
         // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
         // Removes cells covered by tomb or this->tomb.
         bool compact_and_expire(row_tombstone tomb, gc_clock::time_point query_time,
@@ -60,7 +61,7 @@ public:
     };
     struct mutation_view {
         tombstone tomb;
-        std::vector<std::pair<bytes_view, atomic_cell_view>> cells;
+        utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
         mutation materialize(const collection_type_impl&) const;
     };
     virtual data_type name_comparator() const = 0;
