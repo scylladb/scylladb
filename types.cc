@@ -2712,7 +2712,7 @@ bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb,
         tomb = tombstone();
     }
     t.apply(base_tomb.regular());
-    std::vector<std::pair<bytes, atomic_cell>> survivors;
+    utils::chunked_vector<std::pair<bytes, atomic_cell>> survivors;
     for (auto&& name_and_cell : cells) {
         atomic_cell& cell = name_and_cell.second;
         auto cannot_erase_cell = [&] {
@@ -2795,7 +2795,7 @@ collection_type_impl::merge(collection_mutation_view a, collection_mutation_view
             compare,
             merge);
     merged.tomb = std::max(aa.tomb, bb.tomb);
-    return serialize_mutation_form(merged);
+    return serialize_mutation_form(std::move(merged));
   });
  });
 }
@@ -2825,7 +2825,7 @@ collection_type_impl::difference(collection_mutation_view a, collection_mutation
     if (aa.tomb > bb.tomb) {
         diff.tomb = aa.tomb;
     }
-    return serialize_mutation_form(diff);
+    return serialize_mutation_form(std::move(diff));
   });
  });
 }
