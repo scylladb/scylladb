@@ -302,7 +302,7 @@ class repair_row {
     std::optional<repair_hash> _hash;
     lw_shared_ptr<mutation_fragment> _mf;
 public:
-    repair_row() = delete;
+    repair_row() = default;
     repair_row(std::optional<frozen_mutation_fragment> fm,
             std::optional<position_in_partition> pos,
             lw_shared_ptr<const decorated_key_with_hash> dk_with_hash,
