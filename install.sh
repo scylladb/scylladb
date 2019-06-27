@@ -141,6 +141,7 @@ cp -r swagger-ui/dist "$rprefix"/swagger-ui
 install -d -m755 -d "$rprefix"/api
 cp -r api/api-doc "$rprefix"/api
 cp -r tools/scyllatop "$rprefix"/scyllatop
+cp -r dist/common/scripts "$rprefix"/scripts
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rusr/bin/scyllatop"
 
 cd dist/common/scripts/
@@ -153,9 +154,11 @@ done
 
 install -m755 scylla-gdb.py -Dt "$rprefix"/scripts/
 
-find ./dist/common/scripts -type f -exec ./relocate_python_scripts.py \
-            --installroot $rprefix/scripts/ --with-python3 "$root/$python3" {} +
-
+PYSCRIPTS=$(find dist/common/scripts/ -maxdepth 1 -type f -exec grep -Pls '\A#!/usr/bin/env python3' {} +)
+for i in $PYSCRIPTS; do
+    ./relocate_python_scripts.py \
+            --installroot $rprefix/scripts/ --with-python3 "$root/$python3" $i
+done
 ./relocate_python_scripts.py \
             --installroot $rprefix/scripts/ --with-python3 "$root/$python3" \
             seastar/scripts/perftune.py seastar/scripts/seastar-addr2line seastar/scripts/perftune.py

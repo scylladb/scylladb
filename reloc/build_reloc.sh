@@ -87,4 +87,5 @@ if [ -n "$CCOMPILER" ]; then
     FLAGS="$FLAGS --c-compiler $CCOMPILER"
 fi
 ./configure.py $FLAGS
+python3 -m compileall ./dist/common/scripts/ ./seastar/scripts/perftune.py ./tools/scyllatop
 $NINJA $JOBS build/release/scylla-package.tar.gz
