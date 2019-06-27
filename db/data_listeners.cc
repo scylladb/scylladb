@@ -57,7 +57,7 @@ void data_listeners::on_write(const schema_ptr& s, const frozen_mutation& m) {
     }
 }
 
-toppartitons_item_key::operator sstring() const {
+toppartitions_item_key::operator sstring() const {
     std::ostringstream oss;
     oss << key.key().with_schema(*schema);
     return oss.str();
@@ -85,7 +85,7 @@ flat_mutation_reader toppartitions_data_listener::on_read(const schema_ptr& s, c
     }
     dblog.trace("toppartitions_data_listener::on_read: {}.{}", s->ks_name(), s->cf_name());
     return make_filtering_reader(std::move(rd), [this, &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
-        _top_k_read.append(toppartitons_item_key{s, dk});
+        _top_k_read.append(toppartitions_item_key{s, dk});
         return true;
     });
 }
@@ -95,7 +95,7 @@ void toppartitions_data_listener::on_write(const schema_ptr& s, const frozen_mut
         return;
     }
     dblog.trace("toppartitions_data_listener::on_write: {}.{}", _ks, _cf);
-    _top_k_write.append(toppartitons_item_key{s, m.decorated_key(*s)});
+    _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s)});
 }
 
 toppartitions_query::toppartitions_query(distributed<database>& xdb, sstring ks, sstring cf,
