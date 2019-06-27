@@ -832,10 +832,15 @@ public:
     }
 
     // Get a list of row hashes in _working_row_buf
-    std::unordered_set<repair_hash>
+    future<std::unordered_set<repair_hash>>
     working_row_hashes() {
-        return boost::copy_range<std::unordered_set<repair_hash>>(_working_row_buf |
-                boost::adaptors::transformed([] (repair_row& r) { return r.hash(); }));
+        return do_with(std::unordered_set<repair_hash>(), [this] (std::unordered_set<repair_hash>& hashes) {
+            return do_for_each(_working_row_buf, [&hashes] (repair_row& r) {
+                hashes.emplace(r.hash());
+            }).then([&hashes] {
+                return std::move(hashes);
+            });
+        });
     }
 
     std::pair<std::optional<repair_sync_boundary>, bool>
@@ -2214,7 +2219,7 @@ private:
                 // local node and peer node have the same combined hash. This
                 // means we can set peer_row_hash_sets[n] to local row hashes
                 // without fetching it from peers to save network traffic.
-                master.peer_row_hash_sets(node_idx) = master.working_row_hashes();
+                master.peer_row_hash_sets(node_idx) = master.working_row_hashes().get0();
                 rlogger.debug("Calling optimize master.working_row_hashes for node {}, hash_sets={}",
                     node, master.peer_row_hash_sets(node_idx).size());
                 continue;
@@ -2251,10 +2256,10 @@ private:
             // sequentially because the rows from repair follower 1 to
             // repair master might reduce the amount of missing data
             // between repair master and repair follower 2.
-            std::unordered_set<repair_hash> set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes());
+            std::unordered_set<repair_hash> set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes().get0());
             // Request missing sets from peer node
             rlogger.debug("Before get_row_diff to node {}, local={}, peer={}, set_diff={}",
-                    node, master.working_row_hashes().size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
+                    node, master.working_row_hashes().get0().size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
             // If we need to pull all rows from the peer. We can avoid
             // sending the row hashes on wire by setting needs_all_rows flag.
             auto needs_all_rows = repair_meta::needs_all_rows_t(set_diff.size() == master.peer_row_hash_sets(node_idx).size());
@@ -2263,7 +2268,7 @@ private:
             } else {
                 master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx).get();
             }
-            rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().size());
+            rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().get0().size());
         }
         return op_status::next_step;
     }
@@ -2274,7 +2279,7 @@ private:
         // So we can figure out which rows peer node are missing and send the missing rows to them
         check_in_shutdown();
         _ri.check_in_abort();
-        std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes();
+        std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes().get0();
         parallel_for_each(boost::irange(size_t(0), _all_live_peer_nodes.size()), [&, this] (size_t idx) {
             auto set_diff = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
             auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());
