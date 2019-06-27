@@ -144,9 +144,7 @@ cp -r tools/scyllatop "$rprefix"/scyllatop
 cp -r dist/common/scripts "$rprefix"/scripts
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rusr/bin/scyllatop"
 
-cd dist/common/scripts/
-SBINFILES="scylla_*setup node_exporter_install node_health_check scylla_ec2_check scylla_kernel_check"
-cd -
+SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_exporter_install node_health_check scylla_ec2_check scylla_kernel_check)
 install -d "$rusr"/sbin
 for i in $SBINFILES; do
     ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
