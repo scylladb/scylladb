@@ -1065,11 +1065,6 @@ private:
         });
     }
 
-    std::unordered_set<repair_hash>
-    get_full_row_hashes() {
-        return working_row_hashes();
-    }
-
     // Return rows in the _working_row_buf with hash within the given sef_diff
     // Give a set of row hashes, return the corresponding rows
     // If needs_all_rows is set, return all the rows in _working_row_buf, ignore the set_diff
@@ -1282,7 +1277,7 @@ public:
     future<std::unordered_set<repair_hash>>
     get_full_row_hashes_handler() {
         return with_gate(_gate, [this] {
-            return get_full_row_hashes();
+            return working_row_hashes();
         });
     }
 
