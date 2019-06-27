@@ -1024,6 +1024,40 @@ private:
         });
     }
 
+    future<> move_row_buf_to_working_row_buf() {
+        if (_cmp(_row_buf.back().boundary(), *_current_sync_boundary) <= 0) {
+            // Fast path
+            _working_row_buf.swap(_row_buf);
+            return make_ready_future<>();
+        }
+        return do_with(_row_buf.rbegin(), [this, sz = _row_buf.size()] (auto& it) {
+            // Move the rows > _current_sync_boundary to _working_row_buf
+            // Delete the rows > _current_sync_boundary from _row_buf
+            // Swap _working_row_buf and _row_buf so that _working_row_buf
+            // contains rows within (_last_sync_boundary,
+            // _current_sync_boundary], _row_buf contains rows wthin
+            // (_current_sync_boundary, ...]
+            return repeat([this, &it, sz] () {
+                if (it == _row_buf.rend()) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                repair_row& r = *(it++);
+                if (_cmp(r.boundary(), *_current_sync_boundary) > 0) {
+                    _working_row_buf.push_front(std::move(r));
+                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                }
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }).then([this, sz] {
+                _row_buf.resize(_row_buf.size() - _working_row_buf.size());
+                _row_buf.swap(_working_row_buf);
+                if (sz != _working_row_buf.size() + _row_buf.size()) {
+                    throw std::runtime_error(format("incorrect row_buf and working_row_buf size, before={}, after={} + {}",
+                            sz, _working_row_buf.size(), _row_buf.size()));
+                }
+            });
+        });
+    }
+
     // Move rows from <_row_buf> to <_working_row_buf> according to
     // _last_sync_boundary and common_sync_boundary. That is rows within the
     // (_last_sync_boundary, _current_sync_boundary] in <_row_buf> are moved
@@ -1041,32 +1075,13 @@ private:
         if (_row_buf.empty()) {
             return make_ready_future<get_combined_row_hash_response>(get_combined_row_hash_response{repair_hash(), 0});
         }
-
-        auto sz = _row_buf.size();
-
-        // Fast path
-        if (_cmp(_row_buf.back().boundary(), *_current_sync_boundary) <= 0) {
-            _working_row_buf.swap(_row_buf);
-        } else {
-            auto it = std::find_if(_row_buf.rbegin(), _row_buf.rend(),
-                    [this] (repair_row& r) { return _cmp(r.boundary(), *_current_sync_boundary) <= 0; });
-            // Copy the items > _current_sync_boundary to _working_row_buf
-            // Delete the items > _current_sync_boundary from _row_buf
-            // Swap _working_row_buf and _row_buf
-            std::copy(it.base(), _row_buf.end(), std::back_inserter(_working_row_buf));
-            _row_buf.erase(it.base(), _row_buf.end());
-            _row_buf.swap(_working_row_buf);
-        }
-        rlogger.trace("before={}, after={} + {}", sz, _working_row_buf.size(), _row_buf.size());
-        if (sz != _working_row_buf.size() + _row_buf.size()) {
-            throw std::runtime_error("incorrect row_buf and working_row_buf size");
-        }
-
-        return parallel_for_each(_working_row_buf, [this] (repair_row& r) {
-            _working_row_buf_combined_hash.add(r.hash());
-            return make_ready_future<>();
-        }).then([this] {
-            return get_combined_row_hash_response{_working_row_buf_combined_hash, _working_row_buf.size()};
+        return move_row_buf_to_working_row_buf().then([this] {
+            return do_for_each(_working_row_buf, [this] (repair_row& r) {
+                _working_row_buf_combined_hash.add(r.hash());
+                return make_ready_future<>();
+            }).then([this] {
+                return get_combined_row_hash_response{_working_row_buf_combined_hash, _working_row_buf.size()};
+            });
         });
     }
 
