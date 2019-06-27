@@ -1471,10 +1471,11 @@ public:
 
     // RPC API
     // Return rows in the _working_row_buf with hash within the given sef_diff
-    future<> get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx) {
+    // Must run inside a seastar thread
+    void get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx) {
         if (needs_all_rows || !set_diff.empty()) {
             if (remote_node == _myip) {
-                return make_ready_future<>();
+                return;
             }
             if (needs_all_rows) {
                 set_diff.clear();
@@ -1483,15 +1484,12 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            return netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
-                    _repair_meta_id, std::move(set_diff), bool(needs_all_rows)).then([this, remote_node, node_idx] (repair_rows_on_wire rows) {
-                if (!rows.empty()) {
-                    return apply_rows(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::no, node_idx);
-                }
-                return make_ready_future<>();
-            });
+            repair_rows_on_wire rows = netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
+                    _repair_meta_id, std::move(set_diff), bool(needs_all_rows)).get0();
+            if (!rows.empty()) {
+                apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::no, node_idx);
+            }
         }
-        return make_ready_future<>();
     }
 
     future<> get_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx) {
@@ -2326,7 +2324,7 @@ private:
             if (master.use_rpc_stream()) {
                 master.get_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, repair_meta::update_peer_row_hash_sets::no, node, node_idx).get();
             } else {
-                master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx).get();
+                master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx);
             }
             rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().get0().size());
         }
