@@ -1492,19 +1492,17 @@ public:
         }
     }
 
-    future<> get_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx) {
+    // Must run inside a seastar thread
+    void get_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx) {
         if (remote_node == _myip) {
-            return make_ready_future<>();
+            return;
         }
         stats().rpc_call_nr++;
-        return netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
-                _repair_meta_id, {}, bool(needs_all_rows_t::yes)).then([this, remote_node, node_idx] (repair_rows_on_wire rows) {
-            if (!rows.empty()) {
-                return apply_rows(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::yes, node_idx);
-            }
-            return make_ready_future<>();
-        });
-        return make_ready_future<>();
+        repair_rows_on_wire rows = netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
+                _repair_meta_id, {}, bool(needs_all_rows_t::yes)).get0();
+        if (!rows.empty()) {
+            apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::yes, node_idx);
+        }
     }
 
 private:
@@ -2291,7 +2289,7 @@ private:
                     master.get_row_diff_with_rpc_stream({}, repair_meta::needs_all_rows_t::yes, repair_meta::update_peer_row_hash_sets::yes, node, node_idx).get();
                 } else {
                     rlogger.debug("FastPath: get_row_diff with needs_all_rows_t::yes rpc verb");
-                    master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx).get();
+                    master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx);
                 }
                 continue;
             }
