@@ -807,12 +807,13 @@ public:
         });
     }
 
+    // Must run inside a seastar thread
     static std::unordered_set<repair_hash>
     get_set_diff(const std::unordered_set<repair_hash>& x, const std::unordered_set<repair_hash>& y) {
         std::unordered_set<repair_hash> set_diff;
         // Note std::set_difference needs x and y are sorted.
         std::copy_if(x.begin(), x.end(), std::inserter(set_diff, set_diff.end()),
-                [&y] (auto& item) { return y.find(item) == y.end(); });
+                [&y] (auto& item) { thread::maybe_yield(); return y.find(item) == y.end(); });
         return set_diff;
     }
 
@@ -2335,9 +2336,14 @@ private:
         check_in_shutdown();
         _ri.check_in_abort();
         std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes().get0();
-        parallel_for_each(boost::irange(size_t(0), _all_live_peer_nodes.size()), [&, this] (size_t idx) {
-            auto set_diff = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
+        auto sz = _all_live_peer_nodes.size();
+        std::vector<std::unordered_set<repair_hash>> set_diffs(sz);
+        for (size_t idx : boost::irange(size_t(0), sz)) {
+            set_diffs[idx] = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
+        }
+        parallel_for_each(boost::irange(size_t(0), sz), [&, this] (size_t idx) {
             auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());
+            auto& set_diff = set_diffs[idx];
             rlogger.debug("Calling master.put_row_diff to node {}, set_diff={}, needs_all_rows={}", _all_live_peer_nodes[idx], set_diff.size(), needs_all_rows);
             if (master.use_rpc_stream()) {
                 return master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx);
