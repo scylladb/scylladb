@@ -1506,41 +1506,38 @@ public:
     }
 
 private:
-    future<> get_row_diff_source_op(
+    // Must run inside a seastar thread
+    void get_row_diff_source_op(
             update_peer_row_hash_sets update_hash_set,
             gms::inet_address remote_node,
             unsigned node_idx,
             rpc::sink<repair_hash_with_cmd>& sink,
             rpc::source<repair_row_on_wire_with_cmd>& source) {
-        auto current_rows = make_lw_shared<repair_rows_on_wire>();
-        return repeat([this, current_rows, update_hash_set, remote_node, node_idx, &sink, &source] () mutable {
-            return source().then([this, current_rows, update_hash_set, remote_node, node_idx] (std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt) mutable {
-                if (row_opt) {
-                    if (inject_rpc_stream_error) {
-                        throw std::runtime_error("get_row_diff: Inject sender error in source loop");
-                    }
-                    auto row = std::move(std::get<0>(row_opt.value()));
-                    if (row.cmd == repair_stream_cmd::row_data) {
-                        rlogger.trace("get_row_diff: Got repair_row_on_wire with data");
-                        current_rows->push_back(std::move(row.row));
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
-                    } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
-                        rlogger.trace("get_row_diff: Got repair_row_on_wire with nullopt");
-                        return apply_rows(std::move(*current_rows), remote_node, update_working_row_buf::yes, update_hash_set, node_idx).then([current_rows] {
-                            current_rows->clear();
-                            return make_ready_future<stop_iteration>(stop_iteration::yes);
-                        });
-                    } else if (row.cmd == repair_stream_cmd::error) {
-                        throw std::runtime_error("get_row_diff: Peer failed to process");
-                    } else {
-                        throw std::runtime_error("get_row_diff: Got unexpected repair_stream_cmd");
-                    }
-                } else {
-                    _sink_source_for_get_row_diff.mark_source_closed(node_idx);
-                    throw std::runtime_error("get_row_diff: Got unexpected end of stream");
+        repair_rows_on_wire current_rows;
+        for (;;) {
+            std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt = source().get0();
+            if (row_opt) {
+                if (inject_rpc_stream_error) {
+                    throw std::runtime_error("get_row_diff: Inject sender error in source loop");
                 }
-            });
-        });
+                auto row = std::move(std::get<0>(row_opt.value()));
+                if (row.cmd == repair_stream_cmd::row_data) {
+                    rlogger.trace("get_row_diff: Got repair_row_on_wire with data");
+                    current_rows.push_back(std::move(row.row));
+                } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
+                    rlogger.trace("get_row_diff: Got repair_row_on_wire with nullopt");
+                    apply_rows_on_master_in_thread(std::move(current_rows), remote_node, update_working_row_buf::yes, update_hash_set, node_idx);
+                    break;
+                } else if (row.cmd == repair_stream_cmd::error) {
+                    throw std::runtime_error("get_row_diff: Peer failed to process");
+                } else {
+                    throw std::runtime_error("get_row_diff: Got unexpected repair_stream_cmd");
+                }
+            } else {
+                _sink_source_for_get_row_diff.mark_source_closed(node_idx);
+                throw std::runtime_error("get_row_diff: Got unexpected end of stream");
+            }
+        }
     }
 
     future<> get_row_diff_sink_op(
@@ -1573,7 +1570,8 @@ private:
     }
 
 public:
-    future<> get_row_diff_with_rpc_stream(
+    // Must run inside a seastar thread
+    void get_row_diff_with_rpc_stream(
             std::unordered_set<repair_hash> set_diff,
             needs_all_rows_t needs_all_rows,
             update_peer_row_hash_sets update_hash_set,
@@ -1581,7 +1579,7 @@ public:
             unsigned node_idx) {
         if (needs_all_rows || !set_diff.empty()) {
             if (remote_node == _myip) {
-                return make_ready_future<>();
+                return;
             }
             if (needs_all_rows) {
                 set_diff.clear();
@@ -1590,15 +1588,13 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            return _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx).then(
-                    [this, set_diff = std::move(set_diff), needs_all_rows, update_hash_set, remote_node, node_idx]
-                    (rpc::sink<repair_hash_with_cmd>& sink, rpc::source<repair_row_on_wire_with_cmd>& source) mutable {
-                auto source_op = get_row_diff_source_op(update_hash_set, remote_node, node_idx, sink, source);
-                auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
-                return when_all_succeed(std::move(source_op), std::move(sink_op));
-            });
+            auto f = _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx).get();
+            rpc::sink<repair_hash_with_cmd>& sink = std::get<0>(f);
+            rpc::source<repair_row_on_wire_with_cmd>& source = std::get<1>(f);
+            auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
+            get_row_diff_source_op(update_hash_set, remote_node, node_idx, sink, source);
+            sink_op.get();
         }
-        return make_ready_future<>();
     }
 
     // RPC handler
@@ -2286,7 +2282,7 @@ private:
                 master.peer_row_hash_sets(node_idx).clear();
                 if (master.use_rpc_stream()) {
                     rlogger.debug("FastPath: get_row_diff with needs_all_rows_t::yes rpc stream");
-                    master.get_row_diff_with_rpc_stream({}, repair_meta::needs_all_rows_t::yes, repair_meta::update_peer_row_hash_sets::yes, node, node_idx).get();
+                    master.get_row_diff_with_rpc_stream({}, repair_meta::needs_all_rows_t::yes, repair_meta::update_peer_row_hash_sets::yes, node, node_idx);
                 } else {
                     rlogger.debug("FastPath: get_row_diff with needs_all_rows_t::yes rpc verb");
                     master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx);
@@ -2320,7 +2316,7 @@ private:
             // sending the row hashes on wire by setting needs_all_rows flag.
             auto needs_all_rows = repair_meta::needs_all_rows_t(set_diff.size() == master.peer_row_hash_sets(node_idx).size());
             if (master.use_rpc_stream()) {
-                master.get_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, repair_meta::update_peer_row_hash_sets::no, node, node_idx).get();
+                master.get_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, repair_meta::update_peer_row_hash_sets::no, node, node_idx);
             } else {
                 master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx);
             }
