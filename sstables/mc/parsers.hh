@@ -211,5 +211,117 @@ public:
     }
 };
 
+class promoted_index_block_parser {
+    clustering_parser _clustering;
+
+    std::optional<position_in_partition> _start_pos;
+    std::optional<position_in_partition> _end_pos;
+    std::optional<deletion_time> _end_open_marker;
+
+    uint64_t _offset{};
+    uint64_t _width{};
+
+    enum class state {
+        START,
+        END,
+        OFFSET,
+        WIDTH,
+        END_OPEN_MARKER_FLAG,
+        END_OPEN_MARKER_LOCAL_DELETION_TIME,
+        END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1,
+        END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2,
+        DONE,
+    } _state = state::START;
+
+    data_consumer::primitive_consumer _primitive;
+public:
+    using read_status = data_consumer::read_status;
+
+    promoted_index_block_parser(const schema& s, reader_permit permit, column_values_fixed_lengths cvfl)
+        : _clustering(s, permit, std::move(cvfl), true)
+        , _primitive(permit)
+    { }
+
+    position_in_partition& start() { return *_start_pos; }
+    position_in_partition& end() { return *_end_pos; }
+    std::optional<deletion_time>& end_open_marker() { return _end_open_marker; }
+    uint64_t offset() const { return _offset; }
+    uint64_t width() const { return _width; }
+
+    // Feeds the data into the state machine.
+    // Returns read_status::ready when whole block was parsed.
+    // If returns read_status::waiting then data.empty() after the call.
+    read_status consume(temporary_buffer<char>& data) {
+        static constexpr size_t width_base = 65536;
+        if (_primitive.consume(data) == read_status::waiting) {
+            return read_status::waiting;
+        }
+        switch (_state) {
+        case state::DONE:
+            return read_status::ready;
+        case state::START:
+            if (_clustering.consume(data) == read_status::waiting) {
+                return read_status::waiting;
+            }
+            _start_pos = _clustering.get_and_reset();
+            _clustering.set_parsing_start_key(false);
+            _state = state::END;
+            // fall-through
+        case state::END:
+            if (_clustering.consume(data) == read_status::waiting) {
+                return read_status::waiting;
+            }
+            _end_pos = _clustering.get_and_reset();
+            _state = state::OFFSET;
+            // fall-through
+        case state::OFFSET:
+            if (_primitive.read_unsigned_vint(data) != read_status::ready) {
+                _state = state::WIDTH;
+                return read_status::waiting;
+            }
+        case state::WIDTH:
+            _offset = _primitive._u64;
+            if (_primitive.read_signed_vint(data) != read_status::ready) {
+                _state = state::END_OPEN_MARKER_FLAG;
+                return read_status::waiting;
+            }
+        case state::END_OPEN_MARKER_FLAG:
+            assert(_primitive._i64 + width_base > 0);
+            _width = (_primitive._i64 + width_base);
+            if (_primitive.read_8(data) != read_status::ready) {
+                _state = state::END_OPEN_MARKER_LOCAL_DELETION_TIME;
+                return read_status::waiting;
+            }
+        case state::END_OPEN_MARKER_LOCAL_DELETION_TIME:
+            if (_primitive._u8 == 0) {
+                _state = state::DONE;
+                return read_status::ready;
+            }
+            _end_open_marker.emplace();
+            if (_primitive.read_32(data) != read_status::ready) {
+                _state = state::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1;
+                return read_status::waiting;
+            }
+        case state::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1:
+            _end_open_marker->local_deletion_time = _primitive._u32;
+            if (_primitive.read_64(data) != read_status::ready) {
+                _state = state::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2;
+                return read_status::waiting;
+            }
+        case state::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2:
+            _end_open_marker->marked_for_delete_at = _primitive._u64;
+            _state = state::DONE;
+            return read_status::ready;
+        }
+        abort();
+    }
+
+    void reset() {
+        _end_open_marker.reset();
+        _clustering.set_parsing_start_key(true);
+        _state = state::START;
+    }
+};
+
 }
 }

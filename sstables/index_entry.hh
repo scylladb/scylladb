@@ -169,29 +169,10 @@ private:
     };
 
     struct m_parser_context {
-        mc::clustering_parser clustering;
-
-        std::optional<position_in_partition> start_pos;
-        std::optional<position_in_partition> end_pos;
-        std::optional<deletion_time> end_open_marker;
-
-        uint64_t offset{};
-        uint64_t width{};
-
-        enum class state {
-            START,
-            END,
-            OFFSET,
-            WIDTH,
-            END_OPEN_MARKER_FLAG,
-            END_OPEN_MARKER_LOCAL_DELETION_TIME,
-            END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1,
-            END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2,
-            ADD_BLOCK,
-        } state = state::START;
+        mc::promoted_index_block_parser block_parser;
 
         m_parser_context(const schema& s, reader_permit permit, column_values_fixed_lengths cvfl)
-            : clustering(s, std::move(permit), std::move(cvfl), true)
+            : block_parser(s, std::move(permit), std::move(cvfl))
         { }
     };
 
@@ -246,77 +227,18 @@ private:
     }
 
     void process_state(temporary_buffer<char>& data, m_parser_context& ctx) {
-        static constexpr size_t width_base = 65536;
-        using state_m = typename m_parser_context::state;
         // keep running in the loop until we either are out of data or have consumed all the blocks
-        while (true) {
-            switch (ctx.state) {
-            case state_m::START:
-                if (ctx.clustering.consume(data) == read_status::waiting) {
-                    return;
-                }
-                ctx.start_pos = ctx.clustering.get_and_reset();
-                ctx.clustering.set_parsing_start_key(false);
-                ctx.state = state_m::END;
-                // fall-through
-            case state_m::END:
-                if (ctx.clustering.consume(data) == read_status::waiting) {
-                    return;
-                }
-                ctx.end_pos = ctx.clustering.get_and_reset();
-                ctx.clustering.set_parsing_start_key(true);
-                ctx.state = state_m::OFFSET;
-                // fall-through
-            case state_m::OFFSET:
-                if (read_unsigned_vint(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::WIDTH;
-                    return;
-                }
-            case state_m::WIDTH:
-                ctx.offset = _u64;
-                if (read_signed_vint(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::END_OPEN_MARKER_FLAG;
-                    return;
-                }
-            case state_m::END_OPEN_MARKER_FLAG:
-                assert(_i64 + width_base > 0);
-                ctx.width = (_i64 + width_base);
-                if (read_8(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::END_OPEN_MARKER_LOCAL_DELETION_TIME;
-                    return;
-                }
-            case state_m::END_OPEN_MARKER_LOCAL_DELETION_TIME:
-                if (_u8 == 0) {
-                    ctx.state = state_m::ADD_BLOCK;
-                    goto add_block_label;
-                }
-                ctx.end_open_marker.emplace();
-                if (read_32(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1;
-                    return;
-                }
-            case state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1:
-                ctx.end_open_marker->local_deletion_time = _u32;
-                if (read_64(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2;
-                    return;
-                }
-            case state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2:
-                ctx.end_open_marker->marked_for_delete_at = _u64;
-            case m_parser_context::state::ADD_BLOCK:
-            add_block_label:
-
-                _pi_blocks.emplace_back(*std::exchange(ctx.start_pos, {}),
-                                        *std::exchange(ctx.end_pos, {}),
-                                        ctx.offset,
-                                        ctx.width,
-                                        std::exchange(ctx.end_open_marker, {}));
-                ctx.state = state_m::START;
-                --_num_blocks_left;
-                if (_num_blocks_left == 0) {
-                    return;
-                }
+        while (_num_blocks_left) {
+            if (ctx.block_parser.consume(data) == read_status::waiting) {
+                return;
             }
+            _pi_blocks.emplace_back(std::move(ctx.block_parser.start()),
+                                    std::move(ctx.block_parser.end()),
+                                    ctx.block_parser.offset(),
+                                    ctx.block_parser.width(),
+                                    std::move(ctx.block_parser.end_open_marker()));
+            --_num_blocks_left;
+            ctx.block_parser.reset();
         }
     }
 
@@ -332,9 +254,7 @@ public:
     }
 
     bool non_consuming(const m_parser_context& ctx) const {
-        using state_m = typename m_parser_context::state;
-        return ctx.state == state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2
-                || ctx.state == state_m::ADD_BLOCK;
+        return false;
     }
 
     bool non_consuming() const {
