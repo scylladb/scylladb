@@ -1090,50 +1090,6 @@ private:
     }
 
     // Give a list of rows, apply the rows to disk and update the _working_row_buf and _peer_row_hash_sets if requested
-    future<>
-    apply_rows(repair_rows_on_wire rows, gms::inet_address from, update_working_row_buf update_buf,
-            update_peer_row_hash_sets update_hash_set, unsigned node_idx = 0) {
-        if (rows.empty()) {
-            return make_ready_future<>();
-        }
-        return to_repair_rows_list(rows).then([this, from, node_idx, update_buf, update_hash_set] (std::list<repair_row> row_diff) {
-            return do_with(std::move(row_diff), [this, from, node_idx, update_buf, update_hash_set] (std::list<repair_row>& row_diff) {
-                if (_repair_master) {
-                    auto sz = get_repair_rows_size(row_diff);
-                    stats().rx_row_bytes += sz;
-                    stats().rx_row_nr += row_diff.size();
-                    stats().rx_row_nr_peer[from] += row_diff.size();
-                }
-                if (update_buf) {
-                    std::list<repair_row> tmp;
-                    tmp.swap(_working_row_buf);
-                    // Both row_diff and _working_row_buf and are ordered, merging
-                    // two sored list to make sure the combination of row_diff
-                    // and _working_row_buf are ordered.
-                    std::merge(tmp.begin(), tmp.end(), row_diff.begin(), row_diff.end(), std::back_inserter(_working_row_buf),
-                        [this] (const repair_row& x, const repair_row& y) { return _cmp(x.boundary(), y.boundary()) < 0; });
-                }
-                if (update_hash_set) {
-                    _peer_row_hash_sets[node_idx] = boost::copy_range<std::unordered_set<repair_hash>>(row_diff |
-                            boost::adaptors::transformed([] (repair_row& r) { return r.hash(); }));
-                }
-                _repair_writer.create_writer(node_idx);
-                return do_for_each(row_diff, [this, node_idx, update_buf] (repair_row& r) {
-                    if (update_buf) {
-                        _working_row_buf_combined_hash.add(r.hash());
-                    }
-                    // The repair_row here is supposed to have
-                    // mutation_fragment attached because we have stored it in
-                    // to_repair_rows_list above where the repair_row is created.
-                    mutation_fragment mf = std::move(r.get_mutation_fragment());
-                    auto dk_with_hash = r.get_dk_with_hash();
-                    return _repair_writer.do_write(node_idx, std::move(dk_with_hash), std::move(mf));
-                });
-            });
-        });
-    }
-
-    // Give a list of rows, apply the rows to disk and update the _working_row_buf and _peer_row_hash_sets if requested
     // Must run inside a seastar thread
     void apply_rows_on_master_in_thread(repair_rows_on_wire rows, gms::inet_address from, update_working_row_buf update_buf,
             update_peer_row_hash_sets update_hash_set, unsigned node_idx = 0) {
