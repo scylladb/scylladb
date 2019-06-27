@@ -1133,6 +1133,27 @@ private:
         });
     }
 
+    future<>
+    apply_rows_on_follower(repair_rows_on_wire rows) {
+        if (rows.empty()) {
+            return make_ready_future<>();
+        }
+        return to_repair_rows_list(rows).then([this] (std::list<repair_row> row_diff) {
+            return do_with(std::move(row_diff), [this] (std::list<repair_row>& row_diff) {
+                unsigned node_idx = 0;
+                _repair_writer.create_writer(node_idx);
+                return do_for_each(row_diff, [this, node_idx] (repair_row& r) {
+                    // The repair_row here is supposed to have
+                    // mutation_fragment attached because we have stored it in
+                    // to_repair_rows_list above where the repair_row is created.
+                    mutation_fragment mf = std::move(r.get_mutation_fragment());
+                    auto dk_with_hash = r.get_dk_with_hash();
+                    return _repair_writer.do_write(node_idx, std::move(dk_with_hash), std::move(mf));
+                });
+            });
+        });
+    }
+
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
         _metrics.tx_row_nr += row_list.size();
         _metrics.tx_row_bytes += get_repair_rows_size(row_list);
@@ -1654,8 +1675,8 @@ public:
 
     // RPC handler
     future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
-        return with_gate(_gate, [this, rows = std::move(rows), from] () mutable {
-            return apply_rows(std::move(rows), from, update_working_row_buf::no, update_peer_row_hash_sets::no);
+        return with_gate(_gate, [this, rows = std::move(rows)] () mutable {
+            return apply_rows_on_follower(std::move(rows));
         });
     }
 };
