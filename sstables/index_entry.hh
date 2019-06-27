@@ -28,6 +28,7 @@
 #include "column_translation.hh"
 #include "m_format_read_helpers.hh"
 #include "utils/overloaded_functor.hh"
+#include "sstables/mc/parsers.hh"
 
 namespace sstables {
 
@@ -168,32 +169,18 @@ private:
     };
 
     struct m_parser_context {
-        column_values_fixed_lengths clustering_values_fixed_lengths;
-        bool parsing_start_key = true;
-        boost::iterator_range<column_values_fixed_lengths::const_iterator> ck_range;
+        mc::clustering_parser clustering;
 
-        std::vector<temporary_buffer<char>> clustering_key_values;
-        bound_kind_m kind;
-
-        temporary_buffer<char> column_value;
-        uint64_t ck_blocks_header = 0;
-        uint32_t ck_blocks_header_offset = 0;
         std::optional<position_in_partition> start_pos;
         std::optional<position_in_partition> end_pos;
         std::optional<deletion_time> end_open_marker;
 
-        uint64_t offset;
-        uint64_t width;
+        uint64_t offset{};
+        uint64_t width{};
 
         enum class state {
-            CLUSTERING_START,
-            CK_KIND,
-            CK_SIZE,
-            CK_BLOCK,
-            CK_BLOCK_HEADER,
-            CK_BLOCK2,
-            CK_BLOCK_END,
-            ADD_CLUSTERING_KEY,
+            START,
+            END,
             OFFSET,
             WIDTH,
             END_OPEN_MARKER_FLAG,
@@ -201,46 +188,11 @@ private:
             END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1,
             END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2,
             ADD_BLOCK,
-        } state = state::CLUSTERING_START;
+        } state = state::START;
 
-        bool is_block_empty() const {
-            return (ck_blocks_header & (uint64_t(1) << (2 * ck_blocks_header_offset))) != 0;
-        }
-
-        bool is_block_null() const {
-            return (ck_blocks_header & (uint64_t(1) << (2 * ck_blocks_header_offset + 1))) != 0;
-        }
-
-        bool no_more_ck_blocks() const { return ck_range.empty(); }
-
-        void move_to_next_ck_block() {
-            ck_range.advance_begin(1);
-            ++ck_blocks_header_offset;
-            if (ck_blocks_header_offset == 32u) {
-                ck_blocks_header_offset = 0u;
-            }
-        }
-
-        bool should_read_block_header() const {
-            return ck_blocks_header_offset == 0u;
-        }
-        std::optional<uint32_t> get_ck_block_value_length() const {
-            return ck_range.front();
-        }
-
-        position_in_partition make_position() {
-            auto key = clustering_key_prefix::from_range(clustering_key_values | boost::adaptors::transformed(
-                [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
-
-            if (kind == bound_kind_m::clustering) {
-                return position_in_partition::for_key(std::move(key));
-            }
-
-            bound_kind rt_marker_kind = is_bound_kind(kind)
-                    ? to_bound_kind(kind)
-                    :(parsing_start_key ? boundary_to_start_bound : boundary_to_end_bound)(kind);
-            return position_in_partition(position_in_partition::range_tag_t{}, rt_marker_kind, std::move(key));
-        }
+        m_parser_context(const schema& s, reader_permit permit, column_values_fixed_lengths cvfl)
+            : clustering(s, std::move(permit), std::move(cvfl), true)
+        { }
     };
 
     std::variant<k_l_parser_context, m_parser_context> _ctx;
@@ -299,82 +251,22 @@ private:
         // keep running in the loop until we either are out of data or have consumed all the blocks
         while (true) {
             switch (ctx.state) {
-            case state_m::CLUSTERING_START:
-            clustering_start_label:
-                ctx.clustering_key_values.clear();
-                ctx.clustering_key_values.reserve(ctx.clustering_values_fixed_lengths.size());
-                ctx.ck_range = boost::make_iterator_range(ctx.clustering_values_fixed_lengths);
-                ctx.ck_blocks_header_offset = 0u;
-                if (read_8(data) != read_status::ready) {
-                    ctx.state = state_m::CK_KIND;
+            case state_m::START:
+                if (ctx.clustering.consume(data) == read_status::waiting) {
                     return;
                 }
-            case state_m::CK_KIND:
-                ctx.kind = bound_kind_m{_u8};
-                if (ctx.kind == bound_kind_m::clustering) {
-                    ctx.state = state_m::CK_BLOCK;
-                    goto ck_block_label;
-                }
-                if (read_16(data) != read_status::ready) {
-                    ctx.state = state_m::CK_SIZE;
+                ctx.start_pos = ctx.clustering.get_and_reset();
+                ctx.clustering.set_parsing_start_key(false);
+                ctx.state = state_m::END;
+                // fall-through
+            case state_m::END:
+                if (ctx.clustering.consume(data) == read_status::waiting) {
                     return;
                 }
-            case state_m::CK_SIZE:
-                if (_u16 < _s.clustering_key_size()) {
-                    ctx.ck_range.drop_back(_s.clustering_key_size() - _u16);
-                }
-
-            case state_m::CK_BLOCK:
-            ck_block_label:
-                if (ctx.no_more_ck_blocks()) {
-                    goto add_clustering_key_label;
-                }
-                if (!ctx.should_read_block_header()) {
-                    ctx.state = state_m::CK_BLOCK2;
-                    goto ck_block2_label;
-                }
-                if (read_unsigned_vint(data) != read_status::ready) {
-                    ctx.state = state_m::CK_BLOCK_HEADER;
-                    return;
-                }
-            case state_m::CK_BLOCK_HEADER:
-                ctx.ck_blocks_header = _u64;
-            case state_m::CK_BLOCK2:
-            ck_block2_label:
-            {
-                if (ctx.is_block_empty()) {
-                    ctx.clustering_key_values.push_back({});
-                    ctx.move_to_next_ck_block();
-                    goto ck_block_label;
-                }
-                if (ctx.is_block_null()) {
-                    ctx.move_to_next_ck_block();
-                    goto ck_block_label;
-                }
-                read_status status = read_status::waiting;
-                if (auto len = ctx.get_ck_block_value_length()) {
-                    status = read_bytes(data, *len, ctx.column_value);
-                } else {
-                    status = read_unsigned_vint_length_bytes(data, ctx.column_value);
-                }
-                if (status != read_status::ready) {
-                    ctx.state = state_m::CK_BLOCK_END;
-                    return;
-                }
-            }
-            case state_m::CK_BLOCK_END:
-                ctx.clustering_key_values.push_back(std::move(ctx.column_value));
-                ctx.move_to_next_ck_block();
-                ctx.state = state_m::CK_BLOCK;
-                goto ck_block_label;
-            case state_m::ADD_CLUSTERING_KEY:
-            add_clustering_key_label:
-                (ctx.parsing_start_key ? ctx.start_pos : ctx.end_pos) = ctx.make_position();
-                ctx.parsing_start_key = !ctx.parsing_start_key;
-                if (!ctx.end_pos) {
-                    ctx.state = state_m::CLUSTERING_START;
-                    goto clustering_start_label;
-                }
+                ctx.end_pos = ctx.clustering.get_and_reset();
+                ctx.clustering.set_parsing_start_key(true);
+                ctx.state = state_m::OFFSET;
+                // fall-through
             case state_m::OFFSET:
                 if (read_unsigned_vint(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_m::WIDTH;
@@ -419,7 +311,7 @@ private:
                                         ctx.offset,
                                         ctx.width,
                                         std::exchange(ctx.end_open_marker, {}));
-                ctx.state = state_m::CLUSTERING_START;
+                ctx.state = state_m::START;
                 --_num_blocks_left;
                 if (_num_blocks_left == 0) {
                     return;
@@ -441,11 +333,7 @@ public:
 
     bool non_consuming(const m_parser_context& ctx) const {
         using state_m = typename m_parser_context::state;
-        return ctx.state == state_m::CK_SIZE
-                || ctx.state == state_m::CK_BLOCK_HEADER
-                || ctx.state == state_m::CK_BLOCK_END
-                || ctx.state == state_m::ADD_CLUSTERING_KEY
-                || ctx.state == state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2
+        return ctx.state == state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2
                 || ctx.state == state_m::ADD_BLOCK;
     }
 
@@ -494,7 +382,7 @@ public:
         , _s{s}
     {
         if (clustering_values_fixed_lengths) {
-            _ctx.emplace<m_parser_context>(m_parser_context{std::move(*clustering_values_fixed_lengths)});
+            _ctx.emplace<m_parser_context>(m_parser_context{s, std::move(permit), std::move(*clustering_values_fixed_lengths)});
         }
     }
 };
