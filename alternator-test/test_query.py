@@ -228,3 +228,23 @@ def test_query_filtering_attributes_equality(filled_test_table):
     got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}}, QueryFilter=query_filter)
     print(got_items)
     assert multiset([item for item in items if item['p'] == 'long' and item['attribute'] == 'xxxx' and item['another'] == 'yy']) == multiset(got_items)
+
+# Test Query with the AttributesToGet parameter. Result should include the
+# selected attributes only - if one wants the key attributes as well, one
+# needs to select them explicitly. When no key attributes are selected,
+# some items may have *none* of the selected attributes. Those items are
+# returned too, as empty items - they are not outright missing.
+def test_query_attributes_to_get(dynamodb, test_table):
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'a': str(i*10), 'b': str(i*100) } for i in range(10)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    for wanted in [ ['a'],             # only non-key attributes
+                    ['c', 'a'],        # a key attribute (sort key) and non-key
+                    ['p', 'c'],        # entire key
+                    ['nonexistent']    # none of the items have this attribute!
+                   ]:
+        got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, AttributesToGet=wanted)
+        expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
+        assert multiset(expected_items) == multiset(got_items)
