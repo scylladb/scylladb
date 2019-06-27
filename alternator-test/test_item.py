@@ -321,3 +321,22 @@ def test_update_item_no_update_method(test_table_s):
     assert not "Item" in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
     test_table_s.update_item(Key={'p': p})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p}
+
+# Test GetItem with the AttributesToGet parameter. Result should include the
+# selected attributes only - if one wants the key attributes as well, one
+# needs to select them explicitly. When no key attributes are selected,
+# some items may have *none* of the selected attributes. Those items are
+# returned too, as empty items - they are not outright missing.
+def test_getitem_attributes_to_get(dynamodb, test_table):
+    p = random_string()
+    c = random_string()
+    item = {'p': p, 'c': c, 'a': 'hello', 'b': 'hi'}
+    test_table.put_item(Item=item)
+    for wanted in [ ['a'],             # only non-key attribute
+                    ['c', 'a'],        # a key attribute (sort key) and non-key
+                    ['p', 'c'],        # entire key
+                    ['nonexistent']    # Our item doesn't have this
+                   ]:
+        got_item = test_table.get_item(Key={'p': p, 'c': c}, AttributesToGet=wanted, ConsistentRead=True)['Item']
+        expected_item = {k: item[k] for k in wanted if k in item}
+        assert expected_item == got_item
