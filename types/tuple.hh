@@ -132,7 +132,6 @@ public:
     }
     virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view s) const override;
-    virtual sstring to_string_impl(const data_value& v) const override;
     virtual sstring to_json_string(bytes_view bv) const override;
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
     virtual bool is_compatible_with(const abstract_type& previous) const override;

@@ -621,7 +621,7 @@ public:
     sstring to_string(const bytes& b) const {
         return to_string(bytes_view(b));
     }
-    virtual sstring to_string_impl(const data_value& v) const = 0;
+    sstring to_string_impl(const data_value& v) const;
     virtual bytes from_string(sstring_view text) const = 0;
     virtual sstring to_json_string(bytes_view bv) const = 0;
     sstring to_json_string(const bytes& b) const {
@@ -998,9 +998,6 @@ public:
 
     virtual sstring get_string(const bytes& b) const override {
         return _underlying_type->get_string(b);
-    }
-    virtual sstring to_string_impl(const data_value& v) const override {
-        return _underlying_type->to_string_impl(v);
     }
     virtual sstring to_json_string(bytes_view bv) const override {
         return _underlying_type->to_json_string(bv);
