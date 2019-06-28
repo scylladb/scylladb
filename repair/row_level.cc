@@ -875,8 +875,13 @@ private:
 
     future<uint64_t> do_estimate_partitions_on_local_shard() {
         auto sstables = _cf.get_sstables();
-        uint64_t partition_count = boost::accumulate(*sstables, uint64_t(0), [this] (uint64_t x, auto&& sst) { return x + sst->estimated_keys_for_range(_range); });
-        return make_ready_future<uint64_t>(partition_count);
+        auto partition_count = make_lw_shared<uint64_t>(0);
+        return do_for_each(*sstables, [this, partition_count] (const sstables::shared_sstable& sst) mutable {
+            *partition_count += sst->estimated_keys_for_range(_range);
+            return make_ready_future<>();
+        }).then([partition_count] {
+            return *partition_count;
+        });
     }
 
     future<uint64_t> get_estimated_partitions() {
