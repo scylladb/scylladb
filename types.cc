@@ -271,9 +271,6 @@ struct byte_type_impl : integer_type_impl<int8_t> {
         return "tinyint";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::TINYINT;
-    }
 };
 
 struct short_type_impl : integer_type_impl<int16_t> {
@@ -290,9 +287,6 @@ struct short_type_impl : integer_type_impl<int16_t> {
         return "smallint";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::SMALLINT;
-    }
 };
 
 struct int32_type_impl : integer_type_impl<int32_t> {
@@ -303,9 +297,6 @@ struct int32_type_impl : integer_type_impl<int32_t> {
         return "int";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::INT;
-    }
 };
 
 struct long_type_impl : integer_type_impl<int64_t> {
@@ -316,9 +307,6 @@ struct long_type_impl : integer_type_impl<int64_t> {
         return "bigint";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::BIGINT;
-    }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == timestamp_type.get();
     }
@@ -388,9 +376,6 @@ struct ascii_type_impl final : public string_type_impl {
         return "ascii";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::ASCII;
-    }
 };
 
 struct utf8_type_impl final : public string_type_impl {
@@ -400,9 +385,6 @@ struct utf8_type_impl final : public string_type_impl {
         return "text";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::TEXT;
-    }
     virtual bool is_compatible_with(const abstract_type& other) const override {
         // Anything that is ascii is also utf8, and they both use bytes
         // comparison
@@ -465,9 +447,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         return "blob";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::BLOB;
-    }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return true;
     }
@@ -541,9 +520,6 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         return "boolean";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::BOOLEAN;
-    }
 };
 
 // This is the old version of timestamp_type_impl, but has been replaced as it
@@ -604,9 +580,6 @@ public:
         return "timestamp";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::TIMESTAMP;
-    }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timestamp_type.get() || &other == long_type.get();
     }
@@ -715,9 +688,6 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         return "timeuuid";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::TIMEUUID;
-    }
 private:
     static int compare_bytes(bytes_view o1, bytes_view o2) {
         auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
@@ -888,9 +858,6 @@ public:
         return "timestamp";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::TIMESTAMP;
-    }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == long_type.get();
     }
@@ -995,9 +962,6 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         return "date";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::DATE;
-    }
 };
 
 struct time_type_impl : public simple_type_impl<int64_t> {
@@ -1093,9 +1057,6 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         return "time";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::TIME;
-    }
 };
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
@@ -1178,9 +1139,6 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         return "uuid";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::UUID;
-    }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timeuuid_type.get();
     }
@@ -1281,9 +1239,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
         return "inet";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::INET;
-    }
 };
 
 // Integer of same length of a given type. This is useful because our
@@ -1440,9 +1395,6 @@ struct double_type_impl : floating_type_impl<double> {
         return "double";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::DOUBLE;
-    }
 };
 
 struct float_type_impl : floating_type_impl<float> {
@@ -1451,9 +1403,6 @@ struct float_type_impl : floating_type_impl<float> {
         return "float";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::FLOAT;
-    }
 };
 
 
@@ -1570,9 +1519,6 @@ public:
         return "varint";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::VARINT;
-    }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || int32_type->is_value_compatible_with(other) || long_type->is_value_compatible_with(other);
     }
@@ -1679,9 +1625,6 @@ public:
         return "decimal";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::DECIMAL;
-    }
 };
 
 class counter_type_impl : public abstract_type {
@@ -1725,9 +1668,6 @@ public:
         return "counter";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::COUNTER;
-    }
     virtual size_t native_value_size() const override {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1893,9 +1833,6 @@ public:
         return "duration";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::DURATION;
-    }
     virtual bool references_duration() const override {
         return true;
     }
@@ -1949,9 +1886,6 @@ struct empty_type_impl : abstract_type {
         return "empty";
     }
     virtual bool is_native() const override { return true; }
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return cql3_kind::EMPTY;
-    }
     virtual size_t native_value_size() const override {
         return 0;
     }
@@ -2283,7 +2217,34 @@ shared_ptr<const abstract_type> abstract_type::underlying_type() const {
 }
 
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
-    assert(0 && "no kind for this type");
+    struct visitor {
+        cql3_kind operator()(const ascii_type_impl&) { return cql3_kind::ASCII; }
+        cql3_kind operator()(const byte_type_impl&) { return cql3_kind::TINYINT; }
+        cql3_kind operator()(const bytes_type_impl&) { return cql3_kind::BLOB; }
+        cql3_kind operator()(const boolean_type_impl&) { return cql3_kind::BOOLEAN; }
+        cql3_kind operator()(const counter_type_impl&) { return cql3_kind::COUNTER; }
+        cql3_kind operator()(const date_type_impl&) { return cql3_kind::TIMESTAMP; }
+        cql3_kind operator()(const decimal_type_impl&) { return cql3_kind::DECIMAL; }
+        cql3_kind operator()(const double_type_impl&) { return cql3_kind::DOUBLE; }
+        cql3_kind operator()(const duration_type_impl&) { return cql3_kind::DURATION; }
+        cql3_kind operator()(const empty_type_impl&) { return cql3_kind::EMPTY; }
+        cql3_kind operator()(const float_type_impl&) { return cql3_kind::FLOAT; }
+        cql3_kind operator()(const inet_addr_type_impl&) { return cql3_kind::INET; }
+        cql3_kind operator()(const int32_type_impl&) { return cql3_kind::INT; }
+        cql3_kind operator()(const long_type_impl&) { return cql3_kind::BIGINT; }
+        cql3_kind operator()(const short_type_impl&) { return cql3_kind::SMALLINT; }
+        cql3_kind operator()(const simple_date_type_impl&) { return cql3_kind::DATE; }
+        cql3_kind operator()(const utf8_type_impl&) { return cql3_kind::TEXT; }
+        cql3_kind operator()(const time_type_impl&) { return cql3_kind::TIME; }
+        cql3_kind operator()(const timestamp_type_impl&) { return cql3_kind::TIMESTAMP; }
+        cql3_kind operator()(const timeuuid_type_impl&) { return cql3_kind::TIMEUUID; }
+        cql3_kind operator()(const uuid_type_impl&) { return cql3_kind::UUID; }
+        cql3_kind operator()(const varint_type_impl&) { return cql3_kind::VARINT; }
+        cql3_kind operator()(const reversed_type_impl& r) { return r.underlying_type()->get_cql3_kind_impl(); }
+        cql3_kind operator()(const tuple_type_impl&) { assert(0 && "no kind for this type"); }
+        cql3_kind operator()(const collection_type_impl&) { assert(0 && "no kind for this type"); }
+    };
+    return visit(*this, visitor{});
 }
 
 cql3::cql3_type abstract_type::as_cql3_type() const {

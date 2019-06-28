@@ -648,7 +648,7 @@ public:
     virtual shared_ptr<const abstract_type> freeze() const { return shared_from_this(); }
     friend class list_type_impl;
 private:
-    virtual cql3_kind get_cql3_kind_impl() const;
+    cql3_kind get_cql3_kind_impl() const;
     virtual sstring cql3_type_name_impl() const = 0;
     mutable sstring _cql3_type_name;
 protected:
@@ -1005,10 +1005,6 @@ public:
     }
     virtual bytes from_string(sstring_view s) const override {
         return _underlying_type->from_string(s);
-    }
-
-    virtual cql3_kind get_cql3_kind_impl() const override {
-        return _underlying_type->get_cql3_kind_impl();
     }
 
     virtual sstring cql3_type_name_impl() const override {
