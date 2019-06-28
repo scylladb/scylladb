@@ -33,6 +33,32 @@
 namespace sstables {
 
 using promoted_index_block_position_view = std::variant<composite_view, position_in_partition_view>;
+using promoted_index_block_position = std::variant<composite, position_in_partition>;
+
+inline
+promoted_index_block_position_view to_view(const promoted_index_block_position& v) {
+    return std::visit(overloaded_functor{
+            [] (const composite& v) -> promoted_index_block_position_view {
+                return composite_view(v);
+            },
+            [] (const position_in_partition& v) -> promoted_index_block_position_view {
+                return position_in_partition_view(v);
+            }
+        }, v);
+}
+
+// Return the owning version of the position given a view.
+inline
+promoted_index_block_position materialize(const promoted_index_block_position_view& v) {
+    return std::visit(overloaded_functor{
+            [] (const composite_view& v) -> promoted_index_block_position {
+                return composite(v);
+            },
+            [] (const position_in_partition_view& v) -> promoted_index_block_position {
+                return position_in_partition(v);
+            }
+        }, v);
+}
 
 class promoted_index_block_compare {
     const position_in_partition::composite_less_compare _cmp;
@@ -453,3 +479,7 @@ inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_inde
     return out;
 }
 
+inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position& pos) {
+    std::visit([&out] (const auto& pos) mutable { out << pos; }, pos);
+    return out;
+}
