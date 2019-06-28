@@ -65,6 +65,7 @@
 #include "binary_search.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/memory_data_sink.hh"
+#include "utils/cached_file.hh"
 
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
@@ -3378,6 +3379,7 @@ future<> replay_pending_delete_log(sstring pending_delete_log) {
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
 thread_local shared_index_lists::stats shared_index_lists::_shard_stats;
+thread_local cached_file::metrics index_page_cache_metrics;
 static thread_local seastar::metrics::metric_groups metrics;
 
 future<> init_metrics() {
@@ -3390,6 +3392,17 @@ future<> init_metrics() {
             sm::description("Index page requests which initiated a read from disk")),
         sm::make_derive("index_page_blocks", [] { return shared_index_lists::shard_stats().blocks; },
             sm::description("Index page requests which needed to wait due to page not being loaded yet")),
+
+        sm::make_derive("index_page_cache_hits", [] { return index_page_cache_metrics.page_hits; },
+            sm::description("Index page cache requests which were served from cache")),
+        sm::make_derive("index_page_cache_misses", [] { return index_page_cache_metrics.page_misses; },
+            sm::description("Index page cache requests which had to perform I/O")),
+        sm::make_derive("index_page_cache_evictions", [] { return index_page_cache_metrics.page_evictions; },
+            sm::description("Total number of index page cache pages which have been evicted")),
+        sm::make_derive("index_page_cache_populations", [] { return index_page_cache_metrics.page_populations; },
+            sm::description("Total number of index page cache pages which were inserted into the cache")),
+        sm::make_gauge("index_page_cache_bytes", [] { return index_page_cache_metrics.cached_bytes; },
+            sm::description("Total number of bytes cached in the index page cache")),
 
         sm::make_derive("partition_writes", [] { return sstables_stats::get_shard_stats().partition_writes; },
             sm::description("Number of partitions written")),

@@ -29,10 +29,12 @@
 #include "sstables/prepended_input_stream.hh"
 #include "tracing/traced_file.hh"
 #include "sstables/scanning_clustered_index_cursor.hh"
+#include "sstables/mc/bsearch_clustered_cursor.hh"
 
 namespace sstables {
 
 extern seastar::logger sstlog;
+extern thread_local cached_file::metrics index_page_cache_metrics;
 
 class index_consumer {
     uint64_t max_quantity;
@@ -217,7 +219,8 @@ public:
             }
         state_CONSUME_ENTRY:
         case state::CONSUME_ENTRY: {
-            auto promoted_index_size = _promoted_index_end - current_pos();
+            auto promoted_index_start = current_pos();
+            auto promoted_index_size = _promoted_index_end - promoted_index_start;
             sstlog.trace("{}: pos {} state {} size {}", this, current_pos(), state::CONSUME_ENTRY, promoted_index_size);
             if (_deletion_time) {
                 _num_pi_blocks = get_uint32();
@@ -225,19 +228,32 @@ public:
             auto data_size = data.size();
             std::unique_ptr<promoted_index> pi;
             if ((_trust_pi == trust_promoted_index::yes) && (promoted_index_size > 0)) {
-                input_stream<char> promoted_index_stream = [&] {
+                std::unique_ptr<clustered_index_cursor> cursor;
+                if (is_mc_format()) {
+                    cached_file f(_index_file, continuous_data_consumer::_permit, index_page_cache_metrics,
+                        promoted_index_start, promoted_index_size);
                     if (promoted_index_size <= data_size) {
-                        auto buf = data.share();
-                        buf.trim(promoted_index_size);
-                        return make_buffer_input_stream(std::move(buf));
+                        f.populate_front(data.share());
                     } else {
-                        return make_prepended_input_stream(std::move(data),
-                            make_file_input_stream(_index_file, this->position(), promoted_index_size - data_size, _options).detach());
+                        f.populate_front(std::move(data));
                     }
-                }();
-                auto index = std::make_unique<scanning_clustered_index_cursor>(_s, continuous_data_consumer::_permit,
+                    cursor = std::make_unique<mc::bsearch_clustered_cursor>(_s, continuous_data_consumer::_permit,
+                        *_ck_values_fixed_lengths, std::move(f), _options.io_priority_class, _num_pi_blocks);
+                } else {
+                    input_stream<char> promoted_index_stream = [&] {
+                        if (promoted_index_size <= data_size) {
+                            auto buf = data.share();
+                            buf.trim(promoted_index_size);
+                            return make_buffer_input_stream(std::move(buf));
+                        } else {
+                            return make_prepended_input_stream(std::move(data),
+                                make_file_input_stream(_index_file, this->position(), promoted_index_size - data_size, _options).detach());
+                        }
+                    }();
+                    cursor = std::make_unique<scanning_clustered_index_cursor>(_s, continuous_data_consumer::_permit,
                         std::move(promoted_index_stream), promoted_index_size, _num_pi_blocks, _ck_values_fixed_lengths);
-                pi = std::make_unique<promoted_index>(_s, *_deletion_time, promoted_index_size, std::move(index));
+                }
+                pi = std::make_unique<promoted_index>(_s, *_deletion_time, promoted_index_size, std::move(cursor));
             } else {
                 _num_pi_blocks = 0;
             }
