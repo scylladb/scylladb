@@ -1016,7 +1016,7 @@ private:
         _last_sync_boundary = _current_sync_boundary;
         size_t current_size = row_buf_size();
         return read_rows_from_disk(current_size).then([this, skipped_sync_boundary = std::move(skipped_sync_boundary)] (std::list<repair_row> new_rows) mutable {
-            size_t new_rows_size = boost::accumulate(new_rows, size_t(0), [] (size_t x, const repair_row& r) { return x + r.size(); });
+            size_t new_rows_size = get_repair_rows_size(new_rows);
             size_t new_rows_nr = new_rows.size();
             _row_buf.splice(_row_buf.end(), new_rows);
             std::optional<repair_sync_boundary> sb_max;
