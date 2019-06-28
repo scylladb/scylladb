@@ -547,12 +547,11 @@ public:
         return this == &previous;
     }
     /*
-     * Types which are wrappers over other types should override this.
+     * Types which are wrappers over other types return the inner type.
      * For example the reversed_type returns the type it is reversing.
      */
-    virtual shared_ptr<const abstract_type> underlying_type() const {
-        return shared_from_this();
-    }
+    shared_ptr<const abstract_type> underlying_type() const;
+
     /**
      * Returns true if values of the other AbstractType can be read and "reasonably" interpreted by the this
      * AbstractType. Note that this is a weaker version of isCompatibleWith, as it does not require that both type
@@ -962,7 +961,7 @@ public:
         return false;
     }
 
-    virtual shared_ptr<const abstract_type> underlying_type() const override {
+    shared_ptr<const abstract_type> underlying_type() const {
         return _underlying_type;
     }
 

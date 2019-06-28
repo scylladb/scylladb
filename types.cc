@@ -2274,6 +2274,14 @@ void write_collection_value(bytes::iterator& out, cql_serialization_format sf, b
     out = std::copy_n(val_bytes.begin(), val_bytes.size(), out);
 }
 
+shared_ptr<const abstract_type> abstract_type::underlying_type() const {
+    struct visitor {
+        shared_ptr<const abstract_type> operator()(const abstract_type& t) { return t.shared_from_this(); }
+        shared_ptr<const abstract_type> operator()(const reversed_type_impl& r) { return r.underlying_type(); }
+    };
+    return visit(*this, visitor{});
+}
+
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     assert(0 && "no kind for this type");
 }
