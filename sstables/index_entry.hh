@@ -391,6 +391,8 @@ public:
     // or nullopt if there is no information about further positions.
     //
     // When entry_info is returned, the cursor was advanced to entry_info::start.
+    //
+    // The returned entry_info is only valid until the next invocation of any method on this instance.
     virtual future<std::optional<entry_info>> next_entry() = 0;
 };
 
