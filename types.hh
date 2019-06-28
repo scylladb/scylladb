@@ -638,7 +638,7 @@ public:
     bool is_list() const { return _kind == kind::list; }
     virtual bool is_multi_cell() const { return false; }
     virtual bool is_atomic() const { return !is_multi_cell(); }
-    virtual bool is_reversed() const { return false; }
+    bool is_reversed() const { return _kind == kind::reversed; }
     virtual bool is_tuple() const { return false; }
     virtual bool is_user_type() const { return false; }
     virtual bool is_native() const = 0;
@@ -974,7 +974,6 @@ public:
     virtual size_t hash(bytes_view v) const override {
         return _underlying_type->hash(v);
     }
-    virtual bool is_reversed() const override { return true; }
     virtual bool is_counter() const override {
         return _underlying_type->is_counter();
     }
