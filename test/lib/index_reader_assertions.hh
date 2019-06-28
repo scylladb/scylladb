@@ -52,7 +52,7 @@ public:
             prev = rp;
 
             sstables::clustered_index_cursor& cur = e.get_promoted_index()->cursor();
-            std::optional<sstables::promoted_index_block_position> prev_end;
+            std::optional<sstables::promoted_index_block_position_view> prev_end;
             while (auto ei_opt = cur.next_entry().get0()) {
                 sstables::clustered_index_cursor::entry_info& ei = *ei_opt;
                 if (prev_end && pos_cmp(ei.start, *prev_end)) {

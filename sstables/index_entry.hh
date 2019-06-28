@@ -32,30 +32,30 @@
 
 namespace sstables {
 
-using promoted_index_block_position = std::variant<composite_view, position_in_partition_view>;
+using promoted_index_block_position_view = std::variant<composite_view, position_in_partition_view>;
 
 class promoted_index_block_compare {
     const position_in_partition::composite_less_compare _cmp;
 public:
     explicit promoted_index_block_compare(const schema& s) : _cmp{s} {}
 
-    bool operator()(const promoted_index_block_position& lhs, position_in_partition_view rhs) const {
+    bool operator()(const promoted_index_block_position_view& lhs, position_in_partition_view rhs) const {
         return std::visit([this, rhs] (const auto& pos) { return _cmp(pos, rhs); }, lhs);
     }
 
-    bool operator()(position_in_partition_view lhs, const promoted_index_block_position& rhs) const {
+    bool operator()(position_in_partition_view lhs, const promoted_index_block_position_view& rhs) const {
         return std::visit([this, lhs] (const auto& pos) { return _cmp(lhs, pos); }, rhs);
     }
 
-    bool operator()(const promoted_index_block_position& lhs, composite_view rhs) const {
+    bool operator()(const promoted_index_block_position_view& lhs, composite_view rhs) const {
         return std::visit([this, rhs] (const auto& pos) { return _cmp(pos, rhs); }, lhs);
     }
 
-    bool operator()(composite_view lhs, const promoted_index_block_position& rhs) const {
+    bool operator()(composite_view lhs, const promoted_index_block_position_view& rhs) const {
         return std::visit([this, lhs] (const auto& pos) { return _cmp(lhs, pos); }, rhs);
     }
 
-    bool operator()(const promoted_index_block_position& lhs, const promoted_index_block_position& rhs) const {
+    bool operator()(const promoted_index_block_position_view& lhs, const promoted_index_block_position_view& rhs) const {
         return std::visit([this, &lhs] (const auto& pos) { return (*this)(lhs, pos); }, rhs);
     }
 };
@@ -78,11 +78,11 @@ class promoted_index_block {
     std::optional<deletion_time> _end_open_marker;
 
     inline static
-    promoted_index_block_position get_position(const schema& s, const bound_storage& storage) {
+    promoted_index_block_position_view get_position(const schema& s, const bound_storage& storage) {
         return std::visit(overloaded_functor{
-            [&s] (const temporary_buffer<char>& buf) -> promoted_index_block_position {
+            [&s] (const temporary_buffer<char>& buf) -> promoted_index_block_position_view {
                 return composite_view{to_bytes_view(buf), s.is_compound()}; },
-            [] (const position_in_partition& pos) -> promoted_index_block_position {
+            [] (const position_in_partition& pos) -> promoted_index_block_position_view {
                 return pos;
             }}, storage);
     }
@@ -107,8 +107,8 @@ public:
     promoted_index_block& operator=(const promoted_index_block&) = delete;
     promoted_index_block& operator=(promoted_index_block&&) noexcept = default;
 
-    promoted_index_block_position start(const schema& s) const { return get_position(s, _start);}
-    promoted_index_block_position end(const schema& s) const { return get_position(s, _end);}
+    promoted_index_block_position_view start(const schema& s) const { return get_position(s, _start);}
+    promoted_index_block_position_view end(const schema& s) const { return get_position(s, _end);}
     uint64_t offset() const { return _offset; }
     uint64_t width() const { return _width; }
     std::optional<deletion_time> end_open_marker() const { return _end_open_marker; }
@@ -330,8 +330,8 @@ public:
     };
 
     struct entry_info {
-        promoted_index_block_position start;
-        promoted_index_block_position end;
+        promoted_index_block_position_view start;
+        promoted_index_block_position_view end;
         offset_in_partition offset;
     };
 
@@ -448,7 +448,7 @@ public:
 
 }
 
-inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position& pos) {
+inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position_view& pos) {
     std::visit([&out] (const auto& pos) mutable { out << pos; }, pos);
     return out;
 }
