@@ -329,7 +329,15 @@ cql_server::connection::read_frame() {
                 temporary_buffer<char> full(frame_size());
                 full.get_write()[0] = _version;
                 std::copy(tail.get(), tail.get() + tail.size(), full.get_write() + 1);
-                return make_ready_future<ret_type>(parse_frame(std::move(full)));
+                auto frame = parse_frame(std::move(full));
+                // This is the very first frame, so reject obviously incorrect frames, to
+                // avoid allocating large amounts of memory for the message body
+                if (frame.length > 100'000) {
+                    // The STARTUP message body is a [string map] containing just a few options,
+                    // so it should be smaller that 100kB. See #4366.
+                    throw exceptions::protocol_exception(format("Initial message size too large ({:d}), rejecting as invalid", frame.length));
+                }
+                return make_ready_future<ret_type>(frame);
             });
         });
     } else {
