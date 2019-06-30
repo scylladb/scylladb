@@ -33,20 +33,26 @@ def full_query(table, **kwargs):
         items.extend(response['Items'])
     return items
 
+def freeze(item):
+    if isinstance(item, dict):
+        return frozenset((key, freeze(value)) for key, value in item.items())
+    elif isinstance(item, list):
+        return tuple(freeze(value) for value in item)
+    return item
+
 # To compare two lists of items (each is a dict) without regard for order,
 # "==" is not good enough because it will fail if the order is different.
 # The following function, multiset() converts the list into a multiset
 # (set with duplicates) where order doesn't matter, so the multisets can
 # be compared.
 def multiset(items):
-    return collections.Counter([frozenset(item.items()) for item in items])
+    return collections.Counter([freeze(item) for item in items])
 
 # Basic test for ProjectionExpression, requesting only top-level attributes.
 # Result should include the selected attributes only - if one wants the key
 # attributes as well, one needs to select them explicitly. When no key
 # attributes are selected, an item may have *none* of the selected
 # attributes, and returned as an empty item.
-@pytest.mark.xfail(reason="ProjectionExpression not yet implemented in GetItem")
 def test_projection_expression_toplevel(test_table):
     p = random_string()
     c = random_string()
@@ -63,7 +69,6 @@ def test_projection_expression_toplevel(test_table):
 
 # Various simple tests for ProjectionExpression's syntax, using only top-evel
 # attributes.
-@pytest.mark.xfail(reason="ProjectionExpression not yet implemented in GetItem")
 def test_projection_expression_toplevel_syntax(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': 'hello', 'b': 'hi'})
@@ -71,6 +76,11 @@ def test_projection_expression_toplevel_syntax(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#name': 'a'})['Item'] == {'a': 'hello'}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a,b')['Item'] == {'a': 'hello', 'b': 'hi'}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=' a  ,   b  ')['Item'] == {'a': 'hello', 'b': 'hi'}
+    # Missing or unused names in ExpressionAttributeNames are errors:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#wrong': 'a'})['Item'] == {'a': 'hello'}
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#name': 'a', '#unused': 'b'})['Item'] == {'a': 'hello'}
     # It is not allowed to fetch the same top-level attribute twice (or in
     # general, list two overlapping attributes). We get an error like
     # "Invalid ProjectionExpression: Two document paths overlap with each
@@ -94,7 +104,6 @@ def test_projection_expression_toplevel_syntax(test_table_s):
 # The following two tests are similar to test_projection_expression_toplevel()
 # which tested the GetItem operation - but these test Scan and Query.
 # Both test ProjectionExpression with only top-level attributes.
-@pytest.mark.xfail(reason="ProjectionExpression not yet implemented in Scan")
 def test_projection_expression_scan(filled_test_table):
     table, items = filled_test_table
     for wanted in [ ['another'],       # only non-key attributes (one item doesn't have it!)
@@ -106,7 +115,6 @@ def test_projection_expression_scan(filled_test_table):
         expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
         assert multiset(expected_items) == multiset(got_items)
 
-@pytest.mark.xfail(reason="ProjectionExpression not yet implemented in Query")
 def test_projection_expression_query(test_table):
     p = random_string()
     items = [{'p': p, 'c': str(i), 'a': str(i*10), 'b': str(i*100) } for i in range(10)]
@@ -171,14 +179,43 @@ def test_projection_expression_path(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a,a.b[0]')['Item']
 
+@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
+def test_query_projection_expression_path(test_table):
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'a': {'x': str(i*10), 'y': 'hi'}, 'b': 'hello' } for i in range(10)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ProjectionExpression="a.x")
+    expected_items = [{'a': {'x': x['a']['x']}} for x in items]
+    assert multiset(expected_items) == multiset(got_items)
+
+@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
+def test_scan_projection_expression_path(test_table):
+    # This test is similar to test_query_projection_expression_path above,
+    # but uses a scan instead of a query. The scan will generate unrelated
+    # partitions created by other tests (hopefully not too many...) that we
+    # need to ignore. We also need to ask for "p" too, so we can filter by it.
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'a': {'x': str(i*10), 'y': 'hi'}, 'b': 'hello' } for i in range(10)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    got_items = [ x for x in full_scan(test_table, ProjectionExpression="p, a.x") if x['p'] == p]
+    expected_items = [{'p': p, 'a': {'x': x['a']['x']}} for x in items]
+    assert multiset(expected_items) == multiset(got_items)
+
 # It is not allowed to use both ProjectionExpression and its older cousin,
 # AttributesToGet, together. If trying to do this, DynamoDB produces an error
 # like "Can not use both expression and non-expression parameters in the same
 # request: Non-expression parameters: {AttributesToGet} Expression
 # parameters: {ProjectionExpression}
-@pytest.mark.xfail(reason="ProjectionExpression not yet implemented in GetItem")
 def test_projection_expression_and_attributes_to_get(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': 'hello', 'b': 'hi'})
     with pytest.raises(ClientError, match='ValidationException.*both'):
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a', AttributesToGet=['b'])['Item']
+    with pytest.raises(ClientError, match='ValidationException.*both'):
+        full_scan(test_table_s,  ProjectionExpression='a', AttributesToGet=['a'])
+    with pytest.raises(ClientError, match='ValidationException.*both'):
+        full_query(test_table_s, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ProjectionExpression='a', AttributesToGet=['a'])

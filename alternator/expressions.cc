@@ -45,6 +45,14 @@ parse_update_expression(std::string query) {
     }
 }
 
+std::vector<parsed::path>
+parse_projection_expression(std::string query) {
+    try {
+        return do_with_parser(query,  std::mem_fn(&expressionsParser::projection_expression));
+    } catch (...) {
+        throw expressions_syntax_error(format("Failed parsing ProjectionExpression '{}': {}", query, std::current_exception()));
+    }
+}
 
 
 namespace parsed {

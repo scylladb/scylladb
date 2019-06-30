@@ -12,6 +12,7 @@
 
 #include <string>
 #include <stdexcept>
+#include <vector>
 
 #include "expressions_types.hh"
 
@@ -23,6 +24,7 @@ public:
 };
 
 parsed::update_expression parse_update_expression(std::string query);
+std::vector<parsed::path> parse_projection_expression(std::string query);
 
 
 } /* namespace alternator */
