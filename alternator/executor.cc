@@ -372,13 +372,13 @@ static std::string resolve_update_path(const parsed::path& p,
 // Fail the expression if it has unused attribute names or values. This is
 // how DynamoDB behaves, so we do too.
 static void verify_all_are_used(const Json::Value& req, const char* field,
-        const std::unordered_set<std::string>& used) {
+        const std::unordered_set<std::string>& used, const char* operation) {
     auto& attribute_names = req[field];
     for (auto it = attribute_names.begin(); it != attribute_names.end(); ++it) {
         if (!used.count(it.key().asString())) {
             throw api_error("ValidationException",
-                format("{} has spurious '{}', not used in UpdateExpression",
-                       field, it.key().asString()));
+                format("{} has spurious '{}', not used in {}",
+                       field, it.key().asString(), operation));
         }
     }
 }
@@ -516,6 +516,74 @@ static Json::Value calculate_value(const parsed::set_rhs& rhs,
     return Json::Value::null;
 }
 
+static std::string resolve_projection_path(const parsed::path& p,
+        const Json::Value& expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& seen_column_names) {
+    if (p.has_operators()) {
+        // FIXME:
+        throw api_error("ValidationException", "Non-toplevel attributes in ProjectionExpression not yet implemented (FIXME)");
+    }
+    auto column_name = p.root();
+    if (column_name.size() > 0 && column_name[0] == '#') {
+        const Json::Value& value = expression_attribute_names.get(column_name, Json::nullValue);
+        if (!value.isString()) {
+            throw api_error("ValidationException",
+                format("ExpressionAttributeNames missing entry '{}' required by ProjectionExpression", column_name));
+        }
+        used_attribute_names.emplace(std::move(column_name));
+        column_name = value.asString();
+    }
+    // FIXME: this check will need to change when we support non-toplevel attributes
+    if (!seen_column_names.insert(column_name).second) {
+        throw api_error("ValidationException",
+                format("Invalid ProjectionExpression: two document paths overlap with each other: {} and {}.",
+                        column_name, column_name));
+    }
+    return column_name;
+}
+
+// calculate_attrs_to_get() takes either AttributesToGet or
+// ProjectionExpression parameters (having both is *not* allowed),
+// and returns the list of cells we need to read.
+// In our current implementation, only top-level attributes are stored
+// as cells, and nested documents are stored serialized as JSON.
+// So this function currently returns only the the top-level attributes
+// but we also need to add, after the query, filtering to keep only
+// the parts of the JSON attributes that were chosen in the paths'
+// operators. Because we don't have such filtering yet (FIXME), we fail here
+// if the requested paths are anything but top-level attributes.
+std::unordered_set<std::string> calculate_attrs_to_get(const Json::Value& req) {
+    const Json::Value& attributes_to_get = req["AttributesToGet"];
+    const Json::Value& projection_expression = req["ProjectionExpression"];
+    if (attributes_to_get && projection_expression) {
+        throw api_error("ValidationException",
+                format("GetItem does not allow both ProjectionExpression and AttributesToGet to be given together"));
+    }
+    if (attributes_to_get) {
+        return boost::copy_range<std::unordered_set<std::string>>(attributes_to_get |
+                boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
+    } else if (projection_expression){
+        const Json::Value& expression_attribute_names = req["ExpressionAttributeNames"];
+        std::vector<parsed::path> paths_to_get;
+        try {
+            paths_to_get = parse_projection_expression(projection_expression.asString());
+        } catch(expressions_syntax_error& e) {
+            throw api_error("ValidationException", e.what());
+        }
+        std::unordered_set<std::string> used_attribute_names;
+        std::unordered_set<std::string> seen_column_names;
+        auto ret = boost::copy_range<std::unordered_set<std::string>>(paths_to_get |
+            boost::adaptors::transformed([&] (const parsed::path& p) {
+                return resolve_projection_path(p, expression_attribute_names, used_attribute_names, seen_column_names);
+            }));
+        verify_all_are_used(req, "ExpressionAttributeNames", used_attribute_names, "ProjectionExpression");
+        return ret;
+    }
+    // An empty set asks to read everything
+    return {};
+}
+
 
 future<json::json_return_type> executor::update_item(std::string content) {
     _stats.api_operations.update_item++;
@@ -579,8 +647,8 @@ future<json::json_return_type> executor::update_item(std::string content) {
                 throw api_error("ValidationException", "UpdateExpression: ADD and DELETE not yet supported.");
             }
         }
-        verify_all_are_used(update_info, "ExpressionAttributeNames", used_attribute_names);
-        verify_all_are_used(update_info, "ExpressionAttributeValues", used_attribute_values);
+        verify_all_are_used(update_info, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
+        verify_all_are_used(update_info, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
     }
 
     for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
@@ -699,8 +767,7 @@ future<json::json_return_type> executor::get_item(std::string content) {
     elogger.trace("Getting item {}", table_info.toStyledString());
 
     schema_ptr schema = get_table(_proxy, table_info);
-    //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
-    Json::Value attributes_to_get = table_info["AttributesToGet"];
+
     Json::Value query_key = table_info["Key"];
     db::consistency_level cl = get_read_consistency(table_info);
 
@@ -723,7 +790,7 @@ future<json::json_return_type> executor::get_item(std::string content) {
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
 
-    auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
+    auto attrs_to_get = calculate_attrs_to_get(table_info);
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(db::no_timeout)).then(
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get)] (service::storage_proxy::coordinator_query_result qr) mutable {
@@ -882,8 +949,7 @@ future<json::json_return_type> executor::scan(std::string content) {
     elogger.trace("Scanning {}", request_info.toStyledString());
 
     schema_ptr schema = get_table(_proxy, request_info);
-    //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
-    Json::Value attributes_to_get = request_info["AttributesToGet"];
+
     Json::Value exclusive_start_key = request_info["ExclusiveStartKey"];
     //FIXME(sarna): ScanFilter is deprecated in favor of FilterExpression
     const Json::Value& scan_filter = request_info["ScanFilter"];
@@ -893,7 +959,8 @@ future<json::json_return_type> executor::scan(std::string content) {
         throw api_error("ValidationException", "Limit must be greater than 0");
     }
 
-    auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
+
+    auto attrs_to_get = calculate_attrs_to_get(request_info);
 
     dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
     std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
@@ -1010,8 +1077,7 @@ future<json::json_return_type> executor::query(std::string content) {
     elogger.trace("Querying {}", request_info.toStyledString());
 
     schema_ptr schema = get_table(_proxy, request_info);
-    //FIXME(sarna): AttributesToGet is deprecated with more generic ProjectionExpression in the newest API
-    Json::Value attributes_to_get = request_info["AttributesToGet"];
+
     Json::Value exclusive_start_key = request_info["ExclusiveStartKey"];
     db::consistency_level cl = get_read_consistency(request_info);
     uint32_t limit = request_info.get("Limit", query::max_partitions).asUInt();
@@ -1025,7 +1091,8 @@ future<json::json_return_type> executor::query(std::string content) {
     const Json::Value& query_filter = request_info["QueryFilter"];
 
     auto [partition_ranges, ck_bounds] = calculate_bounds(schema, conditions);
-    auto attrs_to_get = boost::copy_range<std::unordered_set<std::string>>(attributes_to_get | boost::adaptors::transformed(std::bind(&Json::Value::asString, std::placeholders::_1)));
+
+    auto attrs_to_get = calculate_attrs_to_get(request_info);
 
     auto filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), query_filter);
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions));
