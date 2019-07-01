@@ -279,6 +279,14 @@ static mutation make_item_mutation(const Json::Value& item, schema_ptr schema) {
     row.cells().apply(attrs_column(*schema), std::move(serialized_map));
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
+    // PutItem is supposed to completely replace the old item, so we need to
+    // also have a tombstone removing old cells. We can't use the timestamp
+    // ts, because when data and tombstone tie on timestamp, the tombstone
+    // wins. So we need to use ts-1. Note that we use this trick also in
+    // Scylla proper, to implement the operation to replace an entire
+    // collection ("UPDATE .. SET x = ..") - see
+    // cql3::update_parameters::make_tombstone_just_before().
+    row.apply(tombstone(ts-1, gc_clock::now()));
     return m;
 }
 

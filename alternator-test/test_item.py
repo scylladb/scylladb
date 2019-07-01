@@ -337,3 +337,19 @@ def test_delete_item_sort(test_table):
     assert 'Item' in test_table.get_item(Key=key, ConsistentRead=True)
     test_table.delete_item(Key=key)
     assert not 'Item' in test_table.get_item(Key=key, ConsistentRead=True)
+
+# Test that PutItem completely replaces an existing item. It shouldn't merge
+# it with a previously existing value, as UpdateItem does!
+# We test for a table with just hash key, and for a table with both hash and
+# sort keys.
+def test_put_item_replace(test_table_s, test_table):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hi'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi'}
+    test_table_s.put_item(Item={'p': p, 'b': 'hello'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hello'}
+    c = random_string()
+    test_table.put_item(Item={'p': p, 'c': c, 'a': 'hi'})
+    assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'a': 'hi'}
+    test_table.put_item(Item={'p': p, 'c': c, 'b': 'hello'})
+    assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'b': 'hello'}

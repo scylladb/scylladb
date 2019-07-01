@@ -95,3 +95,22 @@ def test_batch_write_duplicate_write_and_delete(test_table_s):
         with test_table_s.batch_writer() as batch:
             batch.delete_item(Key={'p': p})
             batch.put_item({'p': p})
+
+# Test that BatchWriteItem's PutRequest completely replaces an existing item.
+# It shouldn't merge it with a previously existing value. See also the same
+# test for PutItem - test_put_item_replace().
+def test_batch_put_item_replace(test_table_s, test_table):
+    p = random_string()
+    with test_table_s.batch_writer() as batch:
+        batch.put_item(Item={'p': p, 'a': 'hi'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi'}
+    with test_table_s.batch_writer() as batch:
+        batch.put_item(Item={'p': p, 'b': 'hello'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hello'}
+    c = random_string()
+    with test_table.batch_writer() as batch:
+        batch.put_item(Item={'p': p, 'c': c, 'a': 'hi'})
+    assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'a': 'hi'}
+    with test_table.batch_writer() as batch:
+        batch.put_item(Item={'p': p, 'c': c, 'b': 'hello'})
+    assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'b': 'hello'}
