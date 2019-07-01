@@ -319,10 +319,20 @@ future<json::json_return_type> executor::batch_write_item(std::string content) {
     for (auto it = request_items.begin(); it != request_items.end(); ++it) {
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
         for (auto&& request : *it) {
-            //FIXME(sarna): Add support for DeleteRequest too
-            const Json::Value& put_request = request.get("PutRequest", Json::Value());
-            const Json::Value& item = put_request["Item"];
-            mutations.push_back(make_item_mutation(item, schema));
+            if (!request.isObject() || request.size() != 1) {
+                throw api_error("ValidationException", format("Invalid BatchWriteItem request: {}", request.toStyledString()));
+            }
+            auto r = request.begin();
+            if (r.key() == "PutRequest") {
+                const Json::Value& put_request = *r;
+                const Json::Value& item = put_request["Item"];
+                mutations.push_back(make_item_mutation(item, schema));
+            } else if (r.key() == "DeleteRequest") {
+                // FIXME:
+                throw api_error("ValidationException", "BatchWriteItem doesn't support DeleteRequest yet");
+            } else {
+                throw api_error("ValidationException", format("Unknown BatchWriteItem request type: {}", r.key()));
+            }
         }
     }
 
