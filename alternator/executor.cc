@@ -307,9 +307,19 @@ future<json::json_return_type> executor::put_item(std::string content) {
 
 }
 
-static mutation make_delete_item_mutation(const Json::Value& item, schema_ptr schema) {
-    partition_key pk = pk_from_json(item, schema);
-    clustering_key ck = ck_from_json(item, schema);
+// After calling pk_from_json() and ck_from_json() to extract the pk and ck
+// components of a key, and if that succeeded, call check_key() to further
+// check that the key doesn't have any spurious components.
+static void check_key(const Json::Value& key, const schema_ptr& schema) {
+    if (key.size() != (schema->clustering_key_size() == 0 ? 1 : 2)) {
+        throw api_error("ValidationException", "Given key attribute not in schema");
+    }
+}
+
+static mutation make_delete_item_mutation(const Json::Value& key, schema_ptr schema) {
+    partition_key pk = pk_from_json(key, schema);
+    clustering_key ck = ck_from_json(key, schema);
+    check_key(key, schema);
     mutation m(schema, pk);
     auto& row = m.partition().clustered_row(*schema, ck);
     row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
@@ -324,6 +334,7 @@ future<json::json_return_type> executor::delete_item(std::string content) {
     const Json::Value& key = update_info["Key"];
 
     mutation m = make_delete_item_mutation(key, schema);
+    check_key(key, schema);
 
     return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, DeleteItem returns nothing.
@@ -635,9 +646,9 @@ future<json::json_return_type> executor::update_item(std::string content) {
     schema_ptr schema = get_table(_proxy, update_info);
     // FIXME: handle missing Key.
     const Json::Value& key = update_info["Key"];
-    // FIXME: handle missing components in Key, extra stuff, etc.
     partition_key pk = pk_from_json(key, schema);
     clustering_key ck = ck_from_json(key, schema);
+    check_key(key, schema);
 
     mutation m(schema, pk);
     collection_type_impl::mutation attrs_mut;
@@ -824,6 +835,7 @@ future<json::json_return_type> executor::get_item(std::string content) {
         clustering_key ck = ck_from_json(query_key, schema);
         bounds.push_back(query::clustering_range::make_singular(std::move(ck)));
     }
+    check_key(query_key, schema);
 
     //TODO(sarna): It would be better to fetch only some attributes of the map, not all
     query::column_id_vector regular_columns{attrs_column(*schema).id};
