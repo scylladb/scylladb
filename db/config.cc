@@ -169,7 +169,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
     , compaction_static_shares(this, "compaction_static_shares", value_status::Used, 0,
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
-    , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", value_status::Used, false,
+    , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
     /* Initialization properties */
     /* The minimal properties needed for configuring a cluster. */
@@ -696,12 +696,20 @@ void config_file::named_value<db::config::seed_provider_type>::add_command_line_
                 boost::program_options::options_description_easy_init& init,
                 const std::string_view& name, const std::string_view& desc) {
     init((hyphenate(name) + "-class-name").data(),
-                    value_ex(&_value.class_name)->notifier(
-                                    [this](auto&&) {_source = config_source::CommandLine;}),
+                    value_ex<sstring>()->notifier(
+                                    [this](sstring new_class_name) {
+                                        auto old_seed_provider = operator()();
+                                        old_seed_provider.class_name = new_class_name;
+                                        set(std::move(old_seed_provider), config_source::CommandLine);
+                                    }),
                     desc.data());
     init((hyphenate(name) + "-parameters").data(),
-                    value_ex(&_value.parameters)->notifier(
-                                    [this](auto&&) {_source = config_source::CommandLine;}),
+                    value_ex<std::unordered_map<sstring, sstring>>()->notifier(
+                                    [this](std::unordered_map<sstring, sstring> new_parameters) {
+                                        auto old_seed_provider = operator()();
+                                        old_seed_provider.parameters = new_parameters;
+                                        set(std::move(old_seed_provider), config_source::CommandLine);
+                                    }),
                     desc.data());
 }
 
@@ -761,7 +769,7 @@ logging::settings db::config::logging_settings(const bpo::variables_map& map) co
         }
     };
 
-    auto value = [&map](auto v, auto dummy) {
+    auto value = [&map](auto& v, auto dummy) {
         auto name = utils::hyphenate(v.name());
         const bpo::variable_value& opt = map[name];
 

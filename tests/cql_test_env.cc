@@ -59,16 +59,16 @@
 using namespace std::chrono_literals;
 
 cql_test_config::cql_test_config()
-    : cql_test_config(db::config())
+    : cql_test_config(make_shared<db::config>())
 {}
 
-cql_test_config::cql_test_config(const db::config& cfg)
-    : db_config(seastar::make_shared<db::config>(cfg))
+cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
+    : db_config(cfg)
 {
     // This causes huge amounts of commitlog writes to allocate space on disk,
     // which all get thrown away when the test is done. This can cause timeouts
     // if /tmp is not tmpfs.
-    db_config->commitlog_use_o_dsync() = false;
+    db_config->commitlog_use_o_dsync.set(false);
 }
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;
@@ -335,21 +335,22 @@ public:
             auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
 
             auto db = ::make_shared<distributed<database>>();
-            auto cfg = make_lw_shared<db::config>(*cfg_in.db_config);
+            auto cfg = cfg_in.db_config;
             tmpdir data_dir;
             auto data_dir_path = data_dir.path().string();
             if (!cfg->data_file_directories.is_set()) {
-                cfg->data_file_directories() = {data_dir_path};
+                cfg->data_file_directories.set({data_dir_path});
             } else {
                 data_dir_path = cfg->data_file_directories()[0];
             }
-            cfg->commitlog_directory() = data_dir_path + "/commitlog.dir";
-            cfg->hints_directory() = data_dir_path + "/hints.dir";
-            cfg->view_hints_directory() = data_dir_path + "/view_hints.dir";
-            cfg->num_tokens() = 256;
-            cfg->ring_delay_ms() = 500;
-            cfg->experimental() = true;
-            cfg->shutdown_announce_in_ms() = 0;
+            cfg->commitlog_directory.set(data_dir_path + "/commitlog.dir");
+            cfg->hints_directory.set(data_dir_path + "/hints.dir");
+            cfg->view_hints_directory.set(data_dir_path + "/view_hints.dir");
+            cfg->num_tokens.set(256);
+            cfg->ring_delay_ms.set(500);
+            cfg->experimental.set(true);
+            cfg->shutdown_announce_in_ms.set(0);
+            cfg->broadcast_to_all_shards().get();
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
             create_directories(cfg->hints_directory().c_str());
@@ -388,7 +389,7 @@ public:
 
             database_config dbcfg;
             dbcfg.available_memory = memory::stats().total_memory();
-            db->start(std::move(*cfg), dbcfg).get();
+            db->start(std::ref(*cfg), dbcfg).get();
             auto stop_db = defer([db] {
                 db->stop().get();
             });

@@ -25,10 +25,36 @@
 #include <iostream>
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
 #include "db/config.hh"
+#include "utils/updateable_value.hh"
+#include <algorithm>
 
 using namespace db;
+
+SEASTAR_THREAD_TEST_CASE(test_updateable_value_basics) {
+    using namespace utils;
+    updateable_value_source<int> source;
+    source.set(3);
+    updateable_value<int> u1(source);
+    updateable_value<int> u2(u1);
+    updateable_value<int> u3(std::move(u2));
+    u2 = u3;
+    BOOST_REQUIRE_EQUAL(u1.get(), 3);
+    BOOST_REQUIRE_EQUAL(u2.get(), 3);
+    BOOST_REQUIRE_EQUAL(u3.get(), 3);
+    unsigned called = 0;
+    auto u3observer = u3.observe([&] (int v) {
+        ++called;
+        BOOST_REQUIRE_EQUAL(v, 4);
+    });
+    source.set(4);
+    BOOST_REQUIRE_EQUAL(u1.get(), 4);
+    BOOST_REQUIRE_EQUAL(u2.get(), 4);
+    BOOST_REQUIRE_EQUAL(u3.get(), 4);
+    BOOST_REQUIRE_EQUAL(called, 1);
+}
 
 // stock, default cassandra.yaml
 const char* cassandra_conf = R"apa(

@@ -26,6 +26,7 @@
 #include <numeric>
 
 #include "../utils/observable.hh"
+#include "../utils/updateable_value.hh"
 
 using namespace utils;
 
@@ -84,3 +85,4 @@ BOOST_AUTO_TEST_CASE(test_disconnect_fully_disconnects) {
     // Would have accessed the overwritten observable before the bug fix.
     sub.disconnect();
 }
+

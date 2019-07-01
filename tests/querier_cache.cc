@@ -618,7 +618,9 @@ SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
-    db::config db_cfg;
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+
     db_cfg.enable_cache(false);
     db_cfg.enable_commitlog(false);
 
@@ -723,7 +725,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 nullptr,
                 db::no_timeout).get();
         return make_ready_future<>();
-    }, std::move(db_cfg)).get();
+    }, std::move(db_cfg_ptr)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_evict_all_for_table) {

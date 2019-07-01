@@ -118,7 +118,7 @@ thread_local dirty_memory_manager default_dirty_memory_manager;
 
 inline
 flush_controller
-make_flush_controller(db::config& cfg, seastar::scheduling_group sg, const ::io_priority_class& iop, std::function<double()> fn) {
+make_flush_controller(const db::config& cfg, seastar::scheduling_group sg, const ::io_priority_class& iop, std::function<double()> fn) {
     if (cfg.memtable_flush_static_shares() > 0) {
         return flush_controller(sg, iop, cfg.memtable_flush_static_shares());
     }
@@ -127,7 +127,7 @@ make_flush_controller(db::config& cfg, seastar::scheduling_group sg, const ::io_
 
 inline
 std::unique_ptr<compaction_manager>
-make_compaction_manager(db::config& cfg, database_config& dbcfg) {
+make_compaction_manager(const db::config& cfg, database_config& dbcfg) {
     if (cfg.compaction_static_shares() > 0) {
         return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory, cfg.compaction_static_shares());
     }
@@ -179,13 +179,10 @@ void keyspace::remove_user_type(const user_type ut) {
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
-database::database() : database(db::config(), database_config())
-{}
-
 database::database(const db::config& cfg, database_config dbcfg)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
-    , _cfg(std::make_unique<db::config>(cfg))
+    , _cfg(&cfg)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.45, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
@@ -1548,7 +1545,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_cache = false;
     }
     cfg.enable_dangerous_direct_import_of_cassandra_counters = _cfg->enable_dangerous_direct_import_of_cassandra_counters();
-    cfg.compaction_enforce_min_threshold = _cfg->compaction_enforce_min_threshold();
+    cfg.compaction_enforce_min_threshold = _cfg->compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.read_concurrency_semaphore = &_read_concurrency_sem;

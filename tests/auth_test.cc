@@ -54,8 +54,8 @@ SEASTAR_TEST_CASE(test_default_authenticator) {
 }
 
 SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
-    db::config cfg;
-    cfg.authenticator(auth::password_authenticator_name());
+    auto cfg = make_shared<db::config>();
+    cfg->authenticator(auth::password_authenticator_name());
 
     return do_with_cql_env([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
@@ -95,8 +95,8 @@ future<> require_throws(seastar::future<Args...> fut) {
 }
 
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
-    db::config cfg;
-    cfg.authenticator(auth::password_authenticator_name());
+    auto cfg = make_shared<db::config>();
+    cfg->authenticator(auth::password_authenticator_name());
 
     /**
      * Not using seastar::async due to apparent ASan bug.

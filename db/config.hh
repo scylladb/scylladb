@@ -56,6 +56,9 @@ struct seed_provider_type {
     }
     sstring class_name;
     std::unordered_map<sstring, sstring> parameters;
+    bool operator==(const seed_provider_type& other) const {
+        return class_name == other.class_name && parameters == other.parameters;
+    }
 };
 
 }
