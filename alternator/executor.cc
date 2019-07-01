@@ -1232,7 +1232,13 @@ future<> executor::start() {
     // FIXME: the RF of this keyspace should be configurable: RF=1 makes
     // sense on test setups, but not on real clusters.
     auto ksm = keyspace_metadata::new_keyspace(KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", "1"}}, true);
-    return _mm.announce_new_keyspace(ksm, api::min_timestamp, false).handle_exception_type([] (exceptions::already_exists_exception& ignored) {});
+    try {
+        return _mm.announce_new_keyspace(ksm, api::min_timestamp, false);
+    } catch(exceptions::already_exists_exception& ignored) {
+        return make_ready_future<>();
+    } catch(...) {
+        return make_exception_future(std::current_exception());
+    }
 }
 
 }
