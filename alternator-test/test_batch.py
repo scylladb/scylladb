@@ -43,7 +43,6 @@ def test_batch_write_hash_only(test_table_s):
 
 # Test batch delete operation (DeleteRequest): We create a bunch of items, and
 # then delete them all.
-@pytest.mark.xfail(reason="BatchWriteItem does not yet support DeleteRequest")
 def test_batch_write_delete(test_table_s):
     items = [{'p': random_string(), 'val': random_string()} for i in range(10)]
     with test_table_s.batch_writer() as batch:
@@ -59,7 +58,6 @@ def test_batch_write_delete(test_table_s):
         assert not 'Item' in test_table_s.get_item(Key={'p': item['p']}, ConsistentRead=True)
 
 # Test the same batch including both writes and delete. Should be fine.
-@pytest.mark.xfail(reason="BatchWriteItem does not yet support DeleteRequest")
 def test_batch_write_and_delete(test_table_s):
     p1 = random_string()
     p2 = random_string()
@@ -82,7 +80,7 @@ def test_batch_write_duplicate_write(test_table_s):
             batch.put_item({'p': p})
             batch.put_item({'p': p})
 
-@pytest.mark.xfail(reason="BatchWriteItem does not yet support DeleteRequest")
+@pytest.mark.xfail(reason="BatchWriteItem does not yet check for duplicates")
 def test_batch_write_duplicate_delete(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*duplicates'):
@@ -90,7 +88,7 @@ def test_batch_write_duplicate_delete(test_table_s):
             batch.delete_item(Key={'p': p})
             batch.delete_item(Key={'p': p})
 
-@pytest.mark.xfail(reason="BatchWriteItem does not yet support DeleteRequest")
+@pytest.mark.xfail(reason="BatchWriteItem does not yet check for duplicates")
 def test_batch_write_duplicate_write_and_delete(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*duplicates'):
