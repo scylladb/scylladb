@@ -353,8 +353,8 @@ future<json::json_return_type> executor::batch_write_item(std::string content) {
                 const Json::Value& item = put_request["Item"];
                 mutations.push_back(make_item_mutation(item, schema));
             } else if (r.key() == "DeleteRequest") {
-                // FIXME:
-                throw api_error("ValidationException", "BatchWriteItem doesn't support DeleteRequest yet");
+                const Json::Value& key = (*r)["Key"];
+                mutations.push_back(make_delete_item_mutation(key, schema));
             } else {
                 throw api_error("ValidationException", format("Unknown BatchWriteItem request type: {}", r.key()));
             }
