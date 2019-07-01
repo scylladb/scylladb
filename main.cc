@@ -403,15 +403,7 @@ int main(int ac, char** av) {
     auto cfg = make_lw_shared<db::config>(ext);
     auto init = app.get_options_description().add_options();
 
-    // If --version is requested, print it out and exit immediately to avoid
-    // Seastar-specific warnings that may occur when running the app
     init("version", bpo::bool_switch(), "print version number and exit");
-    bpo::variables_map vm;
-    bpo::store(bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run(), vm);
-    if (vm["version"].as<bool>()) {
-        fmt::print("{}\n", scylla_version());
-        return 0;
-    }
 
     bpo::options_description deprecated("Deprecated options - ignored");
     deprecated.add_options()
@@ -424,6 +416,15 @@ int main(int ac, char** av) {
 
     configurable::append_all(*cfg, init);
     cfg->add_options(init);
+
+    // If --version is requested, print it out and exit immediately to avoid
+    // Seastar-specific warnings that may occur when running the app
+    bpo::variables_map vm;
+    bpo::store(bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run(), vm);
+    if (vm["version"].as<bool>()) {
+        fmt::print("{}\n", scylla_version());
+        return 0;
+    }
 
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
