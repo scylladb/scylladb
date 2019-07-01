@@ -181,7 +181,7 @@ def test_put_item_wrong_key_type(test_table):
     # Should fail (missing sort key)
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.put_item(Item={'p': s})
-def test_update_item_wrong_key_type(test_table):
+def test_update_item_wrong_key_type(test_table, test_table_s):
     b = random_bytes()
     s = random_string()
     n = Decimal("3.14")
@@ -204,7 +204,12 @@ def test_update_item_wrong_key_type(test_table):
     # Should fail (missing sort key)
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.update_item(Key={'p': s}, AttributeUpdates={})
-def test_get_item_wrong_key_type(test_table):
+    # Should fail (spurious key columns)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'p': s, 'c': s, 'spurious': s})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.get_item(Key={'p': s, 'c': s})
+def test_get_item_wrong_key_type(test_table, test_table_s):
     b = random_bytes()
     s = random_string()
     n = Decimal("3.14")
@@ -222,10 +227,42 @@ def test_get_item_wrong_key_type(test_table):
         test_table.get_item(Key={'p': s, 'c': n})
     # Should fail (missing hash key)
     with pytest.raises(ClientError, match='ValidationException'):
-        test_table.get_item(Key={'c': n})
+        test_table.get_item(Key={'c': s})
     # Should fail (missing sort key)
     with pytest.raises(ClientError, match='ValidationException'):
-        test_table.get_item(Key={'p': n})
+        test_table.get_item(Key={'p': s})
+    # Should fail (spurious key columns)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.get_item(Key={'p': s, 'c': s, 'spurious': s})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.get_item(Key={'p': s, 'c': s})
+def test_delete_item_wrong_key_type(test_table, test_table_s):
+    b = random_bytes()
+    s = random_string()
+    n = Decimal("3.14")
+    # Should succeed (correct key types)
+    test_table.delete_item(Key={'p': s, 'c': s})
+    # Should fail (incorrect hash key types)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.delete_item(Key={'p': b, 'c': s})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.delete_item(Key={'p': n, 'c': s})
+    # Should fail (incorrect sort key types)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.delete_item(Key={'p': s, 'c': b})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.delete_item(Key={'p': s, 'c': n})
+    # Should fail (missing hash key)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.delete_item(Key={'c': s})
+    # Should fail (missing sort key)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.delete_item(Key={'p': s})
+    # Should fail (spurious key columns)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.delete_item(Key={'p': s, 'c': s, 'spurious': s})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.delete_item(Key={'p': s, 'c': s})
 
 # Most of the tests here arbitrarily used a table with both hash and sort keys
 # (both strings). Let's check that a table with *only* a hash key works ok
