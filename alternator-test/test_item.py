@@ -319,3 +319,21 @@ def test_getitem_attributes_to_get(dynamodb, test_table):
         got_item = test_table.get_item(Key={'p': p, 'c': c}, AttributesToGet=wanted, ConsistentRead=True)['Item']
         expected_item = {k: item[k] for k in wanted if k in item}
         assert expected_item == got_item
+
+# Basic test for DeleteItem, with hash key only
+def test_delete_item_hash(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p})
+    assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    test_table_s.delete_item(Key={'p': p})
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+# Basic test for DeleteItem, with hash and sort key
+def test_delete_item_sort(test_table):
+    p = random_string()
+    c = random_string()
+    key = {'p': p, 'c': c}
+    test_table.put_item(Item=key)
+    assert 'Item' in test_table.get_item(Key=key, ConsistentRead=True)
+    test_table.delete_item(Key=key)
+    assert not 'Item' in test_table.get_item(Key=key, ConsistentRead=True)

@@ -37,6 +37,7 @@ public:
     future<json::json_return_type> delete_table(std::string content);
     future<json::json_return_type> put_item(std::string content);
     future<json::json_return_type> get_item(std::string content);
+    future<json::json_return_type> delete_item(std::string content);
     future<json::json_return_type> update_item(std::string content);
     future<json::json_return_type> list_tables(std::string content);
     future<json::json_return_type> scan(std::string content);

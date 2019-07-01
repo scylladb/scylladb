@@ -299,6 +299,31 @@ future<json::json_return_type> executor::put_item(std::string content) {
 
 }
 
+static mutation make_delete_item_mutation(const Json::Value& item, schema_ptr schema) {
+    partition_key pk = pk_from_json(item, schema);
+    clustering_key ck = ck_from_json(item, schema);
+    mutation m(schema, pk);
+    auto& row = m.partition().clustered_row(*schema, ck);
+    row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
+    return m;
+}
+
+future<json::json_return_type> executor::delete_item(std::string content) {
+    _stats.api_operations.delete_item++;
+    Json::Value update_info = json::to_json_value(content);
+
+    schema_ptr schema = get_table(_proxy, update_info);
+    const Json::Value& key = update_info["Key"];
+
+    mutation m = make_delete_item_mutation(key, schema);
+
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+        // Without special options on what to return, DeleteItem returns nothing.
+        return make_ready_future<json::json_return_type>(json_string(""));
+    });
+
+}
+
 static schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const Json::Value::const_iterator& batch_request) {
     std::string table_name = batch_request.key().asString(); // JSON keys are always strings
     validate_table_name(table_name);

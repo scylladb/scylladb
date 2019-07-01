@@ -102,6 +102,7 @@ void server::set_routes(routes& r) {
         {"PutItem", [] (executor& e, std::unique_ptr<request> req) { return e.put_item(req->content); }},
         {"UpdateItem", [] (executor& e, std::unique_ptr<request> req) { return e.update_item(req->content); }},
         {"GetItem", [] (executor& e, std::unique_ptr<request> req) { return e.get_item(req->content); }},
+        {"DeleteItem", [] (executor& e, std::unique_ptr<request> req) { return e.delete_item(req->content); }},
         {"ListTables", [] (executor& e, std::unique_ptr<request> req) { return e.list_tables(req->content); }},
         {"Scan", [] (executor& e, std::unique_ptr<request> req) { return e.scan(req->content); }},
         {"DescribeEndpoints", [] (executor& e, std::unique_ptr<request> req) { return e.describe_endpoints(req->content, req->get_header("Host")); }},
