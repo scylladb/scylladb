@@ -938,10 +938,14 @@ private:
     }
 
     // return the combined checksum of rows in _row_buf
-    repair_hash row_buf_csum() {
-        repair_hash combined;
-        boost::for_each(_row_buf, [&combined] (repair_row& r) { combined.add(r.hash()); });
-        return combined;
+    future<repair_hash> row_buf_csum() {
+        return do_with(repair_hash(), [this] (repair_hash& combined) {
+            return do_for_each(_row_buf, [&combined] (repair_row& r) mutable {
+                combined.add(r.hash());
+            }).then([&combined] {
+                return combined;
+            });
+        });
     }
 
     repair_hash do_hash_for_mf(const decorated_key_with_hash& dk_with_hash, const mutation_fragment& mf) {
@@ -1020,13 +1024,15 @@ private:
             size_t new_rows_size = get_repair_rows_size(new_rows);
             size_t new_rows_nr = new_rows.size();
             _row_buf.splice(_row_buf.end(), new_rows);
-            std::optional<repair_sync_boundary> sb_max;
-            if (!_row_buf.empty()) {
-                sb_max = _row_buf.back().boundary();
-            }
-            rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
-                    new_rows.size(), sb_max, row_buf_size(), row_buf_csum(), skipped_sync_boundary);
-            return get_sync_boundary_response{sb_max, row_buf_csum(), row_buf_size(), new_rows_size, new_rows_nr};
+            return row_buf_csum().then([this, new_rows_size, new_rows_nr, skipped_sync_boundary = std::move(skipped_sync_boundary)] (repair_hash row_buf_combined_hash) {
+                std::optional<repair_sync_boundary> sb_max;
+                if (!_row_buf.empty()) {
+                    sb_max = _row_buf.back().boundary();
+                }
+                rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
+                        new_rows_nr, sb_max, row_buf_size(), row_buf_combined_hash, skipped_sync_boundary);
+                return get_sync_boundary_response{sb_max, row_buf_combined_hash, row_buf_size(), new_rows_size, new_rows_nr};
+            });
         });
     }
 
