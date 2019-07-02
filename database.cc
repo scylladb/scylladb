@@ -182,13 +182,13 @@ utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 database::database(const db::config& cfg, database_config dbcfg)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
-    , _cfg(&cfg)
+    , _cfg(cfg)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.45, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _streaming_dirty_memory_manager(*this, dbcfg.available_memory * 0.10, cfg.virtual_dirty_soft_limit(), dbcfg.streaming_scheduling_group)
     , _dbcfg(dbcfg)
-    , _memtable_controller(make_flush_controller(*_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+    , _memtable_controller(make_flush_controller(_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         auto backlog = (_dirty_memory_manager.virtual_dirty_memory()) / limit;
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
@@ -210,13 +210,13 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _mutation_query_stage()
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
-    , _compaction_manager(make_compaction_manager(*_cfg, dbcfg))
+    , _compaction_manager(make_compaction_manager(_cfg, dbcfg))
     , _enable_incremental_backups(cfg.incremental_backups())
     , _querier_cache(_read_concurrency_sem, dbcfg.available_memory * 0.04)
-    , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024,
-              _cfg->compaction_large_row_warning_threshold_mb()*1024*1024,
-              _cfg->compaction_large_cell_warning_threshold_mb()*1024*1024,
-              _cfg->compaction_rows_count_warning_threshold()))
+    , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
+              _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,
+              _cfg.compaction_large_cell_warning_threshold_mb()*1024*1024,
+              _cfg.compaction_rows_count_warning_threshold()))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
     , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler))
     , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler))
@@ -606,7 +606,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
 
 future<>
 database::init_commitlog() {
-    return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(*_cfg, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
+    return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
             if (_column_families.count(id) == 0) {
@@ -1527,15 +1527,15 @@ future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, c
 keyspace::config
 database::make_keyspace_config(const keyspace_metadata& ksm) {
     keyspace::config cfg;
-    if (_cfg->data_file_directories().size() > 0) {
-        cfg.datadir = format("{}/{}", _cfg->data_file_directories()[0], ksm.name());
-        for (auto& extra : _cfg->data_file_directories()) {
+    if (_cfg.data_file_directories().size() > 0) {
+        cfg.datadir = format("{}/{}", _cfg.data_file_directories()[0], ksm.name());
+        for (auto& extra : _cfg.data_file_directories()) {
             cfg.all_datadirs.push_back(format("{}/{}", extra, ksm.name()));
         }
-        cfg.enable_disk_writes = !_cfg->enable_in_memory_data_store();
+        cfg.enable_disk_writes = !_cfg.enable_in_memory_data_store();
         cfg.enable_disk_reads = true; // we allways read from disk
-        cfg.enable_commitlog = ksm.durable_writes() && _cfg->enable_commitlog() && !_cfg->enable_in_memory_data_store();
-        cfg.enable_cache = _cfg->enable_cache();
+        cfg.enable_commitlog = ksm.durable_writes() && _cfg.enable_commitlog() && !_cfg.enable_in_memory_data_store();
+        cfg.enable_cache = _cfg.enable_cache();
 
     } else {
         cfg.datadir = "";
@@ -1544,8 +1544,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
     }
-    cfg.enable_dangerous_direct_import_of_cassandra_counters = _cfg->enable_dangerous_direct_import_of_cassandra_counters();
-    cfg.compaction_enforce_min_threshold = _cfg->compaction_enforce_min_threshold;
+    cfg.enable_dangerous_direct_import_of_cassandra_counters = _cfg.enable_dangerous_direct_import_of_cassandra_counters();
+    cfg.compaction_enforce_min_threshold = _cfg.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.read_concurrency_semaphore = &_read_concurrency_sem;
@@ -1559,7 +1559,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.memtable_to_cache_scheduling_group = _dbcfg.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
     cfg.statement_scheduling_group = _dbcfg.statement_scheduling_group;
-    cfg.enable_metrics_reporting = _cfg->enable_keyspace_column_family_metrics();
+    cfg.enable_metrics_reporting = _cfg.enable_keyspace_column_family_metrics();
 
     cfg.view_update_concurrency_semaphore = &_view_update_concurrency_sem;
     cfg.view_update_concurrency_semaphore_limit = max_memory_pending_view_updates();
@@ -1785,13 +1785,13 @@ future<> database::truncate_views(const column_family& base, db_clock::time_poin
 }
 
 const sstring& database::get_snitch_name() const {
-    return _cfg->endpoint_snitch();
+    return _cfg.endpoint_snitch();
 }
 
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards
 // (as we have been doing for a lot of the other operations, like the snapshot itself).
 future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
-    std::vector<sstring> data_dirs = _cfg->data_file_directories();
+    std::vector<sstring> data_dirs = _cfg.data_file_directories();
     lw_shared_ptr<lister::dir_entry_types> dirs_only_entries_ptr = make_lw_shared<lister::dir_entry_types>({ directory_entry_type::directory });
     lw_shared_ptr<sstring> tag_ptr = make_lw_shared<sstring>(std::move(tag));
     std::unordered_set<sstring> ks_names_set(keyspace_names.begin(), keyspace_names.end());

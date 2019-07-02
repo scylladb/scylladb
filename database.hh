@@ -1234,7 +1234,7 @@ private:
     lw_shared_ptr<db_stats> _stats;
     std::unique_ptr<cell_locker_stats> _cl_stats;
 
-    const db::config* _cfg;
+    const db::config& _cfg;
 
     dirty_memory_manager _system_dirty_memory_manager;
     dirty_memory_manager _dirty_memory_manager;
@@ -1438,7 +1438,7 @@ public:
     }
 
     const db::config& get_config() const {
-        return *_cfg;
+        return _cfg;
     }
     const db::extensions& extensions() const;
 
