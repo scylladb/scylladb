@@ -1240,22 +1240,13 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     auto fut = do_io_check(commit_error_handler, [=] {
         auto fut = open_file_dma(filename, flags, opt);
         if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
-            fut = fut.then([this, filename, flags](file f) {
-                return do_with(std::move(f), [this, filename, flags](file& f) {
-                    auto ext_range = cfg.extensions->commitlog_file_extensions();
-                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename, flags](auto& ext) {
-                        // note: we're potentially wrapping more than once. extension mechanism
-                        // is responsible for order being sane.
-                        return ext->wrap_file(filename, f, flags).then([&f](file of) {
-                            if (of) {
-                                f = std::move(of);
-                            }
-                        });
-                    }).then([&f] {
-                        return f;
-                    });
+            for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
+                fut = fut.then([ext, filename, flags](file f) {
+                   return ext->wrap_file(filename, f, flags).then([f](file nf) mutable {
+                       return nf ? nf : std::move(f);
+                   });
                 });
-            });
+            }
         }
         return fut;
     });
@@ -2042,22 +2033,13 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
     auto fut = do_io_check(commit_error_handler, [&] {
         auto fut = open_file_dma(filename, open_flags::ro);
         if (exts && !exts->commitlog_file_extensions().empty()) {
-            fut = fut.then([filename, exts](file f) {
-                return do_with(std::move(f), [filename, exts](file& f) {
-                    auto ext_range = exts->commitlog_file_extensions() | boost::adaptors::reversed;
-                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename](auto& ext) {
-                        // note: we're potentially wrapping more than once. extension mechanism
-                        // is responsible for order being sane.
-                        return ext->wrap_file(filename, f, open_flags::ro).then([&f](file of) {
-                            if (of) {
-                                f = std::move(of);
-                            }
-                        });
-                    }).then([&f] {
-                        return make_ready_future<file>(f);
-                    });
+            for (auto * ext : exts->commitlog_file_extensions()) {
+                fut = fut.then([ext, filename](file f) {
+                   return ext->wrap_file(filename, f, open_flags::ro).then([f](file nf) mutable {
+                       return nf ? nf : std::move(f);
+                   });
                 });
-            });
+            }
         }
         return fut;
     });
