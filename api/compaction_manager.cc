@@ -24,6 +24,7 @@
 #include "api/api-doc/compaction_manager.json.hh"
 #include "db/system_keyspace.hh"
 #include "column_family.hh"
+#include <utility>
 
 namespace api {
 
@@ -38,6 +39,16 @@ static future<json::json_return_type> get_cm_stats(http_context& ctx,
         return make_ready_future<json::json_return_type>(res);
     });
 }
+static std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash> sum_pending_tasks(std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>&& a,
+        const std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>& b) {
+    for (auto&& i : b) {
+        if (i.second) {
+            a[i.first] += i.second;
+        }
+    }
+    return std::move(a);
+}
+
 
 void set_compaction_manager(http_context& ctx, routes& r) {
     cm::get_compactions.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -57,6 +68,31 @@ void set_compaction_manager(http_context& ctx, routes& r) {
             }
             return summaries;
         }, std::vector<cm::summary>(), concat<cm::summary>).then([](const std::vector<cm::summary>& res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
+    });
+
+    cm::get_pending_tasks_by_table.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return ctx.db.map_reduce0([&ctx](database& db) {
+            std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash> tasks;
+            return do_for_each(db.get_column_families(), [&tasks](const std::pair<utils::UUID, seastar::lw_shared_ptr<table>>& i) {
+                table& cf = *i.second.get();
+                tasks[std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name())] = cf.get_compaction_strategy().estimated_pending_compactions(cf);
+                return make_ready_future<>();
+            }).then([&tasks] {
+                return tasks;
+            });
+        }, std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>(), sum_pending_tasks).then(
+                [](const std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>& task_map) {
+            std::vector<cm::pending_compaction> res;
+            res.reserve(task_map.size());
+            for (auto i : task_map) {
+                cm::pending_compaction task;
+                task.ks = i.first.first;
+                task.cf = i.first.second;
+                task.task = i.second;
+                res.emplace_back(std::move(task));
+            }
             return make_ready_future<json::json_return_type>(res);
         });
     });
