@@ -128,6 +128,24 @@
       ]
     },
     {
+      "path": "/compaction_manager/metrics/pending_tasks_by_table",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get pending tasks by table name",
+          "type": "array",
+          "items": {
+              "type": "pending_compaction"
+           },
+          "nickname": "get_pending_tasks_by_table",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/compaction_manager/metrics/completed_tasks",
       "operations": [
         {
@@ -243,6 +261,23 @@
                "description":"The units being used"
             }
          }
+      },
+      "pending_compaction": {
+        "id": "pending_compaction",
+        "properties": {
+            "cf": {
+               "type": "string",
+               "description": "The column family name"
+            },
+            "ks": {
+               "type":"string",
+               "description": "The keyspace name"
+            },
+            "task": {
+               "type":"long",
+               "description": "The number of pending tasks"
+            }
+        }
       },
       "history": {
       "id":"history",
