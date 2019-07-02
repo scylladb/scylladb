@@ -928,12 +928,18 @@ private:
                && engine().cpu_id() == _master_node_shard_config.shard;
     }
 
-    size_t get_repair_rows_size(const std::list<repair_row>& rows) const {
-        return boost::accumulate(rows, size_t(0), [] (size_t x, const repair_row& r) { return x + r.size(); });
+    future<size_t> get_repair_rows_size(const std::list<repair_row>& rows) const {
+        return do_with(size_t(0), [&rows] (size_t& sz) {
+            return do_for_each(rows, [&sz] (const repair_row& r) mutable {
+                sz += r.size();
+            }).then([&sz] {
+                return sz;
+            });
+        });
     }
 
     // Get the size of rows in _row_buf
-    size_t row_buf_size() const {
+    future<size_t> row_buf_size() const {
         return get_repair_rows_size(_row_buf);
     }
 
@@ -1020,18 +1026,21 @@ private:
         // Here is the place we update _last_sync_boundary
         rlogger.trace("SET _last_sync_boundary from {} to {}", _last_sync_boundary, _current_sync_boundary);
         _last_sync_boundary = _current_sync_boundary;
-        size_t current_size = row_buf_size();
-        return read_rows_from_disk(current_size).then([this, skipped_sync_boundary = std::move(skipped_sync_boundary)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
-            size_t new_rows_nr = new_rows.size();
-            _row_buf.splice(_row_buf.end(), new_rows);
-            return row_buf_csum().then([this, new_rows_size, new_rows_nr, skipped_sync_boundary = std::move(skipped_sync_boundary)] (repair_hash row_buf_combined_hash) {
-                std::optional<repair_sync_boundary> sb_max;
-                if (!_row_buf.empty()) {
-                    sb_max = _row_buf.back().boundary();
-                }
-                rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
-                        new_rows_nr, sb_max, row_buf_size(), row_buf_combined_hash, skipped_sync_boundary);
-                return get_sync_boundary_response{sb_max, row_buf_combined_hash, row_buf_size(), new_rows_size, new_rows_nr};
+        return row_buf_size().then([this, sb = std::move(skipped_sync_boundary)] (size_t cur_size) {
+            return read_rows_from_disk(cur_size).then([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
+                size_t new_rows_nr = new_rows.size();
+                _row_buf.splice(_row_buf.end(), new_rows);
+                return row_buf_csum().then([this, new_rows_size, new_rows_nr, sb = std::move(sb)] (repair_hash row_buf_combined_hash) {
+                    return row_buf_size().then([this, new_rows_size, new_rows_nr, row_buf_combined_hash, sb = std::move(sb)] (size_t row_buf_bytes) {
+                        std::optional<repair_sync_boundary> sb_max;
+                        if (!_row_buf.empty()) {
+                            sb_max = _row_buf.back().boundary();
+                        }
+                        rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
+                                new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, sb);
+                        return get_sync_boundary_response{sb_max, row_buf_combined_hash, row_buf_bytes, new_rows_size, new_rows_nr};
+                    });
+                });
             });
         });
     }
@@ -1146,7 +1155,7 @@ private:
             return;
         }
         auto row_diff = to_repair_rows_list(rows).get0();
-        auto sz = get_repair_rows_size(row_diff);
+        auto sz = get_repair_rows_size(row_diff).get0();
         stats().rx_row_bytes += sz;
         stats().rx_row_nr += row_diff.size();
         stats().rx_row_nr_peer[from] += row_diff.size();
@@ -1199,24 +1208,26 @@ private:
     }
 
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
-        _metrics.tx_row_nr += row_list.size();
-        _metrics.tx_row_bytes += get_repair_rows_size(row_list);
         return do_with(repair_rows_on_wire(), std::move(row_list), [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list) {
-            return do_for_each(row_list, [this, &rows] (repair_row& r) {
-                auto pk = r.get_dk_with_hash()->dk.key();
-                // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
-                if (rows.empty()) {
-                    rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
-                } else {
-                    auto& row = rows.back();
-                    if (pk.legacy_equal(*_schema, row.get_key())) {
-                        row.push_mutation_fragment(std::move(r.get_frozen_mutation()));
-                    } else {
+            return get_repair_rows_size(row_list).then([this, &rows, &row_list] (size_t row_bytes) {
+                _metrics.tx_row_nr += row_list.size();
+                _metrics.tx_row_bytes += row_bytes;
+                return do_for_each(row_list, [this, &rows] (repair_row& r) {
+                    auto pk = r.get_dk_with_hash()->dk.key();
+                    // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
+                    if (rows.empty()) {
                         rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
+                    } else {
+                        auto& row = rows.back();
+                        if (pk.legacy_equal(*_schema, row.get_key())) {
+                            row.push_mutation_fragment(std::move(r.get_frozen_mutation()));
+                        } else {
+                            rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
+                        }
                     }
-                }
-            }).then([&rows] {
-                return std::move(rows);
+                }).then([&rows] {
+                    return std::move(rows);
+                });
             });
         });
     };
@@ -1623,12 +1634,16 @@ public:
                 if (row_diff.size() != sz) {
                     throw std::runtime_error("row_diff.size() != set_diff.size()");
                 }
-                stats().tx_row_nr += row_diff.size();
-                stats().tx_row_nr_peer[remote_node] += row_diff.size();
-                stats().tx_row_bytes += get_repair_rows_size(row_diff);
-                stats().rpc_call_nr++;
-                return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node] (repair_rows_on_wire rows)  {
-                    return netw::get_local_messaging_service().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
+                return do_with(std::move(row_diff), [this, remote_node] (std::list<repair_row>& row_diff) {
+                    return get_repair_rows_size(row_diff).then([this, remote_node, &row_diff] (size_t row_bytes) mutable {
+                        stats().tx_row_nr += row_diff.size();
+                        stats().tx_row_nr_peer[remote_node] += row_diff.size();
+                        stats().tx_row_bytes += row_bytes;
+                        stats().rpc_call_nr++;
+                        return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node] (repair_rows_on_wire rows)  {
+                            return netw::get_local_messaging_service().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
+                        });
+                    });
                 });
             });
         }
@@ -1696,17 +1711,21 @@ public:
                 if (row_diff.size() != sz) {
                     throw std::runtime_error("row_diff.size() != set_diff.size()");
                 }
-                stats().tx_row_nr += row_diff.size();
-                stats().tx_row_nr_peer[remote_node] += row_diff.size();
-                stats().tx_row_bytes += get_repair_rows_size(row_diff);
-                stats().rpc_call_nr++;
-                return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
-                    return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then(
-                            [this, rows = std::move(rows), remote_node, node_idx]
-                            (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
-                        auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
-                        auto sink_op = put_row_diff_sink_op(std::move(rows), sink, remote_node);
-                        return when_all_succeed(std::move(source_op), std::move(sink_op));
+                return do_with(std::move(row_diff), [this, remote_node, node_idx] (std::list<repair_row>& row_diff) {
+                    return get_repair_rows_size(row_diff).then([this, remote_node, node_idx, &row_diff] (size_t row_bytes) mutable {
+                        stats().tx_row_nr += row_diff.size();
+                        stats().tx_row_nr_peer[remote_node] += row_diff.size();
+                        stats().tx_row_bytes += row_bytes;
+                        stats().rpc_call_nr++;
+                        return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
+                            return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then(
+                                    [this, rows = std::move(rows), remote_node, node_idx]
+                                    (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
+                                auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
+                                auto sink_op = put_row_diff_sink_op(std::move(rows), sink, remote_node);
+                                return when_all_succeed(std::move(source_op), std::move(sink_op));
+                            });
+                        });
                     });
                 });
             });
