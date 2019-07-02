@@ -136,7 +136,6 @@ public:
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
     virtual bool is_compatible_with(const abstract_type& previous) const override;
     virtual bool is_value_compatible_with_internal(const abstract_type& previous) const override;
-    virtual sstring cql3_type_name_impl() const override;
     virtual bool is_native() const override { return false; }
     virtual bool is_tuple() const override { return true; }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;

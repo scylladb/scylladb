@@ -649,7 +649,6 @@ public:
     friend class list_type_impl;
 private:
     cql3_kind get_cql3_kind_impl() const;
-    virtual sstring cql3_type_name_impl() const = 0;
     mutable sstring _cql3_type_name;
 protected:
     // native_value_* methods are virualized versions of native_type's
@@ -1005,10 +1004,6 @@ public:
     }
     virtual bytes from_string(sstring_view s) const override {
         return _underlying_type->from_string(s);
-    }
-
-    virtual sstring cql3_type_name_impl() const override {
-        return _underlying_type->cql3_type_name_impl();
     }
 
     virtual bool is_native() const {

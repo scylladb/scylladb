@@ -38,8 +38,6 @@ class Value;
 class set_type_impl final : public concrete_type<std::vector<data_value>, listlike_collection_type_impl> {
     using set_type = shared_ptr<const set_type_impl>;
     using intern = type_interning_helper<set_type_impl, data_type, bool>;
-protected:
-    virtual sstring cql3_type_name_impl() const override;
 public:
     static set_type get_instance(data_type elements, bool is_multi_cell);
     set_type_impl(data_type elements, bool is_multi_cell);
