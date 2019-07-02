@@ -140,8 +140,10 @@ install -m755 -d "$rprefix"/swagger-ui
 cp -r swagger-ui/dist "$rprefix"/swagger-ui
 install -d -m755 -d "$rprefix"/api
 cp -r api/api-doc "$rprefix"/api
-cp -r tools/scyllatop "$rprefix"/scyllatop
-cp -r dist/common/scripts "$rprefix"/scripts
+install -d -m755 -d "$rprefix"/scyllatop
+cp -r tools/scyllatop/* "$rprefix"/scyllatop
+install -d -m755 -d "$rprefix"/scripts
+cp -r dist/common/scripts/* "$rprefix"/scripts
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rusr/bin/scyllatop"
 
 SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_exporter_install node_health_check scylla_ec2_check scylla_kernel_check)
