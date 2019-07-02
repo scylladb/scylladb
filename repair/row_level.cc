@@ -1755,19 +1755,7 @@ public:
 future<> repair_cf_range_row_level(repair_info& ri,
         sstring cf_name, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes) {
-    auto all_live_peer_nodes = boost::copy_range<std::vector<gms::inet_address>>(all_peer_nodes |
-        boost::adaptors::filtered([] (const gms::inet_address& node) { return gms::get_local_gossiper().is_alive(node); }));
-    if (all_live_peer_nodes.size() != all_peer_nodes.size()) {
-        rlogger.warn("Repair for range={} is partial, peer nodes={}, live peer nodes={}",
-                range, all_peer_nodes, all_live_peer_nodes);
-        ri.nr_failed_ranges++;
-    }
-    if (all_live_peer_nodes.empty()) {
-        rlogger.info(">>> Skipped Row Level Repair (Master): local={}, peers={}, keyspace={}, cf={}, range={}",
-            utils::fb_utilities::get_broadcast_address(), all_peer_nodes, ri.keyspace, cf_name, range);
-        return make_ready_future<>();
-    }
-    return do_with(row_level_repair(ri, std::move(cf_name), std::move(range), std::move(all_live_peer_nodes)), [] (row_level_repair& repair) {
+    return do_with(row_level_repair(ri, std::move(cf_name), std::move(range), all_peer_nodes), [] (row_level_repair& repair) {
         return repair.run();
     });
 }
