@@ -319,27 +319,27 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
         desc.idle = true;
         return desc;
     } else {
-    // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
-    // ratio is greater than threshold.
-    // prefer oldest sstables from biggest size tiers because they will be easier to satisfy conditions for
-    // tombstone purge, i.e. less likely to shadow even older data.
-    for (auto&& sstables : buckets | boost::adaptors::reversed) {
-        // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
-        auto e = boost::range::remove_if(sstables, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
-            return !worth_dropping_tombstones(sst, gc_before);
-        });
-        sstables.erase(e, sstables.end());
-        if (sstables.empty()) {
-            continue;
+        // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
+        // ratio is greater than threshold.
+        // prefer oldest sstables from biggest size tiers because they will be easier to satisfy conditions for
+        // tombstone purge, i.e. less likely to shadow even older data.
+        for (auto&& sstables : buckets | boost::adaptors::reversed) {
+            // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
+            auto e = boost::range::remove_if(sstables, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
+                return !worth_dropping_tombstones(sst, gc_before);
+            });
+            sstables.erase(e, sstables.end());
+            if (sstables.empty()) {
+                continue;
+            }
+            // find oldest sstable from current tier
+            auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
+                return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
+            });
+            auto desc = sstables::compaction_descriptor({ *it });
+            desc.idle = true;
+            return desc;
         }
-        // find oldest sstable from current tier
-        auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
-            return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
-        });
-        auto desc = sstables::compaction_descriptor({ *it });
-        desc.idle = true;
-        return desc;
-    }
     }
     return sstables::compaction_descriptor();
 }
