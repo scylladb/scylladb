@@ -2165,6 +2165,14 @@ bool abstract_type::is_collection() const {
     return visit(*this, visitor{});
 }
 
+bool abstract_type::is_tuple() const {
+    struct visitor {
+        bool operator()(const abstract_type&) { return false; }
+        bool operator()(const tuple_type_impl&) { return true; }
+    };
+    return visit(*this, visitor{});
+}
+
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {
         cql3_kind operator()(const ascii_type_impl&) { return cql3_kind::ASCII; }

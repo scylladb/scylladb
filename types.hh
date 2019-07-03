@@ -639,7 +639,7 @@ public:
     virtual bool is_multi_cell() const { return false; }
     virtual bool is_atomic() const { return !is_multi_cell(); }
     bool is_reversed() const { return _kind == kind::reversed; }
-    virtual bool is_tuple() const { return false; }
+    bool is_tuple() const;
     bool is_user_type() const { return _kind == kind::user; }
     virtual bool is_native() const = 0;
     cql3::cql3_type as_cql3_type() const;
