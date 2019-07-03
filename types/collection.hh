@@ -66,7 +66,6 @@ public:
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
-    virtual bool is_native() const override { return false; }
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
     // requires linearized collection_mutation_view, lifetime

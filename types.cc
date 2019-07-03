@@ -266,8 +266,6 @@ struct byte_type_impl : integer_type_impl<int8_t> {
             throw marshal_exception(format("Expected 1 byte for a tinyint ({:d})", v.size()));
         }
     }
-
-    virtual bool is_native() const override { return true; }
 };
 
 struct short_type_impl : integer_type_impl<int16_t> {
@@ -279,22 +277,17 @@ struct short_type_impl : integer_type_impl<int16_t> {
             throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size()));
         }
     }
-
-    virtual bool is_native() const override { return true; }
 };
 
 struct int32_type_impl : integer_type_impl<int32_t> {
     int32_type_impl() : integer_type_impl{kind::int32, int32_type_name, 4}
     { }
-
-    virtual bool is_native() const override { return true; }
 };
 
 struct long_type_impl : integer_type_impl<int64_t> {
     long_type_impl() : integer_type_impl{kind::long_kind, long_type_name, 8}
     { }
 
-    virtual bool is_native() const override { return true; }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == timestamp_type.get();
     }
@@ -360,13 +353,11 @@ struct string_type_impl : public concrete_type<sstring> {
 
 struct ascii_type_impl final : public string_type_impl {
     ascii_type_impl() : string_type_impl(kind::ascii, ascii_type_name) {}
-    virtual bool is_native() const override { return true; }
 };
 
 struct utf8_type_impl final : public string_type_impl {
     static const char* name;
     utf8_type_impl() : string_type_impl(kind::utf8, utf8_type_name) {}
-    virtual bool is_native() const override { return true; }
     virtual bool is_compatible_with(const abstract_type& other) const override {
         // Anything that is ascii is also utf8, and they both use bytes
         // comparison
@@ -425,7 +416,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         v.remove_prefix(2);
         return bytes_type->from_string(v);
     }
-    virtual bool is_native() const override { return true; }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return true;
     }
@@ -495,7 +485,6 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         }
         return this->decompose(value.asBool());
     }
-    virtual bool is_native() const override { return true; }
 };
 
 // This is the old version of timestamp_type_impl, but has been replaced as it
@@ -552,7 +541,6 @@ public:
         }
         return from_string(value.asString());
     }
-    virtual bool is_native() const override { return true; }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timestamp_type.get() || &other == long_type.get();
     }
@@ -657,7 +645,6 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         }
         return from_string(value.asString());
     }
-    virtual bool is_native() const override { return true; }
 private:
     static int compare_bytes(bytes_view o1, bytes_view o2) {
         auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
@@ -824,7 +811,6 @@ public:
         }
         return from_string(value.asString());
     }
-    virtual bool is_native() const override { return true; }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == long_type.get();
     }
@@ -925,7 +911,6 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual bool is_native() const override { return true; }
 };
 
 struct time_type_impl : public simple_type_impl<int64_t> {
@@ -1017,7 +1002,6 @@ struct time_type_impl : public simple_type_impl<int64_t> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual bool is_native() const override { return true; }
 };
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
@@ -1096,7 +1080,6 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual bool is_native() const override { return true; }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timeuuid_type.get();
     }
@@ -1193,7 +1176,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual bool is_native() const override { return true; }
 };
 
 // Integer of same length of a given type. This is useful because our
@@ -1346,12 +1328,10 @@ struct floating_type_impl : public simple_type_impl<T> {
 
 struct double_type_impl : floating_type_impl<double> {
     double_type_impl() : floating_type_impl{kind::double_kind, double_type_name, 8} { }
-    virtual bool is_native() const override { return true; }
 };
 
 struct float_type_impl : floating_type_impl<float> {
     float_type_impl() : floating_type_impl{kind::float_kind, float_type_name, 4} { }
-    virtual bool is_native() const override { return true; }
 };
 
 
@@ -1464,7 +1444,6 @@ public:
             throw marshal_exception(format("unable to make int from '{}'", text));
         }
     }
-    virtual bool is_native() const override { return true; }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || int32_type->is_value_compatible_with(other) || long_type->is_value_compatible_with(other);
     }
@@ -1567,7 +1546,6 @@ public:
             throw marshal_exception(format("unable to make BigDecimal from '{}'", text));
         }
     }
-    virtual bool is_native() const override { return true; }
 };
 
 class counter_type_impl : public abstract_type {
@@ -1604,7 +1582,6 @@ public:
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual bool is_native() const override { return true; }
     virtual size_t native_value_size() const override {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1766,7 +1743,6 @@ public:
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
-    virtual bool is_native() const override { return true; }
     virtual bool references_duration() const override {
         return true;
     }
@@ -1816,7 +1792,6 @@ struct empty_type_impl : abstract_type {
     virtual bytes from_string(sstring_view text) const override {
         return {};
     }
-    virtual bool is_native() const override { return true; }
     virtual size_t native_value_size() const override {
         return 0;
     }
@@ -2181,6 +2156,8 @@ bool abstract_type::is_multi_cell() const {
     };
     return visit(*this, visitor{});
 }
+
+bool abstract_type::is_native() const { return !is_collection() && !is_tuple(); }
 
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {

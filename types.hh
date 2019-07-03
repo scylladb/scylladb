@@ -641,7 +641,7 @@ public:
     bool is_reversed() const { return _kind == kind::reversed; }
     bool is_tuple() const;
     bool is_user_type() const { return _kind == kind::user; }
-    virtual bool is_native() const = 0;
+    bool is_native() const;
     cql3::cql3_type as_cql3_type() const;
     const sstring& cql3_type_name() const;
     cql3_kind_enum_set::prepared get_cql3_kind() const;
@@ -995,10 +995,6 @@ public:
     }
     virtual bytes from_string(sstring_view s) const override {
         return _underlying_type->from_string(s);
-    }
-
-    virtual bool is_native() const {
-        return _underlying_type->is_native();
     }
 
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
