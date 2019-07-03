@@ -1,3 +1,10 @@
+# How to use this document
+
+This document describes general guidelines for reviewing patches to
+Scylla. The guidelines are not absolute; with good reason they can be
+overridden at the discretion of the maintainers. Nevertheless, patches
+should try to conform to these guidelines instead of finding reasons for
+seeking an exception.
 
 # Code style
 
