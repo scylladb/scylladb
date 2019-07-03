@@ -478,7 +478,7 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
     auto native_to_c = [] (native_type v) {
         return std::make_tuple(extract<int32_t>(v[0]), extract<int64_t>(v[1]), extract<sstring>(v[2]));
     };
-    auto c_to_native = [] (std::tuple<opt<int32_t>, opt<int64_t>, opt<sstring>> v) {
+    auto c_to_native = [] (c_type v) {
         return native_type({std::get<0>(v), std::get<1>(v), std::get<2>(v)});
     };
     auto native_to_bytes = [t] (native_type v) {
@@ -504,6 +504,13 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
     auto b2 = c_to_bytes(v2);
     BOOST_REQUIRE(t->compare(b1, b2) > 0);
     BOOST_REQUIRE(t->compare(b2, b2) == 0);
+
+    auto test_string_conversion = [=] (c_type v, sstring s) {
+        BOOST_REQUIRE_EQUAL(t->to_string(c_to_bytes(v)), s);
+        BOOST_REQUIRE(t->equal(t->from_string(s), c_to_bytes(v)));
+    };
+
+    test_string_conversion({10, {}, "a@@:b:c"}, "10:@:a\\@\\@\\:b\\:c");
 }
 
 void test_validation_fails(const shared_ptr<const abstract_type>& type, bytes_view v)

@@ -3367,12 +3367,12 @@ static std::vector<sstring_view> split_field_strings(sstring_view v) {
 
 // Replace "\:" with ":" and "\@" with "@".
 static std::string unescape(sstring_view s) {
-    static thread_local std::regex escaped_colon_re("\\\\:");
-    static thread_local std::regex escaped_at_re("\\\\@");
-    std::string result = s.to_string();
-    result = std::regex_replace(result, escaped_colon_re, ":");
-    result = std::regex_replace(result, escaped_at_re, "@");
-    return std::move(result);
+    return std::regex_replace(std::string(s), std::regex("\\\\([@:])"), "$1");
+}
+
+// Replace ":" with "\:" and "@" with "\@".
+static std::string escape(sstring_view s) {
+    return std::regex_replace(std::string(s), std::regex("[@:]"), "\\$0");
 }
 
 // Concat list of bytes into a single bytes.
@@ -3412,8 +3412,30 @@ tuple_type_impl::from_string(sstring_view s) const {
 }
 
 sstring
-tuple_type_impl::to_string(const bytes& b) const {
-    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+tuple_type_impl::to_string(const bytes& v) const {
+    auto vv = deserialize(v);
+    const auto& b = from_value(vv);
+    if (b.empty()) {
+        return "";
+    }
+
+    std::ostringstream out;
+    for (size_t i = 0; i < b.size(); ++i) {
+        if (i > 0) {
+            out << ":";
+        }
+
+        const auto& val = b[i];
+        if (val.is_null()) {
+            out << "@";
+        } else {
+            // We use ':' as delimiter and '@' to represent null, so they need to be escaped in the tuple's fields.
+            auto typ = type(i);
+            out << escape(typ->to_string(typ->decompose(val)));
+        }
+    }
+
+    return out.str();
 }
 
 sstring tuple_type_impl::to_json_string(const bytes &b) const {
