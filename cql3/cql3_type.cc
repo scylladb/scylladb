@@ -79,7 +79,7 @@ public:
     }
 
     virtual bool is_duration() const override {
-        return _type.get_type()->equals(duration_type);
+        return _type.get_type() == duration_type;
     }
 };
 

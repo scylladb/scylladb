@@ -1569,8 +1569,8 @@ bool row::equal(column_kind kind, const schema& this_schema, const row& other, c
                             std::pair<column_id, const atomic_cell_or_collection&> c2) {
         static_assert(schema::row_column_ids_are_ordered_by_name::value, "Relying on column ids being ordered by name");
         auto& at1 = *this_schema.column_at(kind, c1.first).type;
-        auto& at2 = other_schema.column_at(kind, c2.first).type;
-        return at1.equals(at2)
+        auto& at2 = *other_schema.column_at(kind, c2.first).type;
+        return at1 == at2
                && this_schema.column_at(kind, c1.first).name() == other_schema.column_at(kind, c2.first).name()
                && c1.second.equals(at1, c2.second);
     };

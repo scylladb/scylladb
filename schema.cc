@@ -417,7 +417,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._columns == y._raw._columns
         && x._raw._comment == y._raw._comment
         && x._raw._default_time_to_live == y._raw._default_time_to_live
-        && x._raw._regular_column_name_type->equals(y._raw._regular_column_name_type)
+        && x._raw._regular_column_name_type == y._raw._regular_column_name_type
         && x._raw._bloom_filter_fp_chance == y._raw._bloom_filter_fp_chance
         && x._raw._compressor_params == y._raw._compressor_params
         && x._raw._is_dense == y._raw._is_dense
@@ -646,7 +646,7 @@ bool column_definition::is_on_all_components() const {
 bool operator==(const column_definition& x, const column_definition& y)
 {
     return x._name == y._name
-        && x.type->equals(y.type)
+        && x.type == y.type
         && x.id == y.id
         && x.kind == y.kind
         && x._dropped_at == y._dropped_at;

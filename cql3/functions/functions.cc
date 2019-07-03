@@ -555,7 +555,7 @@ function_call::raw::test_assignment(database& db, const sstring& keyspace, share
     // later with a more helpful error message that if we were to return false here.
     try {
         auto&& fun = functions::get(db, keyspace, _name, _terms, receiver->ks_name, receiver->cf_name, receiver);
-        if (fun && receiver->type->equals(fun->return_type())) {
+        if (fun && receiver->type == fun->return_type()) {
             return assignment_testable::test_result::EXACT_MATCH;
         } else if (!fun || receiver->type->is_value_compatible_with(*fun->return_type())) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;

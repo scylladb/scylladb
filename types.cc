@@ -3627,13 +3627,6 @@ bytes user_type_impl::from_json_object(const Json::Value& value, cql_serializati
 }
 
 bool
-tuple_type_impl::equals(const abstract_type& other) const {
-    auto x = dynamic_cast<const tuple_type_impl*>(&other);
-    return x && std::equal(_types.begin(), _types.end(), x->_types.begin(), x->_types.end(),
-            [] (auto&& a, auto&& b) { return a->equals(b); });
-}
-
-bool
 tuple_type_impl::is_compatible_with(const abstract_type& previous) const {
     return check_compatibility(previous, &abstract_type::is_compatible_with);
 }
@@ -3750,16 +3743,6 @@ user_type_impl::make_name(sstring keyspace,
         os << ")";
     }
     return os.str();
-}
-
-bool
-user_type_impl::equals(const abstract_type& other) const {
-    auto x = dynamic_cast<const user_type_impl*>(&other);
-    return x
-        && _keyspace == x->_keyspace
-        && _name == x->_name
-        && std::equal(_field_names.begin(), _field_names.end(), x->_field_names.begin(), x->_field_names.end())
-        && tuple_type_impl::equals(other);
 }
 
 bool

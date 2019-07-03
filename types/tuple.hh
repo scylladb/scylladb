@@ -135,7 +135,6 @@ public:
     virtual sstring to_string_impl(const data_value& v) const override;
     virtual sstring to_json_string(bytes_view bv) const override;
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
-    virtual bool equals(const abstract_type& other) const override;
     virtual bool is_compatible_with(const abstract_type& previous) const override;
     virtual bool is_value_compatible_with_internal(const abstract_type& previous) const override;
     virtual sstring cql3_type_name_impl() const override;

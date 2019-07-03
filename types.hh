@@ -509,7 +509,7 @@ public:
         validate(v, cql_serialization_format::latest());
     }
     virtual bool is_compatible_with(const abstract_type& previous) const {
-        return equals(previous);
+        return this == &previous;
     }
     /*
      * Types which are wrappers over other types should override this.
@@ -532,9 +532,6 @@ public:
     bool is_value_compatible_with(const abstract_type& other) const {
         return is_value_compatible_with_internal(*other.underlying_type());
     }
-    bool equals(const shared_ptr<const abstract_type>& other) const {
-        return equals(*other);
-    }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const = 0;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const = 0;
     virtual bool references_duration() const {
@@ -544,9 +541,6 @@ public:
         return _value_length_if_fixed;
     }
 protected:
-    virtual bool equals(const abstract_type& other) const {
-        return this == &other;
-    }
     /**
      * Needed to handle ReversedType in value-compatibility checks.  Subclasses should implement this instead of
      * is_value_compatible_with().
@@ -647,7 +641,7 @@ protected:
 
 inline bool operator==(const abstract_type& x, const abstract_type& y)
 {
-     return x.equals(y);
+     return &x == &y;
 }
 
 inline
@@ -769,7 +763,7 @@ protected:
 
 inline bool operator==(const data_value& x, const data_value& y)
 {
-     return x._type->equals(y._type) && x._type->equal(x._type->decompose(x), y._type->decompose(y));
+     return x._type == y._type && x._type->equal(x._type->decompose(x), y._type->decompose(y));
 }
 
 inline bool operator!=(const data_value& x, const data_value& y)

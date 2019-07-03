@@ -70,7 +70,7 @@ public:
     virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
         try {
             auto&& casted_type = _type->prepare(db, keyspace).get_type();
-            if (receiver->type->equals(casted_type)) {
+            if (receiver->type == casted_type) {
                 return assignment_testable::test_result::EXACT_MATCH;
             } else if (receiver->type->is_value_compatible_with(*casted_type)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
