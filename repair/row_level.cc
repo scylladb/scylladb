@@ -199,7 +199,7 @@ static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(const st
     return common_algorithms.back();
 }
 
-bool is_rpc_stream_supported(row_level_diff_detect_algorithm algo) {
+static bool is_rpc_stream_supported(row_level_diff_detect_algorithm algo) {
     // send_full_set is the only algorithm that does not support rpc stream
     return algo != row_level_diff_detect_algorithm::send_full_set;
 }
@@ -1651,7 +1651,7 @@ public:
     }
 };
 
-future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
+static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -1694,7 +1694,7 @@ future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
     }
 }
 
-future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
+static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -1725,7 +1725,7 @@ future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
     }
 }
 
-future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process_op(
+static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process_op(
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -1760,7 +1760,7 @@ future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process_op(
     }
 }
 
-future<> repair_get_row_diff_with_rpc_stream_handler(
+static future<> repair_get_row_diff_with_rpc_stream_handler(
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -1801,7 +1801,7 @@ future<> repair_get_row_diff_with_rpc_stream_handler(
     });
 }
 
-future<> repair_put_row_diff_with_rpc_stream_handler(
+static future<> repair_put_row_diff_with_rpc_stream_handler(
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
@@ -1842,7 +1842,7 @@ future<> repair_put_row_diff_with_rpc_stream_handler(
     });
 }
 
-future<> repair_get_full_row_hashes_with_rpc_stream_handler(
+static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
         gms::inet_address from,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
