@@ -327,6 +327,9 @@ database::setup_metrics() {
         sm::make_gauge("pending_flushes_bytes", _cf_stats.pending_memtables_flushes_bytes,
                        sm::description("Holds the current number of bytes in memtables that are currently being flushed to sstables. "
                                        "High value in this metric may be an indication of storage being a bottleneck.")),
+        sm::make_gauge("failed_flushes", _cf_stats.failed_memtables_flushes_count,
+                       sm::description("Holds the number of failed memtable flushes. "
+                                       "High value in this metric may indicate a permanent failure to flush a memtable.")),
     });
 
     _metrics.add_group("database", {

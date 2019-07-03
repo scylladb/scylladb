@@ -979,6 +979,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             }).handle_exception([this, old, newtab, &monitor] (auto e) {
                 monitor.write_failed();
                 newtab->mark_for_deletion();
+                _config.cf_stats->failed_memtables_flushes_count++;
                 tlogger.error("failed to write sstable {}: {}", newtab->get_filename(), e);
                 // If we failed this write we will try the write again and that will create a new flush reader
                 // that will decrease dirty memory again. So we need to reset the accounting.
