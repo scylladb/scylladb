@@ -636,7 +636,7 @@ public:
     bool is_map() const { return _kind == kind::map; }
     bool is_set() const { return _kind == kind::set; }
     bool is_list() const { return _kind == kind::list; }
-    virtual bool is_multi_cell() const { return false; }
+    bool is_multi_cell() const;
     virtual bool is_atomic() const { return !is_multi_cell(); }
     bool is_reversed() const { return _kind == kind::reversed; }
     bool is_tuple() const;
@@ -972,9 +972,6 @@ public:
     }
     virtual size_t hash(bytes_view v) const override {
         return _underlying_type->hash(v);
-    }
-    virtual bool is_multi_cell() const override {
-        return _underlying_type->is_multi_cell();
     }
 
     virtual void serialize(const void* value, bytes::iterator& out) const override {

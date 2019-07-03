@@ -2173,6 +2173,15 @@ bool abstract_type::is_tuple() const {
     return visit(*this, visitor{});
 }
 
+bool abstract_type::is_multi_cell() const {
+    struct visitor {
+        bool operator()(const abstract_type&) { return false; }
+        bool operator()(const reversed_type_impl& t) { return t.underlying_type()->is_multi_cell(); }
+        bool operator()(const collection_type_impl& c) { return c.is_multi_cell(); }
+    };
+    return visit(*this, visitor{});
+}
+
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {
         cql3_kind operator()(const ascii_type_impl&) { return cql3_kind::ASCII; }

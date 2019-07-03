@@ -55,7 +55,7 @@ public:
         utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
         mutation materialize(const collection_type_impl&) const;
     };
-    virtual bool is_multi_cell() const override { return _is_multi_cell; }
+    bool is_multi_cell() const { return _is_multi_cell; }
     virtual data_type name_comparator() const = 0;
     virtual data_type value_comparator() const = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;
