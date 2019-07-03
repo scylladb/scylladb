@@ -1743,9 +1743,6 @@ public:
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
-    virtual bool references_duration() const override {
-        return true;
-    }
 private:
     using counter_type = cql_duration::common_counter_type;
 
@@ -2159,6 +2156,21 @@ bool abstract_type::is_multi_cell() const {
 
 bool abstract_type::is_native() const { return !is_collection() && !is_tuple(); }
 
+bool abstract_type::references_duration() const {
+    struct visitor {
+        bool operator()(const abstract_type&) { return false; }
+        bool operator()(const duration_type_impl&) { return true; }
+        bool operator()(const tuple_type_impl& t) {
+            return boost::algorithm::any_of(t.all_types(), std::mem_fn(&abstract_type::references_duration));
+        }
+        bool operator()(const map_type_impl& m) {
+            return m.get_keys_type()->references_duration() || m.get_values_type()->references_duration();
+        }
+        bool operator()(const listlike_collection_type_impl& l) { return l.get_elements_type()->references_duration(); }
+    };
+    return visit(*this, visitor{});
+}
+
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {
         cql3_kind operator()(const ascii_type_impl&) { return cql3_kind::ASCII; }
@@ -2556,10 +2568,6 @@ map_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) 
     }
     return std::make_optional(static_pointer_cast<const abstract_type>(
         get_instance(k ? *k : _keys, v ? *v : _values, _is_multi_cell)));
-}
-
-bool map_type_impl::references_duration() const {
-    return _keys->references_duration() || _values->references_duration();
 }
 
 auto collection_type_impl::deserialize_mutation_form(bytes_view in) const -> mutation_view {
@@ -3019,10 +3027,6 @@ set_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) 
     return std::nullopt;
 }
 
-bool set_type_impl::references_duration() const {
-    return _elements->references_duration();
-}
-
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
@@ -3233,10 +3237,6 @@ list_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated)
             get_instance(std::move(*e), _is_multi_cell)));
     }
     return std::nullopt;
-}
-
-bool list_type_impl::references_duration() const {
-    return _elements->references_duration();
 }
 
 tuple_type_impl::tuple_type_impl(kind k, sstring name, std::vector<data_type> types)
@@ -3703,10 +3703,6 @@ tuple_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated
             get_instance(std::move(*new_types))));
     }
     return std::nullopt;
-}
-
-bool tuple_type_impl::references_duration() const {
-    return boost::algorithm::any_of(_types, std::mem_fn(&abstract_type::references_duration));
 }
 
 sstring

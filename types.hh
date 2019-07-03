@@ -568,9 +568,7 @@ public:
     }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const = 0;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const = 0;
-    virtual bool references_duration() const {
-        return false;
-    }
+    bool references_duration() const;
     std::optional<uint32_t> value_length_if_fixed() const {
         return _value_length_if_fixed;
     }

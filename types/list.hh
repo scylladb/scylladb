@@ -62,7 +62,6 @@ public:
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
-    virtual bool references_duration() const override;
 };
 
 data_value make_list_value(data_type type, list_type_impl::native_type value);
