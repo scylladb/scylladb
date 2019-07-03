@@ -35,6 +35,7 @@
 #include "expressions.hh"
 #include "conditions.hh"
 #include "cql3/constants.hh"
+#include <optional>
 
 #include <boost/range/adaptors.hpp>
 
@@ -753,7 +754,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
     });
 }
 
-static Json::Value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
+static std::optional<Json::Value> describe_single_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
     Json::Value item(Json::objectValue);
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
@@ -763,7 +764,7 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
     if (result_set->empty()) {
         // If there is no matching item, we're supposed to return an empty
         // object without an Item member - not one with an empty Item member
-        return Json::objectValue;
+        return {};
     }
     // FIXME: I think this can't really be a loop, there should be exactly
     // one result after above we handled the 0 result case
@@ -791,8 +792,17 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
             ++column_it;
         }
     }
+    return item;
+}
+static Json::Value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
+    std::optional<Json::Value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), std::move(attrs_to_get));
+    if (!opt_item) {
+        // If there is no matching item, we're supposed to return an empty
+        // object without an Item member - not one with an empty Item member
+        return Json::objectValue;
+    }
     Json::Value item_descr(Json::objectValue);
-    item_descr["Item"] = item;
+    item_descr["Item"] = *opt_item;
     return item_descr;
 }
 
@@ -850,6 +860,103 @@ future<json::json_return_type> executor::get_item(std::string content) {
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(db::no_timeout, empty_service_permit())).then(
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get)] (service::storage_proxy::coordinator_query_result qr) mutable {
         return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get))));
+    });
+}
+
+future<json::json_return_type> executor::batch_get_item(std::string content) {
+    // FIXME: In this implementation, an unbounded batch size can cause
+    // unbounded response JSON object to be buffered in memory, unbounded
+    // parallelism of the requests, and unbounded amount of non-preemptable
+    // work in the following loops. So we should limit the batch size, and/or
+    // the response size, as DynamoDB does.
+    _stats.api_operations.batch_get_item++;
+    Json::Value req = json::to_json_value(content);
+    Json::Value& request_items = req["RequestItems"];
+
+    // We need to validate all the parameters before starting any asynchronous
+    // query, and fail the entire request on any parse error. So we parse all
+    // the input into our own vector "requests".
+    struct table_requests {
+        schema_ptr schema;
+        db::consistency_level cl;
+        std::unordered_set<std::string> attrs_to_get;
+        struct single_request {
+            partition_key pk;
+            clustering_key ck;
+        };
+        std::vector<single_request> requests;
+    };
+    std::vector<table_requests> requests;
+
+    for (auto it = request_items.begin(); it != request_items.end(); ++it) {
+        table_requests rs;
+        rs.schema = get_table_from_batch_request(_proxy, it);
+        rs.cl = get_read_consistency(*it);
+        rs.attrs_to_get = calculate_attrs_to_get(*it);
+        for (const Json::Value& key : (*it)["Keys"]) {
+            rs.requests.push_back({pk_from_json(key, rs.schema), ck_from_json(key, rs.schema)});
+            check_key(key, rs.schema);
+        }
+        requests.emplace_back(std::move(rs));
+    }
+
+    // If got here, all "requests" are valid, so let's start them all
+    // in parallel. The requests object are then immediately destroyed.
+    std::vector<future<std::tuple<std::string, std::unique_ptr<Json::Value>>>> response_futures;
+    for (const auto& rs : requests) {
+        for (const auto &r : rs.requests) {
+            dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*rs.schema, std::move(r.pk)))};
+            std::vector<query::clustering_range> bounds;
+            if (rs.schema->clustering_key_size() == 0) {
+                bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+            } else {
+                bounds.push_back(query::clustering_range::make_singular(std::move(r.ck)));
+            }
+            query::column_id_vector regular_columns{attrs_column(*rs.schema).id};
+            auto selection = cql3::selection::selection::wildcard(rs.schema);
+            auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
+            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
+            future<std::tuple<std::string, std::unique_ptr<Json::Value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(db::no_timeout, empty_service_permit())).then(
+                    [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
+                std::optional<Json::Value> json = describe_single_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get));
+                // Unfortunately, future<std::optional<Json::Value>> doesn't
+                // work because Json::Value doesn't have a non-throwing move
+                // constructor. So we need to convert it to a std::unique_ptr.
+                std::unique_ptr<Json::Value> v;
+                if (json) {
+                    v = std::make_unique<Json::Value>(std::move(*json));
+                }
+                return make_ready_future<std::tuple<std::string, std::unique_ptr<Json::Value>>>(
+                        std::make_tuple(schema->cf_name(), std::move(v)));
+            });
+            response_futures.push_back(std::move(f));
+        }
+    }
+
+    // Wait for all requests to complete, and then return the response.
+    // FIXME: If one of the requests failed this will fail the entire request.
+    // What we should do instead is to return the failed key in the array
+    // UnprocessedKeys (which the BatchGetItem API supports) and let the user
+    // try again. Note that simply a missing key is *not* an error (we already
+    // handled it above), but this case does include things like timeouts,
+    // unavailable CL, etc.
+    return when_all_succeed(response_futures.begin(), response_futures.end()).then(
+            [] (std::vector<std::tuple<std::string, std::unique_ptr<Json::Value>>> responses) {
+        Json::Value response = Json::objectValue;
+        response["Responses"] = Json::objectValue;
+        for (const auto& t : responses) {
+            if (std::get<1>(t)) {
+                response["Responses"][std::get<0>(t)].append(*std::get<1>(t));
+            } else {
+                // Even if all items requested for a particular table are
+                // missing, we still need to return an empty array.
+                Json::Value& x = response["Responses"][std::get<0>(t)];
+                if (x.isNull()) {
+                    x = Json::arrayValue;
+                }
+            }
+        }
+        return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
     });
 }
 

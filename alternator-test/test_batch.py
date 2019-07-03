@@ -5,11 +5,15 @@
 import pytest
 import random
 import string
+import collections
 
 from botocore.exceptions import ClientError
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(length))
+
+def multiset(items):
+    return collections.Counter([frozenset(item.items()) for item in items])
 
 # Test ensuring that items inserted by a batched statement can be properly extracted
 # via GetItem. Schema has both hash and sort keys.
@@ -114,3 +118,73 @@ def test_batch_put_item_replace(test_table_s, test_table):
     with test_table.batch_writer() as batch:
         batch.put_item(Item={'p': p, 'c': c, 'b': 'hello'})
     assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'b': 'hello'}
+
+# Basic test for BatchGetItem, reading several entire items.
+# Schema has both hash and sort keys.
+def test_batch_get_item(test_table):
+    items = [{'p': random_string(), 'c': random_string(), 'val': random_string()} for i in range(10)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    keys = [{k: x[k] for k in ('p', 'c')} for x in items]
+    # We use the low-level batch_get_item API for lack of a more convenient
+    # API. At least it spares us the need to encode the key's types...
+    reply = test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': keys, 'ConsistentRead': True}})
+    print(reply)
+    got_items = reply['Responses'][test_table.name]
+    assert multiset(got_items) == multiset(items)
+
+# Same, with schema has just hash key.
+def test_batch_get_item_hash(test_table_s):
+    items = [{'p': random_string(), 'val': random_string()} for i in range(10)]
+    with test_table_s.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    keys = [{k: x[k] for k in ('p')} for x in items]
+    reply = test_table_s.meta.client.batch_get_item(RequestItems = {test_table_s.name: {'Keys': keys, 'ConsistentRead': True}})
+    got_items = reply['Responses'][test_table_s.name]
+    assert multiset(got_items) == multiset(items)
+
+# Test what do we get if we try to read two *missing* values in addition to
+# an existing one. It turns out the missing items are simply not returned,
+# with no sign they are missing.
+def test_batch_get_item_missing(test_table_s):
+    p = random_string();
+    test_table_s.put_item(Item={'p': p})
+    reply = test_table_s.meta.client.batch_get_item(RequestItems = {test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}, {'p': p}], 'ConsistentRead': True}})
+    got_items = reply['Responses'][test_table_s.name]
+    assert got_items == [{'p' : p}]
+
+# If all the keys requested from a particular table are missing, we still
+# get a response array for that table - it's just empty.
+def test_batch_get_item_completely_missing(test_table_s):
+    reply = test_table_s.meta.client.batch_get_item(RequestItems = {test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+    got_items = reply['Responses'][test_table_s.name]
+    assert got_items == []
+
+# Test GetItem with AttributesToGet
+def test_batch_get_item_attributes_to_get(test_table):
+    items = [{'p': random_string(), 'c': random_string(), 'val1': random_string(), 'val2': random_string()} for i in range(10)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    keys = [{k: x[k] for k in ('p', 'c')} for x in items]
+    for wanted in [['p'], ['p', 'c'], ['val1'], ['p', 'val2']]:
+        reply = test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': keys, 'AttributesToGet': wanted, 'ConsistentRead': True}})
+        got_items = reply['Responses'][test_table.name]
+        expected_items = [{k: item[k] for k in wanted if k in item} for item in items]
+        assert multiset(got_items) == multiset(expected_items)
+
+# Test GetItem with ProjectionExpression (just a simple one, with
+# top-level attributes)
+def test_batch_get_item_projection_expression(test_table):
+    items = [{'p': random_string(), 'c': random_string(), 'val1': random_string(), 'val2': random_string()} for i in range(10)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    keys = [{k: x[k] for k in ('p', 'c')} for x in items]
+    for wanted in [['p'], ['p', 'c'], ['val1'], ['p', 'val2']]:
+        reply = test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': keys, 'ProjectionExpression': ",".join(wanted), 'ConsistentRead': True}})
+        got_items = reply['Responses'][test_table.name]
+        expected_items = [{k: item[k] for k in wanted if k in item} for item in items]
+        assert multiset(got_items) == multiset(expected_items)
