@@ -53,7 +53,6 @@ public:
     const std::vector<bytes>& field_names() const { return _field_names; }
     sstring get_name_as_string() const;
     virtual bool is_native() const override { return false; }
-    virtual bool is_user_type() const override { return true; }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 
