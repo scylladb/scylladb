@@ -37,8 +37,9 @@ public:
     static constexpr size_t max_elements = 65535;
 
 protected:
-    explicit collection_type_impl(kind k, sstring name)
-            : abstract_type(k, std::move(name), {}, data::type_info::make_collection()) {}
+    bool _is_multi_cell;
+    explicit collection_type_impl(kind k, sstring name, bool is_multi_cell)
+            : abstract_type(k, std::move(name), {}, data::type_info::make_collection()), _is_multi_cell(is_multi_cell) {}
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
     struct mutation {
@@ -54,6 +55,7 @@ public:
         utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
         mutation materialize(const collection_type_impl&) const;
     };
+    virtual bool is_multi_cell() const override { return _is_multi_cell; }
     virtual data_type name_comparator() const = 0;
     virtual data_type value_comparator() const = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;

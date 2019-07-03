@@ -42,7 +42,6 @@ class map_type_impl final : public concrete_collection_type<std::vector<std::pai
     data_type _keys;
     data_type _values;
     data_type _key_value_pair_type;
-    bool _is_multi_cell;
 protected:
     virtual sstring cql3_type_name_impl() const override;
 public:
@@ -52,7 +51,6 @@ public:
     data_type get_values_type() const { return _values; }
     virtual data_type name_comparator() const override { return _keys; }
     virtual data_type value_comparator() const override { return _values; }
-    virtual bool is_multi_cell() const override { return _is_multi_cell; }
     virtual data_type freeze() const override;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;

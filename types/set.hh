@@ -39,7 +39,6 @@ class set_type_impl final : public concrete_collection_type<std::vector<data_val
     using set_type = shared_ptr<const set_type_impl>;
     using intern = type_interning_helper<set_type_impl, data_type, bool>;
     data_type _elements;
-    bool _is_multi_cell;
 protected:
     virtual sstring cql3_type_name_impl() const override;
 public:
@@ -48,7 +47,6 @@ public:
     data_type get_elements_type() const { return _elements; }
     virtual data_type name_comparator() const override { return _elements; }
     virtual data_type value_comparator() const override;
-    virtual bool is_multi_cell() const override { return _is_multi_cell; }
     virtual data_type freeze() const override;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
