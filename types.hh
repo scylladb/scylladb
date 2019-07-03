@@ -634,6 +634,9 @@ public:
     virtual bool is_counter() const { return false; }
     virtual bool is_string() const { return false; }
     virtual bool is_collection() const { return false; }
+    bool is_map() const { return _kind == kind::map; }
+    bool is_set() const { return _kind == kind::set; }
+    bool is_list() const { return _kind == kind::list; }
     virtual bool is_multi_cell() const { return false; }
     virtual bool is_atomic() const { return !is_multi_cell(); }
     virtual bool is_reversed() const { return false; }

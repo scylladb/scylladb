@@ -36,22 +36,9 @@ class collection_type_impl : public abstract_type {
 public:
     static constexpr size_t max_elements = 65535;
 
-    class kind {
-        std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> _impl;
-    public:
-        kind(std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> impl)
-            : _impl(std::move(impl)) {}
-        shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;
-        static const kind map;
-        static const kind set;
-        static const kind list;
-    };
-
-    const kind& _kind;
-
 protected:
-    explicit collection_type_impl(abstract_type::kind ak, sstring name, const kind& k)
-            : abstract_type(ak, std::move(name), {}, data::type_info::make_collection()), _kind(k) {}
+    explicit collection_type_impl(kind k, sstring name)
+            : abstract_type(k, std::move(name), {}, data::type_info::make_collection()) {}
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
     struct mutation {
@@ -71,9 +58,6 @@ public:
     virtual data_type value_comparator() const = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;
     virtual bool is_collection() const override { return true; }
-    bool is_map() const { return &_kind == &kind::map; }
-    bool is_set() const { return &_kind == &kind::set; }
-    bool is_list() const { return &_kind == &kind::list; }
     std::vector<atomic_cell> enforce_limit(std::vector<atomic_cell>, int version) const;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const = 0;
     bytes serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) const;

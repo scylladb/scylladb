@@ -2209,27 +2209,23 @@ template <typename Func> static auto visit(const abstract_type& t, const void* v
 logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
 
-const collection_type_impl::kind collection_type_impl::kind::map(
-        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
-            return is_key ? cql3::maps::key_spec_of(*collection) : cql3::maps::value_spec_of(*collection);
-        });
-const collection_type_impl::kind collection_type_impl::kind::set(
-        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
-            return cql3::sets::value_spec_of(collection);
-        });
-const collection_type_impl::kind collection_type_impl::kind::list(
-        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
+shared_ptr<cql3::column_specification> collection_type_impl::make_collection_receiver(
+        shared_ptr<cql3::column_specification> collection, bool is_key) const {
+    struct visitor {
+        const shared_ptr<cql3::column_specification>& collection;
+        bool is_key;
+        shared_ptr<cql3::column_specification> operator()(const abstract_type&) { abort(); }
+        shared_ptr<cql3::column_specification> operator()(const list_type_impl&) {
             return cql3::lists::value_spec_of(collection);
-        });
-
-shared_ptr<cql3::column_specification>
-collection_type_impl::kind::make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const {
-    return _impl(std::move(collection), is_key);
-}
-
-shared_ptr<cql3::column_specification>
-collection_type_impl::make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const {
-    return _kind.make_collection_receiver(std::move(collection), is_key);
+        }
+        shared_ptr<cql3::column_specification> operator()(const map_type_impl&) {
+            return is_key ? cql3::maps::key_spec_of(*collection) : cql3::maps::value_spec_of(*collection);
+        }
+        shared_ptr<cql3::column_specification> operator()(const set_type_impl&) {
+            return cql3::sets::value_spec_of(collection);
+        }
+    };
+    return ::visit(*this, visitor{collection, is_key});
 }
 
 std::vector<atomic_cell>
@@ -2263,7 +2259,7 @@ collection_type_impl::is_compatible_with(const abstract_type& previous) const {
         return false;
     }
     auto& cprev = static_cast<const collection_type_impl&>(previous);
-    if (&_kind != &cprev._kind) {
+    if (get_kind() != cprev.get_kind()) {
         return false;
     }
     if (is_multi_cell() != cprev.is_multi_cell()) {
@@ -2292,7 +2288,7 @@ collection_type_impl::is_value_compatible_with_internal(const abstract_type& pre
         return false;
     }
     auto& cprev = static_cast<const collection_type_impl&>(previous);
-    if (&_kind != &cprev._kind) {
+    if (get_kind() != cprev.get_kind()) {
         return false;
     }
     return is_value_compatible_with_frozen(cprev);
@@ -2425,7 +2421,7 @@ sstring make_map_type_name(data_type keys, data_type values, bool is_multi_cell)
 }
 
 map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cell)
-        : concrete_type(abstract_type::kind::map, make_map_type_name(keys, values, is_multi_cell), kind::map)
+        : concrete_type(kind::map, make_map_type_name(keys, values, is_multi_cell))
         , _keys(std::move(keys))
         , _values(std::move(values))
         , _is_multi_cell(is_multi_cell) {
@@ -2996,7 +2992,7 @@ sstring make_set_type_name(data_type elements, bool is_multi_cell)
 }
 
 set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
-        : concrete_type(abstract_type::kind::set, make_set_type_name(elements, is_multi_cell), kind::set)
+        : concrete_type(kind::set, make_set_type_name(elements, is_multi_cell))
         , _elements(std::move(elements))
         , _is_multi_cell(is_multi_cell) {
 }
@@ -3220,7 +3216,7 @@ sstring make_list_type_name(data_type elements, bool is_multi_cell)
 }
 
 list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
-        : concrete_type(abstract_type::kind::list, make_list_type_name(elements, is_multi_cell), kind::list)
+        : concrete_type(kind::list, make_list_type_name(elements, is_multi_cell))
         , _elements(std::move(elements))
         , _is_multi_cell(is_multi_cell) {
 }
