@@ -2156,6 +2156,15 @@ bool abstract_type::is_counter() const {
     return visit(*this, visitor{});
 }
 
+bool abstract_type::is_collection() const {
+    struct visitor {
+        bool operator()(const reversed_type_impl& r) { return r.underlying_type()->is_collection(); }
+        bool operator()(const abstract_type&) { return false; }
+        bool operator()(const collection_type_impl&) { return true; }
+    };
+    return visit(*this, visitor{});
+}
+
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {
         cql3_kind operator()(const ascii_type_impl&) { return cql3_kind::ASCII; }
