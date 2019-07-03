@@ -59,6 +59,7 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "utils/logalloc.hh"
 
 using namespace std::chrono_literals;
 
@@ -189,6 +190,71 @@ SEASTAR_TEST_CASE(test_row_tombstone_updates) {
     m.partition().apply_row_tombstone(*s, c_key2_prefix, tombstone(1, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, c_key2), row_tombstone(tombstone(1, ttl)));
     return make_ready_future<>();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_operations) {
+    auto& prng = tests::random::gen();
+
+    auto sb = schema_builder("ks", "cf")
+        .with_column("pk", byte_type, column_kind::partition_key);
+    for (auto i = 0; i < 128; i++) {
+        sb.with_column(to_bytes(format("v{}", i * 2)), byte_type);
+    }
+    auto s = sb.build();
+
+    auto reg = logalloc::region{};
+
+    with_allocator(reg.allocator(), [&] {
+        auto r1 = row();
+
+        std::vector<row> rows;
+        for (auto i = 0; i < 128; i++) {
+            auto r2 = row();
+            r2.append_cell(i, atomic_cell::make_live(*byte_type, 1, bytes{}));
+            rows.emplace_back(*s, column_kind::regular_column, r2);
+            r1.apply(*s, column_kind::regular_column, std::move(r2));
+        }
+        auto r3 = row(*s, column_kind::regular_column, r1);
+        r3.apply(*s, column_kind::regular_column, r1);
+
+        for (auto i = 0; i < 10; i++) {
+            reg.full_compaction();
+
+            std::shuffle(rows.begin(), rows.end(), prng);
+            std::accumulate(rows.begin(), rows.end(), row{}, [&] (const row& a, const row& b) {
+                auto r = row(*s, column_kind::regular_column, a);
+                r.apply(*s, column_kind::regular_column, b);
+                return r;
+            });
+        }
+
+        for (auto& r : rows) {
+            auto dr = r3.difference(*s, column_kind::regular_column, r);
+            r.apply(*s, column_kind::regular_column, std::move(dr));
+            BOOST_CHECK(r.equal(column_kind::regular_column, *s, r3, *s));
+        }
+
+        for (auto i = 0; i < 10; i++) {
+            auto reduce = std::vector<row>{};
+            std::transform(rows.begin(), rows.end(), std::back_inserter(reduce), [&] (const row& r) {
+                return row(*s, column_kind::regular_column, r);
+            });
+            std::shuffle(reduce.begin(), reduce.end(), prng);
+            while (reduce.size() > 1) {
+                reg.full_compaction();
+
+                assert(reduce.size() % 2 == 0);
+                auto it1 = reduce.begin();
+                auto it2 = reduce.begin() + reduce.size() / 2;
+                for (; it2 != reduce.end(); ++it1, ++it2) {
+                    it1->apply(*s, column_kind::regular_column, *it2);
+                }
+                reduce.erase(it1, it2);
+            }
+            assert(reduce.size() == 1);
+            BOOST_CHECK(reduce.front().equal(column_kind::regular_column, *s, r3, *s));
+        }
+    });
 }
 
 collection_type_impl::mutation make_collection_mutation(tombstone t, bytes key, atomic_cell cell)
