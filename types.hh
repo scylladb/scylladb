@@ -637,7 +637,7 @@ public:
     bool is_set() const { return _kind == kind::set; }
     bool is_list() const { return _kind == kind::list; }
     bool is_multi_cell() const;
-    virtual bool is_atomic() const { return !is_multi_cell(); }
+    bool is_atomic() const { return !is_multi_cell(); }
     bool is_reversed() const { return _kind == kind::reversed; }
     bool is_tuple() const;
     bool is_user_type() const { return _kind == kind::user; }
