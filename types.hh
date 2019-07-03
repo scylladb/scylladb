@@ -630,7 +630,7 @@ public:
         return b ? to_json_string(*b) : "null";
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const = 0;
-    virtual bool is_counter() const { return false; }
+    bool is_counter() const;
     virtual bool is_string() const { return false; }
     virtual bool is_collection() const { return false; }
     bool is_map() const { return _kind == kind::map; }
@@ -972,9 +972,6 @@ public:
     }
     virtual size_t hash(bytes_view v) const override {
         return _underlying_type->hash(v);
-    }
-    virtual bool is_counter() const override {
-        return _underlying_type->is_counter();
     }
     virtual bool is_collection() const override {
         return _underlying_type->is_collection();

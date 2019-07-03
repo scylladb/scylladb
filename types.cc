@@ -1604,9 +1604,6 @@ public:
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual bool is_counter() const override {
-        return true;
-    }
     virtual bool is_native() const override { return true; }
     virtual size_t native_value_size() const override {
         fail(unimplemented::cause::COUNTERS);
@@ -2146,6 +2143,15 @@ shared_ptr<const abstract_type> abstract_type::underlying_type() const {
     struct visitor {
         shared_ptr<const abstract_type> operator()(const abstract_type& t) { return t.shared_from_this(); }
         shared_ptr<const abstract_type> operator()(const reversed_type_impl& r) { return r.underlying_type(); }
+    };
+    return visit(*this, visitor{});
+}
+
+bool abstract_type::is_counter() const {
+    struct visitor {
+        bool operator()(const reversed_type_impl& r) { return r.underlying_type()->is_counter(); }
+        bool operator()(const abstract_type&) { return false; }
+        bool operator()(const counter_type_impl&) { return true; }
     };
     return visit(*this, visitor{});
 }
