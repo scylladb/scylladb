@@ -286,6 +286,7 @@ using sstable_list = sstables::sstable_list;
 struct cf_stats {
     int64_t pending_memtables_flushes_count = 0;
     int64_t pending_memtables_flushes_bytes = 0;
+    int64_t failed_memtables_flushes_count = 0;
 
     // number of time the clustering filter was executed
     int64_t clustering_filter_count = 0;
