@@ -107,6 +107,7 @@ void server::set_routes(routes& r) {
         {"Scan", [] (executor& e, std::unique_ptr<request> req) { return e.scan(req->content); }},
         {"DescribeEndpoints", [] (executor& e, std::unique_ptr<request> req) { return e.describe_endpoints(req->content, req->get_header("Host")); }},
         {"BatchWriteItem", [] (executor& e, std::unique_ptr<request> req) { return e.batch_write_item(req->content); }},
+        {"BatchGetItem", [] (executor& e, std::unique_ptr<request> req) { return e.batch_get_item(req->content); }},
         {"Query", [] (executor& e, std::unique_ptr<request> req) { return e.query(req->content); }},
     };
 
