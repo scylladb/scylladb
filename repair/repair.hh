@@ -332,6 +332,9 @@ class partition_key_and_mutation_fragments {
     partition_key _key;
     std::list<frozen_mutation_fragment> _mfs;
 public:
+    partition_key_and_mutation_fragments()
+        : _key(std::vector<bytes>() ) {
+    }
     partition_key_and_mutation_fragments(partition_key key, std::list<frozen_mutation_fragment> mfs)
         : _key(std::move(key))
         , _mfs(std::move(mfs)) {
@@ -346,8 +349,30 @@ public:
 using repair_row_on_wire = partition_key_and_mutation_fragments;
 using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
 
+enum class repair_stream_cmd : uint8_t {
+    error,
+    hash_data,
+    row_data,
+    end_of_current_hash_set,
+    needs_all_rows,
+    end_of_current_rows,
+    get_full_row_hashes,
+    put_rows_done,
+};
+
+struct repair_hash_with_cmd {
+    repair_stream_cmd cmd;
+    repair_hash hash;
+};
+
+struct repair_row_on_wire_with_cmd {
+    repair_stream_cmd cmd;
+    repair_row_on_wire row;
+};
+
 enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set,
+    send_full_set_rpc_stream,
 };
 
 std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo);

@@ -162,3 +162,122 @@ In the result, we saw the rows on wire were as expected.
 
 tx_row_nr  = 1000505 + 999619 + 1001257 + 998619 (4 shards, the numbers are for each shard) = 4'000'000
 rx_row_nr  =  500233 + 500235 +  499559 + 499973 (4 shards, the numbers are for each shard) = 2'000'000
+
+## RPC stream usage in repair
+
+Some of the RPC verbs used by row level repair can transmit bulk of data,
+namely REPAIR_GET_FULL_ROW_HASHES, REPAIR_GET_ROW_DIFF and REPAIR_PUT_ROW_DIFF.
+To have better repair bandwidth with high latency link, we want to increase the
+row buff size.  It is more efficent to send large amount of data with RPC
+stream interface instead of the RPC verb interface.  We want to switch to RPC
+stream for such RPC verbs. Three functions, get_full_row_hashes(),
+get_row_diff() and put_row_diff(), are converted to use the new RPC stream
+interface.
+
+
+###  1) get_full_row_hashes()
+A new REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM rpc veb is introduced.
+
+#### The repair master sends: repair_stream_cmd.
+
+The repair_stream_cmd can be:
+- repair_stream_cmd::get_full_row_hashes
+Asks the repair follower to send all the hashes in working row buffer.
+
+####  The repair follower replies: repair_hash_with_cmd.
+
+```
+struct repair_hash_with_cmd {
+    repair_stream_cmd cmd;
+    repair_hash hash;
+};
+```
+
+The repair_stream_cmd in repair_hash_with_cmd can be:
+
+- repair_stream_cmd::hash_data
+One of the hashes in the working row buffer. The hash is stored in repair_hash_with_cmd.hash.
+
+- repair_stream_cmd::end_of_current_hash_set
+Notifies repair master that  repair follower has send all the hashes in the working row buffer
+
+- repair_stream_cmd::error
+Notifies an error has happened on the follower
+
+
+### 2) get_row_diff()
+
+A new REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM rpc veb is introduced.
+
+```
+struct repair_hash_with_cmd {
+    repair_stream_cmd cmd;
+    repair_hash hash;
+};
+
+struct repair_row_on_wire_with_cmd {
+    repair_stream_cmd cmd;
+    repair_row_on_wire row;
+};
+```
+
+#### The repair master sends: repair_hash_with_cmd
+
+The repair_stream_cmd in repair_hash_with_cmd can be:
+
+- repair_stream_cmd::needs_all_rows
+Asks the repair follower to send all the rows in the working row buffer.
+
+- repair_stream_cmd::hash_data
+Contains the hash for the row in the working row buffer that repair master
+needs. The hash is stored in repair_hash_with_cmd.hash.
+
+- repair_stream_cmd::end_of_current_hash_set
+
+Notifies repair follower that repair master has sent all the rows it needs.
+
+#### The repair follower replies: repair_row_on_wire_with_cmd
+
+The repair_stream_cmd in repair_row_on_wire_with_cmd can be:
+
+- repair_stream_cmd::row_data
+This is one of the row repair master requested. The row data is stored in
+repair_row_on_wire_with_cmd.row.
+
+- repair_stream_cmd::end_of_current_rows
+Notifes repair follower has sent all the rows repair master requested.
+
+- repair_stream_cmd::error
+Notifies an error has happened on the follower.
+
+
+### 3) put_row_diff()
+
+A new REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM  rpc veb is introduced.
+
+```
+struct repair_row_on_wire_with_cmd {
+    repair_stream_cmd cmd;
+    repair_row_on_wire row;
+};
+```
+
+#### The repair master sends: repair_row_on_wire_with_cmd
+
+The repair_stream_cmd in repair_row_on_wire_with_cmd can be:
+
+- repair_stream_cmd::row_data
+Contains one of the rows that repair master wants to send to repair follower.
+The row data is stored in repair_row_on_wire_with_cmd.row.
+
+- repair_stream_cmd::end_of_current_rows
+Notifies repair follower that repair master has sent all the rows it wants to send.
+
+#### The repair follower replies: repair_stream_cmd
+
+- repair_stream_cmd::put_rows_done
+Notifies repair master that repair follower has received and applied all the
+rows repair master sent.
+
+- repair_stream_cmd::error
+Notifies an error has happened on the follower.

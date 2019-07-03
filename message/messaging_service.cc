@@ -464,6 +464,9 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_ESTIMATED_PARTITIONS:
     case messaging_verb::REPAIR_SET_ESTIMATED_PARTITIONS:
     case messaging_verb::REPAIR_GET_DIFF_ALGORITHMS:
+    case messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM:
+    case messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM:
+    case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -689,6 +692,67 @@ messaging_service::make_sink_and_source_for_stream_mutation_fragments(utils::UUI
 
 void messaging_service::register_stream_mutation_fragments(std::function<future<rpc::sink<int32_t>> (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<streaming::stream_reason>, rpc::source<frozen_mutation_fragment> source)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_FRAGMENTS, std::move(func));
+}
+
+template<class SinkType, class SourceType>
+future<rpc::sink<SinkType>, rpc::source<SourceType>>
+do_make_sink_source(messaging_verb verb, uint32_t repair_meta_id, shared_ptr<messaging_service::rpc_protocol_client_wrapper> rpc_client, std::unique_ptr<messaging_service::rpc_protocol_wrapper>& rpc) {
+    return rpc_client->make_stream_sink<netw::serializer, SinkType>().then([&rpc, verb, repair_meta_id, rpc_client] (rpc::sink<SinkType> sink) mutable {
+        auto rpc_handler = rpc->make_client<rpc::source<SourceType> (uint32_t, rpc::sink<SinkType>)>(verb);
+        return rpc_handler(*rpc_client, repair_meta_id, sink).then_wrapped([sink, rpc_client] (future<rpc::source<SourceType>> source) mutable {
+            return (source.failed() ? sink.close() : make_ready_future<>()).then([sink = std::move(sink), source = std::move(source)] () mutable {
+                return make_ready_future<rpc::sink<SinkType>, rpc::source<SourceType>>(std::move(sink), std::move(source.get0()));
+            });
+        });
+    });
+}
+
+// Wrapper for REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM
+future<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>
+messaging_service::make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
+    auto verb = messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM;
+    auto rpc_client = get_rpc_client(verb, id);
+    return do_make_sink_source<repair_hash_with_cmd, repair_row_on_wire_with_cmd>(verb, repair_meta_id, std::move(rpc_client), rpc());
+}
+
+rpc::sink<repair_row_on_wire_with_cmd> messaging_service::make_sink_for_repair_get_row_diff_with_rpc_stream(rpc::source<repair_hash_with_cmd>& source) {
+    return source.make_sink<netw::serializer, repair_row_on_wire_with_cmd>();
+}
+
+void messaging_service::register_repair_get_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_row_on_wire_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_hash_with_cmd> source)>&& func) {
+    register_handler(this, messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM, std::move(func));
+}
+
+// Wrapper for REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM
+future<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>
+messaging_service::make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
+    auto verb = messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM;
+    auto rpc_client = get_rpc_client(verb, id);
+    return do_make_sink_source<repair_row_on_wire_with_cmd, repair_stream_cmd>(verb, repair_meta_id, std::move(rpc_client), rpc());
+}
+
+rpc::sink<repair_stream_cmd> messaging_service::make_sink_for_repair_put_row_diff_with_rpc_stream(rpc::source<repair_row_on_wire_with_cmd>& source) {
+    return source.make_sink<netw::serializer, repair_stream_cmd>();
+}
+
+void messaging_service::register_repair_put_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_stream_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source)>&& func) {
+    register_handler(this, messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM, std::move(func));
+}
+
+// Wrapper for REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM
+future<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>
+messaging_service::make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
+    auto verb = messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM;
+    auto rpc_client = get_rpc_client(verb, id);
+    return do_make_sink_source<repair_stream_cmd, repair_hash_with_cmd>(verb, repair_meta_id, std::move(rpc_client), rpc());
+}
+
+rpc::sink<repair_hash_with_cmd> messaging_service::make_sink_for_repair_get_full_row_hashes_with_rpc_stream(rpc::source<repair_stream_cmd>& source) {
+    return source.make_sink<netw::serializer, repair_hash_with_cmd>();
+}
+
+void messaging_service::register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source)>&& func) {
+    register_handler(this, messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM, std::move(func));
 }
 
 // Send a message for verb
