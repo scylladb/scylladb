@@ -114,7 +114,7 @@ public:
     class IN;
     class IN_with_values;
     class IN_with_marker;
-
+    class LIKE;
     class slice;
     class contains;
 
@@ -389,6 +389,51 @@ public:
     virtual bool is_satisfied_by(bytes_view data, const query_options& options) const override;
     virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
         return ::make_shared<slice>(cdef, _slice);
+    }
+};
+
+class single_column_restriction::LIKE final : public single_column_restriction {
+private:
+    ::shared_ptr<term> _value;
+public:
+    LIKE(const column_definition& column_def, ::shared_ptr<term> value)
+            : single_column_restriction(column_def)
+          , _value(value)
+    { }
+
+    virtual std::vector<bytes_opt> values(const query_options& options) const override {
+        std::vector<bytes_opt> v;
+        v.push_back(to_bytes_opt(_value->bind_and_get(options)));
+        return v;
+    }
+
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
+        return false;
+    }
+
+    virtual bool is_supported_by(const secondary_index::index& index) const {
+        return index.supports_expression(_column_def, cql3::operator_type::LIKE);
+    }
+
+    virtual sstring to_string() const override {
+        return format("LIKE({})", _value->to_string());
+    }
+
+    virtual void merge_with(::shared_ptr<restriction> other) {
+        throw exceptions::invalid_request_exception(
+            format("{} cannot be restricted by more than one relation if it includes a LIKE",
+                   _column_def.name_as_text()));
+    }
+
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const override;
+    virtual bool is_satisfied_by(bytes_view data, const query_options& options) const override;
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
+        return ::make_shared<LIKE>(cdef, _value);
     }
 };
 
