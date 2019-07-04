@@ -62,7 +62,6 @@ public:
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     bytes serialize_partially_deserialized_form(
             const std::vector<bytes_view>& v, cql_serialization_format sf) const;
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 };
 

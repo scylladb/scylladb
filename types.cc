@@ -167,9 +167,6 @@ struct simple_type_impl : concrete_type<T> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const {
-        return false;
-    }
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         return std::nullopt;
     }
@@ -1606,9 +1603,6 @@ public:
     virtual const std::type_info& native_typeid() const {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
-        return false;
-    }
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         return std::nullopt;
     }
@@ -1819,9 +1813,6 @@ struct empty_type_impl : abstract_type {
     virtual const std::type_info& native_typeid() const {
         // Can't happen
         abort();
-    }
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
-        return false;
     }
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         return std::nullopt;
@@ -2169,6 +2160,36 @@ bool abstract_type::references_duration() const {
         bool operator()(const listlike_collection_type_impl& l) { return l.get_elements_type()->references_duration(); }
     };
     return visit(*this, visitor{});
+}
+
+bool abstract_type::references_user_type(const sstring& keyspace, const bytes& name) const {
+    struct visitor {
+        const sstring& keyspace;
+        const bytes& name;
+        bool operator()(const abstract_type&) { return false; }
+        bool operator()(const reversed_type_impl& r) {
+            return r.underlying_type()->references_user_type(keyspace, name);
+        }
+        bool operator()(const user_type_impl& u) {
+            if (u._keyspace == keyspace && u._name == name) {
+                return true;
+            }
+            return std::any_of(u.all_types().begin(), u.all_types().end(),
+                    [&] (auto&& dt) { return dt->references_user_type(keyspace, name); });
+        }
+        bool operator()(const tuple_type_impl& t) {
+            return std::any_of(t.all_types().begin(), t.all_types().end(),
+                    [&] (auto&& dt) { return dt->references_user_type(keyspace, name); });
+        }
+        bool operator()(const map_type_impl& m) {
+            return m.get_keys_type()->references_user_type(keyspace, name) ||
+                   m.get_values_type()->references_user_type(keyspace, name);
+        }
+        bool operator()(const listlike_collection_type_impl& l) {
+            return l.get_elements_type()->references_user_type(keyspace, name);
+        }
+    };
+    return visit(*this, visitor{keyspace, name});
 }
 
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
@@ -2552,11 +2573,6 @@ map_type_impl::serialize_partially_deserialized_form(
     return b;
 
 
-}
-
-bool
-map_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
-    return _keys->references_user_type(keyspace, name) || _values->references_user_type(keyspace, name);
 }
 
 std::optional<data_type>
@@ -3012,11 +3028,6 @@ set_type_impl::serialize_partially_deserialized_form(
     return pack(v.begin(), v.end(), v.size(), sf);
 }
 
-bool
-set_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
-    return _elements->references_user_type(keyspace, name);
-}
-
 std::optional<data_type>
 set_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
     auto e = _elements->update_user_type(updated);
@@ -3222,11 +3233,6 @@ list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
         }
     }
     return pack(tmp.begin(), tmp.end(), tmp.size(), sf);
-}
-
-bool
-list_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
-    return _elements->references_user_type(keyspace, name);
 }
 
 std::optional<data_type>
@@ -3675,11 +3681,6 @@ tuple_type_impl::make_name(const std::vector<data_type>& types) {
     return format("org.apache.cassandra.db.marshal.TupleType({})", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
 }
 
-bool
-tuple_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
-    return std::any_of(_types.begin(), _types.end(), [&](auto&& dt) { return dt->references_user_type(keyspace, name); });
-}
-
 static std::optional<std::vector<data_type>>
 update_types(const std::vector<data_type> types, const user_type updated) {
     std::optional<std::vector<data_type>> new_types = std::nullopt;
@@ -3732,12 +3733,6 @@ user_type_impl::make_name(sstring keyspace,
         os << ")";
     }
     return os.str();
-}
-
-bool
-user_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
-    return (_keyspace == keyspace && _name == name)
-        || tuple_type_impl::references_user_type(keyspace, name);
 }
 
 std::optional<data_type>

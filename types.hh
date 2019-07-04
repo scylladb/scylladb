@@ -566,7 +566,7 @@ public:
     bool is_value_compatible_with(const abstract_type& other) const {
         return is_value_compatible_with_internal(*other.underlying_type());
     }
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const = 0;
+    bool references_user_type(const sstring& keyspace, const bytes& name) const;
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const = 0;
     bool references_duration() const;
     std::optional<uint32_t> value_length_if_fixed() const {
@@ -766,9 +766,6 @@ protected:
     }
     virtual const std::type_info& native_typeid() const override {
         return typeid(native_type);
-    }
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
-        return false;
     }
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
         return std::nullopt;
@@ -993,10 +990,6 @@ public:
     }
     virtual bytes from_string(sstring_view s) const override {
         return _underlying_type->from_string(s);
-    }
-
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
-        return _underlying_type->references_user_type(keyspace, name);
     }
 
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
