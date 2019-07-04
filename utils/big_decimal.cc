@@ -112,6 +112,32 @@ big_decimal& big_decimal::operator+=(const big_decimal& other)
     return *this;
 }
 
+big_decimal& big_decimal::operator-=(const big_decimal& other) {
+    if (_scale == other._scale) {
+        _unscaled_value -= other._unscaled_value;
+    } else {
+        boost::multiprecision::cpp_int rescale(10);
+        auto max_scale = std::max(_scale, other._scale);
+        boost::multiprecision::cpp_int u = _unscaled_value * boost::multiprecision::pow(rescale,  max_scale - _scale);
+        boost::multiprecision::cpp_int v = other._unscaled_value * boost::multiprecision::pow(rescale, max_scale - other._scale);
+        _unscaled_value = u - v;
+        _scale = max_scale;
+    }
+    return *this;
+}
+
+big_decimal big_decimal::operator+(const big_decimal& other) const {
+    big_decimal ret(*this);
+    ret += other;
+    return ret;
+}
+
+big_decimal big_decimal::operator-(const big_decimal& other) const {
+    big_decimal ret(*this);
+    ret -= other;
+    return ret;
+}
+
 big_decimal big_decimal::div(const ::uint64_t y, const rounding_mode mode) const
 {
     if (mode != rounding_mode::HALF_EVEN) {
