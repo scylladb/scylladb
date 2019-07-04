@@ -2147,19 +2147,25 @@ bool abstract_type::is_multi_cell() const {
 
 bool abstract_type::is_native() const { return !is_collection() && !is_tuple(); }
 
-bool abstract_type::references_duration() const {
+static bool find(const abstract_type& t, std::function<bool(const abstract_type&)> f) {
+    if (f(t)) {
+        return true;
+    }
     struct visitor {
+        std::function<bool(const abstract_type&)>& f;
         bool operator()(const abstract_type&) { return false; }
-        bool operator()(const duration_type_impl&) { return true; }
+        bool operator()(const reversed_type_impl& r) { return find(*r.underlying_type(), f); }
         bool operator()(const tuple_type_impl& t) {
-            return boost::algorithm::any_of(t.all_types(), std::mem_fn(&abstract_type::references_duration));
+            return boost::algorithm::any_of(t.all_types(), [&] (const data_type& dt) { return find(*dt, f); });
         }
-        bool operator()(const map_type_impl& m) {
-            return m.get_keys_type()->references_duration() || m.get_values_type()->references_duration();
-        }
-        bool operator()(const listlike_collection_type_impl& l) { return l.get_elements_type()->references_duration(); }
+        bool operator()(const map_type_impl& m) { return find(*m.get_keys_type(), f) || find(*m.get_values_type(), f); }
+        bool operator()(const listlike_collection_type_impl& l) { return find(*l.get_elements_type(), f); }
     };
-    return visit(*this, visitor{});
+    return visit(t, visitor{f});
+}
+
+bool abstract_type::references_duration() const {
+    return find(*this, [] (const abstract_type& t) { return t.get_kind() == kind::duration; });
 }
 
 bool abstract_type::references_user_type(const sstring& keyspace, const bytes& name) const {
@@ -2167,29 +2173,9 @@ bool abstract_type::references_user_type(const sstring& keyspace, const bytes& n
         const sstring& keyspace;
         const bytes& name;
         bool operator()(const abstract_type&) { return false; }
-        bool operator()(const reversed_type_impl& r) {
-            return r.underlying_type()->references_user_type(keyspace, name);
-        }
-        bool operator()(const user_type_impl& u) {
-            if (u._keyspace == keyspace && u._name == name) {
-                return true;
-            }
-            return std::any_of(u.all_types().begin(), u.all_types().end(),
-                    [&] (auto&& dt) { return dt->references_user_type(keyspace, name); });
-        }
-        bool operator()(const tuple_type_impl& t) {
-            return std::any_of(t.all_types().begin(), t.all_types().end(),
-                    [&] (auto&& dt) { return dt->references_user_type(keyspace, name); });
-        }
-        bool operator()(const map_type_impl& m) {
-            return m.get_keys_type()->references_user_type(keyspace, name) ||
-                   m.get_values_type()->references_user_type(keyspace, name);
-        }
-        bool operator()(const listlike_collection_type_impl& l) {
-            return l.get_elements_type()->references_user_type(keyspace, name);
-        }
+        bool operator()(const user_type_impl& u) { return u._keyspace == keyspace && u._name == name; }
     };
-    return visit(*this, visitor{keyspace, name});
+    return find(*this, visitor{keyspace, name});
 }
 
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
