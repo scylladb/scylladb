@@ -82,6 +82,10 @@ public:
         return false;
     }
 
+    virtual bool is_LIKE() const {
+        return false;
+    }
+
     virtual bool has_bound(statements::bound b) const override {
         return true;
     }

@@ -188,6 +188,11 @@ protected:
         throw exceptions::invalid_request_exception(format("{} cannot be used for Multi-column relations", get_operator()));
     }
 
+    virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(
+            database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) override {
+        throw exceptions::invalid_request_exception("LIKE cannot be used for Multi-column relations");
+    }
+
     virtual ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override {
         auto new_entities = boost::copy_range<decltype(_entities)>(_entities | boost::adaptors::transformed([&] (auto&& entity) {
             return *entity == from ? ::make_shared<column_identifier::raw>(to) : entity;

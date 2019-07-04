@@ -602,6 +602,7 @@ public:
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const = 0;
     virtual bool is_counter() const { return false; }
+    virtual bool is_string() const { return false; }
     virtual bool is_collection() const { return false; }
     virtual bool is_multi_cell() const { return false; }
     virtual bool is_atomic() const { return !is_multi_cell(); }

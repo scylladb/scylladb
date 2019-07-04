@@ -72,6 +72,7 @@ private:
     bool _slice;
     bool _contains;
     bool _in;
+    bool _like;
 public:
     single_column_primary_key_restrictions(schema_ptr schema, bool allow_filtering)
         : _schema(schema)
@@ -80,6 +81,7 @@ public:
         , _slice(false)
         , _contains(false)
         , _in(false)
+        , _like(false)
     { }
 
     // Convert another primary key restrictions type into this type, possibly using different schema
@@ -91,6 +93,7 @@ public:
         , _slice(other._slice)
         , _contains(other._contains)
         , _in(other._in)
+        , _like(other._like)
     {
         for (const auto& entry : other._restrictions->restrictions()) {
             const column_definition* other_cdef = entry.first;
@@ -121,6 +124,10 @@ public:
 
     virtual bool is_IN() const override {
         return _in;
+    }
+
+    virtual bool is_LIKE() const override {
+        return _like;
     }
 
     virtual bool is_all_eq() const override {
@@ -160,6 +167,7 @@ public:
         _slice |= restriction->is_slice();
         _in |= restriction->is_IN();
         _contains |= restriction->is_contains();
+        _like |= restriction->is_LIKE();
         _restrictions->add_restriction(restriction);
     }
 
@@ -264,7 +272,7 @@ private:
             const column_definition* def = e.first;
             auto&& r = e.second;
 
-            if (vec_of_values.size() != _schema->position(*def) || r->is_contains()) {
+            if (vec_of_values.size() != _schema->position(*def) || r->is_contains() || r->is_LIKE()) {
                 // The prefixes built so far are the longest we can build,
                 // the rest of the constraints will have to be applied using filtering.
                 break;

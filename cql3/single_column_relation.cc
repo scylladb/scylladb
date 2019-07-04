@@ -95,6 +95,18 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, ::sh
     return ::make_shared<single_column_restriction::IN_with_values>(column_def, std::move(terms));
 }
 
+::shared_ptr<restrictions::restriction>
+single_column_relation::new_LIKE_restriction(
+        database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) {
+    const column_definition& column_def = to_column_definition(schema, _entity);
+    if (!column_def.type->is_string()) {
+        throw exceptions::invalid_request_exception(
+                format("LIKE is allowed only on string types, which {} is not", column_def.name_as_text()));
+    }
+    auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), bound_names);
+    return ::make_shared<single_column_restriction::LIKE>(column_def, std::move(term));
+}
+
 std::vector<::shared_ptr<column_specification>>
 single_column_relation::to_receivers(schema_ptr schema, const column_definition& column_def)
 {

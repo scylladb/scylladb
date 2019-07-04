@@ -360,6 +360,9 @@ struct string_type_impl : public concrete_type<sstring> {
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
+    virtual bool is_string() const override {
+        return true;
+    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
