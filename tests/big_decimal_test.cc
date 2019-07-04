@@ -35,13 +35,30 @@ void test_div(const char *r_cstr, const int64_t q, const char *expected_cstr) {
     BOOST_REQUIRE_EQUAL(res.scale(), expected.scale());
 }
 
-void test_assignadd(const char *x_cstr, const char *y_cstr, const char *expected_cstr) {
+template<typename Op>
+void test_op(const char* x_cstr, const char* y_cstr, const char* expected_cstr, Op&& op) {
     big_decimal x{x_cstr};
     big_decimal y{y_cstr};
     big_decimal expected{expected_cstr};
-    x +=  y;
-    BOOST_REQUIRE_EQUAL(x.unscaled_value(), expected.unscaled_value());
-    BOOST_REQUIRE_EQUAL(x.scale(), expected.scale());
+    auto ret = op(x, y);
+    BOOST_REQUIRE_EQUAL(ret.unscaled_value(), expected.unscaled_value());
+    BOOST_REQUIRE_EQUAL(ret.scale(), expected.scale());
+}
+
+void test_assignadd(const char *x_cstr, const char *y_cstr, const char *expected_cstr) {
+    return test_op(x_cstr, y_cstr, expected_cstr, [](big_decimal& d1, big_decimal& d2) { return d1 += d2; });
+}
+
+void test_add(const char *x_cstr, const char *y_cstr, const char *expected_cstr) {
+    return test_op(x_cstr, y_cstr, expected_cstr, [](big_decimal& d1, big_decimal& d2) { return d1 + d2; });
+}
+
+void test_assignsub(const char *x_cstr, const char *y_cstr, const char *expected_cstr) {
+    return test_op(x_cstr, y_cstr, expected_cstr, [](big_decimal& d1, big_decimal& d2) { return d1 -= d2; });
+}
+
+void test_sub(const char *x_cstr, const char *y_cstr, const char *expected_cstr) {
+    return test_op(x_cstr, y_cstr, expected_cstr, [](big_decimal& d1, big_decimal& d2) { return d1 - d2; });
 }
 
 } /* anonymous namespoce */
@@ -127,4 +144,40 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_assignadd) {
     test_assignadd("0.0", "0.000", "0.000");
     test_assignadd("1.0", "1.000", "2.000");
     test_assignadd("-1.0", "-1.000", "-2.000");
+}
+
+BOOST_AUTO_TEST_CASE(test_big_decimal_add) {
+    test_add("1", "4", "5");
+    test_add("1.00", "4.00", "5.00");
+    test_add("1.000", "4.000", "5.000");
+    test_add("1", "-1", "0");
+    test_add("1.00", "-1.00", "0.00");
+    test_add("1.000", "-1.000", "0.000");
+    test_add("0.0", "0.000", "0.000");
+    test_add("1.0", "1.000", "2.000");
+    test_add("-1.0", "-1.000", "-2.000");
+}
+
+BOOST_AUTO_TEST_CASE(test_big_decimal_assignsub) {
+    test_assignsub("1", "4", "-3");
+    test_assignsub("1.00", "4.00", "-3.00");
+    test_assignsub("1.000", "4.000", "-3.000");
+    test_assignsub("1", "-1", "2");
+    test_assignsub("1.00", "-1.00", "2.00");
+    test_assignsub("1.000", "-1.000", "2.000");
+    test_assignsub("0.0", "0.000", "0.000");
+    test_assignsub("1.0", "1.000", "0.000");
+    test_assignsub("-1.0", "1.000", "-2.000");
+}
+
+BOOST_AUTO_TEST_CASE(test_big_decimal_sub) {
+    test_sub("1", "4", "-3");
+    test_sub("1.00", "4.00", "-3.00");
+    test_sub("1.000", "4.000", "-3.000");
+    test_sub("1", "-1", "2");
+    test_sub("1.00", "-1.00", "2.00");
+    test_sub("1.000", "-1.000", "2.000");
+    test_sub("0.0", "0.000", "0.000");
+    test_sub("1.0", "1.000", "0.000");
+    test_sub("-1.0", "1.000", "-2.000");
 }

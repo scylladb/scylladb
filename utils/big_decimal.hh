@@ -34,7 +34,7 @@ public:
         HALF_EVEN,
     };
 
-    big_decimal(sstring_view text);
+    explicit big_decimal(sstring_view text);
     big_decimal() : big_decimal(0, 0) {}
     big_decimal(int32_t scale, boost::multiprecision::cpp_int unscaled_value)
         : _scale(scale), _unscaled_value(unscaled_value)
@@ -48,6 +48,9 @@ public:
     int compare(const big_decimal& other) const;
 
     big_decimal& operator+=(const big_decimal& other);
+    big_decimal& operator-=(const big_decimal& other);
+    big_decimal operator+(const big_decimal& other) const;
+    big_decimal operator-(const big_decimal& other) const;
     big_decimal div(const ::uint64_t y, const rounding_mode mode) const;
     friend bool operator<(const big_decimal& x, const big_decimal& y) { return x.compare(y) < 0; }
     friend bool operator<=(const big_decimal& x, const big_decimal& y) { return x.compare(y) <= 0; }
