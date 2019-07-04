@@ -868,7 +868,7 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c) {
 
         auto cr = c->get_compacting_sstable_writer();
         auto cfc = make_stable_flattened_mutations_consumer<compact_for_compaction<compacting_sstable_writer>>(
-            *c->schema(), gc_clock::now(), std::move(cr), c->max_purgeable_func());
+            *c->schema(), gc_clock::now(), c->max_purgeable_func(), std::move(cr));
 
         auto start_time = db_clock::now();
         try {
