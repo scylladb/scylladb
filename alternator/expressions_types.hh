@@ -59,15 +59,12 @@ public:
 // Note that the real right-hand-side of an assignment is actually a bit
 // more general - it allows either a value, or a value+value or value-value -
 // see class set_rhs below.
-class value {
-public:
+struct value {
     struct function_call {
         std::string _function_name;
         std::vector<value> _parameters;
     };
-private:
     std::variant<std::string, path, function_call> _value;
-public:
     void set_valref(std::string s) {
         _value = std::move(s);
     }
@@ -79,24 +76,6 @@ public:
     }
     void add_func_parameter(value v) {
         std::get<function_call>(_value)._parameters.emplace_back(std::move(v));
-    }
-    bool is_valref() const {
-        return std::holds_alternative<std::string>(_value);
-    }
-    bool is_function_call() const {
-        return std::holds_alternative<function_call>(_value);
-    }
-    bool is_path() const {
-        return std::holds_alternative<path>(_value);
-    }
-    const std::string& as_valref() const {
-        return std::get<std::string>(_value);
-    }
-    const function_call& as_function_call() const {
-        return std::get<function_call>(_value);
-    }
-    const path& as_path() const {
-        return std::get<path>(_value);
     }
 };
 
@@ -138,7 +117,6 @@ public:
         };
         std::variant<set, remove, add, del> _action;
 
-        // FIXME: rhs type, not just one value, also value+value, value-value
         void assign_set(path p, set_rhs rhs) {
             _path = std::move(p);
             _action = set { std::move(rhs) };
@@ -154,30 +132,6 @@ public:
         void assign_del(path p, std::string v) {
             _path = std::move(p);
             _action = del { std::move(v) };
-        }
-        bool is_set() const {
-            return std::holds_alternative<set>(_action);
-        }
-        bool is_remove() const {
-            return std::holds_alternative<remove>(_action);
-        }
-        bool is_add() const {
-            return std::holds_alternative<add>(_action);
-        }
-        bool is_del() const {
-            return std::holds_alternative<del>(_action);
-        }
-        const set& as_set() const {
-            return std::get<set>(_action);
-        }
-        const remove& as_remove() const {
-            return std::get<remove>(_action);
-        }
-        const add& as_add() const {
-            return std::get<add>(_action);
-        }
-        const del& as_del() const {
-            return std::get<del>(_action);
         }
     };
 private:

@@ -507,45 +507,47 @@ static Json::Value number_subtract(const Json::Value& v1, const Json::Value& v2)
     return ret;
 }
 
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
 // Given a parsed::value, which can refer either to a constant value from
 // ExpressionAttributeValues, to the value of some attribute, or to a function
 // of other values, this function calculates the resulting value.
 static Json::Value calculate_value(const parsed::value& v,
         const Json::Value& expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_values) {
-    if (v.is_valref()) {
-        auto& valref = v.as_valref();
-        const Json::Value& value = expression_attribute_values.get(valref, Json::nullValue);
-        if (value.isNull()) {
-            throw api_error("ValidationException",
-                format("ExpressionAttributeValues missing entry '{}' required by UpdateExpression", valref));
-        }
-        used_attribute_values.emplace(std::move(valref));
-        return value;
-    } else if (v.is_function_call()) {
-        auto& f = v.as_function_call();
-        if (f._function_name == "list_append") {
-            if (f._parameters.size() != 2) {
+    return std::visit(overloaded {
+        [&] (const std::string& valref) -> Json::Value {
+            const Json::Value& value = expression_attribute_values.get(valref, Json::nullValue);
+            if (value.isNull()) {
                 throw api_error("ValidationException",
-                    format("UpdateExpression: list_append() accepts 2 parameters, got {}", f._parameters.size()));
+                        format("ExpressionAttributeValues missing entry '{}' required by UpdateExpression", valref));
             }
-            Json::Value v1 = calculate_value(f._parameters[0], expression_attribute_values, used_attribute_values);
-            Json::Value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_values);
-            return list_concatenate(v1, v2);
-        } else if (f._function_name == "if_not_exists") {
-            // FIXME
-            throw api_error("ValidationException", "UpdateExpression: if_not_exists not yet supported");
-        } else {
-            throw api_error("ValidationException",
-                format("UpdateExpression: unknown function '{}' called.", f._function_name));
+            used_attribute_values.emplace(std::move(valref));
+            return value;
+        },
+        [&] (const parsed::value::function_call& f) -> Json::Value {
+            if (f._function_name == "list_append") {
+                if (f._parameters.size() != 2) {
+                    throw api_error("ValidationException",
+                            format("UpdateExpression: list_append() accepts 2 parameters, got {}", f._parameters.size()));
+                }
+                Json::Value v1 = calculate_value(f._parameters[0], expression_attribute_values, used_attribute_values);
+                Json::Value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_values);
+                return list_concatenate(v1, v2);
+            } else if (f._function_name == "if_not_exists") {
+                // FIXME
+                throw api_error("ValidationException", "UpdateExpression: if_not_exists not yet supported");
+            } else {
+                throw api_error("ValidationException",
+                        format("UpdateExpression: unknown function '{}' called.", f._function_name));
+            }
+        },
+        [&] (const parsed::path& p) -> Json::Value {
+            // FIXME: support path value (read before write).
+            throw api_error("ValidationException", "UpdateExpression: unsupported value type");
         }
-    } else if (v.is_path()) {
-        // FIXME: support path value (read before write).
-        throw api_error("ValidationException", "UpdateExpression: unsupported value type");
-    }
-    // Can't happen
-    return Json::Value::null;
-
+    }, v._value);
 }
 
 // Same as calculate_value() above, except takes a set_rhs, which may be
@@ -690,17 +692,24 @@ future<json::json_return_type> executor::update_item(std::string content) {
                         format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
                                 column_name, column_name));
             }
-            if (action.is_set()) {
-                auto a = action.as_set();
-                auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_values);
-                bytes val = serialize_item(value);
-                attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
-            } else if (action.is_remove()) {
-                attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_dead(ts, gc_clock::now()));
-            } else if (action.is_add() || action.is_del()) {
-                // FIXME: implement ADD and DELETE.
-                throw api_error("ValidationException", "UpdateExpression: ADD and DELETE not yet supported.");
-            }
+            std::visit(overloaded {
+                [&] (const parsed::update_expression::action::set& a) {
+                    auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_values);
+                    bytes val = serialize_item(value);
+                    attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
+                },
+                [&] (const parsed::update_expression::action::remove& a) {
+                    attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_dead(ts, gc_clock::now()));
+                },
+                [&] (const parsed::update_expression::action::add& a) {
+                    // FIXME: implement ADD.
+                    throw api_error("ValidationException", "UpdateExpression: ADD not yet supported.");
+                },
+                [&] (const parsed::update_expression::action::del& a) {
+                    // FIXME: implement DELETE.
+                    throw api_error("ValidationException", "UpdateExpression: DELETE not yet supported.");
+                }
+            }, action._action);
         }
         verify_all_are_used(update_info, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
         verify_all_are_used(update_info, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
