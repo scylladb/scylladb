@@ -26,6 +26,7 @@ namespace cql_transport {
 namespace messages {
 
 class result_message {
+    std::vector<sstring> _warnings;
 public:
     class visitor;
     class visitor_base;
@@ -33,6 +34,14 @@ public:
     virtual ~result_message() {}
 
     virtual void accept(visitor&) const = 0;
+
+    void add_warning(sstring w) {
+        _warnings.push_back(std::move(w));
+    }
+
+    const std::vector<sstring>& warnings() const {
+        return _warnings;
+    }
 
     //
     // Message types:

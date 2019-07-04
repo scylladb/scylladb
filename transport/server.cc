@@ -1218,6 +1218,10 @@ std::unique_ptr<cql_server::response>
 cql_server::connection::make_result(int16_t stream, shared_ptr<messages::result_message> msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata)
 {
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
+    if (__builtin_expect(!msg->warnings().empty() && _version > 3, false)) {
+        response->set_frame_flag(cql_frame_flags::warning);
+        response->write_string_list(msg->warnings());
+    }
     fmt_visitor fmt{_version, *response, skip_metadata};
     msg->accept(fmt);
     return response;
