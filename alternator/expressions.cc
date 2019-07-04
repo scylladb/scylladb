@@ -54,20 +54,19 @@ parse_projection_expression(std::string query) {
     }
 }
 
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 namespace parsed {
 
 void update_expression::add(update_expression::action a) {
+    std::visit(overloaded {
+        [&] (action::set&)    { seen_set = true; },
+        [&] (action::remove&) { seen_remove = true; },
+        [&] (action::add&)    { seen_add = true; },
+        [&] (action::del&)    { seen_del = true; }
+    }, a._action);
     _actions.push_back(std::move(a));
-    if (a.is_set()) {
-        seen_set = true;
-    } else if (a.is_remove()) {
-        seen_remove = true;
-    } else if (a.is_add()) {
-        seen_add = true;
-    } else if (a.is_del()) {
-        seen_del = true;
-    }
 }
 
 void update_expression::append(update_expression other) {
