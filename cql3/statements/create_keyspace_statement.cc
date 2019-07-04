@@ -43,6 +43,8 @@
 #include "prepared_statement.hh"
 #include "database.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_service.hh"
+#include "transport/messages/result_message.hh"
 
 #include <regex>
 
@@ -51,6 +53,8 @@ bool is_system_keyspace(const sstring& keyspace);
 namespace cql3 {
 
 namespace statements {
+
+logging::logger create_keyspace_statement::_logger("create_keyspace");
 
 create_keyspace_statement::create_keyspace_statement(const sstring& name, shared_ptr<ks_prop_defs> attrs, bool if_not_exists)
     : _name{name}
@@ -136,6 +140,24 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
                 r).handle_exception_type([](const auth::unsupported_authorization_operation&) {
             // Nothing.
         });
+    });
+}
+
+future<::shared_ptr<messages::result_message>>
+create_keyspace_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
+    return schema_altering_statement::execute(proxy, state, options).then([this] (::shared_ptr<messages::result_message> msg) {
+        bool multidc = service::get_local_storage_service().get_token_metadata().
+                                get_topology().get_datacenter_endpoints().size() > 1;
+        bool simple = _attrs->get_replication_strategy_class() == "SimpleStrategy";
+
+        if (multidc && simple) {
+            static const auto warning = "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
+
+            msg->add_warning(warning);
+            _logger.warn(warning);
+        }
+
+        return msg;
     });
 }
 
