@@ -167,9 +167,6 @@ struct simple_type_impl : concrete_type<T> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
-        return std::nullopt;
-    }
 };
 
 template<typename T>
@@ -1603,9 +1600,6 @@ public:
     virtual const std::type_info& native_typeid() const {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
-        return std::nullopt;
-    }
 };
 
 // TODO(jhaberku): Move this to Seastar.
@@ -1813,9 +1807,6 @@ struct empty_type_impl : abstract_type {
     virtual const std::type_info& native_typeid() const {
         // Can't happen
         abort();
-    }
-    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
-        return std::nullopt;
     }
 };
 
@@ -2561,15 +2552,17 @@ map_type_impl::serialize_partially_deserialized_form(
 
 }
 
-std::optional<data_type>
-map_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
-    auto k = _keys->update_user_type(updated);
-    auto v = _values->update_user_type(updated);
+static std::optional<data_type> update_user_type_aux(
+        const map_type_impl& m, const shared_ptr<const user_type_impl> updated) {
+    auto old_keys = m.get_keys_type();
+    auto old_values = m.get_values_type();
+    auto k = old_keys->update_user_type(updated);
+    auto v = old_values->update_user_type(updated);
     if (!k && !v) {
         return std::nullopt;
     }
     return std::make_optional(static_pointer_cast<const abstract_type>(
-        get_instance(k ? *k : _keys, v ? *v : _values, _is_multi_cell)));
+        map_type_impl::get_instance(k ? *k : old_keys, v ? *v : old_values, m.is_multi_cell())));
 }
 
 auto collection_type_impl::deserialize_mutation_form(bytes_view in) const -> mutation_view {
@@ -3014,16 +3007,6 @@ set_type_impl::serialize_partially_deserialized_form(
     return pack(v.begin(), v.end(), v.size(), sf);
 }
 
-std::optional<data_type>
-set_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
-    auto e = _elements->update_user_type(updated);
-    if (e) {
-        return std::make_optional(static_pointer_cast<const abstract_type>(
-            get_instance(std::move(*e), _is_multi_cell)));
-    }
-    return std::nullopt;
-}
-
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
@@ -3221,12 +3204,11 @@ list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
     return pack(tmp.begin(), tmp.end(), tmp.size(), sf);
 }
 
-std::optional<data_type>
-list_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
-    auto e = _elements->update_user_type(updated);
-    if (e) {
-        return std::make_optional(static_pointer_cast<const abstract_type>(
-            get_instance(std::move(*e), _is_multi_cell)));
+template <typename F>
+static std::optional<data_type> update_listlike(
+        const listlike_collection_type_impl& c, F&& f, shared_ptr<const user_type_impl> updated) {
+    if (auto e = c.get_elements_type()->update_user_type(updated)) {
+        return std::make_optional<data_type>(f(std::move(*e), c.is_multi_cell()));
     }
     return std::nullopt;
 }
@@ -3682,12 +3664,10 @@ update_types(const std::vector<data_type> types, const user_type updated) {
     return new_types;
 }
 
-std::optional<data_type>
-tuple_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
-    auto new_types = update_types(_types, updated);
-    if (new_types) {
-        return std::make_optional(static_pointer_cast<const abstract_type>(
-            get_instance(std::move(*new_types))));
+static std::optional<data_type> update_user_type_aux(
+        const tuple_type_impl& t, const shared_ptr<const user_type_impl> updated) {
+    if (auto new_types = update_types(t.all_types(), updated)) {
+        return std::make_optional(tuple_type_impl::get_instance(std::move(*new_types)));
     }
     return std::nullopt;
 }
@@ -3721,17 +3701,39 @@ user_type_impl::make_name(sstring keyspace,
     return os.str();
 }
 
-std::optional<data_type>
-user_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
-    if (_keyspace == updated->_keyspace && _name == updated->_name) {
-        return std::make_optional(static_pointer_cast<const abstract_type>(updated));
+static std::optional<data_type> update_user_type_aux(
+        const user_type_impl& u, const shared_ptr<const user_type_impl> updated) {
+    if (u._keyspace == updated->_keyspace && u._name == updated->_name) {
+        return std::make_optional<data_type>(updated);
     }
-    auto new_types = update_types(_types, updated);
-    if (new_types) {
-        return std::make_optional(static_pointer_cast<const abstract_type>(
-            get_instance(_keyspace, _name, _field_names, *new_types)));
+    if (auto new_types = update_types(u.all_types(), updated)) {
+        return std::make_optional(
+                user_type_impl::get_instance(u._keyspace, u._name, u.field_names(), std::move(*new_types)));
     }
     return std::nullopt;
+}
+
+std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    struct visitor {
+        const shared_ptr<const user_type_impl> updated;
+        std::optional<data_type> operator()(const abstract_type&) { return std::nullopt; }
+        std::optional<data_type> operator()(const empty_type_impl&) {
+            return std::nullopt;
+        }
+        std::optional<data_type> operator()(const reversed_type_impl& r) {
+            return r.underlying_type()->update_user_type(updated);
+        }
+        std::optional<data_type> operator()(const user_type_impl& u) { return update_user_type_aux(u, updated); }
+        std::optional<data_type> operator()(const tuple_type_impl& t) { return update_user_type_aux(t, updated); }
+        std::optional<data_type> operator()(const map_type_impl& m) { return update_user_type_aux(m, updated); }
+        std::optional<data_type> operator()(const set_type_impl& s) {
+            return update_listlike(s, set_type_impl::get_instance, updated);
+        }
+        std::optional<data_type> operator()(const list_type_impl& l) {
+            return update_listlike(l, list_type_impl::get_instance, updated);
+        }
+    };
+    return visit(*this, visitor{updated});
 }
 
 size_t

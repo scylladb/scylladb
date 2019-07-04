@@ -60,7 +60,6 @@ public:
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
-    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 };
 
 data_value make_list_value(data_type type, list_type_impl::native_type value);

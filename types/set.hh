@@ -62,7 +62,6 @@ public:
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     bytes serialize_partially_deserialized_form(
             const std::vector<bytes_view>& v, cql_serialization_format sf) const;
-    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 };
 
 data_value make_set_value(data_type tuple_type, set_type_impl::native_type value);

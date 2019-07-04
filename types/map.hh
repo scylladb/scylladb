@@ -70,7 +70,6 @@ public:
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
             cql_serialization_format sf);
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
-    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 };
 
 data_value make_map_value(data_type tuple_type, map_type_impl::native_type value);
