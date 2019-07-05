@@ -67,26 +67,59 @@ def test_batch_write_and_delete(test_table_s):
 
 # It is forbidden to update the same key twice in the same batch.
 # DynamoDB says "Provided list of item keys contains duplicates".
-def test_batch_write_duplicate_write(test_table_s):
+def test_batch_write_duplicate_write(test_table_s, test_table):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*duplicates'):
         with test_table_s.batch_writer() as batch:
             batch.put_item({'p': p})
             batch.put_item({'p': p})
+    c = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*duplicates'):
+        with test_table.batch_writer() as batch:
+            batch.put_item({'p': p, 'c': c})
+            batch.put_item({'p': p, 'c': c})
+    # But it is fine to touch items with one component the same, but the other not.
+    other = random_string()
+    with test_table.batch_writer() as batch:
+        batch.put_item({'p': p, 'c': c})
+        batch.put_item({'p': p, 'c': other})
+        batch.put_item({'p': other, 'c': c})
 
-def test_batch_write_duplicate_delete(test_table_s):
+def test_batch_write_duplicate_delete(test_table_s, test_table):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*duplicates'):
         with test_table_s.batch_writer() as batch:
             batch.delete_item(Key={'p': p})
             batch.delete_item(Key={'p': p})
+    c = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*duplicates'):
+        with test_table.batch_writer() as batch:
+            batch.delete_item(Key={'p': p, 'c': c})
+            batch.delete_item(Key={'p': p, 'c': c})
+    # But it is fine to touch items with one component the same, but the other not.
+    other = random_string()
+    with test_table.batch_writer() as batch:
+        batch.delete_item(Key={'p': p, 'c': c})
+        batch.delete_item(Key={'p': p, 'c': other})
+        batch.delete_item(Key={'p': other, 'c': c})
 
-def test_batch_write_duplicate_write_and_delete(test_table_s):
+def test_batch_write_duplicate_write_and_delete(test_table_s, test_table):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*duplicates'):
         with test_table_s.batch_writer() as batch:
             batch.delete_item(Key={'p': p})
             batch.put_item({'p': p})
+    c = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*duplicates'):
+        with test_table.batch_writer() as batch:
+            batch.delete_item(Key={'p': p, 'c': c})
+            batch.put_item({'p': p, 'c': c})
+    # But it is fine to touch items with one component the same, but the other not.
+    other = random_string()
+    with test_table.batch_writer() as batch:
+        batch.delete_item(Key={'p': p, 'c': c})
+        batch.put_item({'p': p, 'c': other})
+        batch.put_item({'p': other, 'c': c})
 
 # Test that BatchWriteItem's PutRequest completely replaces an existing item.
 # It shouldn't merge it with a previously existing value. See also the same
