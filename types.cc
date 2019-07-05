@@ -2138,35 +2138,21 @@ bool abstract_type::references_user_type(const sstring& keyspace, const bytes& n
 
 namespace {
 struct is_byte_order_equal_visitor {
-    bool operator()(const abstract_type& t) {
-        // If we're byte order comparable, then we must also be byte order equal.
-        return t.is_byte_order_comparable();
-    }
-    bool operator()(const reversed_type_impl& t) { return t.underlying_type()->is_byte_order_equal(); }
     template <typename T> bool operator()(const simple_type_impl<T>&) { return true; }
     bool operator()(const concrete_type<utils::UUID>&) { return true; }
-};
-}
-
-bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_order_equal_visitor{}); }
-
-namespace {
-struct is_byte_order_comparable_visitor {
     bool operator()(const abstract_type&) { return false; }
-    bool operator()(const reversed_type_impl& r) { return r.underlying_type()->is_byte_order_comparable(); }
+    bool operator()(const reversed_type_impl& t) { return t.underlying_type()->is_byte_order_equal(); }
     bool operator()(const string_type_impl&) { return true; }
     bool operator()(const bytes_type_impl&) { return true; }
     bool operator()(const date_type_impl&) { return true; }
     bool operator()(const inet_addr_type_impl&) { return true; }
     bool operator()(const duration_type_impl&) { return true; }
     // FIXME: origin returns false for list.  Why?
-    bool operator()(const set_type_impl& s) { return s.get_elements_type()->is_byte_order_comparable(); }
+    bool operator()(const set_type_impl& s) { return s.get_elements_type()->is_byte_order_equal(); }
 };
 }
 
-bool abstract_type::is_byte_order_comparable() const {
-    return visit(*this, is_byte_order_comparable_visitor{});
-}
+bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_order_equal_visitor{}); }
 
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {

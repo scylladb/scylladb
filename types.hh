@@ -594,7 +594,6 @@ public:
     const sstring& name() const {
         return _name;
     }
-    bool is_byte_order_comparable() const;
 
     /**
      * When returns true then equal values have the same byte representation and if byte
