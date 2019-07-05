@@ -4969,66 +4969,6 @@ SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
     sst.load();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
-    api::timestamp_type write_timestamp = 1525385507816568;
-    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
-    storage_service_for_tests ssft;
-    auto get_builder = [&] (bool has_missing_column) {
-        auto builder = schema_builder("ks", "cf")
-            .with_column("pk", int32_type, column_kind::partition_key)
-            .with_column("ck", int32_type, column_kind::clustering_key);
-        if (!has_missing_column) {
-            builder.with_column("val1", int32_type);
-        }
-        builder.with_column("val2", int32_type);
-        return builder;
-    };
-    schema_ptr write_schema = get_builder(false).build();
-    schema_ptr read_schema = get_builder(true).build();
-    auto val2_cdef = read_schema->get_column_definition(to_bytes("val2"));
-    auto to_ck = [write_schema] (int ck) {
-        return clustering_key::from_single_value(*write_schema, int32_type->decompose(ck));
-    };
-    auto bytes = int32_type->decompose(int32_t(0));
-    auto pk = partition_key::from_single_value(*write_schema, bytes);
-    auto dk = dht::global_partitioner().decorate_key(*write_schema, pk);
-    mutation partition(write_schema, pk);
-    for (int i = 0; i < 3; ++i) {
-        clustering_key ckey = to_ck(i);
-        partition.partition().apply_insert(*write_schema, ckey, write_timestamp);
-        partition.set_cell(ckey, "val1", data_value{100 + i}, write_timestamp);
-        partition.set_cell(ckey, "val2", data_value{200 + i}, write_timestamp);
-    };
-    auto mt = make_lw_shared<memtable>(write_schema);
-    mt->apply(partition);
-    for (const auto version : all_sstable_versions) {
-        for (auto index_block_size : {1, 128, 64*1024}) {
-            tmpdir dir;
-            sstable_writer_config cfg;
-            cfg.promoted_index_block_size = index_block_size;
-            test_env env;
-            auto sst = env.make_sstable(write_schema,
-                dir.path().string(),
-                1 /* generation */,
-                version,
-                sstables::sstable::format_types::big);
-            sst->write_components(mt->make_flat_reader(write_schema), 1, write_schema, cfg, mt->get_encoding_stats()).get();
-            sst->load().get();
-
-            BOOST_REQUIRE_EXCEPTION(
-                assert_that(sst->read_rows_flat(read_schema))
-                    .produces_partition_start(dk)
-                    .produces_row(to_ck(0), {{val2_cdef, int32_type->decompose(int32_t(200))}})
-                    .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})
-                    .produces_row(to_ck(2), {{val2_cdef, int32_type->decompose(int32_t(202))}})
-                    .produces_partition_end()
-                    .produces_end_of_stream(),
-                std::exception,
-                message_equals("Column val1 missing in current schema in sstable " + sst->get_filename()));
-        }
-    }
-}
-
 namespace {
 struct large_row_handler : public db::large_data_handler {
     using callback_t = std::function<void(const schema& s, const sstables::key& partition_key,
