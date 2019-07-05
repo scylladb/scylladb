@@ -1,12 +1,8 @@
 # Test for operations on items with *nested* attributes.
 
-import random
-import string
 import pytest
 from botocore.exceptions import ClientError
-
-def random_string(length=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for x in range(length))
+from util import random_string
 
 # Test that we can write a top-level attribute that is a nested document, and
 # read it back correctly.

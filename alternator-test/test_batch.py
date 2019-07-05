@@ -3,17 +3,8 @@
 # so they are actually tested by other tests as well.
 
 import pytest
-import random
-import string
-import collections
-
 from botocore.exceptions import ClientError
-
-def random_string(length=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for x in range(length))
-
-def multiset(items):
-    return collections.Counter([frozenset(item.items()) for item in items])
+from util import random_string, full_scan, full_query, multiset
 
 # Test ensuring that items inserted by a batched statement can be properly extracted
 # via GetItem. Schema has both hash and sort keys.
