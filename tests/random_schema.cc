@@ -1006,7 +1006,7 @@ void random_schema::delete_range(
     md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), {}});
 }
 
-std::vector<mutation> generate_random_mutations(std::mt19937& engine, tests::random_schema& random_schema) {
+std::vector<mutation> generate_random_mutations(tests::random_schema& random_schema) {
     auto ts_gen = [&, underlying = tests::default_timestamp_generator()] (std::mt19937& engine,
             tests::timestamp_destination ts_dest, api::timestamp_type min_timestamp) -> api::timestamp_type {
         if (ts_dest == tests::timestamp_destination::partition_tombstone ||
@@ -1020,6 +1020,7 @@ std::vector<mutation> generate_random_mutations(std::mt19937& engine, tests::ran
         return underlying(engine, ts_dest, min_timestamp);
     };
 
+    auto engine = std::mt19937(tests::random::get_int<uint32_t>());
     auto muts = std::vector<mutation>{};
     auto ckeys = random_schema.make_ckeys(100);
     for (uint32_t pk = 0; pk < 10; ++pk) {
