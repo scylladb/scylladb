@@ -158,9 +158,6 @@ struct simple_type_impl : concrete_type<T> {
         T b = simple_type_traits<T>::read_nonempty(v2);
         return a == b ? 0 : a < b ? -1 : 1;
     }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return compare(v1, v2) < 0;
-    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
@@ -293,9 +290,6 @@ struct string_type_impl : public concrete_type<sstring> {
         auto& v = from_value(value);
         return v.size();
     }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return less_unsigned(v1, v2);
-    }
     virtual bool is_string() const override {
         return true;
     }
@@ -356,9 +350,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         return v.size();
     }
     virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return less_unsigned(v1, v2);
-    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
@@ -467,9 +458,6 @@ public:
         }
         return 8;
     }
-    virtual bool less(bytes_view b1, bytes_view b2) const override {
-        return compare_unsigned(b1, b2) < 0;
-    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
@@ -524,20 +512,6 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         }
         return 16;
     }
-    virtual bool less(bytes_view b1, bytes_view b2) const override {
-        if (b1.empty()) {
-            return b2.empty() ? false : true;
-        }
-        if (b2.empty()) {
-            return false;
-        }
-        auto r = compare_bytes(b1, b2);
-        if (r != 0) {
-            return r < 0;
-        } else {
-            return std::lexicographical_compare(b1.begin(), b1.end(), b2.begin(), b2.end());
-        }
-    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
@@ -590,7 +564,7 @@ private:
                                 compare_pos(2, 0xff,
                                     compare_pos(3, 0xff, 0))))))));
     }
-    friend class uuid_type_impl;
+    friend abstract_type;
 };
 
 class timestamp_type_impl : public simple_type_impl<db_clock::time_point> {
@@ -927,28 +901,6 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         }
         return 16;
     }
-    virtual bool less(bytes_view b1, bytes_view b2) const override {
-        if (b1.size() < 16) {
-            return b2.size() < 16 ? false : true;
-        }
-        if (b2.size() < 16) {
-            return false;
-        }
-        auto v1 = (b1[6] >> 4) & 0x0f;
-        auto v2 = (b2[6] >> 4) & 0x0f;
-
-        if (v1 != v2) {
-            return v1 < v2;
-        }
-
-        if (v1 == 1) {
-            auto c = timeuuid_type_impl::compare_bytes(b1, b2);
-            if (c) {
-                return c < 0;
-            }
-        }
-        return less_unsigned(b1, b2);
-    }
     // FIXME: isCompatibleWith(uuid)
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
@@ -1017,9 +969,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
             return 0;
         }
         return ipv.get().size();
-    }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return less_unsigned(v1, v2);
     }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
@@ -1252,9 +1201,6 @@ public:
         auto b = from_value(deserialize(v2));
         return a == b ? 0 : a < b ? -1 : 1;
     }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return compare(v1, v2) < 0;
-    }
     virtual size_t hash(bytes_view v) const override {
         bytes b(v.begin(), v.end());
         return std::hash<sstring>()(to_string(b));
@@ -1343,9 +1289,6 @@ public:
         }
         return a.get().compare(b.get());
     }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return compare(v1, v2) < 0;
-    }
     virtual size_t hash(bytes_view v) const override {
         bytes b(v.begin(), v.end());
         return std::hash<sstring>()(to_string(b));
@@ -1392,9 +1335,6 @@ public:
         fail(unimplemented::cause::COUNTERS);
     }
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
         fail(unimplemented::cause::COUNTERS);
     }
     virtual size_t hash(bytes_view v) const override {
@@ -1551,9 +1491,6 @@ public:
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return less_unsigned(v1, v2);
-    }
     using counter_type = cql_duration::common_counter_type;
 
     static std::tuple<counter_type, counter_type, counter_type> deserialize_counters(bytes_view v) {
@@ -1581,9 +1518,6 @@ struct empty_type_impl : abstract_type {
         return 0;
     }
 
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return false;
-    }
     virtual size_t hash(bytes_view v) const override {
         return 0;
     }
@@ -2006,6 +1940,72 @@ struct is_byte_order_equal_visitor {
 
 bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_order_equal_visitor{}); }
 
+bool abstract_type::less(bytes_view v1, bytes_view v2) const {
+    struct visitor {
+        bytes_view v1;
+        bytes_view v2;
+        bool operator()(const abstract_type& t) { return t.compare(v1, v2) < 0; }
+        bool operator()(const listlike_collection_type_impl& l) {
+            using llpdi = listlike_partial_deserializing_iterator;
+            auto sf = cql_serialization_format::internal();
+            return std::lexicographical_compare(llpdi::begin(v1, sf), llpdi::end(v1, sf), llpdi::begin(v2, sf),
+                    llpdi::end(v2, sf),
+                    [&] (bytes_view o1, bytes_view o2) { return l.get_elements_type()->less(o1, o2); });
+        }
+        bool operator()(const map_type_impl& m) {
+            return map_type_impl::compare_maps(m.get_keys_type(), m.get_values_type(), v1, v2) < 0;
+        }
+        bool operator()(const counter_type_impl&) {
+            fail(unimplemented::cause::COUNTERS);
+            return false;
+        }
+        bool operator()(const string_type_impl&) { return less_unsigned(v1, v2); }
+        bool operator()(const bytes_type_impl&) { return less_unsigned(v1, v2); }
+        bool operator()(const duration_type_impl&) { return less_unsigned(v1, v2); }
+        bool operator()(const inet_addr_type_impl&) { return less_unsigned(v1, v2); }
+        bool operator()(const date_type_impl&) { return less_unsigned(v1, v2); }
+        bool operator()(const empty_type_impl&) { return false; }
+        bool operator()(const timeuuid_type_impl&) {
+            if (v1.empty()) {
+                return v2.empty() ? false : true;
+            }
+            if (v2.empty()) {
+                return false;
+            }
+            auto r = timeuuid_type_impl::compare_bytes(v1, v2);
+            if (r != 0) {
+                return r < 0;
+            }
+            return std::lexicographical_compare(v1.begin(), v1.end(), v2.begin(), v2.end());
+        }
+        bool operator()(const uuid_type_impl&) {
+            if (v1.size() < 16) {
+                return v2.size() < 16 ? false : true;
+            }
+            if (v2.size() < 16) {
+                return false;
+            }
+            auto c1 = (v1[6] >> 4) & 0x0f;
+            auto c2 = (v2[6] >> 4) & 0x0f;
+
+            if (c1 != c2) {
+                return c1 < c2;
+            }
+
+            if (c1 == 1) {
+                auto c = timeuuid_type_impl::compare_bytes(v1, v2);
+                if (c) {
+                    return c < 0;
+                }
+            }
+            return less_unsigned(v1, v2);
+        }
+        bool operator()(const reversed_type_impl& r) { return r.underlying_type()->less(v2, v1); }
+    };
+
+    return visit(*this, visitor{v1, v2});
+}
+
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {
         cql3_kind operator()(const ascii_type_impl&) { return cql3_kind::ASCII; }
@@ -2166,11 +2166,6 @@ map_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previ
     }
     return _keys->is_compatible_with(*p->_keys)
             && _values->is_value_compatible_with(*p->_values);
-}
-
-bool
-map_type_impl::less(bytes_view o1, bytes_view o2) const {
-    return compare_maps(_keys, _values, o1, o2) < 0;
 }
 
 int32_t
@@ -2709,16 +2704,6 @@ set_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previ
     return is_compatible_with(previous);
 }
 
-bool
-set_type_impl::less(bytes_view o1, bytes_view o2) const {
-    using llpdi = listlike_partial_deserializing_iterator;
-    auto sf = cql_serialization_format::internal();
-    return std::lexicographical_compare(
-            llpdi::begin(o1, sf), llpdi::end(o1, sf),
-            llpdi::begin(o2, sf), llpdi::end(o2, sf),
-            [this] (bytes_view o1, bytes_view o2) { return _elements->less(o1, o2); });
-}
-
 void set_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
     auto nr = read_collection_size(v, sf);
     for (int i = 0; i != nr; ++i) {
@@ -2891,16 +2876,6 @@ list_type_impl::is_value_compatible_with_frozen(const collection_type_impl& prev
     return _elements->is_value_compatible_with_internal(*lp._elements);
 }
 
-bool
-list_type_impl::less(bytes_view o1, bytes_view o2) const {
-    using llpdi = listlike_partial_deserializing_iterator;
-    auto sf = cql_serialization_format::internal();
-    return std::lexicographical_compare(
-            llpdi::begin(o1, sf), llpdi::end(o1, sf),
-            llpdi::begin(o2, sf), llpdi::end(o2, sf),
-            [this] (bytes_view o1, bytes_view o2) { return _elements->less(o1, o2); });
-}
-
 void list_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
     auto nr = read_collection_size(v, sf);
     for (int i = 0; i != nr; ++i) {
@@ -3060,11 +3035,6 @@ tuple_type_impl::compare(bytes_view v1, bytes_view v2) const {
             tuple_deserializing_iterator::start(v1), tuple_deserializing_iterator::finish(v1),
             tuple_deserializing_iterator::start(v2), tuple_deserializing_iterator::finish(v2),
             tri_compare_opt);
-}
-
-bool
-tuple_type_impl::less(bytes_view v1, bytes_view v2) const {
-    return tuple_type_impl::compare(v1, v2) < 0;
 }
 
 void tuple_type_impl::validate(bytes_view v, cql_serialization_format sf) const {

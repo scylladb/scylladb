@@ -507,7 +507,7 @@ public:
         return serialize(get_value_ptr(value), out);
     }
     virtual size_t serialized_size(const void* value) const = 0;
-    virtual bool less(bytes_view v1, bytes_view v2) const = 0;
+    bool less(bytes_view v1, bytes_view v2) const;
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator() const ;
     serialized_tri_compare as_tri_comparator() const ;
@@ -922,9 +922,6 @@ protected:
 public:
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         return _underlying_type->compare(v2, v1);
-    }
-    virtual bool less(bytes_view v1, bytes_view v2) const override {
-        return _underlying_type->less(v2, v1);
     }
 
     virtual bool equal(bytes_view v1, bytes_view v2) const override {
