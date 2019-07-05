@@ -519,15 +519,7 @@ public:
         }
         return compare(v1, v2) == 0;
     }
-    virtual int32_t compare(bytes_view v1, bytes_view v2) const {
-        if (less(v1, v2)) {
-            return -1;
-        } else if (less(v2, v1)) {
-            return 1;
-        } else {
-            return 0;
-        }
-    }
+    int32_t compare(bytes_view v1, bytes_view v2) const;
     data_value deserialize(bytes_view v) const;
     data_value deserialize_value(bytes_view v) const {
         return deserialize(v);
@@ -781,6 +773,8 @@ protected:
     const native_type& from_value(const data_value& v) const {
         return this->from_value(AbstractType::get_value_ptr(v));
     }
+
+    friend class abstract_type;
 };
 
 inline bool operator==(const data_value& x, const data_value& y)
@@ -920,10 +914,6 @@ protected:
         return _underlying_type->is_value_compatible_with(*(other.underlying_type()));
     }
 public:
-    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
-        return _underlying_type->compare(v2, v1);
-    }
-
     virtual bool equal(bytes_view v1, bytes_view v2) const override {
         return _underlying_type->equal(v1, v2);
     }

@@ -147,17 +147,6 @@ template <typename T>
 struct simple_type_impl : concrete_type<T> {
     simple_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
         : concrete_type<T>(k, std::move(name), std::move(value_length_if_fixed), data::type_info::make_fixed_size(simple_type_traits<T>::serialized_size)) {}
-    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
-        T a = simple_type_traits<T>::read_nonempty(v1);
-        T b = simple_type_traits<T>::read_nonempty(v2);
-        return a == b ? 0 : a < b ? -1 : 1;
-    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
@@ -1061,32 +1050,6 @@ struct floating_type_impl : public simple_type_impl<T> {
         return sizeof(T);
     }
 
-    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
-        T a = simple_type_traits<T>::read_nonempty(v1);
-        T b = simple_type_traits<T>::read_nonempty(v2);
-
-        // in java world NaN == NaN and NaN is greater than anything else
-        if (std::isnan(a) && std::isnan(b)) {
-            return 0;
-        } else if (std::isnan(a)) {
-            return 1;
-        } else if (std::isnan(b)) {
-            return -1;
-        }
-        // also -0 < 0
-        if (std::signbit(a) && !std::signbit(b)) {
-            return -1;
-        } else if (!std::signbit(a) && std::signbit(b))  {
-            return 1;
-        }
-        return a == b ? 0 : a < b ? -1 : 1;
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(T)) {
             throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
@@ -1190,17 +1153,6 @@ public:
         auto pnum = abs(num);
         return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
     }
-    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
-        auto a = from_value(deserialize(v1));
-        auto b = from_value(deserialize(v2));
-        return a == b ? 0 : a < b ? -1 : 1;
-    }
     virtual size_t hash(bytes_view v) const override {
         bytes b(v.begin(), v.end());
         return std::hash<sstring>()(to_string(b));
@@ -1268,27 +1220,6 @@ public:
         varint_type_impl::native_type unscaled_value = bd.unscaled_value();
         return sizeof(int32_t) + varint_type->serialized_size(&unscaled_value);
     }
-    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
-        auto a = from_value(deserialize(v1));
-        auto b = from_value(deserialize(v2));
-
-        if (a.empty() && b.empty()) {
-            return 0;
-        }
-        if (a.empty() && !b.empty()) {
-            return -1;
-        }
-        if (!a.empty() && b.empty()) {
-            return 1;
-        }
-        return a.get().compare(b.get());
-    }
     virtual size_t hash(bytes_view v) const override {
         bytes b(v.begin(), v.end());
         return std::hash<sstring>()(to_string(b));
@@ -1332,9 +1263,6 @@ public:
         fail(unimplemented::cause::COUNTERS);
     }
     virtual size_t serialized_size(const void* value) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
-    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         fail(unimplemented::cause::COUNTERS);
     }
     virtual size_t hash(bytes_view v) const override {
@@ -3029,14 +2957,6 @@ tuple_type_impl::get_instance(std::vector<data_type> types) {
     return intern::get_instance(std::move(types));
 }
 
-int32_t
-tuple_type_impl::compare(bytes_view v1, bytes_view v2) const {
-    return lexicographical_tri_compare(_types.begin(), _types.end(),
-            tuple_deserializing_iterator::start(v1), tuple_deserializing_iterator::finish(v1),
-            tuple_deserializing_iterator::start(v2), tuple_deserializing_iterator::finish(v2),
-            tri_compare_opt);
-}
-
 void tuple_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
     auto ti = _types.begin();
     auto vi = tuple_deserializing_iterator::start(v);
@@ -3245,6 +3165,95 @@ struct deserialize_visitor {
 
 data_value abstract_type::deserialize(bytes_view v) const {
     return visit(*this, deserialize_visitor{v});
+}
+
+namespace {
+struct compare_visitor {
+    bytes_view v1;
+    bytes_view v2;
+    int32_t operator()(const abstract_type& t) {
+        if (t.less(v1, v2)) {
+            return -1;
+        } else if (t.less(v2, v1)) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+    template <typename T> int32_t operator()(const simple_type_impl<T>&) {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        T a = simple_type_traits<T>::read_nonempty(v1);
+        T b = simple_type_traits<T>::read_nonempty(v2);
+        return a == b ? 0 : a < b ? -1 : 1;
+    }
+    int32_t operator()(const tuple_type_impl& t) {
+        return lexicographical_tri_compare(t.all_types().begin(), t.all_types().end(),
+                tuple_deserializing_iterator::start(v1), tuple_deserializing_iterator::finish(v1),
+                tuple_deserializing_iterator::start(v2), tuple_deserializing_iterator::finish(v2), tri_compare_opt);
+    }
+    int32_t operator()(const counter_type_impl&) {
+        fail(unimplemented::cause::COUNTERS);
+        return 0;
+    }
+    int32_t operator()(const decimal_type_impl& d) {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        auto a = deserialize_value(d, v1);
+        auto b = deserialize_value(d, v2);
+        return a.compare(b);
+    }
+    int32_t operator()(const varint_type_impl& v) {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        auto a = deserialize_value(v, v1);
+        auto b = deserialize_value(v, v2);
+        return a == b ? 0 : a < b ? -1 : 1;
+    }
+    template <typename T> int32_t operator()(const floating_type_impl<T>&) {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        T a = simple_type_traits<T>::read_nonempty(v1);
+        T b = simple_type_traits<T>::read_nonempty(v2);
+
+        // in java world NaN == NaN and NaN is greater than anything else
+        if (std::isnan(a) && std::isnan(b)) {
+            return 0;
+        } else if (std::isnan(a)) {
+            return 1;
+        } else if (std::isnan(b)) {
+            return -1;
+        }
+        // also -0 < 0
+        if (std::signbit(a) && !std::signbit(b)) {
+            return -1;
+        } else if (!std::signbit(a) && std::signbit(b)) {
+            return 1;
+        }
+        return a == b ? 0 : a < b ? -1 : 1;
+    }
+    int32_t operator()(const reversed_type_impl& r) { return r.underlying_type()->compare(v2, v1); }
+};
+}
+
+int32_t abstract_type::compare(bytes_view v1, bytes_view v2) const {
+    return visit(*this, compare_visitor{v1, v2});
 }
 
 std::vector<bytes_view_opt>
