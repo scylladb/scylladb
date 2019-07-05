@@ -220,4 +220,6 @@ public:
             timestamp_generator ts_gen = default_timestamp_generator());
 };
 
+std::vector<mutation> generate_random_mutations(std::mt19937& engine, tests::random_schema& random_schema);
+
 } // namespace tests

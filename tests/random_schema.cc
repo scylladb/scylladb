@@ -1006,4 +1006,46 @@ void random_schema::delete_range(
     md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), {}});
 }
 
+std::vector<mutation> generate_random_mutations(std::mt19937& engine, tests::random_schema& random_schema) {
+    auto ts_gen = [&, underlying = tests::default_timestamp_generator()] (std::mt19937& engine,
+            tests::timestamp_destination ts_dest, api::timestamp_type min_timestamp) -> api::timestamp_type {
+        if (ts_dest == tests::timestamp_destination::partition_tombstone ||
+                ts_dest == tests::timestamp_destination::row_marker ||
+                ts_dest == tests::timestamp_destination::row_tombstone ||
+                ts_dest == tests::timestamp_destination::collection_tombstone) {
+            if (tests::random::get_int<int>(0, 10, engine)) {
+                return api::missing_timestamp;
+            }
+        }
+        return underlying(engine, ts_dest, min_timestamp);
+    };
+
+    auto muts = std::vector<mutation>{};
+    auto ckeys = random_schema.make_ckeys(100);
+    for (uint32_t pk = 0; pk < 10; ++pk) {
+        auto mut = random_schema.new_mutation(pk);
+        for (uint32_t ck = 0; ck < 100; ++ck) {
+            random_schema.add_row(engine, mut, ckeys[ck], ts_gen);
+        }
+        random_schema.add_static_row(engine, mut, ts_gen);
+
+        for (size_t i = 0; i < 4; ++i) {
+            const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+            const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+            random_schema.delete_range(
+                    engine,
+                    mut,
+                    nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
+                    ts_gen);
+        }
+        muts.emplace_back(mut.build(random_schema.schema()));
+    }
+
+    boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+        return a.decorated_key().less_compare(*s, b.decorated_key());
+    });
+
+    return muts;
+}
+
 } // namespace tests
