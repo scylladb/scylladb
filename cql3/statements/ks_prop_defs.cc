@@ -46,6 +46,53 @@ namespace cql3 {
 
 namespace statements {
 
+static std::map<sstring, sstring> prepare_options(
+        const sstring& strategy_class,
+        const locator::token_metadata& tm,
+        std::map<sstring, sstring> options,
+        const std::map<sstring, sstring>& old_options = {}) {
+    options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+
+    if (strategy_class != "NetworkTopologyStrategy") {
+        return options;
+    }
+
+    // For users' convenience, expand the 'replication_factor' option into a replication factor for each DC.
+    // If the user simply switches from another strategy without providing any options,
+    // but the other strategy used the 'replication_factor' option, it will also be expanded.
+    // See issue CASSANDRA-14303.
+
+    sstring rf;
+    auto it = options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
+    if (it != options.end()) {
+        // Expand: the user explicitly provided a 'replication_factor'.
+        rf = it->second;
+        options.erase(it);
+    } else if (options.empty()) {
+        auto it = old_options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
+        if (it != old_options.end()) {
+            // Expand: the user switched from another strategy that specified a 'replication_factor'
+            // and didn't provide any additional options.
+            rf = it->second;
+        }
+    }
+
+    if (!rf.empty()) {
+        // We keep previously specified DC factors for safety.
+        for (const auto& opt : old_options) {
+            if (opt.first != ks_prop_defs::REPLICATION_FACTOR_KEY) {
+                options.insert(opt);
+            }
+        }
+
+        for (const auto& dc : tm.get_topology().get_datacenter_endpoints()) {
+            options.emplace(dc.first, rf);
+        }
+    }
+
+    return options;
+}
+
 void ks_prop_defs::validate() {
     // Skip validation if the strategy class is already set as it means we've alreayd
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
@@ -74,20 +121,23 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
 
-lw_shared_ptr<keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name) {
-    auto options = get_replication_options();
-    options.erase(REPLICATION_STRATEGY_CLASS_KEY);
-    return keyspace_metadata::new_keyspace(ks_name, get_replication_strategy_class().value(), options, get_boolean(KW_DURABLE_WRITES, true));
+lw_shared_ptr<keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
+    auto sc = get_replication_strategy_class().value();
+    return keyspace_metadata::new_keyspace(ks_name, sc,
+            prepare_options(sc, tm, get_replication_options()), get_boolean(KW_DURABLE_WRITES, true));
 }
 
-lw_shared_ptr<keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<keyspace_metadata> old) {
-    auto options = get_replication_options();
-    options.erase(REPLICATION_STRATEGY_CLASS_KEY);
+lw_shared_ptr<keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<keyspace_metadata> old, const locator::token_metadata& tm) {
+    std::map<sstring, sstring> options;
+    const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
-    if (!sc) {
+    if (sc) {
+        options = prepare_options(*sc, tm, get_replication_options(), old_options);
+    } else {
         sc = old->strategy_name();
-        options = old->strategy_options();
+        options = old_options;
     }
+
     return keyspace_metadata::new_keyspace(old->name(), *sc, options, get_boolean(KW_DURABLE_WRITES, true));
 }
 

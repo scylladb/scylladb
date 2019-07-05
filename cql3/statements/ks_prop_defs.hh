@@ -42,6 +42,7 @@
 #pragma once
 
 #include "cql3/statements/property_definitions.hh"
+#include "locator/token_metadata.hh"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
@@ -59,14 +60,15 @@ public:
     static constexpr auto KW_REPLICATION = "replication";
 
     static constexpr auto REPLICATION_STRATEGY_CLASS_KEY = "class";
+    static constexpr auto REPLICATION_FACTOR_KEY = "replication_factor";
 private:
     std::optional<sstring> _strategy_class;
 public:
     void validate();
     std::map<sstring, sstring> get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
-    lw_shared_ptr<keyspace_metadata> as_ks_metadata(sstring ks_name);
-    lw_shared_ptr<keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<keyspace_metadata> old);
+    lw_shared_ptr<keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&);
+    lw_shared_ptr<keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<keyspace_metadata> old, const locator::token_metadata&);
 
 #if 0
     public KSMetaData asKSMetadataUpdate(KSMetaData old) throws RequestValidationException
