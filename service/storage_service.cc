@@ -620,7 +620,10 @@ void storage_service::join_token_ring(int delay) {
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
         while (!get_local_migration_manager().have_schema_agreement()) {
             set_mode(mode::JOINING, "waiting for schema information to complete", true);
-            sleep(std::chrono::seconds(1)).get();
+            auto nodes = gossiper.get_live_members();
+            auto live_nodes = std::vector<gms::inet_address>(nodes.begin(), nodes.end());
+            service::get_local_migration_manager().sync_schema(_db.local(), live_nodes).get();
+            sleep_abortable(std::chrono::seconds(1)).get();
         }
         set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
         set_mode(mode::JOINING, "waiting for pending range calculation", true);
