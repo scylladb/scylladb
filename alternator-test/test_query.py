@@ -2,34 +2,10 @@
 # Tests for the Query operation
 
 import random
-import string
-import collections
-
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-
-# Utility function for fetching the entire results of a query into an array of items
-def full_query(table, **kwargs):
-    response = table.query(**kwargs)
-    items = response['Items']
-    while 'LastEvaluatedKey' in response:
-        response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
-        items.extend(response['Items'])
-    return items
-
-def random_string(length=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for x in range(length))
-def random_bytes(length=10):
-    return bytearray(random.getrandbits(8) for _ in range(length))
-
-# To compare two lists of items (each is a dict) without regard for order,
-# "==" is not good enough because it will fail if the order is different.
-# The following function, multiset() converts the list into a multiset
-# (set with duplicates) where order doesn't matter, so the multisets can
-# be compared.
-def multiset(items):
-    return collections.Counter([frozenset(item.items()) for item in items])
+from util import random_string, random_bytes, full_query, multiset
 
 # Test that scanning works fine with in-stock paginator
 def test_query_basic_restrictions(dynamodb, filled_test_table):

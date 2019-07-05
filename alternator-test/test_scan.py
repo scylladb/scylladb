@@ -1,28 +1,8 @@
 # Tests for the Scan operation
 
-import random
-import string
-import collections
-
 import pytest
 from botocore.exceptions import ClientError
-
-# Utility function for scanning the entire table into an array of items
-def full_scan(table, **kwargs):
-    response = table.scan(**kwargs)
-    items = response['Items']
-    while 'LastEvaluatedKey' in response:
-        response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
-        items.extend(response['Items'])
-    return items
-
-# To compare two lists of items (each is a dict) without regard for order,
-# "==" is not good enough because it will fail if the order is different.
-# The following function, multiset() converts the list into a multiset
-# (set with duplicates) where order doesn't matter, so the multisets can
-# be compared.
-def multiset(items):
-    return collections.Counter([frozenset(item.items()) for item in items])
+from util import random_string, full_scan, multiset
 
 # Test that scanning works fine with/without pagination
 def test_scan_basic(filled_test_table):

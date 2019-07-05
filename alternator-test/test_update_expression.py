@@ -2,13 +2,10 @@
 
 import random
 import string
-
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-
-def random_string(length=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for x in range(length))
+from util import random_string
 
 # The simplest test of using UpdateExpression to set a top-level attribute,
 # instead of the older AttributeUpdates parameter.
