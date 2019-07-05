@@ -1018,41 +1018,41 @@ future<std::vector<mutation>> generate_random_mutations(
     const auto partition_count = partition_count_dist(engine);
     std::vector<mutation> muts;
     muts.reserve(partition_count);
-  return do_with(std::move(engine), std::move(muts), [=, &random_schema] (std::mt19937& engine,
+    return do_with(std::move(engine), std::move(muts), [=, &random_schema] (std::mt19937& engine,
             std::vector<mutation>& muts) mutable {
-    auto r = boost::irange(size_t{0}, partition_count);
-    return do_for_each(r.begin(), r.end(), [=, &random_schema, &engine, &muts] (size_t pk) mutable {
-        auto mut = random_schema.new_mutation(pk);
-        random_schema.add_static_row(engine, mut, ts_gen);
+        auto r = boost::irange(size_t{0}, partition_count);
+        return do_for_each(r.begin(), r.end(), [=, &random_schema, &engine, &muts] (size_t pk) mutable {
+            auto mut = random_schema.new_mutation(pk);
+            random_schema.add_static_row(engine, mut, ts_gen);
 
-        if (!schema_has_clustering_columns) {
+            if (!schema_has_clustering_columns) {
+                muts.emplace_back(mut.build(random_schema.schema()));
+                return;
+            }
+
+            const auto clustering_row_count = clustering_row_count_dist(engine);
+            auto ckeys = random_schema.make_ckeys(clustering_row_count);
+            for (uint32_t ck = 0; ck < clustering_row_count; ++ck) {
+                random_schema.add_row(engine, mut, ckeys[ck], ts_gen);
+            }
+
+            for (size_t i = 0; i < 4; ++i) {
+                const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+                const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+                random_schema.delete_range(
+                        engine,
+                        mut,
+                        nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
+                        ts_gen);
+            }
             muts.emplace_back(mut.build(random_schema.schema()));
-            return;
-        }
-
-        const auto clustering_row_count = clustering_row_count_dist(engine);
-        auto ckeys = random_schema.make_ckeys(clustering_row_count);
-        for (uint32_t ck = 0; ck < clustering_row_count; ++ck) {
-            random_schema.add_row(engine, mut, ckeys[ck], ts_gen);
-        }
-
-        for (size_t i = 0; i < 4; ++i) {
-            const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
-            const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
-            random_schema.delete_range(
-                    engine,
-                    mut,
-                    nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
-                    ts_gen);
-        }
-        muts.emplace_back(mut.build(random_schema.schema()));
-    }).then([&random_schema, &muts] () mutable {
-        boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
-            return a.decorated_key().less_compare(*s, b.decorated_key());
+        }).then([&random_schema, &muts] () mutable {
+            boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+                return a.decorated_key().less_compare(*s, b.decorated_key());
+            });
+            return std::move(muts);
         });
-        return std::move(muts);
     });
-  });
 }
 
 } // namespace tests
