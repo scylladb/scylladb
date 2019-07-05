@@ -1007,29 +1007,30 @@ void random_schema::delete_range(
     md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), {}});
 }
 
-std::vector<mutation> generate_random_mutations(tests::random_schema& random_schema) {
-    auto ts_gen = [&, underlying = tests::default_timestamp_generator()] (std::mt19937& engine,
-            tests::timestamp_destination ts_dest, api::timestamp_type min_timestamp) -> api::timestamp_type {
-        if (ts_dest == tests::timestamp_destination::partition_tombstone ||
-                ts_dest == tests::timestamp_destination::row_marker ||
-                ts_dest == tests::timestamp_destination::row_tombstone ||
-                ts_dest == tests::timestamp_destination::collection_tombstone) {
-            if (tests::random::get_int<int>(0, 10, engine)) {
-                return api::missing_timestamp;
-            }
-        }
-        return underlying(engine, ts_dest, min_timestamp);
-    };
-
+std::vector<mutation> generate_random_mutations(
+        tests::random_schema& random_schema,
+        timestamp_generator ts_gen,
+        std::uniform_int_distribution<size_t> partition_count_dist,
+        std::uniform_int_distribution<size_t> clustering_row_count_dist,
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist) {
     auto engine = std::mt19937(tests::random::get_int<uint32_t>());
+    const auto schema_has_clustering_columns = random_schema.schema()->clustering_key_size() > 0;
+    const auto partition_count = partition_count_dist(engine);
     auto muts = std::vector<mutation>{};
-    auto ckeys = random_schema.make_ckeys(100);
-    for (uint32_t pk = 0; pk < 10; ++pk) {
+    for (uint32_t pk = 0; pk < partition_count; ++pk) {
         auto mut = random_schema.new_mutation(pk);
-        for (uint32_t ck = 0; ck < 100; ++ck) {
+        random_schema.add_static_row(engine, mut, ts_gen);
+
+        if (!schema_has_clustering_columns) {
+            muts.emplace_back(mut.build(random_schema.schema()));
+            continue;
+        }
+
+        const auto clustering_row_count = clustering_row_count_dist(engine);
+        auto ckeys = random_schema.make_ckeys(clustering_row_count);
+        for (uint32_t ck = 0; ck < clustering_row_count; ++ck) {
             random_schema.add_row(engine, mut, ckeys[ck], ts_gen);
         }
-        random_schema.add_static_row(engine, mut, ts_gen);
 
         for (size_t i = 0; i < 4; ++i) {
             const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);

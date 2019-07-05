@@ -220,6 +220,16 @@ public:
             timestamp_generator ts_gen = default_timestamp_generator());
 };
 
-std::vector<mutation> generate_random_mutations(tests::random_schema& random_schema);
+/// Generate random mutations using the random schema.
+///
+/// `clustering_row_count_dist` and `range_tombstone_count_dist` will be used to
+/// generate the respective counts for *each* partition. These params are
+/// ignored if the schema has no clustering columns.
+std::vector<mutation> generate_random_mutations(
+        tests::random_schema& random_schema,
+        timestamp_generator ts_gen = default_timestamp_generator(),
+        std::uniform_int_distribution<size_t> partition_count_dist = std::uniform_int_distribution<size_t>(8, 16),
+        std::uniform_int_distribution<size_t> clustering_row_count_dist = std::uniform_int_distribution<size_t>(16, 128),
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16));
 
 } // namespace tests

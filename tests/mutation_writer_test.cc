@@ -241,7 +241,20 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     tlog.info("Random schema:\n{}", random_schema.cql());
 
-    auto muts = tests::generate_random_mutations(random_schema);
+    auto ts_gen = [&, underlying = tests::default_timestamp_generator()] (std::mt19937& engine,
+            tests::timestamp_destination ts_dest, api::timestamp_type min_timestamp) -> api::timestamp_type {
+        if (ts_dest == tests::timestamp_destination::partition_tombstone ||
+                ts_dest == tests::timestamp_destination::row_marker ||
+                ts_dest == tests::timestamp_destination::row_tombstone ||
+                ts_dest == tests::timestamp_destination::collection_tombstone) {
+            if (tests::random::get_int<int>(0, 10, engine)) {
+                return api::missing_timestamp;
+            }
+        }
+        return underlying(engine, ts_dest, min_timestamp);
+    };
+
+    auto muts = tests::generate_random_mutations(random_schema, ts_gen);
 
     auto classify_fn = [] (api::timestamp_type ts) {
         return int64_t(ts % 2);
