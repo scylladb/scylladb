@@ -348,7 +348,6 @@ def test_update_expression_plus_basic(test_table_s):
 # unchanged, the "+" and "-" operations need to calculate with them, and
 # we should check the calculation isn't done with some lower-precision
 # representation, e.g., double
-@pytest.mark.xfail(reason="plus and minus implemented with wrong precision")
 def test_update_expression_plus_precision(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
