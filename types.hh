@@ -604,10 +604,7 @@ public:
      *
      * When returns false, nothing can be inferred.
      */
-    virtual bool is_byte_order_equal() const {
-        // If we're byte order comparable, then we must also be byte order equal.
-        return is_byte_order_comparable();
-    }
+    bool is_byte_order_equal() const;
     virtual sstring get_string(const bytes& b) const {
         validate(b, cql_serialization_format::latest());
         return to_string(b);
@@ -958,9 +955,6 @@ public:
 
     virtual bool is_byte_order_comparable() const override {
         return _underlying_type->is_byte_order_comparable();
-    }
-    virtual bool is_byte_order_equal() const override {
-        return _underlying_type->is_byte_order_equal();
     }
     virtual size_t hash(bytes_view v) const override {
         return _underlying_type->hash(v);
