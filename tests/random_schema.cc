@@ -879,6 +879,7 @@ data_model::mutation_description::key random_schema::make_partition_key(uint32_t
 }
 
 data_model::mutation_description::key random_schema::make_clustering_key(uint32_t n, value_generator& gen) const {
+    assert(_schema->clustering_key_size() > 0);
     return make_key(n, gen, _schema->clustering_key_columns(), std::numeric_limits<clustering_key::compound::element_type::size_type>::max());
 }
 
