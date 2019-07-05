@@ -5001,29 +5001,31 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
     };
     auto mt = make_lw_shared<memtable>(write_schema);
     mt->apply(partition);
-    for (auto index_block_size : {1, 128, 64*1024}) {
-        tmpdir dir;
-        sstable_writer_config cfg;
-        cfg.promoted_index_block_size = index_block_size;
-        test_env env;
-        auto sst = env.make_sstable(write_schema,
-            dir.path().string(),
-            1 /* generation */,
-            sstable_version_types::mc,
-            sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(write_schema), 1, write_schema, cfg, mt->get_encoding_stats()).get();
-        sst->load().get();
+    for (const auto version : all_sstable_versions) {
+        for (auto index_block_size : {1, 128, 64*1024}) {
+            tmpdir dir;
+            sstable_writer_config cfg;
+            cfg.promoted_index_block_size = index_block_size;
+            test_env env;
+            auto sst = env.make_sstable(write_schema,
+                dir.path().string(),
+                1 /* generation */,
+                version,
+                sstables::sstable::format_types::big);
+            sst->write_components(mt->make_flat_reader(write_schema), 1, write_schema, cfg, mt->get_encoding_stats()).get();
+            sst->load().get();
 
-        BOOST_REQUIRE_EXCEPTION(
-            assert_that(sst->read_rows_flat(read_schema))
-                .produces_partition_start(dk)
-                .produces_row(to_ck(0), {{val2_cdef, int32_type->decompose(int32_t(200))}})
-                .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})
-                .produces_row(to_ck(2), {{val2_cdef, int32_type->decompose(int32_t(202))}})
-                .produces_partition_end()
-                .produces_end_of_stream(),
-            std::exception,
-            message_equals("Column val1 missing in current schema in sstable " + sst->get_filename()));
+            BOOST_REQUIRE_EXCEPTION(
+                assert_that(sst->read_rows_flat(read_schema))
+                    .produces_partition_start(dk)
+                    .produces_row(to_ck(0), {{val2_cdef, int32_type->decompose(int32_t(200))}})
+                    .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})
+                    .produces_row(to_ck(2), {{val2_cdef, int32_type->decompose(int32_t(202))}})
+                    .produces_partition_end()
+                    .produces_end_of_stream(),
+                std::exception,
+                message_equals("Column val1 missing in current schema in sstable " + sst->get_filename()));
+        }
     }
 }
 
