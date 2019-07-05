@@ -679,13 +679,13 @@ future<> repair_info::do_streaming() {
 }
 
 void repair_info::check_failed_ranges() {
-    rlogger.info("repair {} on shard {} stats: ranges_nr={}, sub_ranges_nr={}, {}",
+    rlogger.info("repair id {} on shard {} stats: ranges_nr={}, sub_ranges_nr={}, {}",
         id, shard, ranges.size(), _sub_ranges_nr, _stats.get_stats());
     if (nr_failed_ranges) {
-        rlogger.info("repair {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
+        rlogger.info("repair id {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
         throw std::runtime_error(format("repair {:d} on shard {:d} failed to do checksum for {:d} sub ranges", id, shard, nr_failed_ranges));
     } else {
-        rlogger.info("repair {} on shard {} completed successfully", id, shard);
+        rlogger.info("repair id {} on shard {} completed successfully", id, shard);
     }
 }
 
@@ -1290,7 +1290,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
         repair_tracker().remove_repair_info(ri->id);
         return make_ready_future<>();
     }).handle_exception([ri] (std::exception_ptr eptr) {
-        rlogger.info("repair {} failed - {}", ri->id, eptr);
+        rlogger.info("repair id {} failed - {}", ri->id, eptr);
         repair_tracker().remove_repair_info(ri->id);
         return make_exception_future<>(std::move(eptr));
     });
