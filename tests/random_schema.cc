@@ -1007,7 +1007,7 @@ void random_schema::delete_range(
     md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), {}});
 }
 
-std::vector<mutation> generate_random_mutations(
+future<std::vector<mutation>> generate_random_mutations(
         tests::random_schema& random_schema,
         timestamp_generator ts_gen,
         std::uniform_int_distribution<size_t> partition_count_dist,
@@ -1016,14 +1016,18 @@ std::vector<mutation> generate_random_mutations(
     auto engine = std::mt19937(tests::random::get_int<uint32_t>());
     const auto schema_has_clustering_columns = random_schema.schema()->clustering_key_size() > 0;
     const auto partition_count = partition_count_dist(engine);
-    auto muts = std::vector<mutation>{};
-    for (uint32_t pk = 0; pk < partition_count; ++pk) {
+    std::vector<mutation> muts;
+    muts.reserve(partition_count);
+  return do_with(std::move(engine), std::move(muts), [=, &random_schema] (std::mt19937& engine,
+            std::vector<mutation>& muts) mutable {
+    auto r = boost::irange(size_t{0}, partition_count);
+    return do_for_each(r.begin(), r.end(), [=, &random_schema, &engine, &muts] (size_t pk) mutable {
         auto mut = random_schema.new_mutation(pk);
         random_schema.add_static_row(engine, mut, ts_gen);
 
         if (!schema_has_clustering_columns) {
             muts.emplace_back(mut.build(random_schema.schema()));
-            continue;
+            return;
         }
 
         const auto clustering_row_count = clustering_row_count_dist(engine);
@@ -1042,13 +1046,13 @@ std::vector<mutation> generate_random_mutations(
                     ts_gen);
         }
         muts.emplace_back(mut.build(random_schema.schema()));
-    }
-
-    boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
-        return a.decorated_key().less_compare(*s, b.decorated_key());
+    }).then([&random_schema, &muts] () mutable {
+        boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+            return a.decorated_key().less_compare(*s, b.decorated_key());
+        });
+        return std::move(muts);
     });
-
-    return muts;
+  });
 }
 
 } // namespace tests

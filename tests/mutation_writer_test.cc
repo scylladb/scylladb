@@ -254,7 +254,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
         return underlying(engine, ts_dest, min_timestamp);
     };
 
-    auto muts = tests::generate_random_mutations(random_schema, ts_gen);
+    auto muts = tests::generate_random_mutations(random_schema, ts_gen).get0();
 
     auto classify_fn = [] (api::timestamp_type ts) {
         return int64_t(ts % 2);
