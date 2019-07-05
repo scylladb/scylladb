@@ -3234,6 +3234,15 @@ int32_t abstract_type::compare(bytes_view v1, bytes_view v2) const {
     return visit(*this, compare_visitor{v1, v2});
 }
 
+bool abstract_type::equal(bytes_view v1, bytes_view v2) const {
+    return ::visit(*this, [&](const auto& t) {
+        if (is_byte_order_equal_visitor{}(t)) {
+            return compare_unsigned(v1, v2) == 0;
+        }
+        return compare_visitor{v1, v2}(t) == 0;
+    });
+}
+
 std::vector<bytes_view_opt>
 tuple_type_impl::split(bytes_view v) const {
     return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };

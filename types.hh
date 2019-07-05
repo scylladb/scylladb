@@ -513,12 +513,7 @@ public:
     serialized_tri_compare as_tri_comparator() const ;
     static data_type parse_type(const sstring& name);
     virtual size_t hash(bytes_view v) const = 0;
-    virtual bool equal(bytes_view v1, bytes_view v2) const {
-        if (is_byte_order_equal()) {
-            return compare_unsigned(v1, v2) == 0;
-        }
-        return compare(v1, v2) == 0;
-    }
+    bool equal(bytes_view v1, bytes_view v2) const;
     int32_t compare(bytes_view v1, bytes_view v2) const;
     data_value deserialize(bytes_view v) const;
     data_value deserialize_value(bytes_view v) const {
@@ -914,10 +909,6 @@ protected:
         return _underlying_type->is_value_compatible_with(*(other.underlying_type()));
     }
 public:
-    virtual bool equal(bytes_view v1, bytes_view v2) const override {
-        return _underlying_type->equal(v1, v2);
-    }
-
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         _underlying_type->validate(v, sf);
     }
