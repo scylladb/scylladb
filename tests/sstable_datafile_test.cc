@@ -2458,6 +2458,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
             auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
             auto builder = schema_builder("test", "test_multi_schema")
                 .with_column("a", int32_type, column_kind::partition_key)
+                .without_column("b", 999999999999999999llu)
                 .with_column("c", set_of_ints_type)
                 .with_column("d", int32_type)
                 .with_column("e", bytes_type);
