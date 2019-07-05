@@ -67,7 +67,6 @@ def test_batch_write_and_delete(test_table_s):
 
 # It is forbidden to update the same key twice in the same batch.
 # DynamoDB says "Provided list of item keys contains duplicates".
-@pytest.mark.xfail(reason="BatchWriteItem does not yet check for duplicates")
 def test_batch_write_duplicate_write(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*duplicates'):
@@ -75,7 +74,6 @@ def test_batch_write_duplicate_write(test_table_s):
             batch.put_item({'p': p})
             batch.put_item({'p': p})
 
-@pytest.mark.xfail(reason="BatchWriteItem does not yet check for duplicates")
 def test_batch_write_duplicate_delete(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*duplicates'):
@@ -83,7 +81,6 @@ def test_batch_write_duplicate_delete(test_table_s):
             batch.delete_item(Key={'p': p})
             batch.delete_item(Key={'p': p})
 
-@pytest.mark.xfail(reason="BatchWriteItem does not yet check for duplicates")
 def test_batch_write_duplicate_write_and_delete(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*duplicates'):
