@@ -539,22 +539,24 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         return from_string(value.asString());
     }
 private:
-    static int compare_bytes(bytes_view o1, bytes_view o2) {
-        auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
-            int d = (o1[pos] & mask) - (o2[pos] & mask);
-            return d ? d : ifequal;
-        };
-        return compare_pos(6, 0xf,
-            compare_pos(7, 0xff,
-                compare_pos(4, 0xff,
-                    compare_pos(5, 0xff,
-                        compare_pos(0, 0xff,
-                            compare_pos(1, 0xff,
-                                compare_pos(2, 0xff,
-                                    compare_pos(3, 0xff, 0))))))));
-    }
     friend abstract_type;
 };
+
+static int timeuuid_compare_bytes(bytes_view o1, bytes_view o2) {
+    auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
+        int d = (o1[pos] & mask) - (o2[pos] & mask);
+        return d ? d : ifequal;
+    };
+    return compare_pos(6, 0xf,
+        compare_pos(7, 0xff,
+            compare_pos(4, 0xff,
+                compare_pos(5, 0xff,
+                    compare_pos(0, 0xff,
+                        compare_pos(1, 0xff,
+                            compare_pos(2, 0xff,
+                                compare_pos(3, 0xff, 0))))))));
+}
+
 
 class timestamp_type_impl : public simple_type_impl<db_clock::time_point> {
     static logging::logger _logger;
@@ -1868,72 +1870,6 @@ struct is_byte_order_equal_visitor {
 
 bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_order_equal_visitor{}); }
 
-bool abstract_type::less(bytes_view v1, bytes_view v2) const {
-    struct visitor {
-        bytes_view v1;
-        bytes_view v2;
-        bool operator()(const abstract_type& t) { return t.compare(v1, v2) < 0; }
-        bool operator()(const listlike_collection_type_impl& l) {
-            using llpdi = listlike_partial_deserializing_iterator;
-            auto sf = cql_serialization_format::internal();
-            return std::lexicographical_compare(llpdi::begin(v1, sf), llpdi::end(v1, sf), llpdi::begin(v2, sf),
-                    llpdi::end(v2, sf),
-                    [&] (bytes_view o1, bytes_view o2) { return l.get_elements_type()->less(o1, o2); });
-        }
-        bool operator()(const map_type_impl& m) {
-            return map_type_impl::compare_maps(m.get_keys_type(), m.get_values_type(), v1, v2) < 0;
-        }
-        bool operator()(const counter_type_impl&) {
-            fail(unimplemented::cause::COUNTERS);
-            return false;
-        }
-        bool operator()(const string_type_impl&) { return less_unsigned(v1, v2); }
-        bool operator()(const bytes_type_impl&) { return less_unsigned(v1, v2); }
-        bool operator()(const duration_type_impl&) { return less_unsigned(v1, v2); }
-        bool operator()(const inet_addr_type_impl&) { return less_unsigned(v1, v2); }
-        bool operator()(const date_type_impl&) { return less_unsigned(v1, v2); }
-        bool operator()(const empty_type_impl&) { return false; }
-        bool operator()(const timeuuid_type_impl&) {
-            if (v1.empty()) {
-                return v2.empty() ? false : true;
-            }
-            if (v2.empty()) {
-                return false;
-            }
-            auto r = timeuuid_type_impl::compare_bytes(v1, v2);
-            if (r != 0) {
-                return r < 0;
-            }
-            return std::lexicographical_compare(v1.begin(), v1.end(), v2.begin(), v2.end());
-        }
-        bool operator()(const uuid_type_impl&) {
-            if (v1.size() < 16) {
-                return v2.size() < 16 ? false : true;
-            }
-            if (v2.size() < 16) {
-                return false;
-            }
-            auto c1 = (v1[6] >> 4) & 0x0f;
-            auto c2 = (v2[6] >> 4) & 0x0f;
-
-            if (c1 != c2) {
-                return c1 < c2;
-            }
-
-            if (c1 == 1) {
-                auto c = timeuuid_type_impl::compare_bytes(v1, v2);
-                if (c) {
-                    return c < 0;
-                }
-            }
-            return less_unsigned(v1, v2);
-        }
-        bool operator()(const reversed_type_impl& r) { return r.underlying_type()->less(v2, v1); }
-    };
-
-    return visit(*this, visitor{v1, v2});
-}
-
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {
         cql3_kind operator()(const ascii_type_impl&) { return cql3_kind::ASCII; }
@@ -3171,15 +3107,6 @@ namespace {
 struct compare_visitor {
     bytes_view v1;
     bytes_view v2;
-    int32_t operator()(const abstract_type& t) {
-        if (t.less(v1, v2)) {
-            return -1;
-        } else if (t.less(v2, v1)) {
-            return 1;
-        } else {
-            return 0;
-        }
-    }
     template <typename T> int32_t operator()(const simple_type_impl<T>&) {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
@@ -3191,6 +3118,57 @@ struct compare_visitor {
         T b = simple_type_traits<T>::read_nonempty(v2);
         return a == b ? 0 : a < b ? -1 : 1;
     }
+    int32_t operator()(const string_type_impl&) { return compare_unsigned(v1, v2); }
+    int32_t operator()(const bytes_type_impl&) { return compare_unsigned(v1, v2); }
+    int32_t operator()(const duration_type_impl&) { return compare_unsigned(v1, v2); }
+    int32_t operator()(const inet_addr_type_impl&) { return compare_unsigned(v1, v2); }
+    int32_t operator()(const date_type_impl&) { return compare_unsigned(v1, v2); }
+    int32_t operator()(const timeuuid_type_impl&) {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        if (auto r = timeuuid_compare_bytes(v1, v2)) {
+            return r;
+        }
+        return lexicographical_tri_compare(
+                v1.begin(), v1.end(), v2.begin(), v2.end(), [] (const int8_t& a, const int8_t& b) { return a - b; });
+    }
+    int32_t operator()(const listlike_collection_type_impl& l) {
+        using llpdi = listlike_partial_deserializing_iterator;
+        auto sf = cql_serialization_format::internal();
+        return lexicographical_tri_compare(llpdi::begin(v1, sf), llpdi::end(v1, sf), llpdi::begin(v2, sf),
+                llpdi::end(v2, sf),
+                [&] (bytes_view o1, bytes_view o2) { return l.get_elements_type()->compare(o1, o2); });
+    }
+    int32_t operator()(const map_type_impl& m) {
+        return map_type_impl::compare_maps(m.get_keys_type(), m.get_values_type(), v1, v2);
+    }
+    int32_t operator()(const uuid_type_impl&) {
+        if (v1.size() < 16) {
+            return v2.size() < 16 ? 0 : -1;
+        }
+        if (v2.size() < 16) {
+
+            return 1;
+        }
+        auto c1 = (v1[6] >> 4) & 0x0f;
+        auto c2 = (v2[6] >> 4) & 0x0f;
+
+        if (c1 != c2) {
+            return c1 - c2;
+        }
+
+        if (c1 == 1) {
+            if (auto c = timeuuid_compare_bytes(v1, v2)) {
+                return c;
+            }
+        }
+        return compare_unsigned(v1, v2);
+    }
+    int32_t operator()(const empty_type_impl&) { return 0; }
     int32_t operator()(const tuple_type_impl& t) {
         return lexicographical_tri_compare(t.all_types().begin(), t.all_types().end(),
                 tuple_deserializing_iterator::start(v1), tuple_deserializing_iterator::finish(v1),
