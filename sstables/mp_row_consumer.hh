@@ -225,6 +225,17 @@ public:
         }
     };
 
+    void check_column_missing_in_current_schema(const column& col, int64_t timestamp) {
+        if (__builtin_expect(col.cell.empty() || col.cdef, true)) {
+            return;
+        }
+        auto cell_str = sstring(to_sstring_view(col.cell));
+        auto dc = _schema->dropped_columns().find(cell_str);
+        if (dc == _schema->dropped_columns().end() || dc->second.timestamp < timestamp) {
+            throw malformed_sstable_exception(format("Column {} missing in current schema", cell_str));
+        }
+    }
+
 private:
     // Notes for collection mutation:
     //
@@ -509,6 +520,7 @@ public:
     //}
     proceed do_consume_cell(bytes_view col_name, int64_t timestamp, int64_t ttl, int64_t expiration, CreateCell&& create_cell) {
         struct column col(*_schema, col_name, timestamp);
+        check_column_missing_in_current_schema(col, timestamp);
 
         auto ret = flush_if_needed(col.is_static, col.clustering);
         if (_skip_in_progress) {
@@ -576,6 +588,7 @@ public:
     virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         auto timestamp = deltime.marked_for_delete_at;
         struct column col(*_schema, col_name, timestamp);
+        check_column_missing_in_current_schema(col, timestamp);
         gc_clock::duration secs(deltime.local_deletion_time);
 
         return consume_deleted_cell(col, timestamp, gc_clock::time_point(secs));
