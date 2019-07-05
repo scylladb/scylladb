@@ -308,9 +308,6 @@ struct string_type_impl : public concrete_type<sstring> {
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
-    virtual bool is_byte_order_comparable() const override {
-        return true;
-    }
     virtual bool is_string() const override {
         return true;
     }
@@ -376,9 +373,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
-    }
-    virtual bool is_byte_order_comparable() const override {
-        return true;
     }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
@@ -506,9 +500,6 @@ public:
     }
     virtual bool less(bytes_view b1, bytes_view b2) const override {
         return compare_unsigned(b1, b2) < 0;
-    }
-    virtual bool is_byte_order_comparable() const override {
-        return true;
     }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
@@ -1119,9 +1110,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
-    virtual bool is_byte_order_comparable() const override {
-        return true;
-    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
@@ -1707,9 +1695,6 @@ public:
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bool is_byte_order_comparable() const override {
-        return true;
-    }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
@@ -2164,6 +2149,24 @@ struct is_byte_order_equal_visitor {
 }
 
 bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_order_equal_visitor{}); }
+
+namespace {
+struct is_byte_order_comparable_visitor {
+    bool operator()(const abstract_type&) { return false; }
+    bool operator()(const reversed_type_impl& r) { return r.underlying_type()->is_byte_order_comparable(); }
+    bool operator()(const string_type_impl&) { return true; }
+    bool operator()(const bytes_type_impl&) { return true; }
+    bool operator()(const date_type_impl&) { return true; }
+    bool operator()(const inet_addr_type_impl&) { return true; }
+    bool operator()(const duration_type_impl&) { return true; }
+    // FIXME: origin returns false for list.  Why?
+    bool operator()(const set_type_impl& s) { return s.get_elements_type()->is_byte_order_comparable(); }
+};
+}
+
+bool abstract_type::is_byte_order_comparable() const {
+    return visit(*this, is_byte_order_comparable_visitor{});
+}
 
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {

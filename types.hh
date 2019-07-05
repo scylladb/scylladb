@@ -594,9 +594,7 @@ public:
     const sstring& name() const {
         return _name;
     }
-    virtual bool is_byte_order_comparable() const {
-        return false;
-    }
+    bool is_byte_order_comparable() const;
 
     /**
      * When returns true then equal values have the same byte representation and if byte
@@ -953,9 +951,6 @@ public:
         return _underlying_type;
     }
 
-    virtual bool is_byte_order_comparable() const override {
-        return _underlying_type->is_byte_order_comparable();
-    }
     virtual size_t hash(bytes_view v) const override {
         return _underlying_type->hash(v);
     }
