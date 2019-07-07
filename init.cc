@@ -155,6 +155,10 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
                 to_string(seeds), listen_address_in, broadcast_address);
         throw std::runtime_error("Use broadcast_address for seeds list");
     }
+    if ((!cfg.replace_address_first_boot().empty() || !cfg.replace_address().empty()) && seeds.count(broadcast_address)) {
+        startlog.error("Bad configuration: replace-address and replace-address-first-boot are not allowed for seed nodes");
+        throw bad_configuration_error();
+    }
     gossiper.local().set_seeds(seeds);
     gossiper.invoke_on_all([cluster_name](gms::gossiper& g) {
         g.set_cluster_name(cluster_name);
