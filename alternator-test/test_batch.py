@@ -140,6 +140,31 @@ def test_batch_put_item_replace(test_table_s, test_table):
         batch.put_item(Item={'p': p, 'c': c, 'b': 'hello'})
     assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'b': 'hello'}
 
+# Test that if one of the batch's operations is invalid, because a key
+# column is missing or has the wrong type, the entire batch is rejected
+# before any write is done.
+def test_batch_write_invalid_operation(test_table_s):
+    # test key attribute with wrong type:
+    p1 = random_string()
+    p2 = random_string()
+    items = [{'p': p1}, {'p': 3}, {'p': p2}]
+    with pytest.raises(ClientError, match='ValidationException'):
+        with test_table_s.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+    for p in [p1, p2]:
+        assert not 'item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # test missing key attribute:
+    p1 = random_string()
+    p2 = random_string()
+    items = [{'p': p1}, {'x': 'whatever'}, {'p': p2}]
+    with pytest.raises(ClientError, match='ValidationException'):
+        with test_table_s.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+    for p in [p1, p2]:
+        assert not 'item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
 # Basic test for BatchGetItem, reading several entire items.
 # Schema has both hash and sort keys.
 def test_batch_get_item(test_table):
