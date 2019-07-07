@@ -44,6 +44,7 @@ void init_storage_service(distributed<database>& db, sharded<auth::service>& aut
 }
 
 void init_ms_fd_gossiper(sharded<gms::feature_service>& features
+                , db::config& cfg
                 , sstring listen_address_in
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
@@ -155,6 +156,10 @@ void init_ms_fd_gossiper(sharded<gms::feature_service>& features
         print("Use broadcast_address instead of listen_address for seeds list: seeds=%s, listen_address=%s, broadcast_address=%s\n",
                 to_string(seeds), listen_address_in, broadcast_address);
         throw std::runtime_error("Use broadcast_address for seeds list");
+    }
+    if ((!cfg.replace_address_first_boot().empty() || !cfg.replace_address().empty()) && seeds.count(broadcast_address)) {
+        startlog.error("Bad configuration: replace-address and replace-address-first-boot are not allowed for seed nodes");
+        throw bad_configuration_error();
     }
     gms::get_gossiper().start(std::ref(features)).get();
     auto& gossiper = gms::get_local_gossiper();

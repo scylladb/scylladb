@@ -609,6 +609,7 @@ int main(int ac, char** av) {
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
             init_ms_fd_gossiper(feature_service
+                    , *cfg
                     , listen_address
                     , storage_port
                     , ssl_storage_port
