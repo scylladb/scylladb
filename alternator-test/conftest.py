@@ -55,7 +55,12 @@ def dynamodb(request):
     if request.config.getoption('aws'):
         return boto3.resource('dynamodb')
     else:
-        return boto3.resource('dynamodb',endpoint_url='http://localhost:8000')
+        # Even though we connect to the local installation, Boto3 still
+        # requires us to specify dummy region and credential parameters,
+        # otherwise the user is forced to properly configure ~/.aws even
+        # for local runs.
+        return boto3.resource('dynamodb', endpoint_url='http://localhost:8000',
+            region_name='us-east-1', aws_access_key_id='whatever', aws_secret_access_key='whatever')
 
 # "test_table" fixture: Create and return a temporary table to be used in tests
 # that need a table to work on. The table is automatically deleted at the end.
