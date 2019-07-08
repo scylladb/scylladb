@@ -830,7 +830,7 @@ public:
                 auto t2 = local_tz::utc_to_local(t - tz_offset);
                 auto dst_offset = t2 - t;
                 t -= tz_offset + dst_offset;
-            } else {
+            } else if (tz != "z") {
                 throw marshal_exception(sprint("Unable to parse timezone '%s'", tz));
             }
             return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
