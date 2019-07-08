@@ -53,6 +53,15 @@ def test_update_expression_set_copy(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello', 'b': 'hello'}
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET z = z')
+    # We can also use name references in either LHS or RHS of SET, e.g.,
+    # SET #one = #two. We need to also take the references used in the RHS
+    # when we want to complain about unused names in ExpressionAttributeNames.
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #one = #two',
+         ExpressionAttributeNames={'#one': 'c', '#two': 'a'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello', 'b': 'hello', 'c': 'hello'}
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #one = #two',
+             ExpressionAttributeNames={'#one': 'c', '#two': 'a', '#three': 'z'})
 
 # Test for read-before-write action where the value to be read is nested inside a - operator
 def test_update_expression_set_nested_copy(test_table_s):
