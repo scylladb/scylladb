@@ -37,6 +37,7 @@
 #include "cql3/constants.hh"
 #include <optional>
 #include "utils/big_decimal.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 #include <boost/range/adaptors.hpp>
 
@@ -579,8 +580,11 @@ static Json::Value calculate_value(const parsed::value& v,
             }
         },
         [&] (const parsed::path& p) -> Json::Value {
-            // FIXME: support path value (read before write).
-            throw api_error("ValidationException", "UpdateExpression: unsupported value type");
+            if (!previous_item) {
+                return Json::nullValue;
+            }
+            std::string update_path = resolve_update_path(p, update_info, schema, used_attribute_names, allow_key_columns::yes);
+            return (*previous_item)["Item"].get(update_path, Json::nullValue);
         }
     }, v._value);
 }
@@ -733,6 +737,74 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
     return item_descr;
 }
 
+static bool holds_path(const parsed::value& v) {
+    return std::visit(overloaded {
+        [&] (const std::string& valref) -> bool {
+            return false;
+        },
+        [&] (const parsed::value::function_call& f) -> bool {
+            return boost::algorithm::any_of(f._parameters, [&] (const parsed::value& param) {
+                return holds_path(param);
+            });
+        },
+        [&] (const parsed::path& p) -> bool {
+            return true;
+        }
+    }, v._value);
+}
+
+static bool check_needs_read_before_write(const std::vector<parsed::update_expression::action>& actions) {
+    return boost::algorithm::any_of(actions, [](const parsed::update_expression::action& action) {
+        return std::visit(overloaded {
+            [&] (const parsed::update_expression::action::set& a) -> bool {
+                return holds_path(a._rhs._v1) || (a._rhs._op != 'v' && holds_path(a._rhs._v2));
+            },
+            [&] (const parsed::update_expression::action::remove& a) -> bool {
+                return false;
+            },
+            [&] (const parsed::update_expression::action::add& a) -> bool {
+                return true;
+            },
+            [&] (const parsed::update_expression::action::del& a) -> bool {
+                return true;
+            }
+        }, action._action);
+    });
+}
+
+// FIXME: Getting the previous item does not offer any synchronization guarantees nor linearizability.
+// It should be overridden once we can leverage a consensus protocol.
+static future<std::unique_ptr<Json::Value>> maybe_get_previous_item(service::storage_proxy& proxy, schema_ptr schema, const partition_key& pk, const clustering_key& ck,
+        const Json::Value& update_expression, const parsed::update_expression& expression) {
+    const bool needs_read_before_write = update_expression && check_needs_read_before_write(expression.actions());
+    if (!needs_read_before_write) {
+        return make_ready_future<std::unique_ptr<Json::Value>>();
+    }
+
+    dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*schema, pk))};
+    std::vector<query::clustering_range> bounds;
+    if (schema->clustering_key_size() == 0) {
+        bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+    } else {
+        bounds.push_back(query::clustering_range::make_singular(ck));
+    }
+
+    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto selection = cql3::selection::selection::wildcard(schema);
+
+    auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+
+    auto cl = db::consistency_level::LOCAL_QUORUM;
+
+    //TODO(sarna): RBW stats
+    return proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(db::no_timeout)).then(
+            [schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
+        auto previous_item = describe_item(schema, partition_slice, *selection, std::move(qr.query_result), {});
+        return make_ready_future<std::unique_ptr<Json::Value>>(std::make_unique<Json::Value>(std::move(previous_item)));
+    });
+}
+
 future<json::json_return_type> executor::update_item(std::string content) {
     _stats.api_operations.update_item++;
     Json::Value update_info = json::to_json_value(content);
@@ -758,8 +830,8 @@ future<json::json_return_type> executor::update_item(std::string content) {
                 format("UpdateItem does not allow both AttributeUpdates and UpdateExpression to be given together"));
     }
 
+    parsed::update_expression expression;
     if (update_expression) {
-        parsed::update_expression expression;
         try {
             expression = parse_update_expression(update_expression.asString());
         } catch(expressions_syntax_error& e) {
@@ -768,6 +840,12 @@ future<json::json_return_type> executor::update_item(std::string content) {
         if (expression.empty()) {
             throw api_error("ValidationException", "Empty expression in UpdateExpression is not allowed");
         }
+    }
+
+  return maybe_get_previous_item(_proxy, schema, pk, ck, update_expression, expression).then(
+          [this, schema, expression = std::move(expression), update_expression = std::move(update_expression), ck = std::move(ck),
+           update_info = std::move(update_info), m = std::move(m), attrs_mut = std::move(attrs_mut), attribute_updates = std::move(attribute_updates), ts] (std::unique_ptr<Json::Value> previous_item) mutable {
+    if (update_expression) {
         std::unordered_set<std::string> seen_column_names;
         std::unordered_set<std::string> used_attribute_values;
         std::unordered_set<std::string> used_attribute_names;
@@ -785,7 +863,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
             }
             std::visit(overloaded {
                 [&] (const parsed::update_expression::action::set& a) {
-                    auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, nullptr);
+                    auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                     bytes val = serialize_item(value);
                     attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
                 },
@@ -852,6 +930,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
         // Without special options on what to return, UpdateItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
+  });
 }
 
 // Check according to the request's "ConsistentRead" field, which consistency
