@@ -7,7 +7,7 @@
 
 import pytest
 import boto3
-import time
+from util import create_test_table
 
 # By default, tests run against a local Scylla installation on localhost:8080/.
 # The "--aws" option can be used to run against Amazon DynamoDB in the us-east-1
@@ -29,16 +29,6 @@ def dynamodb(request):
     else:
         return boto3.resource('dynamodb',endpoint_url='http://localhost:8000')
 
-test_table_prefix = 'alternator_test_'
-def test_table_name():
-    current_ms = int(round(time.time() * 1000))
-    # In the off chance that test_table_name() is called twice in the same millisecond...
-    if test_table_name.last_ms >= current_ms:
-        current_ms = test_table_name.last_ms + 1
-    test_table_name.last_ms = current_ms
-    return test_table_prefix + str(current_ms)
-test_table_name.last_ms = 0
-
 # "test_table" fixture: Create and return a temporary table to be used in tests
 # that need a table to work on. The table is automatically deleted at the end.
 # We use scope="session" so that all tests will reuse the same client object.
@@ -56,23 +46,6 @@ test_table_name.last_ms = 0
 # time, we can also remove just tables older than a particular age. Such
 # mechanism will allow running tests in parallel, without the risk of deleting
 # a parallel run's temporary tables.
-
-def create_test_table(dynamodb, KeySchema, AttributeDefinitions):
-    name = test_table_name()
-    print("fixture creating new table {}".format(name))
-    table = dynamodb.create_table(TableName=name,
-        BillingMode='PAY_PER_REQUEST',
-        KeySchema=KeySchema,
-        AttributeDefinitions=AttributeDefinitions)
-    waiter = table.meta.client.get_waiter('table_exists')
-    # recheck every second instead of the default, lower, frequency. This can
-    # save a few seconds on AWS with its very slow table creation, but can
-    # more on tests on Scylla with its faster table creation turnaround.
-    waiter.config.delay = 1
-    waiter.config.max_attempts = 60
-    waiter.wait(TableName=name)
-    return table
-
 @pytest.fixture(scope="session")
 def test_table(dynamodb):
     table = create_test_table(dynamodb,
