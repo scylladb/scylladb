@@ -933,9 +933,20 @@ static future<> repair_cf_range(repair_info& ri,
 // Comparable to RepairSession in Origin
 static future<> repair_range(repair_info& ri, const dht::token_range& range) {
     auto id = utils::UUID_gen::get_time_UUID();
-    return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (const auto& neighbors) {
+    return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (std::vector<gms::inet_address>& neighbors) {
+      auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
+                    boost::adaptors::filtered([] (const gms::inet_address& node) { return gms::get_local_gossiper().is_alive(node); }));
+      if (live_neighbors.size() != neighbors.size()) {
+            ri.nr_failed_ranges++;
+            auto status = live_neighbors.empty() ? "skipped" : "partial";
+            rlogger.warn("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+            ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.cfs, range, neighbors, live_neighbors, status);
+            if (live_neighbors.empty()) {
+                return make_ready_future<>();
+            }
+            neighbors.swap(live_neighbors);
+      }
       return ::service::get_local_migration_manager().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
-        rlogger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, ri.keyspace, ri.cfs);
         return do_for_each(ri.cfs.begin(), ri.cfs.end(), [&ri, &neighbors, range] (auto&& cf) {
             ri._sub_ranges_nr++;
             if (ri.row_level_repair()) {
