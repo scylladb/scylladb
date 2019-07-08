@@ -142,7 +142,7 @@ shared_ptr<selector::factory>
 selectable::with_field_selection::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& factory = _selected->new_selector_factory(db, s, defs);
     auto&& type = factory->new_instance()->get_type();
-    auto&& ut = dynamic_pointer_cast<const user_type_impl>(std::move(type));
+    auto&& ut = dynamic_pointer_cast<const user_type_impl>(type->underlying_type());
     if (!ut) {
         throw exceptions::invalid_request_exception(
                 format("Invalid field selection: {} of type {} is not a user type",

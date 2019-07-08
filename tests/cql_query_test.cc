@@ -1526,6 +1526,18 @@ SEASTAR_TEST_CASE(test_user_type_nested) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_type_reversed) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create type my_type (a int);").get();
+        e.execute_cql("create table tbl (a int, b frozen<my_type>, primary key ((a), b)) with clustering order by (b desc);").get();
+        e.execute_cql("insert into tbl (a, b) values (1, (2));").get();
+        assert_that(e.execute_cql("select a,b.a from tbl;").get0())
+                .is_rows()
+                .with_size(1)
+                .with_row({int32_type->decompose(1), int32_type->decompose(2)});
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_type) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create type ut1 (my_int int, my_bigint bigint, my_text text);").discard_result().then([&e] {
