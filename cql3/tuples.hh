@@ -70,7 +70,7 @@ public:
 
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
-            auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver->type);
+            auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver->type->underlying_type());
             if (!tt) {
                 throw exceptions::invalid_request_exception(format("Invalid tuple type literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
             }
