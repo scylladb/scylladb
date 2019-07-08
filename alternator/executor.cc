@@ -669,6 +669,58 @@ std::unordered_set<std::string> calculate_attrs_to_get(const Json::Value& req) {
     return {};
 }
 
+static std::optional<Json::Value> describe_single_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
+    Json::Value item(Json::objectValue);
+
+    cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
+    query::result_view::consume(*query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
+
+    auto result_set = builder.build();
+    if (result_set->empty()) {
+        // If there is no matching item, we're supposed to return an empty
+        // object without an Item member - not one with an empty Item member
+        return {};
+    }
+    // FIXME: I think this can't really be a loop, there should be exactly
+    // one result after above we handled the 0 result case
+    for (auto& result_row : result_set->rows()) {
+        const auto& columns = selection.get_columns();
+        auto column_it = columns.begin();
+        for (const bytes_opt& cell : result_row) {
+            std::string column_name = (*column_it)->name_as_text();
+            if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
+                if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
+                    Json::Value& field = item[column_name.c_str()];
+                    field[type_to_string((*column_it)->type)] = json_key_column_value(*cell, **column_it);
+                }
+            } else if (cell) {
+                auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
+                auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
+                for (auto entry : keys_and_values) {
+                    std::string attr_name = value_cast<sstring>(entry.first);
+                    if (attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
+                        bytes value = value_cast<bytes>(entry.second);
+                        item[attr_name] = deserialize_item(value);
+                    }
+                }
+            }
+            ++column_it;
+        }
+    }
+    return item;
+}
+
+static Json::Value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
+    std::optional<Json::Value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), std::move(attrs_to_get));
+    if (!opt_item) {
+        // If there is no matching item, we're supposed to return an empty
+        // object without an Item member - not one with an empty Item member
+        return Json::objectValue;
+    }
+    Json::Value item_descr(Json::objectValue);
+    item_descr["Item"] = *opt_item;
+    return item_descr;
+}
 
 future<json::json_return_type> executor::update_item(std::string content) {
     _stats.api_operations.update_item++;
@@ -789,58 +841,6 @@ future<json::json_return_type> executor::update_item(std::string content) {
         // Without special options on what to return, UpdateItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
-}
-
-static std::optional<Json::Value> describe_single_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
-    Json::Value item(Json::objectValue);
-
-    cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
-    query::result_view::consume(*query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
-
-    auto result_set = builder.build();
-    if (result_set->empty()) {
-        // If there is no matching item, we're supposed to return an empty
-        // object without an Item member - not one with an empty Item member
-        return {};
-    }
-    // FIXME: I think this can't really be a loop, there should be exactly
-    // one result after above we handled the 0 result case
-    for (auto& result_row : result_set->rows()) {
-        const auto& columns = selection.get_columns();
-        auto column_it = columns.begin();
-        for (const bytes_opt& cell : result_row) {
-            std::string column_name = (*column_it)->name_as_text();
-            if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
-                if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
-                    Json::Value& field = item[column_name.c_str()];
-                    field[type_to_string((*column_it)->type)] = json_key_column_value(*cell, **column_it);
-                }
-            } else if (cell) {
-                auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
-                auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
-                for (auto entry : keys_and_values) {
-                    std::string attr_name = value_cast<sstring>(entry.first);
-                    if (attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
-                        bytes value = value_cast<bytes>(entry.second);
-                        item[attr_name] = deserialize_item(value);
-                    }
-                }
-            }
-            ++column_it;
-        }
-    }
-    return item;
-}
-static Json::Value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
-    std::optional<Json::Value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), std::move(attrs_to_get));
-    if (!opt_item) {
-        // If there is no matching item, we're supposed to return an empty
-        // object without an Item member - not one with an empty Item member
-        return Json::objectValue;
-    }
-    Json::Value item_descr(Json::objectValue);
-    item_descr["Item"] = *opt_item;
-    return item_descr;
 }
 
 // Check according to the request's "ConsistentRead" field, which consistency
