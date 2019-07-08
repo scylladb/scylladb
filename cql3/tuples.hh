@@ -54,7 +54,7 @@ public:
                 column->ks_name,
                 column->cf_name,
                 ::make_shared<column_identifier>(sprint("%s[%d]", column->name, component), true),
-                static_pointer_cast<const tuple_type_impl>(column->type)->type(component));
+                static_pointer_cast<const tuple_type_impl>(column->type->underlying_type())->type(component));
     }
 
     /**
@@ -112,7 +112,7 @@ public:
 
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
-            auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver->type);
+            auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver->type->underlying_type());
             if (!tt) {
                 throw exceptions::invalid_request_exception(sprint("Invalid tuple type literal for %s of type %s", receiver->name, receiver->type->as_cql3_type()));
             }
