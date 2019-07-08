@@ -22,8 +22,7 @@ region = us-east-1
 * To run all tests in a single file, do `pytest test_table.py`.
 * To run a single specific test, do `pytest test_table.py::test_create_table_unsupported_names`.
 * By default test run against a local Scylla installation at
-  http://localhost:8000. Add the "--aws" option to test against AWS instead
-  (the us-east-1 region).
+  http://localhost:8000. Add the "--aws" option to test against AWS instead.
   For example - `pytest --aws test_item.py` or `pytest --aws`.
 * Additional useful pytest options, especially useful for debugging tests:
   * -v: show the names of each individual test running instead of just dots.
