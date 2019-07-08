@@ -14,10 +14,10 @@ import time
 # region.
 def pytest_addoption(parser):
     parser.addoption("--aws", action="store_true",
-        help="run against WAS instead of a local Scylla installation")
+        help="run against AWS instead of a local Scylla installation")
 
 # "dynamodb" fixture: set up client object for communicating with the DynamoDB
-# API. Currently this chooses either Amazon's DynamoDB in the us-east-1 region
+# API. Currently this chooses either Amazon's DynamoDB in the default region
 # or a local Alternator installation on http://localhost:8080 - depending on the
 # existence of the "--aws" option. In the future we should provide options
 # for choosing other Amazon regions or local installations.
@@ -25,7 +25,7 @@ def pytest_addoption(parser):
 @pytest.fixture(scope="session")
 def dynamodb(request):
     if request.config.getoption('aws'):
-        return boto3.resource('dynamodb',region_name='us-east-1')
+        return boto3.resource('dynamodb')
     else:
         return boto3.resource('dynamodb',endpoint_url='http://localhost:8000')
 
