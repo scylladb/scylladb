@@ -252,6 +252,8 @@ void test_timestamp_like_string_conversions(data_type timestamp_type) {
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-02 23:00-0100"), timestamp_type->decompose(tp)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00+0000"), timestamp_type->decompose(tp)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T01:00:00+0000"), timestamp_type->decompose(tp + 1h)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03t00:00:00z"), timestamp_type->decompose(tp)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00:00Z"), timestamp_type->decompose(tp)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00:00.123+0000"), timestamp_type->decompose(tp + 123ms)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T12:30:00+1230"), timestamp_type->decompose(tp)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-02T23:00-0100"), timestamp_type->decompose(tp)));
