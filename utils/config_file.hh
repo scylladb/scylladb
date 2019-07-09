@@ -156,7 +156,7 @@ public:
             return const_cast<named_value*>(this)->the_value();
         }
         virtual const void* current_value() const override {
-            return &the_value();
+            return &the_value().get();
         }
     public:
         typedef T type;
