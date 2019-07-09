@@ -842,95 +842,95 @@ future<json::json_return_type> executor::update_item(std::string content) {
         }
     }
 
-  return maybe_get_previous_item(_proxy, schema, pk, ck, update_expression, expression).then(
-          [this, schema, expression = std::move(expression), update_expression = std::move(update_expression), ck = std::move(ck),
-           update_info = std::move(update_info), m = std::move(m), attrs_mut = std::move(attrs_mut), attribute_updates = std::move(attribute_updates), ts] (std::unique_ptr<Json::Value> previous_item) mutable {
-    if (update_expression) {
-        std::unordered_set<std::string> seen_column_names;
-        std::unordered_set<std::string> used_attribute_values;
-        std::unordered_set<std::string> used_attribute_names;
-        for (auto& action : expression.actions()) {
-            std::string column_name = resolve_update_path(action._path, update_info, schema, used_attribute_names, allow_key_columns::no);
-            // DynamoDB forbids multiple updates in the same expression to
-            // modify overlapping document paths. Updates of one expression
-            // have the same timestamp, so it's unclear which would "win".
-            // FIXME: currently, without full support for document paths,
-            // we only check if the paths' roots are the same.
-            if (!seen_column_names.insert(column_name).second) {
-                throw api_error("ValidationException",
-                        format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
-                                column_name, column_name));
-            }
-            std::visit(overloaded {
-                [&] (const parsed::update_expression::action::set& a) {
-                    auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                    bytes val = serialize_item(value);
-                    attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
-                },
-                [&] (const parsed::update_expression::action::remove& a) {
-                    attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_dead(ts, gc_clock::now()));
-                },
-                [&] (const parsed::update_expression::action::add& a) {
-                    // FIXME: implement ADD.
-                    throw api_error("ValidationException", "UpdateExpression: ADD not yet supported.");
-                },
-                [&] (const parsed::update_expression::action::del& a) {
-                    // FIXME: implement DELETE.
-                    throw api_error("ValidationException", "UpdateExpression: DELETE not yet supported.");
+    return maybe_get_previous_item(_proxy, schema, pk, ck, update_expression, expression).then(
+            [this, schema, expression = std::move(expression), update_expression = std::move(update_expression), ck = std::move(ck),
+             update_info = std::move(update_info), m = std::move(m), attrs_mut = std::move(attrs_mut), attribute_updates = std::move(attribute_updates), ts] (std::unique_ptr<Json::Value> previous_item) mutable {
+        if (update_expression) {
+            std::unordered_set<std::string> seen_column_names;
+            std::unordered_set<std::string> used_attribute_values;
+            std::unordered_set<std::string> used_attribute_names;
+            for (auto& action : expression.actions()) {
+                std::string column_name = resolve_update_path(action._path, update_info, schema, used_attribute_names, allow_key_columns::no);
+                // DynamoDB forbids multiple updates in the same expression to
+                // modify overlapping document paths. Updates of one expression
+                // have the same timestamp, so it's unclear which would "win".
+                // FIXME: currently, without full support for document paths,
+                // we only check if the paths' roots are the same.
+                if (!seen_column_names.insert(column_name).second) {
+                    throw api_error("ValidationException",
+                            format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
+                                    column_name, column_name));
                 }
-            }, action._action);
-        }
-        verify_all_are_used(update_info, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
-        verify_all_are_used(update_info, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
-    }
-
-    for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
-        // Note that it.key() is the name of the column, *it is the operation
-        bytes column_name = to_bytes(it.key().asString());
-        const column_definition* cdef = schema->get_column_definition(column_name);
-        if (cdef && cdef->is_primary_key()) {
-            throw api_error("ValidationException",
-                    format("UpdateItem cannot update key column {}", it.key().asString()));
-        }
-        std::string action = (*it)["Action"].asString();
-        if (action == "DELETE") {
-            // FIXME: Currently we support only the simple case where the
-            // "Value" field is missing. If it were not missing, we would
-            // we need to verify the old type and/or value is same as
-            // specified before deleting... We don't do this yet.
-            if (!it->get("Value", "").asString().empty()) {
-                throw api_error("ValidationException",
-                        format("UpdateItem DELETE with checking old value not yet supported"));
+                std::visit(overloaded {
+                    [&] (const parsed::update_expression::action::set& a) {
+                        auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                        bytes val = serialize_item(value);
+                        attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
+                    },
+                    [&] (const parsed::update_expression::action::remove& a) {
+                        attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_dead(ts, gc_clock::now()));
+                    },
+                    [&] (const parsed::update_expression::action::add& a) {
+                        // FIXME: implement ADD.
+                        throw api_error("ValidationException", "UpdateExpression: ADD not yet supported.");
+                    },
+                    [&] (const parsed::update_expression::action::del& a) {
+                        // FIXME: implement DELETE.
+                        throw api_error("ValidationException", "UpdateExpression: DELETE not yet supported.");
+                    }
+                }, action._action);
             }
-            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_dead(ts, gc_clock::now()));
-        } else if (action == "PUT") {
-            const Json::Value& value = (*it)["Value"];
-            if (value.size() != 1) {
-                throw api_error("ValidationException",
-                        format("Value field in AttributeUpdates must have just one item", it.key().asString()));
-            }
-            bytes val = serialize_item(value);
-            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*bytes_type, ts, val, atomic_cell::collection_member::yes));
-        } else {
-            // FIXME: need to support "ADD" as well.
-            throw api_error("ValidationException",
-                format("Unknown Action value '{}' in AttributeUpdates", action));
+            verify_all_are_used(update_info, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
+            verify_all_are_used(update_info, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
         }
-    }
-    auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
-    auto& row = m.partition().clustered_row(*schema, ck);
-    row.cells().apply(attrs_column(*schema), std::move(serialized_map));
-    // To allow creation of an item with no attributes, we need a row marker.
-    // Note that unlike Scylla, even an "update" operation needs to add a row
-    // marker. TODO: a row marker isn't really needed for a DELETE operation.
-    row.apply(row_marker(ts));
 
-    elogger.trace("Applying mutation {}", m);
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr(), empty_service_permit()).then([] () {
-        // Without special options on what to return, UpdateItem returns nothing.
-        return make_ready_future<json::json_return_type>(json_string(""));
+        for (auto it = attribute_updates.begin(); it != attribute_updates.end(); ++it) {
+            // Note that it.key() is the name of the column, *it is the operation
+            bytes column_name = to_bytes(it.key().asString());
+            const column_definition* cdef = schema->get_column_definition(column_name);
+            if (cdef && cdef->is_primary_key()) {
+                throw api_error("ValidationException",
+                        format("UpdateItem cannot update key column {}", it.key().asString()));
+            }
+            std::string action = (*it)["Action"].asString();
+            if (action == "DELETE") {
+                // FIXME: Currently we support only the simple case where the
+                // "Value" field is missing. If it were not missing, we would
+                // we need to verify the old type and/or value is same as
+                // specified before deleting... We don't do this yet.
+                if (!it->get("Value", "").asString().empty()) {
+                    throw api_error("ValidationException",
+                            format("UpdateItem DELETE with checking old value not yet supported"));
+                }
+                attrs_mut.cells.emplace_back(column_name, atomic_cell::make_dead(ts, gc_clock::now()));
+            } else if (action == "PUT") {
+                const Json::Value& value = (*it)["Value"];
+                if (value.size() != 1) {
+                    throw api_error("ValidationException",
+                            format("Value field in AttributeUpdates must have just one item", it.key().asString()));
+                }
+                bytes val = serialize_item(value);
+                attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*bytes_type, ts, val, atomic_cell::collection_member::yes));
+            } else {
+                // FIXME: need to support "ADD" as well.
+                throw api_error("ValidationException",
+                    format("Unknown Action value '{}' in AttributeUpdates", action));
+            }
+        }
+        auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
+        auto& row = m.partition().clustered_row(*schema, ck);
+        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        // To allow creation of an item with no attributes, we need a row marker.
+        // Note that unlike Scylla, even an "update" operation needs to add a row
+        // marker. TODO: a row marker isn't really needed for a DELETE operation.
+        row.apply(row_marker(ts));
+
+        elogger.trace("Applying mutation {}", m);
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr(), empty_service_permit()).then([] () {
+            // Without special options on what to return, UpdateItem returns nothing.
+            return make_ready_future<json::json_return_type>(json_string(""));
+        });
     });
-  });
 }
 
 // Check according to the request's "ConsistentRead" field, which consistency
