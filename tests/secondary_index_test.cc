@@ -666,6 +666,7 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
             e.execute_cql(format("INSERT INTO fpa (id, v) VALUES ({}, {})", i + 1, i % 2).c_str()).get();
         }
 
+      eventually([&] {
         auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{2, nullptr, {}, api::new_timestamp()});
         auto msg = e.execute_cql("SELECT sum(id) FROM fpa WHERE v = 0;", std::move(qo)).get0();
@@ -687,18 +688,20 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
         assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(row_count / 2 + 1)},
         });
+      });
 
         // Similar, but this time a non-prefix clustering key part is indexed (wrt. issue 3405, after which we have
         // a special code path for indexing composite non-prefix clustering keys).
         e.execute_cql("CREATE TABLE fpa2 (id int, c1 int, c2 int, primary key (id, c1, c2))").get();
         e.execute_cql("CREATE INDEX ON fpa2(c2)").get();
+      eventually([&] {
         for (int i = 0; i < row_count; ++i) {
             e.execute_cql(format("INSERT INTO fpa2 (id, c1, c2) VALUES ({}, {}, {})", i + 1, i + 1, i % 2).c_str()).get();
         }
 
-        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{2, nullptr, {}, api::new_timestamp()});
-        msg = e.execute_cql("SELECT sum(id) FROM fpa2 WHERE c2 = 0;", std::move(qo)).get0();
+        auto msg = e.execute_cql("SELECT sum(id) FROM fpa2 WHERE c2 = 0;", std::move(qo)).get0();
         // Even though we set up paging, we still expect a single result from an aggregation function
         assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(row_count * row_count / 4)},
@@ -710,5 +713,6 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
         assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(row_count / 2 + 1)},
         });
+      });
     });
 }
