@@ -427,10 +427,13 @@ future<json::json_return_type> executor::batch_write_item(std::string content) {
 // If one of the above checks fails, a validation exception is thrown.
 // FIXME: currently, we only support top-level attribute updates, and this
 // function returns the column name;
+struct allow_key_columns_tag;
+using allow_key_columns = bool_class<allow_key_columns_tag>;
 static std::string resolve_update_path(const parsed::path& p,
         const Json::Value& update_info,
         const schema_ptr& schema,
-        std::unordered_set<std::string>& used_attribute_names) {
+        std::unordered_set<std::string>& used_attribute_names,
+        allow_key_columns allow_key_columns) {
     if (p.has_operators()) {
         throw api_error("ValidationException", "UpdateItem does not yet support nested updates (FIXME)");
     }
@@ -446,7 +449,7 @@ static std::string resolve_update_path(const parsed::path& p,
         column_name = value.asString();
     }
     const column_definition* cdef = schema->get_column_definition(to_bytes(column_name));
-    if (cdef && cdef->is_primary_key()) {
+    if (!allow_key_columns && cdef && cdef->is_primary_key()) {
         throw api_error("ValidationException",
                 format("UpdateItem cannot update key column {}", column_name));
     }
@@ -763,7 +766,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
         std::unordered_set<std::string> used_attribute_values;
         std::unordered_set<std::string> used_attribute_names;
         for (auto& action : expression.actions()) {
-            std::string column_name = resolve_update_path(action._path, update_info, schema, used_attribute_names);
+            std::string column_name = resolve_update_path(action._path, update_info, schema, used_attribute_names, allow_key_columns::no);
             // DynamoDB forbids multiple updates in the same expression to
             // modify overlapping document paths. Updates of one expression
             // have the same timestamp, so it's unclear which would "win".
