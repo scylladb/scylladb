@@ -48,7 +48,12 @@ namespace sstables {
 
         compaction_descriptor() = default;
 
-        explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = 0, uint64_t max_sstable_bytes = std::numeric_limits<uint64_t>::max(), utils::UUID run_identifier = utils::make_random_uuid())
+        static constexpr int default_level = 0;
+        static constexpr uint64_t default_max_sstable_bytes = std::numeric_limits<uint64_t>::max();
+
+        explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = default_level,
+                                       uint64_t max_sstable_bytes = default_max_sstable_bytes,
+                                       utils::UUID run_identifier = utils::make_random_uuid())
             : sstables(std::move(sstables))
             , level(level)
             , max_sstable_bytes(max_sstable_bytes)
