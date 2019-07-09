@@ -546,7 +546,10 @@ template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 // of other values, this function calculates the resulting value.
 static Json::Value calculate_value(const parsed::value& v,
         const Json::Value& expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values,
+        const Json::Value& update_info,
+        schema_ptr schema,
         const std::unique_ptr<Json::Value>& previous_item) {
     return std::visit(overloaded {
         [&] (const std::string& valref) -> Json::Value {
@@ -564,8 +567,8 @@ static Json::Value calculate_value(const parsed::value& v,
                     throw api_error("ValidationException",
                             format("UpdateExpression: list_append() accepts 2 parameters, got {}", f._parameters.size()));
                 }
-                Json::Value v1 = calculate_value(f._parameters[0], expression_attribute_values, used_attribute_values, previous_item);
-                Json::Value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_values, previous_item);
+                Json::Value v1 = calculate_value(f._parameters[0], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                Json::Value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                 return list_concatenate(v1, v2);
             } else if (f._function_name == "if_not_exists") {
                 // FIXME
@@ -586,19 +589,22 @@ static Json::Value calculate_value(const parsed::value& v,
 // either a single value, or v1+v2 or v1-v2.
 static Json::Value calculate_value(const parsed::set_rhs& rhs,
         const Json::Value& expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values,
+        const Json::Value& update_info,
+        schema_ptr schema,
         const std::unique_ptr<Json::Value>& previous_item) {
     switch(rhs._op) {
     case 'v':
-        return calculate_value(rhs._v1, expression_attribute_values, used_attribute_values, previous_item);
+        return calculate_value(rhs._v1, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
     case '+': {
-        Json::Value v1 = calculate_value(rhs._v1, expression_attribute_values, used_attribute_values, previous_item);
-        Json::Value v2 = calculate_value(rhs._v2, expression_attribute_values, used_attribute_values, previous_item);
+        Json::Value v1 = calculate_value(rhs._v1, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+        Json::Value v2 = calculate_value(rhs._v2, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
         return number_add(v1, v2);
     }
     case '-': {
-        Json::Value v1 = calculate_value(rhs._v1, expression_attribute_values, used_attribute_values, previous_item);
-        Json::Value v2 = calculate_value(rhs._v2, expression_attribute_values, used_attribute_values, previous_item);
+        Json::Value v1 = calculate_value(rhs._v1, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+        Json::Value v2 = calculate_value(rhs._v2, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
         return number_subtract(v1, v2);
     }
     }
@@ -779,7 +785,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
             }
             std::visit(overloaded {
                 [&] (const parsed::update_expression::action::set& a) {
-                    auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_values, nullptr);
+                    auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, nullptr);
                     bytes val = serialize_item(value);
                     attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
                 },
