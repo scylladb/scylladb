@@ -967,7 +967,9 @@ data_model::mutation_description random_schema::new_mutation(uint32_t n) {
 }
 
 void random_schema::set_partition_tombstone(std::mt19937& engine, data_model::mutation_description& md, timestamp_generator ts_gen) {
-    md.set_partition_tombstone(tombstone(ts_gen(engine, timestamp_destination::partition_tombstone, api::min_timestamp), {}));
+    if (const auto ts = ts_gen(engine, timestamp_destination::partition_tombstone, api::min_timestamp); ts != api::missing_timestamp) {
+        md.set_partition_tombstone(tombstone(ts_gen(engine, timestamp_destination::partition_tombstone, api::min_timestamp), {}));
+    }
 }
 
 void random_schema::add_row(std::mt19937& engine, data_model::mutation_description& md, data_model::mutation_description::key ckey,
@@ -1023,6 +1025,7 @@ future<std::vector<mutation>> generate_random_mutations(
         auto r = boost::irange(size_t{0}, partition_count);
         return do_for_each(r.begin(), r.end(), [=, &random_schema, &engine, &muts] (size_t pk) mutable {
             auto mut = random_schema.new_mutation(pk);
+            random_schema.set_partition_tombstone(engine, mut, ts_gen);
             random_schema.add_static_row(engine, mut, ts_gen);
 
             if (!schema_has_clustering_columns) {
