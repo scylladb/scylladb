@@ -69,6 +69,16 @@ def test_update_expression_set_nested_copy(test_table_s):
          ExpressionAttributeNames={'#nnnn': 'nnnn', '#nnn': 'nnn'}, ExpressionAttributeValues={':val1': [1,3]})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'n': 2, 'nn': 5, 'nnn': [2,4], 'nnnn': [1,3,2,4]}
 
+# Test for getting a key value with read-before-write
+def test_update_expression_set_key(test_table_sn):
+    p = random_string()
+    test_table_sn.update_item(Key={'p': p, 'c': 7});
+    test_table_sn.update_item(Key={'p': p, 'c': 7}, UpdateExpression='SET #n = #p',
+         ExpressionAttributeNames={'#n': 'n', '#p': 'p'})
+    test_table_sn.update_item(Key={'p': p, 'c': 7}, UpdateExpression='SET #nn = #c + #c',
+         ExpressionAttributeNames={'#nn': 'nn', '#c': 'c'})
+    assert test_table_sn.get_item(Key={'p': p, 'c': 7}, ConsistentRead=True)['Item'] == {'p': p, 'c': 7, 'n': p, 'nn': 14}
+
 # Simple test for the "REMOVE" action
 def test_update_expression_remove(test_table_s):
     p = random_string()
