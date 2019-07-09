@@ -1518,7 +1518,8 @@ SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
     auto expiry_time = now + ttl;
 
     auto md2 = tests::data_model::mutation_description({ to_bytes("pk2") });
-    md2.add_static_expiring_cell("s1", random_int32_value(), ttl, expiry_time);
+    md2.add_static_cell("s1",
+            tests::data_model::mutation_description::atomic_value(random_int32_value(), tests::data_model::data_timestamp, ttl, expiry_time));
     auto m2 = md2.build(s);
 
     auto mt = make_lw_shared<memtable>(s);
