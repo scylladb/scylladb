@@ -37,8 +37,23 @@
  */
 
 #include "locator/snitch_base.hh"
+#include "gms/gossiper.hh"
+#include "gms/application_state.hh"
 
 namespace locator {
+std::optional<sstring>
+snitch_base::get_endpoint_info(inet_address endpoint,
+                               gms::application_state key) {
+    gms::gossiper& local_gossiper = gms::get_local_gossiper();
+    auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
+    return ep_state ? std::optional(ep_state->value) : std::nullopt;
+}
+
+int snitch_base::get_shard_count(inet_address endpoint) {
+    auto val = get_endpoint_info(endpoint,
+                                 gms::application_state::SHARD_COUNT);
+    return val ? std::stoi(*val) : -1;
+}
 
 std::vector<inet_address> snitch_base::get_sorted_list_by_proximity(
     inet_address address,
