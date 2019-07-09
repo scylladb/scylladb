@@ -1683,7 +1683,8 @@ future<> storage_service::gossip_snitch_info() {
     auto rack = snitch->get_rack(addr);
     return _gossiper.add_local_application_state({
         { gms::application_state::DC, value_factory.datacenter(dc) },
-        { gms::application_state::RACK, value_factory.rack(rack) }
+        { gms::application_state::RACK, value_factory.rack(rack) },
+        { gms::application_state::SHARD_COUNT, value_factory.shard_count(smp::count) }
     });
 }
 
