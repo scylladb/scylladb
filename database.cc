@@ -1482,7 +1482,8 @@ future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor) {
             return with_semaphore(sem, 1, [this, &sst] {
                 // release reference to sstables cleaned up, otherwise space usage from their data and index
                 // components cannot be reclaimed until all of them are cleaned.
-                return this->compact_sstables(sstables::compaction_descriptor({ std::move(sst) }, sst->get_sstable_level()), true);
+                auto sstable_level = sst->get_sstable_level();
+                return this->compact_sstables(sstables::compaction_descriptor({ std::move(sst) }, sstable_level), true);
             });
         });
     });
