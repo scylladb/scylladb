@@ -217,6 +217,8 @@ def test_update_expression_multi(test_table_s):
     # We can have a REMOVE and a SET clause (note no comma between clauses):
     test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE a SET b = :val2', ExpressionAttributeValues={':val2': 3})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 3}
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET c = :val2 REMOVE b', ExpressionAttributeValues={':val2': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'c': 3}
     # The same clause (e.g., SET) cannot be used twice, even if interleaved with something else
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :val1 REMOVE a SET b = :val2', ExpressionAttributeValues={':val1': 1, ':val2': 2})
@@ -261,7 +263,6 @@ def test_update_expression_multi_overlap_nested(test_table_s):
 # In the previous test we saw that *modifying* the same item twice in the same
 # update is forbidden; But it is allowed to *read* an item in the same update
 # that also modifies it, and we check this here.
-@pytest.mark.xfail(reason="bug in SET + REMOVE mutations in Scylla collections")
 def test_update_expression_multi_with_copy(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': 'hello'})

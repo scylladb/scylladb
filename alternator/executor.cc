@@ -259,12 +259,39 @@ future<json::json_return_type> executor::create_table(std::string content) {
     });
 }
 
+// attribute_collector is a helper class used to accept several attribute
+// puts or deletes, and collect them as single collection mutation.
+// The implementation is somewhat complicated by the need of cells in a
+// collection to be sorted by key order.
+class attribute_collector {
+    std::map<bytes, atomic_cell, serialized_compare> collected;
+    void add(bytes&& name, atomic_cell&& cell) {
+        collected.emplace(std::move(name), std::move(cell));
+    }
+public:
+    attribute_collector() : collected(attrs_type()->get_keys_type()->as_less_comparator()) { }
+    void put(bytes&& name, bytes&& val, api::timestamp_type ts) {
+        add(std::move(name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
+
+    }
+    void del(bytes&& name, api::timestamp_type ts) {
+        add(std::move(name), atomic_cell::make_dead(ts, gc_clock::now()));
+    }
+    collection_type_impl::mutation to_mut() {
+        collection_type_impl::mutation ret;
+        for (auto&& e : collected) {
+            ret.cells.emplace_back(e.first, std::move(e.second));
+        }
+        return ret;
+    }
+};
+
 static mutation make_item_mutation(const Json::Value& item, schema_ptr schema) {
     partition_key pk = pk_from_json(item, schema);
     clustering_key ck = ck_from_json(item, schema);
 
     mutation m(schema, pk);
-    collection_type_impl::mutation attrs_mut;
+    attribute_collector attrs_collector;
 
     auto ts = api::new_timestamp();
 
@@ -273,11 +300,11 @@ static mutation make_item_mutation(const Json::Value& item, schema_ptr schema) {
         const column_definition* cdef = schema->get_column_definition(column_name);
         if (!cdef || !cdef->is_primary_key()) {
             bytes value = serialize_item(*it);
-            attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*bytes_type, ts, std::move(value), atomic_cell::collection_member::yes));
+            attrs_collector.put(std::move(column_name), std::move(value), ts);
         }
     }
 
-    auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
+    auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
     auto& row = m.partition().clustered_row(*schema, ck);
     row.cells().apply(attrs_column(*schema), std::move(serialized_map));
     // To allow creation of an item with no attributes, we need a row marker.
@@ -817,7 +844,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
     check_key(key, schema);
 
     mutation m(schema, pk);
-    collection_type_impl::mutation attrs_mut;
+    attribute_collector attrs_collector;
     auto ts = api::new_timestamp();
 
     const Json::Value& attribute_updates = update_info["AttributeUpdates"];
@@ -844,7 +871,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
 
     return maybe_get_previous_item(_proxy, schema, pk, ck, update_expression, expression).then(
             [this, schema, expression = std::move(expression), update_expression = std::move(update_expression), ck = std::move(ck),
-             update_info = std::move(update_info), m = std::move(m), attrs_mut = std::move(attrs_mut), attribute_updates = std::move(attribute_updates), ts] (std::unique_ptr<Json::Value> previous_item) mutable {
+             update_info = std::move(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector), attribute_updates = std::move(attribute_updates), ts] (std::unique_ptr<Json::Value> previous_item) mutable {
         if (update_expression) {
             std::unordered_set<std::string> seen_column_names;
             std::unordered_set<std::string> used_attribute_values;
@@ -864,11 +891,10 @@ future<json::json_return_type> executor::update_item(std::string content) {
                 std::visit(overloaded {
                     [&] (const parsed::update_expression::action::set& a) {
                         auto value = calculate_value(a._rhs, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                        bytes val = serialize_item(value);
-                        attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
+                        attrs_collector.put(to_bytes(column_name), serialize_item(value), ts);
                     },
                     [&] (const parsed::update_expression::action::remove& a) {
-                        attrs_mut.cells.emplace_back(to_bytes(column_name), atomic_cell::make_dead(ts, gc_clock::now()));
+                        attrs_collector.del(to_bytes(column_name), ts);
                     },
                     [&] (const parsed::update_expression::action::add& a) {
                         // FIXME: implement ADD.
@@ -902,22 +928,21 @@ future<json::json_return_type> executor::update_item(std::string content) {
                     throw api_error("ValidationException",
                             format("UpdateItem DELETE with checking old value not yet supported"));
                 }
-                attrs_mut.cells.emplace_back(column_name, atomic_cell::make_dead(ts, gc_clock::now()));
+                attrs_collector.del(std::move(column_name), ts);
             } else if (action == "PUT") {
                 const Json::Value& value = (*it)["Value"];
                 if (value.size() != 1) {
                     throw api_error("ValidationException",
                             format("Value field in AttributeUpdates must have just one item", it.key().asString()));
                 }
-                bytes val = serialize_item(value);
-                attrs_mut.cells.emplace_back(column_name, atomic_cell::make_live(*bytes_type, ts, val, atomic_cell::collection_member::yes));
+                attrs_collector.put(std::move(column_name), serialize_item(value), ts);
             } else {
                 // FIXME: need to support "ADD" as well.
                 throw api_error("ValidationException",
                     format("Unknown Action value '{}' in AttributeUpdates", action));
             }
         }
-        auto serialized_map = attrs_type()->serialize_mutation_form(std::move(attrs_mut));
+        auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
         auto& row = m.partition().clustered_row(*schema, ck);
         row.cells().apply(attrs_column(*schema), std::move(serialized_map));
         // To allow creation of an item with no attributes, we need a row marker.
