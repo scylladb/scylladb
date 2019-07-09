@@ -136,9 +136,10 @@ int get_generation_number() {
     return generation_number;
 }
 
-storage_service::storage_service(distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, bool for_testing, std::set<sstring> disabled_features)
-        : _feature_service(feature_service)
+        : _abort_source(abort_source)
+        , _feature_service(feature_service)
         , _db(db)
         , _gossiper(gossiper)
         , _auth_service(auth_service)
@@ -856,7 +857,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     _gossiper.check_seen_seeds();
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    dht::boot_strapper bs(_db, get_broadcast_address(), tokens, _token_metadata);
+    dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), tokens, _token_metadata);
     bs.bootstrap().get(); // handles token update
     slogger.info("Bootstrap completed! for the tokens {}", tokens);
 }
@@ -2641,7 +2642,8 @@ future<std::map<sstring, double>> storage_service::get_load_map() {
 future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-        auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
+        auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss._abort_source,
+                ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
         if (source_dc != "") {
             streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -2780,7 +2782,7 @@ void storage_service::unbootstrap() {
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
     for (const auto& keyspace_name : non_system_keyspaces) {
@@ -2889,7 +2891,7 @@ void storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), get_broadcast_address(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), _abort_source, get_broadcast_address(), "Unbootstrap", streaming::stream_reason::decommission);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -3407,9 +3409,9 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
     });
 }
 
-future<> init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service, storage_service_config config) {
-    return service::get_storage_service().start(std::ref(db), std::ref(gossiper), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config);
+    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config);
 }
 
 future<> deinit_storage_service() {

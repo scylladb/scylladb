@@ -269,7 +269,7 @@ future<> range_streamer::stream_async() {
                 break;
             } catch (...) {
                 logger.warn("{} failed to stream. Will retry in {} seconds ...", _description, sleep_time);
-                sleep_abortable(std::chrono::seconds(sleep_time)).get();
+                sleep_abortable(std::chrono::seconds(sleep_time), _abort_source).get();
                 sleep_time *= 1.5;
                 if (++_nr_retried >= _nr_max_retry) {
                     throw;
@@ -304,6 +304,8 @@ future<> range_streamer::do_stream_async() {
                 dht::token_range_vector ranges_to_stream;
                 auto do_streaming = [&] {
                     auto sp = stream_plan(format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
+                    auto abort_listener = _abort_source.subscribe([&] { sp.abort(); });
+                    _abort_source.check();
                     logger.info("{} with {} for keyspace={}, {} out of {} ranges: ranges = {}",
                             description, source, keyspace, nr_ranges_streamed, nr_ranges_total, ranges_to_stream.size());
                     if (_nr_rx_added) {

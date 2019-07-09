@@ -145,6 +145,7 @@ private:
     /* JMX notification serial number counter */
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
+    abort_source& _abort_source;
     gms::feature_service& _feature_service;
     distributed<database>& _db;
     gms::gossiper& _gossiper;
@@ -169,7 +170,7 @@ private:
     size_t _service_memory_total;
     semaphore _service_memory_limiter;
 public:
-    storage_service(distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, /* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, /* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -2376,7 +2377,7 @@ private:
     void notify_cql_change(inet_address endpoint, bool ready);
 };
 
-future<> init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service, storage_service_config config);
 future<> deinit_storage_service();
 

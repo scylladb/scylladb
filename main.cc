@@ -683,7 +683,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            init_storage_service(db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg);
+            init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg);
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.

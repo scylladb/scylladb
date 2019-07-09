@@ -42,6 +42,7 @@
 #include <unordered_set>
 #include "database_fwd.hh"
 #include <seastar/core/distributed.hh>
+#include <seastar/core/abort_source.hh>
 
 namespace dht {
 
@@ -50,14 +51,16 @@ class boot_strapper {
     using token_metadata = locator::token_metadata;
     using token = dht::token;
     distributed<database>& _db;
+    abort_source& _abort_source;
     /* endpoint that needs to be bootstrapped */
     inet_address _address;
     /* token of the node being bootstrapped. */
     std::unordered_set<token> _tokens;
     token_metadata _token_metadata;
 public:
-    boot_strapper(distributed<database>& db, inet_address addr, std::unordered_set<token> tokens, token_metadata tmd)
+    boot_strapper(distributed<database>& db, abort_source& abort_source, inet_address addr, std::unordered_set<token> tokens, token_metadata tmd)
         : _db(db)
+        , _abort_source(abort_source)
         , _address(addr)
         , _tokens(tokens)
         , _token_metadata(tmd) {
