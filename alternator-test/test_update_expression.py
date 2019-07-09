@@ -54,6 +54,21 @@ def test_update_expression_set_copy(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET z = z')
 
+# Test for read-before-write action where the value to be read is nested inside a - operator
+def test_update_expression_set_nested_copy(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #n = :two',
+         ExpressionAttributeNames={'#n': 'n'}, ExpressionAttributeValues={':two': 2})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #nn = :seven - #n',
+         ExpressionAttributeNames={'#nn': 'nn', '#n': 'n'}, ExpressionAttributeValues={':seven': 7})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'n': 2, 'nn': 5}
+
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #nnn = :nnn',
+         ExpressionAttributeNames={'#nnn': 'nnn'}, ExpressionAttributeValues={':nnn': [2,4]})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #nnnn = list_append(:val1, #nnn)',
+         ExpressionAttributeNames={'#nnnn': 'nnnn', '#nnn': 'nnn'}, ExpressionAttributeValues={':val1': [1,3]})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'n': 2, 'nn': 5, 'nnn': [2,4], 'nnnn': [1,3,2,4]}
+
 # Simple test for the "REMOVE" action
 def test_update_expression_remove(test_table_s):
     p = random_string()
