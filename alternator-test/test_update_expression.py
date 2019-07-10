@@ -489,7 +489,6 @@ def test_update_expression_list_append(test_table_s):
 
 # Test the "if_not_exists" function in SET
 # The test also checks additional features of function-call parsing.
-@pytest.mark.xfail(reason="if_not_exists function not yet implemented")
 def test_update_expression_if_not_exists(test_table_s):
     p = random_string()
     # Since attribute a doesn't exist, set it:
@@ -588,7 +587,6 @@ def test_update_expression_function_nesting(test_table_s):
 # error on the "+"). This means that the parser has two separate rules:
 # 1.  set_action: SET path = value + value
 # 2.  value: VALREF | NAME | NAME (value, ...)
-@pytest.mark.xfail(reason="SET functions not yet implemented")
 def test_update_expression_function_plus_nesting(test_table_s):
     p = random_string()
     # As explained above, this - with "+" outside the expression, works:
