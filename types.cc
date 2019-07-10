@@ -279,9 +279,6 @@ struct string_type_impl : public concrete_type<sstring> {
         auto& v = from_value(value);
         return v.size();
     }
-    virtual bool is_string() const override {
-        return true;
-    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
@@ -1820,6 +1817,14 @@ bool abstract_type::is_multi_cell() const {
 }
 
 bool abstract_type::is_native() const { return !is_collection() && !is_tuple(); }
+
+bool abstract_type::is_string() const {
+    struct visitor {
+        bool operator()(const abstract_type&) { return false; }
+        bool operator()(const string_type_impl&) { return true; }
+    };
+    return visit(*this, visitor{});
+}
 
 static bool find(const abstract_type& t, std::function<bool(const abstract_type&)> f) {
     if (f(t)) {

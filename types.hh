@@ -610,7 +610,7 @@ public:
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const = 0;
     bool is_counter() const;
-    virtual bool is_string() const { return false; }
+    bool is_string() const;
     bool is_collection() const;
     bool is_map() const { return _kind == kind::map; }
     bool is_set() const { return _kind == kind::set; }
