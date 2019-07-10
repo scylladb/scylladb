@@ -201,6 +201,8 @@ if __name__ == "__main__":
                         help="Run only test whose name contains given string")
     parser.add_argument('--mode', choices=all_modes, action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
+    parser.add_argument('--repeat', action="store", default="1", type=int,
+                        help="number of times to repeat test execution")
     parser.add_argument('--timeout', action="store", default="3000", type=int,
                         help="timeout value for test execution")
     parser.add_argument('--jenkins', action="store",
@@ -305,9 +307,10 @@ if __name__ == "__main__":
         path = test[0]
         test_type = test[1]
         exec_args = test[2] if len(test) >= 3 else []
-        futures.append(executor.submit(run_test, path, test_type, exec_args))
+        for _ in range(args.repeat):
+            futures.append(executor.submit(run_test, path, test_type, exec_args))
 
-    cookie = n_total
+    cookie = len(futures)
     for future in concurrent.futures.as_completed(futures):
         test_path, test_args, success, out = future.result()
         cookie = print_progress(test_path, test_args, success, cookie)
@@ -323,5 +326,5 @@ if __name__ == "__main__":
         print('\n\nThe following test(s) have failed:')
         for test, args, _ in failed_tests:
             print('  {} {}'.format(test, ' '.join(args)))
-        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(test_to_run)))
+        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(futures)))
         sys.exit(1)
