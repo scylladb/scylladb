@@ -534,7 +534,7 @@ private:
     shard_id _shard; // Specifies which shard the new SStable will belong to.
     bool _compression_enabled = false;
     std::unique_ptr<file_writer> _data_writer;
-    std::optional<file_writer> _index_writer;
+    std::unique_ptr<file_writer> _index_writer;
     bool _tombstone_written = false;
     bool _static_row_written = false;
     // The length of partition header (partition key, partition deletion and static row, if present)
@@ -592,6 +592,10 @@ private:
     bool _write_regular_as_static; // See #4139
 
     void init_file_writers();
+
+    // Returns the closed writer
+    std::unique_ptr<file_writer> close_writer(std::unique_ptr<file_writer>& w);
+
     void close_data_writer();
     void ensure_tombstone_is_written() {
         if (!_tombstone_written) {
@@ -821,13 +825,17 @@ void writer::init_file_writers() {
                     &_sst._components->compression,
                     _schema.get_compressor_params()));
     }
-    _index_writer.emplace(std::move(_sst._index_file), options);
+    _index_writer = std::make_unique<file_writer>(std::move(_sst._index_file), options);
+}
+
+std::unique_ptr<file_writer> writer::close_writer(std::unique_ptr<file_writer>& w) {
+    auto writer = std::move(w);
+    writer->close();
+    return writer;
 }
 
 void writer::close_data_writer() {
-    auto writer = std::move(_data_writer);
-    writer->close();
-
+    auto writer = close_writer(_data_writer);
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
         _sst.write_digest(chksum_wr->full_checksum());
@@ -1366,8 +1374,7 @@ void writer::consume_end_of_stream() {
         _sst.get_metadata_collector().add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
-    _index_writer->close();
-    _index_writer.reset();
+    close_writer(_index_writer);
     _sst.set_first_and_last_keys();
 
     _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
