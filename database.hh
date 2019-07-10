@@ -761,13 +761,7 @@ public:
 
     // SSTable writes are now allowed again, and generation is updated to new_generation if != -1
     // returns the amount of microseconds elapsed since we disabled writes.
-    std::chrono::steady_clock::duration enable_sstable_write(int64_t new_generation) {
-        if (new_generation != -1) {
-            update_sstables_known_generation(new_generation);
-        }
-        _sstables_lock.write_unlock();
-        return std::chrono::steady_clock::now() - _sstable_writes_disabled_at;
-    }
+    std::chrono::steady_clock::duration enable_sstable_write(int64_t new_generation);
 
     // Make sure the generation numbers are sequential, starting from "start".
     // Generations before "start" are left untouched.

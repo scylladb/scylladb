@@ -1969,6 +1969,13 @@ table::disable_sstable_write() {
     });
 }
 
+std::chrono::steady_clock::duration table::enable_sstable_write(int64_t new_generation) {
+    if (new_generation != -1) {
+        update_sstables_known_generation(new_generation);
+    }
+    _sstables_lock.write_unlock();
+    return std::chrono::steady_clock::now() - _sstable_writes_disabled_at;
+}
 
 void table::set_schema(schema_ptr s) {
     assert(s->is_counter() == _schema->is_counter());
