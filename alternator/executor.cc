@@ -764,14 +764,14 @@ static Json::Value describe_item(schema_ptr schema, const query::partition_slice
     return item_descr;
 }
 
-static bool holds_path(const parsed::value& v) {
+static bool check_needs_read_before_write(const parsed::value& v) {
     return std::visit(overloaded {
         [&] (const std::string& valref) -> bool {
             return false;
         },
         [&] (const parsed::value::function_call& f) -> bool {
             return boost::algorithm::any_of(f._parameters, [&] (const parsed::value& param) {
-                return holds_path(param);
+                return check_needs_read_before_write(param);
             });
         },
         [&] (const parsed::path& p) -> bool {
@@ -784,7 +784,7 @@ static bool check_needs_read_before_write(const std::vector<parsed::update_expre
     return boost::algorithm::any_of(actions, [](const parsed::update_expression::action& action) {
         return std::visit(overloaded {
             [&] (const parsed::update_expression::action::set& a) -> bool {
-                return holds_path(a._rhs._v1) || (a._rhs._op != 'v' && holds_path(a._rhs._v2));
+                return check_needs_read_before_write(a._rhs._v1) || (a._rhs._op != 'v' && check_needs_read_before_write(a._rhs._v2));
             },
             [&] (const parsed::update_expression::action::remove& a) -> bool {
                 return false;
