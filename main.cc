@@ -509,6 +509,7 @@ int main(int ac, char** av) {
             uint16_t api_port = cfg->api_port();
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
+            auto family = cfg->enable_ipv6_dns_lookup() ? std::nullopt : std::make_optional(net::inet_address::family::INET);
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
             sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
@@ -517,7 +518,7 @@ int main(int ac, char** av) {
             std::optional<std::vector<sstring>> hinted_handoff_enabled = parse_hinted_handoff_enabled(cfg->hinted_handoff_enabled());
             auto prom_addr = [&] {
                 try {
-                    return seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
+                    return seastar::net::dns::get_host_by_name(cfg->prometheus_address(), family).get0();
                 } catch (...) {
                     std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve prometheus_address {}", cfg->prometheus_address())));
                 }
@@ -535,7 +536,7 @@ int main(int ac, char** av) {
                 }));
                 prometheus::start(prometheus_server, pctx);
                 with_scheduling_group(maintenance_scheduling_group, [&] {
-                  return prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
+                  return prometheus_server.listen(socket_address{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
                     startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
                     return make_exception_future<>(ep);
                   });
@@ -543,14 +544,14 @@ int main(int ac, char** av) {
             }
             if (!broadcast_address.empty()) {
                 try {
-                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(broadcast_address).get0());
+                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(broadcast_address, family).get0());
                 } catch (...) {
                     startlog.error("Bad configuration: invalid 'broadcast_address': {}: {}", broadcast_address, std::current_exception());
                     throw bad_configuration_error();
                 }
             } else if (!listen_address.empty()) {
                 try {
-                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(listen_address).get0());
+                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(listen_address, family).get0());
                 } catch (...) {
                     startlog.error("Bad configuration: invalid 'listen_address': {}: {}", listen_address, std::current_exception());
                     throw bad_configuration_error();
@@ -561,13 +562,13 @@ int main(int ac, char** av) {
             }
 
             if (!broadcast_rpc_address.empty()) {
-                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(broadcast_rpc_address).get0());
+                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(broadcast_rpc_address, family).get0());
             } else {
                 if (rpc_address == "0.0.0.0") {
                     startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address to a value other than {}", rpc_address, rpc_address);
                     throw bad_configuration_error();
                 }
-                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(rpc_address).get0());
+                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(rpc_address, family).get0());
             }
 
             // TODO: lib.
@@ -618,7 +619,7 @@ int main(int ac, char** av) {
             ctx.http_server.start("API").get();
             api::set_server_init(ctx).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ctx.http_server.listen(ipv4_addr{ip, api_port});
+                return ctx.http_server.listen(socket_address{ip, api_port});
             }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
             static sharded<auth::service> auth_service;

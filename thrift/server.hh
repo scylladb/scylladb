@@ -119,7 +119,7 @@ private:
 public:
     thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, thrift_server_config config);
     ~thrift_server();
-    future<> listen(ipv4_addr addr, bool keepalive);
+    future<> listen(socket_address addr, bool keepalive);
     future<> stop();
     void do_accepts(int which, bool keepalive);
     uint64_t total_connections() const;

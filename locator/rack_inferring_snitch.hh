@@ -61,11 +61,11 @@ struct rack_inferring_snitch : public snitch_base {
     }
 
     virtual sstring get_rack(inet_address endpoint) override {
-        return std::to_string((endpoint.raw_addr() >> 8) & 0xFF);
+        return std::to_string(uint8_t(endpoint.bytes()[2]));
     }
 
     virtual sstring get_datacenter(inet_address endpoint) override {
-        return std::to_string((endpoint.raw_addr() >> 16) & 0xFF);
+        return std::to_string(uint8_t(endpoint.bytes()[1]));
     }
 
     virtual sstring get_name() const override {

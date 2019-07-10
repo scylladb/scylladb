@@ -82,7 +82,7 @@ public:
     void write_string_list(std::vector<sstring> string_list);
     void write_bytes(bytes b);
     void write_short_bytes(bytes b);
-    void write_inet(ipv4_addr inet);
+    void write_inet(socket_address inet);
     void write_consistency(db::consistency_level c);
     void write_string_map(std::map<sstring, sstring> string_map);
     void write_string_multimap(std::multimap<sstring, sstring> string_map);

@@ -38,10 +38,6 @@ enum class application_state:int {
         SUPPORTED_FEATURES
 };
 
-class inet_address final {
-  uint32_t raw_addr();
-};
-
 class versioned_value {
     sstring value;
     int version;

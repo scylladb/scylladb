@@ -27,6 +27,9 @@
 
 #include "utils/serialization.hh"
 #include "types.hh"
+#include "gms/inet_address.hh"
+#include "gms/inet_address_serializer.hh"
+#include "serializer_impl.hh"
 
 #define BOOST_TEST_MODULE test-serialization
 #include <boost/test/unit_test.hpp>
@@ -178,3 +181,24 @@ BOOST_AUTO_TEST_CASE(expected) {
     serialize_string(it, sstring("hello"));
     BOOST_CHECK(expect_bytes(buf, {0, 5, 104, 101, 108, 108, 111}));
 }
+
+BOOST_AUTO_TEST_CASE(inet_address) {
+    {
+        uint32_t hip = 127u << 24 | 1u;
+        gms::inet_address ip(hip);
+        BOOST_CHECK(ip.addr().is_ipv4());
+        auto buf = ser::serialize_to_buffer<bytes>(ip);
+        BOOST_CHECK_EQUAL(buf.size(), sizeof(uint32_t));
+        auto res = ser::deserialize_from_buffer(buf, boost::type<gms::inet_address>{});
+        uint32_t rip = res.addr().as_ipv4_address().ip;
+        BOOST_CHECK_EQUAL(hip, rip);
+    }
+    {
+        gms::inet_address ip("2001:6b0:8:2::232");
+        BOOST_CHECK(ip.addr().is_ipv6());
+        auto buf = ser::serialize_to_buffer<bytes>(ip);
+        auto res = ser::deserialize_from_buffer(buf, boost::type<gms::inet_address>{});
+        BOOST_CHECK_EQUAL(res, ip);
+    }
+}
+

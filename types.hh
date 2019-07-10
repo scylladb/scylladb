@@ -378,6 +378,7 @@ public:
     data_value(float);
     data_value(double);
     data_value(net::ipv4_address);
+    data_value(net::ipv6_address);
     data_value(seastar::net::inet_address);
     data_value(simple_date_native_type);
     data_value(timestamp_native_type);

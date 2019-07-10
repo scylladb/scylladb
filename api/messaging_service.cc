@@ -76,7 +76,7 @@ future_json_function get_server_getter(std::function<uint64_t(const rpc::stats&)
         auto get_shard_map = [f](messaging_service& ms) {
             std::unordered_map<gms::inet_address, unsigned long> map;
             ms.foreach_server_connection_stats([&map, f] (const rpc::client_info& info, const rpc::stats& stats) mutable {
-                map[gms::inet_address(net::ipv4_address(info.addr))] = f(stats);
+                map[gms::inet_address(info.addr.addr())] = f(stats);
             });
             return map;
         };

@@ -2192,7 +2192,7 @@ future<> storage_service::start_rpc_server() {
                 //engine().at_exit([tserver] {
                 //    return tserver->stop();
                 //});
-                return tserver->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, port}, keepalive);
+                return tserver->invoke_on_all(&thrift_server::listen, socket_address{ip, port}, keepalive);
             });
         }).then([addr, port] {
             slogger.info("Thrift server listening on {}:{} ...", addr, port);
@@ -2251,11 +2251,11 @@ future<> storage_service::start_native_transport() {
                 auto f = make_ready_future();
 
                 struct listen_cfg {
-                    ipv4_addr addr;
+                    socket_address addr;
                     std::shared_ptr<seastar::tls::credentials_builder> cred;
                 };
 
-                std::vector<listen_cfg> configs({ { ipv4_addr{ip, cfg.native_transport_port()} }});
+                std::vector<listen_cfg> configs({ { socket_address{ip, cfg.native_transport_port()} }});
 
                 // main should have made sure values are clean and neatish
                 if (ceo.at("enabled") == "true") {
@@ -2280,7 +2280,7 @@ future<> storage_service::start_native_transport() {
                     slogger.info("Enabling encrypted CQL connections between client and server");
 
                     if (cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() != cfg.native_transport_port()) {
-                        configs.emplace_back(listen_cfg{ipv4_addr{ip, cfg.native_transport_port_ssl()}, std::move(cred)});
+                        configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, std::move(cred)});
                     } else {
                         configs.back().cred = std::move(cred);
                     }
