@@ -1048,9 +1048,6 @@ protected:
 };
 using reversed_type = shared_ptr<const reversed_type_impl>;
 
-template <typename NativeType>
-using concrete_collection_type = concrete_type<NativeType, collection_type_impl>;
-
 class map_type_impl;
 using map_type = shared_ptr<const map_type_impl>;
 

@@ -102,6 +102,15 @@ public:
     bytes_opt reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const;
 };
 
+// a list or a set
+class listlike_collection_type_impl : public collection_type_impl {
+protected:
+    data_type _elements;
+    explicit listlike_collection_type_impl(kind k, sstring name, data_type elements,bool is_multi_cell);
+public:
+    data_type get_elements_type() const { return _elements; }
+};
+
 template <typename BytesViewIterator>
 bytes
 collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf) {

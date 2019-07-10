@@ -2228,6 +2228,10 @@ shared_ptr<cql3::column_specification> collection_type_impl::make_collection_rec
     return ::visit(*this, visitor{collection, is_key});
 }
 
+listlike_collection_type_impl::listlike_collection_type_impl(
+        kind k, sstring name, data_type elements, bool is_multi_cell)
+    : collection_type_impl(k, name, is_multi_cell), _elements(elements) {}
+
 std::vector<atomic_cell>
 collection_type_impl::enforce_limit(std::vector<atomic_cell> cells, int version) const {
     assert(is_multi_cell());
@@ -2991,9 +2995,7 @@ sstring make_set_type_name(data_type elements, bool is_multi_cell)
 }
 
 set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
-        : concrete_type(kind::set, make_set_type_name(elements, is_multi_cell), is_multi_cell)
-        , _elements(std::move(elements)) {
-}
+    : concrete_type(kind::set, make_set_type_name(elements, is_multi_cell), elements, is_multi_cell) {}
 
 data_type
 set_type_impl::value_comparator() const {
@@ -3214,9 +3216,7 @@ sstring make_list_type_name(data_type elements, bool is_multi_cell)
 }
 
 list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
-        : concrete_type(kind::list, make_list_type_name(elements, is_multi_cell), is_multi_cell)
-        , _elements(std::move(elements)) {
-}
+    : concrete_type(kind::list, make_list_type_name(elements, is_multi_cell), elements, is_multi_cell) {}
 
 data_type
 list_type_impl::name_comparator() const {

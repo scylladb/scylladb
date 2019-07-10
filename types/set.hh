@@ -35,16 +35,14 @@ namespace Json {
 class Value;
 }
 
-class set_type_impl final : public concrete_collection_type<std::vector<data_value>> {
+class set_type_impl final : public concrete_type<std::vector<data_value>, listlike_collection_type_impl> {
     using set_type = shared_ptr<const set_type_impl>;
     using intern = type_interning_helper<set_type_impl, data_type, bool>;
-    data_type _elements;
 protected:
     virtual sstring cql3_type_name_impl() const override;
 public:
     static set_type get_instance(data_type elements, bool is_multi_cell);
     set_type_impl(data_type elements, bool is_multi_cell);
-    data_type get_elements_type() const { return _elements; }
     virtual data_type name_comparator() const override { return _elements; }
     virtual data_type value_comparator() const override;
     virtual data_type freeze() const override;

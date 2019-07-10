@@ -36,7 +36,7 @@ namespace Json {
 class Value;
 }
 
-class map_type_impl final : public concrete_collection_type<std::vector<std::pair<data_value, data_value>>> {
+class map_type_impl final : public concrete_type<std::vector<std::pair<data_value, data_value>>, collection_type_impl> {
     using map_type = shared_ptr<const map_type_impl>;
     using intern = type_interning_helper<map_type_impl, data_type, data_type, bool>;
     data_type _keys;
