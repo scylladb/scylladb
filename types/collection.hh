@@ -62,7 +62,6 @@ public:
     std::vector<atomic_cell> enforce_limit(std::vector<atomic_cell>, int version) const;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const = 0;
     bytes serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) const;
-    virtual bool is_compatible_with(const abstract_type& previous) const override;
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;

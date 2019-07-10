@@ -530,9 +530,7 @@ public:
     virtual void validate_collection_member(bytes_view v, const bytes& collection_name) const {
         validate(v, cql_serialization_format::latest());
     }
-    virtual bool is_compatible_with(const abstract_type& previous) const {
-        return this == &previous;
-    }
+    bool is_compatible_with(const abstract_type& previous) const;
     /*
      * Types which are wrappers over other types return the inner type.
      * For example the reversed_type returns the type it is reversing.
@@ -915,13 +913,6 @@ public:
 
     virtual void validate_collection_member(bytes_view v, const bytes& collection_name) const  override {
         _underlying_type->validate_collection_member(v, collection_name);
-    }
-
-    virtual bool is_compatible_with(const abstract_type& previous) const override {
-        if (previous.is_reversed()) {
-            return _underlying_type->is_compatible_with(*previous.underlying_type());
-        }
-        return false;
     }
 
     shared_ptr<const abstract_type> underlying_type() const {

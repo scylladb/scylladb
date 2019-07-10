@@ -131,11 +131,11 @@ public:
     virtual bytes from_string(sstring_view s) const override;
     virtual sstring to_json_string(bytes_view bv) const override;
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
-    virtual bool is_compatible_with(const abstract_type& previous) const override;
     virtual bool is_value_compatible_with_internal(const abstract_type& previous) const override;
 private:
     bool check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const;
     static sstring make_name(const std::vector<data_type>& types);
+    friend abstract_type;
 };
 
 data_value make_tuple_value(data_type tuple_type, tuple_type_impl::native_type value);

@@ -311,11 +311,6 @@ struct ascii_type_impl final : public string_type_impl {
 struct utf8_type_impl final : public string_type_impl {
     static const char* name;
     utf8_type_impl() : string_type_impl(kind::utf8, utf8_type_name) {}
-    virtual bool is_compatible_with(const abstract_type& other) const override {
-        // Anything that is ascii is also utf8, and they both use bytes
-        // comparison
-        return this == &other || &other == ascii_type.get();
-    }
     using concrete_type::from_value;
 };
 
@@ -360,12 +355,7 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return true;
     }
-    virtual bool is_compatible_with(const abstract_type& other) const override {
-        // Both asciiType and utf8Type really use bytes comparison and
-        // bytesType validate everything, so it is compatible with the former.
-        return this == &other || &other == ascii_type.get() || &other == utf8_type.get();
-    }
-};
+ };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
     boolean_type_impl() : simple_type_impl<bool>(kind::boolean, boolean_type_name, 1) {}
@@ -463,19 +453,8 @@ public:
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timestamp_type.get() || &other == long_type.get();
     }
-    virtual bool is_compatible_with(const abstract_type& other) const override {
-        if (&other == this) {
-            return true;
-        }
-        if (&other == timestamp_type.get()) {
-            _logger.warn("Changing from TimestampType to DateType is allowed, but be wary that they sort differently for pre-unix-epoch timestamps "
-                         "(negative timestamp values) and thus this change will corrupt your data if you have such negative timestamp. There is no "
-                         "reason to switch from DateType to TimestampType except if you were using DateType in the first place and switched to "
-                         "TimestampType by mistake.");
-            return true;
-        }
-        return false;
-    }
+
+    friend abstract_type;
 };
 logging::logger date_type_impl::_logger(date_type_name);
 
@@ -699,18 +678,7 @@ public:
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == long_type.get();
     }
-    virtual bool is_compatible_with(const abstract_type& other) const override {
-        if (&other == this) {
-            return true;
-        }
-        if (&other == date_type.get()) {
-            _logger.warn("Changing from DateType to TimestampType is allowed, but be wary that they sort differently for pre-unix-epoch timestamps "
-                         "(negative timestamp values) and thus this change will corrupt your data if you have such negative timestamp. So unless you "
-                         "know that you don't have *any* pre-unix-epoch timestamp you should change back to DateType");
-            return true;
-        }
-        return false;
-    }
+    friend abstract_type;
 };
 logging::logger timestamp_type_impl::_logger(timestamp_type_name);
 
@@ -1660,32 +1628,26 @@ collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell> cel
     // return CollectionSerializer.pack(values, cells.size(), version);
 }
 
-bool
-collection_type_impl::is_compatible_with(const abstract_type& previous) const {
-    if (this == &previous) {
-        return true;
-    }
-    if (!previous.is_collection()) {
+static bool is_compatible_with_aux(const collection_type_impl& t, const abstract_type& previous) {
+    if (t.get_kind() != previous.get_kind()) {
         return false;
     }
+
     auto& cprev = static_cast<const collection_type_impl&>(previous);
-    if (get_kind() != cprev.get_kind()) {
-        return false;
-    }
-    if (is_multi_cell() != cprev.is_multi_cell()) {
+    if (t.is_multi_cell() != cprev.is_multi_cell()) {
         return false;
     }
 
-    if (!is_multi_cell()) {
-        return is_compatible_with_frozen(cprev);
+    if (!t.is_multi_cell()) {
+        return t.is_compatible_with_frozen(cprev);
     }
 
-    if (!name_comparator()->is_compatible_with(*cprev.name_comparator())) {
+    if (!t.name_comparator()->is_compatible_with(*cprev.name_comparator())) {
         return false;
     }
 
     // the value comparator is only used for Cell values, so sorting doesn't matter
-    return value_comparator()->is_value_compatible_with(*cprev.value_comparator());
+    return t.value_comparator()->is_value_compatible_with(*cprev.value_comparator());
 }
 
 bool
@@ -1874,6 +1836,62 @@ struct is_byte_order_equal_visitor {
 }
 
 bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_order_equal_visitor{}); }
+
+bool abstract_type::is_compatible_with(const abstract_type& previous) const {
+    if (this == &previous) {
+        return true;
+    }
+    struct visitor {
+        const abstract_type& previous;
+        bool operator()(const reversed_type_impl& t) {
+            if (previous.is_reversed()) {
+                return t.underlying_type()->is_compatible_with(*previous.underlying_type());
+            }
+            return false;
+        }
+        bool operator()(const utf8_type_impl&) {
+            // Anything that is ascii is also utf8, and they both use bytes comparison
+            return previous.is_string();
+        }
+        bool operator()(const bytes_type_impl&) {
+            // Both ascii_type_impl and utf8_type_impl really use bytes comparison and
+            // bytesType validate everything, so it is compatible with the former.
+            return previous.is_string();
+        }
+        bool operator()(const date_type_impl& t) {
+            if (previous.get_kind() == kind::timestamp) {
+                t._logger.warn("Changing from TimestampType to DateType is allowed, but be wary "
+                               "that they sort differently for pre-unix-epoch timestamps "
+                               "(negative timestamp values) and thus this change will corrupt "
+                               "your data if you have such negative timestamp. There is no "
+                               "reason to switch from DateType to TimestampType except if you "
+                               "were using DateType in the first place and switched to "
+                               "TimestampType by mistake.");
+                return true;
+            }
+            return false;
+        }
+        bool operator()(const timestamp_type_impl& t) {
+            if (previous.get_kind() == kind::date) {
+                t._logger.warn("Changing from DateType to TimestampType is allowed, but be wary "
+                               "that they sort differently for pre-unix-epoch timestamps "
+                               "(negative timestamp values) and thus this change will corrupt "
+                               "your data if you have such negative timestamp. So unless you "
+                               "know that you don't have *any* pre-unix-epoch timestamp you "
+                               "should change back to DateType");
+                return true;
+            }
+            return false;
+        }
+        bool operator()(const tuple_type_impl& t) {
+            return t.check_compatibility(previous, &abstract_type::is_compatible_with);
+        }
+        bool operator()(const collection_type_impl& t) { return is_compatible_with_aux(t, previous); }
+        bool operator()(const abstract_type& t) { return false; }
+    };
+
+    return visit(*this, visitor{previous});
+}
 
 abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
     struct visitor {
@@ -3529,11 +3547,6 @@ bytes user_type_impl::from_json_object(const Json::Value& value, cql_serializati
         throw marshal_exception(format("Extraneous field definition for user type {}: {}", get_name_as_string(), *remaining_names.begin()));
     }
     return build_value(std::move(raw_tuple));
-}
-
-bool
-tuple_type_impl::is_compatible_with(const abstract_type& previous) const {
-    return check_compatibility(previous, &abstract_type::is_compatible_with);
 }
 
 bool
