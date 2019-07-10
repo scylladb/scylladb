@@ -187,7 +187,9 @@ public:
         _current_mutation = mutation(_schema, dk);
     }
     void consume(tombstone partition_tombstone) {
+        BOOST_REQUIRE(_current_mutation);
         verify_partition_tombstone(partition_tombstone);
+        _current_mutation->partition().apply(partition_tombstone);
     }
     stop_iteration consume(static_row&& sr) {
         BOOST_REQUIRE(_current_mutation);

@@ -198,6 +198,15 @@ future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bu
         return writer.consume(std::move(mf));
     }
 
+    // We can explicitly write a partition-start fragment when the partition has
+    // a partition tombstone.
+    if (mf.is_partition_start()) {
+        return writer.consume(std::move(mf)).then([this, bucket = it->first, &writer] {
+            writer.set_has_current_partition();
+            _buckets_used_for_current_partition.push_back(bucket);
+        });
+    }
+
     return writer.consume(partition_start(_current_partition_start)).then([this, bucket = it->first, &writer, mf = std::move(mf)] () mutable {
         writer.set_has_current_partition();
         _buckets_used_for_current_partition.push_back(bucket);
@@ -405,7 +414,10 @@ future<> timestamp_based_splitting_mutation_writer::write_marker_and_tombstone(c
 future<> timestamp_based_splitting_mutation_writer::consume(partition_start&& ps) {
     _current_partition_start = std::move(ps);
     if (auto& tomb = _current_partition_start.partition_tombstone()) {
-        return write_to_bucket(_classifier(std::exchange(tomb, {}).timestamp), partition_start(_current_partition_start));
+        auto bucket = _classifier(tomb.timestamp);
+        auto ps = partition_start(_current_partition_start);
+        tomb = {};
+        return write_to_bucket(bucket, std::move(ps));
     }
     return make_ready_future<>();
 }
