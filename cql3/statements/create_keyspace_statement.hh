@@ -44,6 +44,7 @@
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "transport/event.hh"
+#include "log.hh"
 
 #include <seastar/core/shared_ptr.hh>
 
@@ -54,6 +55,8 @@ namespace statements {
 /** A <code>CREATE KEYSPACE</code> statement parsed from a CQL query. */
 class create_keyspace_statement : public schema_altering_statement {
 private:
+    static logging::logger _logger;
+
     sstring _name;
     shared_ptr<ks_prop_defs> _attrs;
     bool _if_not_exists;
@@ -86,6 +89,9 @@ public:
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
     virtual future<> grant_permissions_to_creator(const service::client_state&) override;
+
+    virtual future<::shared_ptr<messages::result_message>>
+    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override;
 };
 
 }
