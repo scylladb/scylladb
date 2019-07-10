@@ -599,8 +599,16 @@ static Json::Value calculate_value(const parsed::value& v,
                 Json::Value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                 return list_concatenate(v1, v2);
             } else if (f._function_name == "if_not_exists") {
-                // FIXME
-                throw api_error("ValidationException", "UpdateExpression: if_not_exists not yet supported");
+                if (f._parameters.size() != 2) {
+                    throw api_error("ValidationException",
+                            format("UpdateExpression: if_not_exists() accepts 2 parameters, got {}", f._parameters.size()));
+                }
+                if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
+                    throw api_error("ValidationException", "UpdateExpression: if_not_exists() must include path as its first argument");
+                }
+                Json::Value v1 = calculate_value(f._parameters[0], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                Json::Value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                return v1.isNull() ? v2 : v1;
             } else {
                 throw api_error("ValidationException",
                         format("UpdateExpression: unknown function '{}' called.", f._function_name));
