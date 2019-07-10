@@ -488,7 +488,9 @@ SEASTAR_TEST_CASE(test_region_groups) {
         auto four = std::make_unique<logalloc::region>(just_four);
         auto five = std::make_unique<logalloc::region>();
 
-        constexpr size_t one_count = 1024 * 1024;
+        constexpr size_t base_count = 16 * 1024;
+
+        constexpr size_t one_count = 16 * base_count;
         std::vector<managed_ref<int>> one_objs;
         with_allocator(one->allocator(), [&] {
             for (size_t i = 0; i < one_count; i++) {
@@ -500,7 +502,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space());
         BOOST_REQUIRE_EQUAL(all.memory_used(), one->occupancy().total_space());
 
-        constexpr size_t two_count = 512 * 1024;
+        constexpr size_t two_count = 8 * base_count;
         std::vector<managed_ref<int>> two_objs;
         with_allocator(two->allocator(), [&] {
             for (size_t i = 0; i < two_count; i++) {
@@ -512,7 +514,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space() + two->occupancy().total_space());
         BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
 
-        constexpr size_t three_count = 2048 * 1024;
+        constexpr size_t three_count = 32 * base_count;
         std::vector<managed_ref<int>> three_objs;
         with_allocator(three->allocator(), [&] {
             for (size_t i = 0; i < three_count; i++) {
@@ -523,7 +525,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
         BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
 
-        constexpr size_t four_count = 256 * 1024;
+        constexpr size_t four_count = 4 * base_count;
         std::vector<managed_ref<int>> four_objs;
         with_allocator(four->allocator(), [&] {
             for (size_t i = 0; i < four_count; i++) {
@@ -535,8 +537,9 @@ SEASTAR_TEST_CASE(test_region_groups) {
         BOOST_REQUIRE_EQUAL(just_four.memory_used(), four->occupancy().total_space());
 
         with_allocator(five->allocator(), [] {
+            constexpr size_t five_count = base_count;
             std::vector<managed_ref<int>> five_objs;
-            for (size_t i = 0; i < 16 * 1024; i++) {
+            for (size_t i = 0; i < five_count; i++) {
                 five_objs.emplace_back(make_managed<int>());
             }
         });
