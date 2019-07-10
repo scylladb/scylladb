@@ -1116,7 +1116,6 @@ private:
     future<std::list<repair_row>>
     get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
         if (needs_all_rows) {
-            std::list<repair_row> rows;
             if (!_repair_master || _nr_peer_nodes == 1) {
                 return make_ready_future<std::list<repair_row>>(std::move(_working_row_buf));
             }
