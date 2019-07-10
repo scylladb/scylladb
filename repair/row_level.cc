@@ -1759,9 +1759,14 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
             return make_exception_future<stop_iteration>(std::runtime_error("get_row_diff_with_rpc_stream: Inject error in handler loop"));
         }
         bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, set_diff = std::move(current_set_diff)] {
+        auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(current_set_diff)));
+        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, fp = std::move(fp)] {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-            return rm->get_row_diff_handler(std::move(set_diff), repair_meta::needs_all_rows_t(needs_all_rows));
+            if (fp.get_owner_shard() == engine().cpu_id()) {
+                return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows));
+            } else {
+                return rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows));
+            }
         }).then([sink] (repair_rows_on_wire rows_on_wire) mutable {
             if (rows_on_wire.empty()) {
                 return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
@@ -1799,9 +1804,14 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
         return make_ready_future<stop_iteration>(stop_iteration::no);
     } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, rows = std::move(current_rows)] () mutable {
+        auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(current_rows)));
+        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] () mutable {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-            return rm->put_row_diff_handler(std::move(rows), from);
+            if (fp.get_owner_shard() == engine().cpu_id()) {
+                return rm->put_row_diff_handler(std::move(*fp), from);
+            } else {
+                return rm->put_row_diff_handler(*fp, from);
+            }
         }).then([sink] () mutable {
             return sink(repair_stream_cmd::put_rows_done);
         }).then([sink] () mutable {
@@ -2050,18 +2060,28 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
                 std::unordered_set<repair_hash> set_diff, bool needs_all_rows) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, set_diff = std::move(set_diff), needs_all_rows] () mutable {
+            auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(set_diff)));
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp), needs_all_rows] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->get_row_diff_handler(std::move(set_diff), repair_meta::needs_all_rows_t(needs_all_rows));
+                if (fp.get_owner_shard() == engine().cpu_id()) {
+                    return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows));
+                } else {
+                    return rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows));
+                }
             });
         });
         ms.register_repair_put_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
                 repair_rows_on_wire row_diff) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, row_diff = std::move(row_diff)] () mutable {
+            auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(row_diff)));
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->put_row_diff_handler(std::move(row_diff), from);
+                if (fp.get_owner_shard() == engine().cpu_id()) {
+                    return rm->put_row_diff_handler(std::move(*fp), from);
+                } else {
+                    return rm->put_row_diff_handler(*fp, from);
+                }
             });
         });
         ms.register_repair_row_level_start([] (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring ks_name,
