@@ -384,6 +384,34 @@ static std::optional<std::vector<sstring>> parse_hinted_handoff_enabled(sstring 
     return dcs;
 }
 
+// Formats parsed program options into a string as follows:
+// "[key1: value1_1 value1_2 ..., key2: value2_1 value 2_2 ..., (positional) value3, ...]"
+std::string format_parsed_options(const std::vector<bpo::option>& opts) {
+    return fmt::format("[{}]",
+        boost::algorithm::join(opts | boost::adaptors::transformed([] (const bpo::option& opt) {
+            if (opt.value.empty()) {
+                return opt.string_key;
+            }
+
+            return (opt.string_key.empty() ?  "(positional) " : fmt::format("{}: ", opt.string_key)) +
+                        boost::algorithm::join(opt.value, " ");
+        }), ", ")
+    );
+}
+
+void print_starting_message(int ac, char** av, const bpo::parsed_options& opts) {
+    fmt::print("Scylla version {} starting ...\n", scylla_version());
+    if (ac) {
+        fmt::print("command used: \"{}", av[0]);
+        for (int i = 1; i < ac; ++i) {
+            fmt::print(" {}", av[i]);
+        }
+        fmt::print("\"\n");
+    }
+
+    fmt::print("parsed command line options: {}\n", format_parsed_options(opts.options));
+}
+
 int main(int ac, char** av) {
   int return_value = 0;
   try {
@@ -403,15 +431,7 @@ int main(int ac, char** av) {
     auto cfg = make_lw_shared<db::config>(ext);
     auto init = app.get_options_description().add_options();
 
-    // If --version is requested, print it out and exit immediately to avoid
-    // Seastar-specific warnings that may occur when running the app
     init("version", bpo::bool_switch(), "print version number and exit");
-    bpo::variables_map vm;
-    bpo::store(bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run(), vm);
-    if (vm["version"].as<bool>()) {
-        fmt::print("{}\n", scylla_version());
-        return 0;
-    }
 
     bpo::options_description deprecated("Deprecated options - ignored");
     deprecated.add_options()
@@ -424,6 +444,18 @@ int main(int ac, char** av) {
 
     configurable::append_all(*cfg, init);
     cfg->add_options(init);
+
+    // If --version is requested, print it out and exit immediately to avoid
+    // Seastar-specific warnings that may occur when running the app
+    bpo::variables_map vm;
+    auto parsed_opts = bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run();
+    bpo::store(parsed_opts, vm);
+    if (vm["version"].as<bool>()) {
+        fmt::print("{}\n", scylla_version());
+        return 0;
+    }
+
+    print_starting_message(ac, av, parsed_opts);
 
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
@@ -439,7 +471,6 @@ int main(int ac, char** av) {
 
     return app.run(ac, av, [&] () -> future<int> {
 
-        fmt::print("Scylla version {} starting ...\n", scylla_version());
         auto&& opts = app.configuration();
 
         namespace sm = seastar::metrics;
