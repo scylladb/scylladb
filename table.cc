@@ -1030,6 +1030,7 @@ table::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
     };
 
     return do_with(work(start, std::move(all_generations)), [this] (work& work) {
+        tlogger.info("Reshuffling SSTables in {}...", _config.datadir);
         return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (fs::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
             if (comps.component != component_type::TOC) {
