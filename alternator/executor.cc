@@ -519,6 +519,21 @@ static std::string get_item_type_string(const Json::Value& v) {
     return it.key().asString();
 }
 
+// Check if a given JSON object encodes a set (i.e., it is a {"SS": [...]}, or "NS", "BS"
+// and returns set's type and a pointer to that set. If the object does not encode a set,
+// returned value is {"", nullptr}
+static const std::pair<std::string, const Json::Value*> unwrap_set(const Json::Value& v) {
+    if (!v.isObject() || v.size() != 1) {
+        return {"", nullptr};
+    }
+    auto it = v.begin();
+    const auto& it_key = it.key().asString();
+    if (it_key != "SS" && it_key != "BS" && it_key != "NS") {
+        return {"", nullptr};
+    }
+    return std::make_pair(it_key, &(*it));
+}
+
 // Take two JSON-encoded list values (remember that a list value is
 // {"L": [...the actual list]}) and return the concatenation, again as
 // a list value.
