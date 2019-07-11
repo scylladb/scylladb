@@ -511,6 +511,14 @@ static const Json::Value* unwrap_list(const Json::Value& v) {
     return &(*it);
 }
 
+static std::string get_item_type_string(const Json::Value& v) {
+    if (!v.isObject() || v.size() != 1) {
+        throw api_error("ValidationException", format("Item has invalid format: {}", v.toStyledString()));
+    }
+    auto it = v.begin();
+    return it.key().asString();
+}
+
 // Take two JSON-encoded list values (remember that a list value is
 // {"L": [...the actual list]}) and return the concatenation, again as
 // a list value.
