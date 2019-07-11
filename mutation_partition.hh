@@ -86,6 +86,8 @@ struct cell_and_hash {
     { }
 };
 
+class compaction_garbage_collector;
+
 //
 // Container for cells of a row. Cells are identified by column_id.
 //
@@ -331,7 +333,8 @@ public:
             gc_clock::time_point query_time,
             can_gc_fn&,
             gc_clock::time_point gc_before,
-            const row_marker& marker);
+            const row_marker& marker,
+            compaction_garbage_collector* collector = nullptr);
 
     bool compact_and_expire(
             const schema& s,
@@ -339,7 +342,8 @@ public:
             row_tombstone tomb,
             gc_clock::time_point query_time,
             can_gc_fn&,
-            gc_clock::time_point gc_before);
+            gc_clock::time_point gc_before,
+            compaction_garbage_collector* collector = nullptr);
 
     row difference(const schema&, column_kind, const row& other) const;
 

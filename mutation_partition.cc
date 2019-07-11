@@ -39,6 +39,7 @@
 #include "mutation_cleaner.hh"
 #include <seastar/core/execution_stage.hh>
 #include "types/map.hh"
+#include "compaction_garbage_collector.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -1650,7 +1651,8 @@ bool row::compact_and_expire(
         gc_clock::time_point query_time,
         can_gc_fn& can_gc,
         gc_clock::time_point gc_before,
-        const row_marker& marker)
+        const row_marker& marker,
+        compaction_garbage_collector* collector)
 {
     if (dead_marker_shadows_row(s, kind, marker)) {
         tomb.apply(shadowable_tombstone(api::max_timestamp, gc_clock::time_point::max()), row_marker());
@@ -1667,15 +1669,20 @@ bool row::compact_and_expire(
 
             if (cell.is_covered_by(tomb.regular(), def.is_counter())) {
                 erase = true;
+            } else if (cell.is_covered_by(tomb.shadowable().tomb(), def.is_counter())) {
+                erase = true;
             } else if (cell.has_expired(query_time)) {
                 erase = can_erase_cell();
                 if (!erase) {
                     c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
+                } else if (collector) {
+                    collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
                 }
             } else if (!cell.is_live()) {
                 erase = can_erase_cell();
-            } else if (cell.is_covered_by(tomb.shadowable().tomb(), def.is_counter())) {
-                erase = true;
+                if (erase && collector) {
+                    collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
+                }
             } else {
                 any_live = true;
             }
@@ -1685,7 +1692,7 @@ bool row::compact_and_expire(
           cell.data.with_linearized([&] (bytes_view cell_bv) {
             auto m_view = ctype->deserialize_mutation_form(cell_bv);
             collection_type_impl::mutation m = m_view.materialize(*ctype);
-            any_live |= m.compact_and_expire(id, tomb, query_time, can_gc, gc_before);
+            any_live |= m.compact_and_expire(id, tomb, query_time, can_gc, gc_before, collector);
             if (m.cells.empty() && m.tomb <= tomb.tomb()) {
                 erase = true;
             } else {
@@ -1704,9 +1711,10 @@ bool row::compact_and_expire(
         row_tombstone tomb,
         gc_clock::time_point query_time,
         can_gc_fn& can_gc,
-        gc_clock::time_point gc_before) {
+        gc_clock::time_point gc_before,
+        compaction_garbage_collector* collector) {
     row_marker m;
-    return compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, m);
+    return compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, m, collector);
 }
 
 deletable_row deletable_row::difference(const schema& s, column_kind kind, const deletable_row& other) const
