@@ -1229,9 +1229,6 @@ public:
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual void native_value_copy(const void* from, void* to) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
     virtual void native_value_move(void* from, void* to) const override {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1399,10 +1396,6 @@ struct empty_type_impl : abstract_type {
     }
     virtual bytes from_string(sstring_view text) const override {
         return {};
-    }
-    virtual void native_value_copy(const void* from, void* to) const override {
-        // Can't happen
-        abort();
     }
     virtual void native_value_move(void* from, void* to) const override {
         // Can't happen
@@ -3686,11 +3679,6 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
         }
     };
     return visit(*this, visitor{updated});
-}
-
-void
-reversed_type_impl::native_value_copy(const void* from, void* to) const {
-    return _underlying_type->native_value_copy(from, to);
 }
 
 void
