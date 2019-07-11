@@ -1232,9 +1232,6 @@ public:
     virtual size_t native_value_size() const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual size_t native_value_alignment() const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
     virtual void native_value_copy(const void* from, void* to) const override {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1408,10 +1405,6 @@ struct empty_type_impl : abstract_type {
     }
     virtual size_t native_value_size() const override {
         return 0;
-    }
-    virtual size_t native_value_alignment() const override {
-        // Can't happen
-        abort();
     }
     virtual void native_value_copy(const void* from, void* to) const override {
         // Can't happen
@@ -3704,11 +3697,6 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
 size_t
 reversed_type_impl::native_value_size() const {
     return _underlying_type->native_value_size();
-}
-
-size_t
-reversed_type_impl::native_value_alignment() const {
-    return _underlying_type->native_value_alignment();
 }
 
 void
