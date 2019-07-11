@@ -506,7 +506,7 @@ public:
     void serialize(const data_value& value, bytes::iterator& out) const {
         return serialize(get_value_ptr(value), out);
     }
-    virtual size_t serialized_size(const void* value) const = 0;
+    size_t serialized_size(const void* value) const;
     bool less(bytes_view v1, bytes_view v2) const { return compare(v1, v2) < 0; }
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator() const ;
@@ -866,9 +866,6 @@ public:
 
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         _underlying_type->serialize(value, out);
-    }
-    virtual size_t serialized_size(const void* value) const override {
-        return _underlying_type->serialized_size(value);
     }
 
     virtual sstring to_json_string(bytes_view bv) const override {
