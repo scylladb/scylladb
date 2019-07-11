@@ -617,7 +617,7 @@ private:
 protected:
     // native_value_* methods are virualized versions of native_type's
     // sizeof/alignof/copy-ctor/move-ctor etc.
-    virtual void* native_value_clone(const void* from) const = 0;
+    void* native_value_clone(const void* from) const;
     virtual void native_value_delete(void* object) const = 0;
     virtual const std::type_info& native_typeid() const = 0;
     // abstract_type is a friend of data_value, but derived classes are not.
@@ -706,9 +706,6 @@ public:
 protected:
     virtual void native_value_delete(void* object) const override {
         delete reinterpret_cast<native_type*>(object);
-    }
-    virtual void* native_value_clone(const void* object) const override {
-        return new native_type(*reinterpret_cast<const native_type*>(object));
     }
     virtual const std::type_info& native_typeid() const override {
         return typeid(native_type);
@@ -908,7 +905,6 @@ public:
     }
 
 protected:
-    virtual void* native_value_clone(const void* object) const override;
     virtual void native_value_delete(void* object) const override;
     virtual const std::type_info& native_typeid() const override;
 };

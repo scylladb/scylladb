@@ -1232,9 +1232,6 @@ public:
     virtual void native_value_delete(void* object) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual void* native_value_clone(const void* object) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
     virtual const std::type_info& native_typeid() const {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1392,10 +1389,6 @@ struct empty_type_impl : abstract_type {
         return {};
     }
     virtual void native_value_delete(void* object) const override {
-        // Can't happen
-        abort();
-    }
-    virtual void* native_value_clone(const void* object) const override {
         // Can't happen
         abort();
     }
@@ -3591,6 +3584,28 @@ static std::optional<data_type> update_user_type_aux(
     return std::nullopt;
 }
 
+namespace {
+struct native_value_clone_visitor {
+    const void* from;
+    void* operator()(const reversed_type_impl& t) {
+        return visit(*t.underlying_type(), native_value_clone_visitor{from});
+    }
+    template <typename N, typename A> void* operator()(const concrete_type<N, A>&) {
+        using nt = typename concrete_type<N, A>::native_type;
+        return new nt(*reinterpret_cast<const nt*>(from));
+    }
+    void* operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
+    void* operator()(const empty_type_impl&) {
+        // Can't happen
+        abort();
+    }
+};
+}
+
+void* abstract_type::native_value_clone(const void* from) const {
+    return visit(*this, native_value_clone_visitor{from});
+}
+
 sstring abstract_type::get_string(const bytes& b) const {
     struct visitor {
         const bytes& b;
@@ -3665,11 +3680,6 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
         }
     };
     return visit(*this, visitor{updated});
-}
-
-void*
-reversed_type_impl::native_value_clone(const void* object) const {
-    return _underlying_type->native_value_clone(object);
 }
 
 void
