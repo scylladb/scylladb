@@ -951,8 +951,28 @@ future<json::json_return_type> executor::update_item(std::string content) {
                         attrs_collector.del(to_bytes(column_name), ts);
                     },
                     [&] (const parsed::update_expression::action::add& a) {
-                        // FIXME: implement ADD.
-                        throw api_error("ValidationException", "UpdateExpression: ADD not yet supported.");
+                        parsed::value base;
+                        parsed::value addition;
+                        base.set_path(action._path);
+                        addition.set_valref(a._valref);
+                        Json::Value v1 = calculate_value(base, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                        Json::Value v2 = calculate_value(addition, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                        Json::Value result;
+                        std::string v1_type = get_item_type_string(v1);
+                        if (v1_type == "N") {
+                            if (get_item_type_string(v2) != "N") {
+                                throw api_error("ValidationException", format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, v2));
+                            }
+                            result = number_add(v1, v2);
+                        } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
+                            if (get_item_type_string(v2) != v1_type) {
+                                throw api_error("ValidationException", format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, v2));
+                            }
+                            result = set_sum(v1, v2);
+                        } else {
+                            throw api_error("ValidationException", format("An operand in the update expression has an incorrect data type: {}", v1));
+                        }
+                        attrs_collector.put(to_bytes(column_name), serialize_item(result), ts);
                     },
                     [&] (const parsed::update_expression::action::del& a) {
                         // FIXME: implement DELETE.
