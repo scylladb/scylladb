@@ -1229,9 +1229,6 @@ public:
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual const std::type_info& native_typeid() const {
-        fail(unimplemented::cause::COUNTERS);
-    }
 };
 
 // TODO(jhaberku): Move this to Seastar.
@@ -1384,10 +1381,6 @@ struct empty_type_impl : abstract_type {
     }
     virtual bytes from_string(sstring_view text) const override {
         return {};
-    }
-    virtual const std::type_info& native_typeid() const {
-        // Can't happen
-        abort();
     }
 };
 
@@ -3620,6 +3613,26 @@ static void native_value_delete(const abstract_type& t, void* object) {
     visit(t, native_value_delete_visitor{object});
 }
 
+namespace {
+struct native_typeid_visitor {
+    template <typename N, typename A> const std::type_info& operator()(const concrete_type<N, A>&) {
+        return typeid(typename concrete_type<N, A>::native_type);
+    }
+    const std::type_info& operator()(const reversed_type_impl& t) {
+        return visit(*t.underlying_type(), native_typeid_visitor{});
+    }
+    const std::type_info& operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
+    const std::type_info& operator()(const empty_type_impl&) {
+        // Can't happen
+        abort();
+    }
+};
+}
+
+const std::type_info& abstract_type::native_typeid() const {
+    return visit(*this, native_typeid_visitor{});
+}
+
 sstring abstract_type::get_string(const bytes& b) const {
     struct visitor {
         const bytes& b;
@@ -3694,11 +3707,6 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
         }
     };
     return visit(*this, visitor{updated});
-}
-
-const std::type_info&
-reversed_type_impl::native_typeid() const {
-    return _underlying_type->native_typeid();
 }
 
 thread_local const shared_ptr<const abstract_type> byte_type(make_shared<byte_type_impl>());

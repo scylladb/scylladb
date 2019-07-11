@@ -618,7 +618,7 @@ protected:
     // native_value_* methods are virualized versions of native_type's
     // sizeof/alignof/copy-ctor/move-ctor etc.
     void* native_value_clone(const void* from) const;
-    virtual const std::type_info& native_typeid() const = 0;
+    const std::type_info& native_typeid() const;
     // abstract_type is a friend of data_value, but derived classes are not.
     static const void* get_value_ptr(const data_value& v) {
         return v._value;
@@ -702,10 +702,6 @@ class concrete_type : public AbstractType {
 public:
     using native_type = maybe_empty<NativeType>;
     using AbstractType::AbstractType;
-protected:
-    virtual const std::type_info& native_typeid() const override {
-        return typeid(native_type);
-    }
 public:
     data_value make_value(std::unique_ptr<native_type> value) const {
         return data_value::make(this->shared_from_this(), std::move(value));
@@ -899,9 +895,6 @@ public:
     static shared_ptr<const reversed_type_impl> get_instance(data_type type) {
         return intern::get_instance(std::move(type));
     }
-
-protected:
-    virtual const std::type_info& native_typeid() const override;
 };
 using reversed_type = shared_ptr<const reversed_type_impl>;
 
