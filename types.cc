@@ -184,9 +184,6 @@ struct integer_type_impl : simple_type_impl<T> {
             throw marshal_exception(format("Invalid number format '{}'", s));
         }
     }
-    virtual bytes from_string(sstring_view s) const override {
-        return decompose_value(parse_int(s));
-    }
 };
 
 struct byte_type_impl : integer_type_impl<int8_t> {
@@ -238,9 +235,6 @@ struct string_type_impl : public concrete_type<sstring> {
             }
         }
     }
-    virtual bytes from_string(sstring_view s) const override {
-        return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
-    }
 };
 
 struct ascii_type_impl final : public string_type_impl {
@@ -256,9 +250,6 @@ struct utf8_type_impl final : public string_type_impl {
 struct bytes_type_impl final : public concrete_type<bytes> {
     bytes_type_impl() : concrete_type(kind::bytes, bytes_type_name, { }, data::type_info::make_variable_size()) {}
     virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
-    virtual bytes from_string(sstring_view s) const override {
-        return from_hex(s);
-    }
  };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
@@ -276,17 +267,6 @@ struct boolean_type_impl : public simple_type_impl<bool> {
             throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size()));
         }
     }
-    virtual bytes from_string(sstring_view s) const override {
-        sstring s_lower(s.begin(), s.end());
-        std::transform(s_lower.begin(), s_lower.end(), s_lower.begin(), ::tolower);
-        if (s.empty() || s_lower == "false") {
-            return ::serialize_value(*this, false);
-        } else if (s_lower == "true") {
-            return ::serialize_value(*this, true);
-        } else {
-            throw marshal_exception(format("unable to make boolean from '{}'", s));
-        }
-    }
 };
 
 // This is the old version of timestamp_type_impl, but has been replaced as it
@@ -296,7 +276,6 @@ class date_type_impl : public concrete_type<db_clock::time_point> {
     static logging::logger _logger;
 public:
     date_type_impl() : concrete_type(kind::date, date_type_name, 8, data::type_info::make_fixed_size(sizeof(uint64_t))) {}
-    virtual bytes from_string(sstring_view s) const override;
     friend abstract_type;
 };
 logging::logger date_type_impl::_logger(date_type_name);
@@ -313,20 +292,6 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         if (uuid.version() != 1) {
             throw marshal_exception(format("Unsupported UUID version ({:d})", uuid.version()));
         }
-    }
-    virtual bytes from_string(sstring_view s) const override {
-        if (s.empty()) {
-            return bytes();
-        }
-        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-        if (!std::regex_match(s.begin(), s.end(), re)) {
-            throw marshal_exception(format("Invalid UUID format ({})", s));
-        }
-        utils::UUID v(s);
-        if (v.version() != 1) {
-            throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
-        }
-        return v.serialize();
     }
 private:
     friend abstract_type;
@@ -450,15 +415,6 @@ public:
             throw marshal_exception(format("unable to parse date '{}'", s));
         }
     }
-    virtual bytes from_string(sstring_view s) const override {
-        if (s.empty()) {
-            return bytes();
-        }
-        int64_t ts = net::hton(timestamp_from_string(s));
-        bytes b(bytes::initialized_later(), sizeof(int64_t));
-        std::copy_n(reinterpret_cast<const int8_t*>(&ts), sizeof(ts), b.begin());
-        return b;
-    }
     friend abstract_type;
 };
 logging::logger timestamp_type_impl::_logger(timestamp_type_name);
@@ -470,15 +426,6 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         if (v.size() != 0 && v.size() != 4) {
             throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
         }
-    }
-    virtual bytes from_string(sstring_view s) const override {
-        if (s.empty()) {
-            return bytes();
-        }
-        uint32_t ts = net::hton(days_from_string(s));
-        bytes b(bytes::initialized_later(), sizeof(int32_t));
-        std::copy_n(reinterpret_cast<const int8_t*>(&ts), sizeof(ts), b.begin());
-        return b;
     }
     static uint32_t days_from_string(sstring_view s) {
         std::string str;
@@ -522,15 +469,6 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         if (v.size() != 0 && v.size() != 8) {
             throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size()));
         }
-    }
-    virtual bytes from_string(sstring_view s) const override {
-        if (s.empty()) {
-            return bytes();
-        }
-        int64_t ts = net::hton(parse_time(s));
-        bytes b(bytes::initialized_later(), sizeof(int64_t));
-        std::copy_n(reinterpret_cast<const int8_t*>(&ts), sizeof(ts), b.begin());
-        return b;
     }
     static int64_t parse_time(sstring_view s) {
         static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
@@ -582,17 +520,6 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
             throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
         }
     }
-    virtual bytes from_string(sstring_view s) const override {
-        if (s.empty()) {
-            return bytes();
-        }
-        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-        if (!std::regex_match(s.begin(), s.end(), re)) {
-            throw marshal_exception(format("Cannot parse uuid from '{}'", s));
-        }
-        utils::UUID v(s);
-        return v.serialize();
-    }
 };
 
 using inet_address = seastar::net::inet_address;
@@ -603,22 +530,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
         if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
             throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size()));
         }
-    }
-    virtual bytes from_string(sstring_view s) const override {
-        // FIXME: support host names
-        if (s.empty()) {
-            return bytes();
-        }
-        native_type ip;
-        try {
-            ip = inet_address(std::string(s.data(), s.size()));
-        } catch (...) {
-            throw marshal_exception(format("Failed to parse inet_addr from '{}'", s));
-        }
-        bytes b(bytes::initialized_later(), ip.get().size());
-        auto out = b.begin();
-        serialize(&ip, out);
-        return b;
     }
 };
 
@@ -661,22 +572,6 @@ struct floating_type_impl : public simple_type_impl<T> {
             throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
         }
     }
-    virtual bytes from_string(sstring_view s) const override {
-        if (s.empty()) {
-            return bytes();
-        }
-        try {
-            auto d = boost::lexical_cast<T>(s.begin(), s.size());
-            bytes b(bytes::initialized_later(), sizeof(T));
-            auto out = b.begin();
-            auto val = this->make_value(d);
-            this->serialize(this->get_value_ptr(val), out);
-            return b;
-        }
-        catch(const boost::bad_lexical_cast& e) {
-            throw marshal_exception(format("Invalid number format '{}'", s));
-        }
-    }
 };
 
 struct double_type_impl : floating_type_impl<double> {
@@ -691,49 +586,17 @@ struct float_type_impl : floating_type_impl<float> {
 class varint_type_impl : public concrete_type<boost::multiprecision::cpp_int> {
 public:
     varint_type_impl() : concrete_type{kind::varint, varint_type_name, { }, data::type_info::make_variable_size()} { }
-    virtual bytes from_string(sstring_view text) const override {
-        if (text.empty()) {
-            return bytes();
-        }
-        try {
-            std::string str(text.begin(), text.end());
-            native_type num(str);
-            bytes b(bytes::initialized_later(), serialized_size(&num));
-            auto out = b.begin();
-            serialize(&num, out);
-            return b;
-        } catch (...) {
-            throw marshal_exception(format("unable to make int from '{}'", text));
-        }
-    }
     friend class decimal_type_impl;
 };
 
 class decimal_type_impl : public concrete_type<big_decimal> {
 public:
     decimal_type_impl() : concrete_type{kind::decimal, decimal_type_name, { }, data::type_info::make_variable_size()} { }
-    virtual bytes from_string(sstring_view text) const override {
-        if (text.empty()) {
-            return bytes();
-        }
-        try {
-            native_type bd(text);
-            bytes b(bytes::initialized_later(), serialized_size(&bd));
-            auto out = b.begin();
-            serialize(&bd, out);
-            return b;
-        } catch (...) {
-            throw marshal_exception(format("unable to make BigDecimal from '{}'", text));
-        }
-    }
 };
 
 class counter_type_impl : public abstract_type {
 public:
     counter_type_impl() : abstract_type{kind::counter, counter_type_name, { }, data::type_info::make_variable_size()} { }
-    virtual bytes from_string(sstring_view text) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
 };
 
 // TODO(jhaberku): Move this to Seastar.
@@ -783,23 +646,6 @@ public:
         }
     }
 
-    virtual bytes from_string(sstring_view s) const override {
-        if (s.empty()) {
-            return bytes();
-        }
-
-        try {
-            native_type nd = cql_duration(s);
-
-            bytes b(bytes::initialized_later(), serialized_size(&nd));
-            auto out = b.begin();
-            serialize(&nd, out);
-
-            return b;
-        } catch (cql_duration_error const& e) {
-            throw marshal_exception(e.what());
-        }
-    }
     using counter_type = cql_duration::common_counter_type;
 
     static std::tuple<counter_type, counter_type, counter_type> deserialize_counters(bytes_view v) {
@@ -821,9 +667,6 @@ public:
 
 struct empty_type_impl : abstract_type {
     empty_type_impl() : abstract_type(kind::empty, empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
-    virtual bytes from_string(sstring_view text) const override {
-        return {};
-    }
 };
 
 template <typename Func> using visit_ret_type = std::invoke_result_t<Func, const ascii_type_impl&>;
@@ -1567,12 +1410,6 @@ static bytes from_json_object_aux(const map_type_impl& t, const Json::Value& val
     return collection_type_impl::pack(raw_map.begin(), raw_map.end(), raw_map.size() / 2, sf);
 }
 
-bytes
-map_type_impl::from_string(sstring_view text) const {
-    // FIXME:
-    abort();
-}
-
 std::vector<bytes>
 map_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
     // FIXME:
@@ -2014,12 +1851,6 @@ static bytes from_json_object_aux(const set_type_impl& t, const Json::Value& val
     return collection_type_impl::pack(raw_set.begin(), raw_set.end(), raw_set.size(), sf);
 }
 
-bytes
-set_type_impl::from_string(sstring_view text) const {
-    // FIXME:
-    abort();
-}
-
 std::vector<bytes>
 set_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
     // FIXME:
@@ -2173,12 +2004,6 @@ static bytes from_json_object_aux(const list_type_impl& t, const Json::Value& va
         values.emplace_back(t.get_elements_type()->from_json_object(v, sf));
     }
     return collection_type_impl::pack(values.begin(), values.end(), values.size(), sf);
-}
-
-bytes
-list_type_impl::from_string(sstring_view text) const {
-    // FIXME:
-    abort();
 }
 
 std::vector<bytes>
@@ -2884,23 +2709,171 @@ size_t abstract_type::serialized_size(const void* value) const {
     return visit(*this, value, serialized_size_visitor{});
 }
 
-bytes
-tuple_type_impl::from_string(sstring_view s) const {
-    std::vector<sstring_view> field_strings = split_field_strings(s);
-    if (field_strings.size() > size()) {
-        throw marshal_exception(format("Invalid tuple literal: too many elements. Type {} expects {:d} but got {:d}", as_cql3_type(), size(), field_strings.size()));
+template<typename T>
+static bytes serialize_value(const T& t, const typename T::native_type& v) {
+    bytes b(bytes::initialized_later(), serialized_size_visitor{}(t, &v));
+    auto i = b.begin();
+    serialize_visitor{i}(t, &v);
+    return b;
+}
+
+namespace {
+struct from_string_visitor {
+    sstring_view s;
+    bytes operator()(const reversed_type_impl& r) { return r.underlying_type()->from_string(s); }
+    template <typename T> bytes operator()(const integer_type_impl<T>& t) { return t.decompose_value(t.parse_int(s)); }
+    bytes operator()(const string_type_impl&) {
+        return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
     }
-    std::vector<bytes> fields(field_strings.size());
-    std::vector<int32_t> field_len(field_strings.size(), -1);
-    for (std::size_t i = 0; i < field_strings.size(); ++i) {
-        if (field_strings[i] != "@") {
-            std::string field_string = unescape(field_strings[i]);
-            fields[i] = type(i)->from_string(field_string);
-            field_len[i] = fields[i].size();
+    bytes operator()(const bytes_type_impl&) { return from_hex(s); }
+    bytes operator()(const boolean_type_impl& t) {
+        sstring s_lower(s.begin(), s.end());
+        std::transform(s_lower.begin(), s_lower.end(), s_lower.begin(), ::tolower);
+        bool v;
+        if (s.empty() || s_lower == "false") {
+            v = false;
+        } else if (s_lower == "true") {
+            v = true;
+        } else {
+            throw marshal_exception(format("unable to make boolean from '{}'", s));
+        }
+        return serialize_value(t, v);
+    }
+    bytes operator()(const timeuuid_type_impl&) {
+        if (s.empty()) {
+            return bytes();
+        }
+        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+        if (!std::regex_match(s.begin(), s.end(), re)) {
+            throw marshal_exception(format("Invalid UUID format ({})", s));
+        }
+        utils::UUID v(s);
+        if (v.version() != 1) {
+            throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
+        }
+        return v.serialize();
+    }
+    bytes operator()(const timestamp_type_impl& t) {
+        if (s.empty()) {
+            return bytes();
+        }
+        return serialize_value(t, db_clock::time_point(db_clock::duration(t.timestamp_from_string(s))));
+    }
+    bytes operator()(const simple_date_type_impl& t) {
+        if (s.empty()) {
+            return bytes();
+        }
+        return serialize_value(t, t.days_from_string(s));
+    }
+    bytes operator()(const date_type_impl& t) {
+        return serialize_value(t, db_clock::time_point(db_clock::duration(timestamp_type_impl::timestamp_from_string(s))));
+    }
+    bytes operator()(const time_type_impl& t) {
+        if (s.empty()) {
+            return bytes();
+        }
+        return serialize_value(t, t.parse_time(s));
+    }
+    bytes operator()(const uuid_type_impl&) {
+        if (s.empty()) {
+            return bytes();
+        }
+        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+        if (!std::regex_match(s.begin(), s.end(), re)) {
+            throw marshal_exception(format("Cannot parse uuid from '{}'", s));
+        }
+        utils::UUID v(s);
+        return v.serialize();
+    }
+    template <typename T> bytes operator()(const floating_type_impl<T>& t) {
+        if (s.empty()) {
+            return bytes();
+        }
+        try {
+            auto d = boost::lexical_cast<T>(s.begin(), s.size());
+            return serialize_value(t, d);
+        } catch (const boost::bad_lexical_cast& e) {
+            throw marshal_exception(format("Invalid number format '{}'", s));
         }
     }
-    return std::move(concat_fields(fields, field_len));
+    bytes operator()(const varint_type_impl& t) {
+        if (s.empty()) {
+            return bytes();
+        }
+        try {
+            std::string str(s.begin(), s.end());
+            varint_type_impl::native_type num(str);
+            return serialize_value(t, num);
+        } catch (...) {
+            throw marshal_exception(format("unable to make int from '{}'", s));
+        }
+    }
+    bytes operator()(const decimal_type_impl& t) {
+        if (s.empty()) {
+            return bytes();
+        }
+        try {
+            decimal_type_impl::native_type bd(s);
+            return serialize_value(t, bd);
+        } catch (...) {
+            throw marshal_exception(format("unable to make BigDecimal from '{}'", s));
+        }
+    }
+    bytes operator()(const counter_type_impl&) {
+        fail(unimplemented::cause::COUNTERS);
+        return bytes();
+    }
+    bytes operator()(const duration_type_impl& t) {
+        if (s.empty()) {
+            return bytes();
+        }
+
+        try {
+            return serialize_value(t, cql_duration(s));
+        } catch (cql_duration_error const& e) {
+            throw marshal_exception(e.what());
+        }
+    }
+    bytes operator()(const empty_type_impl&) { return bytes(); }
+    bytes operator()(const inet_addr_type_impl& t) {
+        // FIXME: support host names
+        if (s.empty()) {
+            return bytes();
+        }
+        try {
+            auto ip = inet_address(std::string(s.data(), s.size()));
+            return serialize_value(t, ip);
+        } catch (...) {
+            throw marshal_exception(format("Failed to parse inet_addr from '{}'", s));
+        }
+    }
+    bytes operator()(const tuple_type_impl& t) {
+        std::vector<sstring_view> field_strings = split_field_strings(s);
+        if (field_strings.size() > t.size()) {
+            throw marshal_exception(
+                    format("Invalid tuple literal: too many elements. Type {} expects {:d} but got {:d}",
+                            t.as_cql3_type(), t.size(), field_strings.size()));
+        }
+        std::vector<bytes> fields(field_strings.size());
+        std::vector<int32_t> field_len(field_strings.size(), -1);
+        for (std::size_t i = 0; i < field_strings.size(); ++i) {
+            if (field_strings[i] != "@") {
+                std::string field_string = unescape(field_strings[i]);
+                fields[i] = t.type(i)->from_string(field_string);
+                field_len[i] = fields[i].size();
+            }
+        }
+        return std::move(concat_fields(fields, field_len));
+    }
+    bytes operator()(const collection_type_impl&) {
+        // FIXME:
+        abort();
+        return bytes();
+    }
+};
 }
+
+bytes abstract_type::from_string(sstring_view s) const { return visit(*this, from_string_visitor{s}); }
 
 static sstring tuple_to_string(const tuple_type_impl &t, const tuple_type_impl::native_type& b) {
     std::ostringstream out;
@@ -3667,15 +3640,6 @@ make_tuple_value(data_type type, tuple_type_impl::native_type value) {
 data_value
 make_user_value(data_type type, user_type_impl::native_type value) {
     return data_value::make_new(std::move(type), std::move(value));
-}
-
-bytes
-date_type_impl::from_string(sstring_view s) const {
-    native_type n = db_clock::time_point(db_clock::duration(timestamp_type_impl::timestamp_from_string(s)));
-    bytes ret(bytes::initialized_later(), serialized_size(&n));
-    auto iter = ret.begin();
-    serialize(&n, iter);
-    return ret;
 }
 
 std::ostream& operator<<(std::ostream& out, const data_value& v) {

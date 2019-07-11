@@ -582,7 +582,7 @@ public:
         return to_string(bytes_view(b));
     }
     sstring to_string_impl(const data_value& v) const;
-    virtual bytes from_string(sstring_view text) const = 0;
+    bytes from_string(sstring_view text) const;
     sstring to_json_string(bytes_view bv) const;
     sstring to_json_string(const bytes& b) const {
         return to_json_string(bytes_view(b));
@@ -861,10 +861,6 @@ public:
 
     shared_ptr<const abstract_type> underlying_type() const {
         return _underlying_type;
-    }
-
-    virtual bytes from_string(sstring_view s) const override {
-        return _underlying_type->from_string(s);
     }
 
     static shared_ptr<const reversed_type_impl> get_instance(data_type type) {

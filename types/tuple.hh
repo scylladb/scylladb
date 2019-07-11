@@ -125,7 +125,6 @@ public:
         boost::range::for_each(range, put);
         return ret;
     }
-    virtual bytes from_string(sstring_view s) const override;
 private:
     static sstring make_name(const std::vector<data_type>& types);
     friend abstract_type;
