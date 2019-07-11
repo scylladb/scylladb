@@ -1229,9 +1229,6 @@ public:
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual void native_value_delete(void* object) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
     virtual const std::type_info& native_typeid() const {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1387,10 +1384,6 @@ struct empty_type_impl : abstract_type {
     }
     virtual bytes from_string(sstring_view text) const override {
         return {};
-    }
-    virtual void native_value_delete(void* object) const override {
-        // Can't happen
-        abort();
     }
     virtual const std::type_info& native_typeid() const {
         // Can't happen
@@ -3606,6 +3599,27 @@ void* abstract_type::native_value_clone(const void* from) const {
     return visit(*this, native_value_clone_visitor{from});
 }
 
+namespace {
+struct native_value_delete_visitor {
+    void* object;
+    template <typename N, typename A> void operator()(const concrete_type<N, A>&) {
+        delete reinterpret_cast<typename concrete_type<N, A>::native_type*>(object);
+    }
+    void operator()(const reversed_type_impl& t) {
+        return visit(*t.underlying_type(), native_value_delete_visitor{object});
+    }
+    void operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
+    void operator()(const empty_type_impl&) {
+        // Can't happen
+        abort();
+    }
+};
+}
+
+static void native_value_delete(const abstract_type& t, void* object) {
+    visit(t, native_value_delete_visitor{object});
+}
+
 sstring abstract_type::get_string(const bytes& b) const {
     struct visitor {
         const bytes& b;
@@ -3682,11 +3696,6 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
     return visit(*this, visitor{updated});
 }
 
-void
-reversed_type_impl::native_value_delete(void* object) const {
-    return _underlying_type->native_value_delete(object);
-}
-
 const std::type_info&
 reversed_type_impl::native_typeid() const {
     return _underlying_type->native_typeid();
@@ -3750,7 +3759,7 @@ data_type abstract_type::parse_type(const sstring& name)
 
 data_value::~data_value() {
     if (_value) {
-        _type->native_value_delete(_value);
+        native_value_delete(*_type, _value);
     }
 }
 
