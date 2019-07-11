@@ -443,7 +443,7 @@ public:
     // tombstones.
     // Returns true if row marker is live.
     bool compact_and_expire(tombstone tomb, gc_clock::time_point now,
-            can_gc_fn& can_gc, gc_clock::time_point gc_before);
+            can_gc_fn& can_gc, gc_clock::time_point gc_before, compaction_garbage_collector* collector = nullptr);
     // Consistent with feed_hash()
     bool operator==(const row_marker& other) const {
         if (_timestamp != other._timestamp) {

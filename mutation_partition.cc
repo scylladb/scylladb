@@ -1764,7 +1764,7 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
 }
 
 bool row_marker::compact_and_expire(tombstone tomb, gc_clock::time_point now,
-        can_gc_fn& can_gc, gc_clock::time_point gc_before) {
+        can_gc_fn& can_gc, gc_clock::time_point gc_before, compaction_garbage_collector* collector) {
     if (is_missing()) {
         return false;
     }
@@ -1777,6 +1777,9 @@ bool row_marker::compact_and_expire(tombstone tomb, gc_clock::time_point now,
         _ttl = dead;
     }
     if (_ttl == dead && _expiry < gc_before && can_gc(tombstone(_timestamp, _expiry))) {
+        if (collector) {
+            collector->collect(*this);
+        }
         _timestamp = api::missing_timestamp;
     }
     return !is_missing() && _ttl != dead;
