@@ -123,6 +123,24 @@ def test_gsi_strong_consistency(test_table_gsi_1):
     with pytest.raises(ClientError, match='ValidationException.*Consistent'):
         full_scan(test_table_gsi_1, IndexName='hello', ConsistentRead=True)
 
+# Verify that a GSI is correctly listed in describe_table
+@pytest.mark.xfail(reason="GSI not supported; only base key")
+def test_gsi_describe(test_table_gsi_1):
+    desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
+    assert 'Table' in desc
+    assert 'GlobalSecondaryIndexes' in desc['Table']
+    gsis = desc['Table']['GlobalSecondaryIndexes']
+    assert len(gsis) == 1
+    gsi = gsis[0]
+    assert gsi['IndexName'] == 'hello'
+    assert 'IndexSizeBytes' in gsi     # actual size depends on content
+    assert 'ItemCount' in gsi
+    assert gsi['Projection'] == {'ProjectionType': 'ALL'}
+    assert gsi['IndexStatus'] == 'ACTIVE'
+    assert gsi['KeySchema'] == [{'KeyType': 'HASH', 'AttributeName': 'c'},
+                                {'KeyType': 'RANGE', 'AttributeName': 'p'}]
+    # TODO: check also ProvisionedThroughput, IndexArn
+
 # When a GSI's key includes an attribute not in the base table's key, we
 # need to remember to add its type to AttributeDefinitions.
 @pytest.mark.xfail(reason="GSI not supported")
@@ -280,6 +298,55 @@ def test_gsi_3(test_table_gsi_3):
     assert_index_query(test_table_gsi_3, 'hello', [items[3]],
         KeyConditions={'a': {'AttributeValueList': [items[3]['a']], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [items[3]['b']], 'ComparisonOperator': 'EQ'}})
+
+# A fourth scenario of GSI. Two GSIs on a single base table.
+@pytest.fixture(scope="session")
+def test_table_gsi_4(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'a', 'AttributeType': 'S' },
+                    { 'AttributeName': 'b', 'AttributeType': 'S' }
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello_a',
+                'KeySchema': [
+                    { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'hello_b',
+                'KeySchema': [
+                    { 'AttributeName': 'b', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ])
+    yield table
+    table.delete()
+
+# Test that a base table with two GSIs updates both as expected.
+@pytest.mark.xfail(reason="GSI not supported")
+def test_gsi_4(test_table_gsi_4):
+    items = [{'p': random_string(), 'a': random_string(), 'b': random_string()} for i in range(10)]
+    with test_table_gsi_4.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    assert_index_query(test_table_gsi_4, 'hello_a', [items[3]],
+        KeyConditions={'a': {'AttributeValueList': [items[3]['a']], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_4, 'hello_b', [items[3]],
+        KeyConditions={'b': {'AttributeValueList': [items[3]['b']], 'ComparisonOperator': 'EQ'}})
+
+# Verify that describe_table lists the two GSIs.
+@pytest.mark.xfail(reason="GSI not supported")
+def test_gsi_4_describe(test_table_gsi_4):
+    desc = test_table_gsi_4.meta.client.describe_table(TableName=test_table_gsi_4.name)
+    assert 'Table' in desc
+    assert 'GlobalSecondaryIndexes' in desc['Table']
+    gsis = desc['Table']['GlobalSecondaryIndexes']
+    assert len(gsis) == 2
+    assert multiset([g['IndexName'] for g in gsis]) == multiset(['hello_a', 'hello_b'])
 
 # All tests above involved "ProjectionType: ALL". This test checks how
 # "ProjectionType:: KEYS_ONLY" works. We note that it projects both
