@@ -76,6 +76,9 @@ libs = {}
 for exe in executables:
     libs.update(ldd(exe))
 
+# manually add libthread_db for debugging thread
+libs.update({'libthread_db-1.0.so': '/lib64/libthread_db-1.0.so'})
+
 ld_so = libs['ld.so']
 
 have_gnutls = any([lib.startswith('libgnutls.so')
