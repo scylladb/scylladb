@@ -224,3 +224,56 @@ def test_query_attributes_to_get(dynamodb, test_table):
         got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, AttributesToGet=wanted)
         expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
         assert multiset(expected_items) == multiset(got_items)
+
+# Test that in a table with both hash key and sort key, which keys we can
+# Query by: We can Query by the hash key, by a combination of both hash and
+# sort keys, but *cannot* query by just the sort key, and obviously not
+# by any non-key column.
+def test_query_which_key(test_table):
+    p = random_string()
+    c = random_string()
+    p2 = random_string()
+    c2 = random_string()
+    item1 = {'p': p, 'c': c}
+    item2 = {'p': p, 'c': c2}
+    item3 = {'p': p2, 'c': c}
+    for i in [item1, item2, item3]:
+        test_table.put_item(Item=i)
+    # Query by hash key only:
+    got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    expected_items = [item1, item2]
+    assert multiset(expected_items) == multiset(got_items)
+    # Query by hash key *and* sort key (this is basically a GetItem):
+    got_items = full_query(test_table, KeyConditions={
+        'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+        'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}
+    })
+    expected_items = [item1]
+    assert multiset(expected_items) == multiset(got_items)
+    # Query by sort key alone is not allowed. DynamoDB reports:
+    # "Query condition missed key schema element: p".
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_query(test_table, KeyConditions={
+            'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}
+        })
+    # Query by a non-key isn't allowed, for the same reason - that the
+    # actual hash key (p) is missing in the query:
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_query(test_table, KeyConditions={
+            'z': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}
+        })
+    # If we try both p and a non-key we get a complaint that the sort
+    # key is missing: "Query condition missed key schema element: c"
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_query(test_table, KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+            'z': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}
+        })
+    # If we try p, c and another key, we get an error that
+    # "Conditions can be of length 1 or 2 only".
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_query(test_table, KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+            'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'},
+            'z': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}
+        })

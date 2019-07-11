@@ -1386,6 +1386,24 @@ calculate_bounds(schema_ptr schema, const Json::Value& conditions) {
             ck_bounds.push_back(calculate_ck_bound(schema, *ck_cdef, op, attr_list));
         }
     }
+
+    // Validate that a query's conditions must be on the hash key, and
+    // optionally also on the sort key if it exists.
+    if (partition_ranges.empty()) {
+        throw api_error("ValidationException", format("Query missing condition on hash key '{}'", schema->partition_key_columns().front().name_as_text()));
+    }
+    if (schema->clustering_key_size() == 0) {
+        if (conditions.size() != 1) {
+            throw api_error("ValidationException", "Only one condition allowed in table with only hash key");
+        }
+    } else {
+        if (conditions.size() == 2 && ck_bounds.empty()) {
+            throw api_error("ValidationException", format("Query missing condition on sort key '{}'", schema->clustering_key_columns().front().name_as_text()));
+        } else if (conditions.size() > 2) {
+            throw api_error("ValidationException", "Only one or two conditions allowed in table with hash key and sort key");
+        }
+    }
+
     if (ck_bounds.empty()) {
         ck_bounds.push_back(query::clustering_range::make_open_ended_both_sides());
     }
