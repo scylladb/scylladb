@@ -552,6 +552,29 @@ static Json::Value list_concatenate(const Json::Value& v1, const Json::Value& v2
     return ret;
 }
 
+// Take two JSON-encoded set values (e.g. {"SS": [...the actual set]}) and return the sum of both sets,
+// again as a set value.
+static Json::Value set_sum(const Json::Value& v1, const Json::Value& v2) {
+    auto [set1_type, set1] = unwrap_set(v1);
+    auto [set2_type, set2] = unwrap_set(v2);
+    if (set1_type != set2_type) {
+        throw api_error("ValidationException", format("Mismatched set types: {} and {}", set1_type, set2_type));
+    }
+    if (!set1 || !set2) {
+        throw api_error("ValidationException", "UpdateExpression: set_sum() given a non-set");
+    }
+    Json::Value sum = *set1;
+    std::set<Json::Value> set1_raw(sum.begin(), sum.end());
+    for (const auto& a : *set2) {
+        if (set1_raw.count(a) == 0) {
+            sum.append(a);
+        }
+    }
+    Json::Value ret(Json::objectValue);
+    ret[set1_type] = std::move(sum);
+    return ret;
+}
+
 // Check if a given JSON object encodes a number (i.e., it is a {"N": [...]}
 // and returns an object representing it.
 static big_decimal unwrap_number(const Json::Value& v) {
