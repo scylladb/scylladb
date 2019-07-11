@@ -145,7 +145,7 @@ def test_gsi_describe(test_table_gsi_1):
 # need to remember to add its type to AttributeDefinitions.
 @pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_missing_attribute_definition(dynamodb):
-    with pytest.raises(ClientError, match='ValidationException'):
+    with pytest.raises(ClientError, match='ValidationException.*AttributeDefinitions'):
         create_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
             AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ],
@@ -610,9 +610,9 @@ def test_gsi_unsupported_names(dynamodb):
         create_gsi(dynamodb, 'n')
     with pytest.raises(ParamValidationError):
         create_gsi(dynamodb, 'nn')
-    with pytest.raises(ClientError, match='ValidationException'):
+    with pytest.raises(ClientError, match='ValidationException.*nnnnn'):
         create_gsi(dynamodb, 'n' * 256)
-    with pytest.raises(ClientError, match='ValidationException'):
+    with pytest.raises(ClientError, match='ValidationException.*nyh'):
         create_gsi(dynamodb, 'nyh@test')
 
 # On the other hand, names following the above rules should be accepted. Even
