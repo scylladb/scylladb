@@ -54,7 +54,6 @@ public:
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     virtual sstring to_json_string(bytes_view bv) const override;
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
-    virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;

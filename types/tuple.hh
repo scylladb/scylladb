@@ -127,7 +127,6 @@ public:
         boost::range::for_each(range, put);
         return ret;
     }
-    virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view s) const override;
     virtual sstring to_json_string(bytes_view bv) const override;
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;

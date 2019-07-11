@@ -147,9 +147,6 @@ template <typename T>
 struct simple_type_impl : concrete_type<T> {
     simple_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
         : concrete_type<T>(k, std::move(name), std::move(value_length_if_fixed), data::type_info::make_fixed_size(simple_type_traits<T>::serialized_size)) {}
-    virtual size_t hash(bytes_view v) const override {
-        return std::hash<bytes_view>()(v);
-    }
 };
 
 template<typename T>
@@ -275,9 +272,6 @@ struct string_type_impl : public concrete_type<sstring> {
         auto& v = from_value(value);
         return v.size();
     }
-    virtual size_t hash(bytes_view v) const override {
-        return std::hash<bytes_view>()(v);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (as_cql3_type() == cql3::cql3_type::ascii) {
             if (!utils::ascii::validate(v)) {
@@ -327,9 +321,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         return v.size();
     }
     virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
-    virtual size_t hash(bytes_view v) const override {
-        return std::hash<bytes_view>()(v);
-    }
     virtual bytes from_string(sstring_view s) const override {
         return from_hex(s);
     }
@@ -427,9 +418,6 @@ public:
         }
         return 8;
     }
-    virtual size_t hash(bytes_view v) const override {
-        return std::hash<bytes_view>()(v);
-    }
     virtual bytes from_string(sstring_view s) const override;
     virtual sstring to_json_string(bytes_view bv) const override {
         return quote_json_string(to_string(bv));
@@ -466,9 +454,6 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
             return 0;
         }
         return 16;
-    }
-    virtual size_t hash(bytes_view v) const override {
-        return std::hash<bytes_view>()(v);
     }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 16) {
@@ -844,10 +829,6 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         }
         return 16;
     }
-    // FIXME: isCompatibleWith(uuid)
-    virtual size_t hash(bytes_view v) const override {
-        return std::hash<bytes_view>()(v);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 16) {
             throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
@@ -909,9 +890,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
             return 0;
         }
         return ipv.get().size();
-    }
-    virtual size_t hash(bytes_view v) const override {
-        return std::hash<bytes_view>()(v);
     }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
@@ -1104,10 +1082,6 @@ public:
         auto pnum = abs(num);
         return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
     }
-    virtual size_t hash(bytes_view v) const override {
-        bytes b(v.begin(), v.end());
-        return std::hash<sstring>()(to_string(b));
-    }
     virtual sstring to_json_string(bytes_view bv) const override {
         auto v = deserialize(bv);
         if (v.is_null()) {
@@ -1168,10 +1142,6 @@ public:
         varint_type_impl::native_type unscaled_value = bd.unscaled_value();
         return sizeof(int32_t) + varint_type->serialized_size(&unscaled_value);
     }
-    virtual size_t hash(bytes_view v) const override {
-        bytes b(v.begin(), v.end());
-        return std::hash<sstring>()(to_string(b));
-    }
     virtual sstring to_json_string(bytes_view bv) const override {
         auto v = deserialize(bv);
         if (v.is_null()) {
@@ -1211,9 +1181,6 @@ public:
         fail(unimplemented::cause::COUNTERS);
     }
     virtual size_t serialized_size(const void* value) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
-    virtual size_t hash(bytes_view v) const override {
         fail(unimplemented::cause::COUNTERS);
     }
     virtual sstring to_json_string(bytes_view bv) const override {
@@ -1340,9 +1307,6 @@ public:
         }
         return from_string(value.asString());
     }
-    virtual size_t hash(bytes_view v) const override {
-        return std::hash<bytes_view>()(v);
-    }
     using counter_type = cql_duration::common_counter_type;
 
     static std::tuple<counter_type, counter_type, counter_type> deserialize_counters(bytes_view v) {
@@ -1367,10 +1331,6 @@ struct empty_type_impl : abstract_type {
     virtual void serialize(const void* value, bytes::iterator& out) const override {
     }
     virtual size_t serialized_size(const void* value) const override {
-        return 0;
-    }
-
-    virtual size_t hash(bytes_view v) const override {
         return 0;
     }
     virtual sstring to_json_string(bytes_view bv) const override {
@@ -2134,11 +2094,6 @@ bytes map_type_impl::from_json_object(const Json::Value& value, cql_serializatio
     return collection_type_impl::pack(raw_map.begin(), raw_map.end(), raw_map.size() / 2, sf);
 }
 
-size_t
-map_type_impl::hash(bytes_view v) const {
-    return std::hash<bytes_view>()(v);
-}
-
 bytes
 map_type_impl::from_string(sstring_view text) const {
     // FIXME:
@@ -2596,11 +2551,6 @@ bytes set_type_impl::from_json_object(const Json::Value& value, cql_serializatio
     return collection_type_impl::pack(raw_set.begin(), raw_set.end(), raw_set.size(), sf);
 }
 
-size_t
-set_type_impl::hash(bytes_view v) const {
-    return std::hash<bytes_view>()(v);
-}
-
 bytes
 set_type_impl::from_string(sstring_view text) const {
     // FIXME:
@@ -2777,11 +2727,6 @@ bytes list_type_impl::from_json_object(const Json::Value& value, cql_serializati
         values.emplace_back(_elements->from_json_object(v, sf));
     }
     return collection_type_impl::pack(values.begin(), values.end(), values.size(), sf);
-}
-
-size_t
-list_type_impl::hash(bytes_view v) const {
-    return std::hash<bytes_view>()(v);
 }
 
 bytes
@@ -3259,6 +3204,35 @@ static bytes concat_fields(const std::vector<bytes>& fields, const std::vector<i
     return result;
 }
 
+size_t abstract_type::hash(bytes_view v) const {
+    struct visitor {
+        bytes_view v;
+        size_t operator()(const reversed_type_impl& t) { return t.underlying_type()->hash(v); }
+        size_t operator()(const abstract_type& t) { return std::hash<bytes_view>()(v); }
+        size_t operator()(const tuple_type_impl& t) {
+            auto apply_hash = [] (auto&& type_value) {
+                auto&& type = boost::get<0>(type_value);
+                auto&& value = boost::get<1>(type_value);
+                return value ? type->hash(*value) : 0;
+            };
+            // FIXME: better accumulation function
+            return boost::accumulate(combine(t.all_types(), t.make_range(v)) | boost::adaptors::transformed(apply_hash),
+                    0, std::bit_xor<>());
+        }
+        size_t operator()(const varint_type_impl& t) {
+            bytes b(v.begin(), v.end());
+            return std::hash<sstring>()(t.to_string(b));
+        }
+        size_t operator()(const decimal_type_impl& t) {
+            bytes b(v.begin(), v.end());
+            return std::hash<sstring>()(t.to_string(b));
+        }
+        size_t operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
+        size_t operator()(const empty_type_impl&) { return 0; }
+    };
+    return visit(*this, visitor{v});
+}
+
 bytes
 tuple_type_impl::from_string(sstring_view s) const {
     std::vector<sstring_view> field_strings = split_field_strings(s);
@@ -3521,20 +3495,6 @@ static bool is_value_compatible_with_internal(const abstract_type& t, const abst
 
 bool abstract_type::is_value_compatible_with(const abstract_type& other) const {
     return is_value_compatible_with_internal(*this, *other.underlying_type());
-}
-
-size_t
-tuple_type_impl::hash(bytes_view v) const {
-    auto apply_hash = [] (auto&& type_value) {
-        auto&& type = boost::get<0>(type_value);
-        auto&& value = boost::get<1>(type_value);
-        return value ? type->hash(*value) : 0;
-    };
-    // FIXME: better accumulation function
-    return boost::accumulate(combine(_types, make_range(v))
-                             | boost::adaptors::transformed(apply_hash),
-                             0,
-                             std::bit_xor<>());
 }
 
 sstring

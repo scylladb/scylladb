@@ -512,7 +512,7 @@ public:
     serialized_compare as_less_comparator() const ;
     serialized_tri_compare as_tri_comparator() const ;
     static data_type parse_type(const sstring& name);
-    virtual size_t hash(bytes_view v) const = 0;
+    size_t hash(bytes_view v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
     int32_t compare(bytes_view v1, bytes_view v2) const;
     data_value deserialize(bytes_view v) const;
@@ -869,10 +869,6 @@ public:
 
     shared_ptr<const abstract_type> underlying_type() const {
         return _underlying_type;
-    }
-
-    virtual size_t hash(bytes_view v) const override {
-        return _underlying_type->hash(v);
     }
 
     virtual void serialize(const void* value, bytes::iterator& out) const override {
