@@ -527,9 +527,6 @@ public:
             validate(bv, sf);
         });
     }
-    virtual void validate_collection_member(bytes_view v, const bytes& collection_name) const {
-        validate(v, cql_serialization_format::latest());
-    }
     bool is_compatible_with(const abstract_type& previous) const;
     /*
      * Types which are wrappers over other types return the inner type.
@@ -861,10 +858,6 @@ class reversed_type_impl : public abstract_type {
 public:
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         _underlying_type->validate(v, sf);
-    }
-
-    virtual void validate_collection_member(bytes_view v, const bytes& collection_name) const  override {
-        _underlying_type->validate_collection_member(v, collection_name);
     }
 
     shared_ptr<const abstract_type> underlying_type() const {
