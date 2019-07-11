@@ -1838,14 +1838,13 @@ map_type_impl::serialize(const void* value, bytes::iterator& out) const {
     return serialize(value, out, cql_serialization_format::internal());
 }
 
-static size_t serialized_size_aux(const map_type_impl& t, const map_type_impl::native_type* m) {
+static size_t map_serialized_size(const map_type_impl::native_type* m) {
     size_t len = collection_size_len(cql_serialization_format::internal());
     size_t psz = collection_value_len(cql_serialization_format::internal());
     for (auto&& kv : *m) {
         len += psz + kv.first.serialized_size();
         len += psz + kv.second.serialized_size();
     }
-
     return len;
 }
 
@@ -2346,8 +2345,7 @@ set_type_impl::serialize(const void* value, bytes::iterator& out) const {
     return serialize(value, out, cql_serialization_format::internal());
 }
 
-static size_t serialized_size_aux(const concrete_type<std::vector<data_value>, listlike_collection_type_impl>& t,
-        const std::vector<data_value>* s) {
+static size_t listlike_serialized_size(const std::vector<data_value>* s) {
     size_t len = collection_size_len(cql_serialization_format::internal());
     size_t psz = collection_value_len(cql_serialization_format::internal());
     for (auto&& e : *s) {
@@ -2648,22 +2646,6 @@ void tuple_type_impl::validate(bytes_view v, cql_serialization_format sf) const 
         ++ti;
         ++vi;
     }
-}
-
-static size_t serialized_size_aux(const tuple_type_impl& t, const tuple_type_impl::native_type* v) {
-    size_t size = 0;
-    if (!v) {
-        return size;
-    }
-    auto find_serialized_size = [] (auto&& t_v) {
-        const data_type& t = boost::get<0>(t_v);
-        const data_value& v = boost::get<1>(t_v);
-        if (!v.is_null() && t != v.type()) {
-            throw std::runtime_error("tuple element type mismatch");
-        }
-        return 4 + v.serialized_size();
-    };
-    return boost::accumulate(boost::combine(t.all_types(), *v) | boost::adaptors::transformed(find_serialized_size), 0);
 }
 
 void
@@ -3080,145 +3062,72 @@ size_t abstract_type::hash(bytes_view v) const {
     return visit(*this, visitor{v});
 }
 
+static size_t concrete_serialized_size(const byte_type_impl::native_type&) { return sizeof(int8_t); }
+static size_t concrete_serialized_size(const short_type_impl::native_type&) { return sizeof(int16_t); }
+static size_t concrete_serialized_size(const int32_type_impl::native_type&) { return sizeof(int32_t); }
+static size_t concrete_serialized_size(const long_type_impl::native_type&) { return sizeof(int64_t); }
+static size_t concrete_serialized_size(const float_type_impl::native_type&) { return sizeof(float); }
+static size_t concrete_serialized_size(const double_type_impl::native_type&) { return sizeof(double); }
+static size_t concrete_serialized_size(const boolean_type_impl::native_type&) { return 1; }
+static size_t concrete_serialized_size(const date_type_impl::native_type&) { return 8; }
+static size_t concrete_serialized_size(const timeuuid_type_impl::native_type&) { return 16; }
+static size_t concrete_serialized_size(const simple_date_type_impl::native_type&) { return 4; }
+static size_t concrete_serialized_size(const string_type_impl::native_type& v) { return v.size(); }
+static size_t concrete_serialized_size(const bytes_type_impl::native_type& v) { return v.size(); }
+static size_t concrete_serialized_size(const inet_addr_type_impl::native_type& v) { return v.get().size(); }
+
+static size_t concrete_serialized_size(const varint_type_impl::native_type& v) {
+    const auto& num = v.get();
+    if (!num) {
+        return 1;
+    }
+    auto pnum = abs(num);
+    return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
+}
+
+static size_t concrete_serialized_size(const decimal_type_impl::native_type& v) {
+    const varint_type_impl::native_type& uv = v.get().unscaled_value();
+    return sizeof(int32_t) + concrete_serialized_size(uv);
+}
+
+static size_t concrete_serialized_size(const duration_type_impl::native_type& v) {
+    const auto& d = v.get();
+    return signed_vint::serialized_size(d.months) + signed_vint::serialized_size(d.days) +
+           signed_vint::serialized_size(d.nanoseconds);
+}
+
+static size_t concrete_serialized_size(const tuple_type_impl::native_type& v) {
+    size_t len = 0;
+    for (auto&& e : v) {
+        len += 4 + e.serialized_size();
+    }
+    return len;
+}
+
 namespace {
 struct serialized_size_visitor {
     size_t operator()(const reversed_type_impl& t, const void* v) { return t.underlying_type()->serialized_size(v); }
     size_t operator()(const empty_type_impl&, const void*) { return 0; }
     template <typename T>
-    size_t operator()(const integer_type_impl<T>& t, const typename integer_type_impl<T>::native_type* v) {
-        if (!v) {
-            return 0;
-        }
+    size_t operator()(const concrete_type<T>& t, const typename concrete_type<T>::native_type* v) {
         if (v->empty()) {
             return 0;
         }
-        return sizeof(v->get());
-    }
-    size_t operator()(const string_type_impl& t, const sstring* v) {
-        if (!v) {
-            return 0;
-        }
-        return v->size();
-    }
-    size_t operator()(const bytes_type_impl& t, const bytes* v) {
-        if (!v) {
-            return 0;
-        }
-        return v->size();
-    }
-    size_t operator()(const boolean_type_impl& t, const boolean_type_impl::native_type* v) {
-        if (!v) {
-            return 0;
-        }
-        if (v->empty()) {
-            return 0;
-        }
-        return 1;
-    }
-    size_t operator()(const date_type_impl& t, const date_type_impl::native_type* v) {
-        if (!v || v->empty()) {
-            return 0;
-        }
-        return 8;
-    }
-    size_t operator()(const timeuuid_type_impl& t, const timeuuid_type_impl::native_type* v) {
-        if (!v || v->empty()) {
-            return 0;
-        }
-        return 16;
-    }
-    size_t operator()(const timestamp_type_impl& t, const timestamp_type_impl::native_type* v) {
-        if (!v || v->empty()) {
-            return 0;
-        }
-        return 8;
-    }
-    size_t operator()(const simple_date_type_impl& t, const simple_date_type_impl::native_type* v) {
-        if (!v || v->empty()) {
-            return 0;
-        }
-        return 4;
-    }
-    size_t operator()(const time_type_impl& t, const time_type_impl::native_type* v) {
-        if (!v || v->empty()) {
-            return 0;
-        }
-        return 8;
-    }
-    size_t operator()(const uuid_type_impl& t, const uuid_type_impl::native_type* v) {
-        if (!v) {
-            return 0;
-        }
-        return 16;
-    }
-    size_t operator()(const inet_addr_type_impl& t, const inet_addr_type_impl::native_type* ipv) {
-        if (!ipv) {
-            return 0;
-        }
-        if (ipv->empty()) {
-            return 0;
-        }
-        return ipv->get().size();
-    }
-    template <typename T>
-    size_t operator()(const floating_type_impl<T>& t, const typename floating_type_impl<T>::native_type* v) {
-        if (!v) {
-            return 0;
-        }
-        return sizeof(T);
-    }
-    size_t operator()(const varint_type_impl& t, const varint_type_impl::native_type* num1) {
-        if (!num1) {
-            return 0;
-        }
-        if (num1->empty()) {
-            return 0;
-        }
-        auto&& num = num1->get();
-        if (!num) {
-            return 1;
-        }
-        auto pnum = abs(num);
-        return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
-    }
-    size_t operator()(const decimal_type_impl& t, const decimal_type_impl::native_type* bd1) {
-        if (!bd1) {
-            return 0;
-        }
-        if (bd1->empty()) {
-            return 0;
-        }
-        auto&& bd = std::move(*bd1).get();
-        const auto* real_varint_type = static_cast<const varint_type_impl*>(varint_type.get());
-        varint_type_impl::native_type unscaled = bd.unscaled_value();
-        return sizeof(int32_t) + serialized_size_visitor{}(*real_varint_type, &unscaled);;
+        return concrete_serialized_size(*v);
     }
     size_t operator()(const counter_type_impl&, const void*) { fail(unimplemented::cause::COUNTERS); }
-    size_t operator()(const duration_type_impl& t, const duration_type_impl::native_type* m) {
-        if (!m) {
-            return 0;
-        }
-        if (m->empty()) {
-            return 0;
-        }
-        const auto& d = m->get();
-        return signed_vint::serialized_size(d.months) + signed_vint::serialized_size(d.days) +
-               signed_vint::serialized_size(d.nanoseconds);
-    }
-    size_t operator()(const map_type_impl& t, const map_type_impl::native_type* value) {
-        return serialized_size_aux(t, value);
-    }
+    size_t operator()(const map_type_impl& t, const map_type_impl::native_type* v) { return map_serialized_size(v); }
     size_t operator()(const concrete_type<std::vector<data_value>, listlike_collection_type_impl>& t,
-            const std::vector<data_value>* value) {
-        return serialized_size_aux(t, value);
-    }
-    size_t operator()(const tuple_type_impl& t, const tuple_type_impl::native_type* value) {
-        return serialized_size_aux(t, value);
+            const std::vector<data_value>* v) {
+        return listlike_serialized_size(v);
     }
 };
 }
 
 size_t abstract_type::serialized_size(const void* value) const {
+    if (!value) {
+        return 0;
+    }
     return visit(*this, value, serialized_size_visitor{});
 }
 
