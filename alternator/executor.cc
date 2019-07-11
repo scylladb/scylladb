@@ -245,6 +245,11 @@ future<json::json_return_type> executor::create_table(std::string content) {
     }
     builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
+    const Json::Value& gsi = table_info["GlobalSecondaryIndexes"];
+    if (!gsi.isNull()) {
+        throw api_error("ValidationException", "FIXME: GSI not yet supported.");
+    }
+
     schema_ptr schema = builder.build();
 
     return _mm.announce_new_column_family(schema, false).then([table_info = std::move(table_info), schema] () mutable {
