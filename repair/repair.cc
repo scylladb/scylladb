@@ -217,9 +217,16 @@ tracker& repair_tracker() {
     }
 }
 
-tracker::tracker(size_t nr_shards)
+tracker::tracker(size_t nr_shards, size_t max_repair_memory)
     : _shutdown(false)
     , _repairs(nr_shards) {
+    auto nr = std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range()));
+    rlogger.info("Setting max_repair_memory={}, max_repair_memory_per_range={}, max_repair_ranges_in_parallel={}",
+        max_repair_memory, max_repair_memory_per_range(), nr);
+    _range_parallelism_semaphores.reserve(nr_shards);
+    while (nr_shards--) {
+        _range_parallelism_semaphores.emplace_back(semaphore(nr));
+    }
     _the_tracker = this;
 }
 
@@ -312,6 +319,10 @@ void tracker::abort_all_repairs() {
         ri->abort();
     }
     rlogger.info0("Aborted {} repair job(s)", count);
+}
+
+semaphore& tracker::range_parallelism_semaphore() {
+    return _range_parallelism_semaphores[engine().cpu_id()];
 }
 
 void check_in_shutdown() {
@@ -1234,13 +1245,11 @@ private:
 };
 
 
-static thread_local semaphore ranges_parallelism_semaphore(16);
-
 static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     if (ri->row_level_repair()) {
         // repair all the ranges in limited parallelism
         return parallel_for_each(ri->ranges, [ri] (auto&& range) {
-            return with_semaphore(ranges_parallelism_semaphore, 1, [ri, &range] {
+            return with_semaphore(repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
                 check_in_shutdown();
                 ri->check_in_abort();
                 ri->ranges_index++;

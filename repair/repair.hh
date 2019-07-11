@@ -229,8 +229,13 @@ private:
     // Map repair id into repair_info. The vector has smp::count elements, each
     // element will be accessed by only one shard.
     std::vector<std::unordered_map<int, lw_shared_ptr<repair_info>>> _repairs;
+    // Each element in the vector is the semaphore used to control the maximum
+    // ranges that can be repaired in parallel. Each element will be accessed
+    // by one shared.
+    std::vector<semaphore> _range_parallelism_semaphores;
+    static const size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
 public:
-    explicit tracker(size_t nr_shards);
+    explicit tracker(size_t nr_shards, size_t max_repair_memory);
     ~tracker();
     void start(int id);
     void done(int id, bool succeeded);
@@ -244,6 +249,8 @@ public:
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
+    semaphore& range_parallelism_semaphore();
+    static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,

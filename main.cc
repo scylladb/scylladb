@@ -901,7 +901,8 @@ int main(int ac, char** av) {
                     });
                 });
             }).get();
-            repair_service rs(gossiper);
+            auto max_memory_repair = db.local().get_available_memory() * 0.1;
+            repair_service rs(gossiper, max_memory_repair);
             repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator).get();
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
