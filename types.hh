@@ -577,10 +577,7 @@ public:
      * When returns false, nothing can be inferred.
      */
     bool is_byte_order_equal() const;
-    virtual sstring get_string(const bytes& b) const {
-        validate(b, cql_serialization_format::latest());
-        return to_string(b);
-    }
+    sstring get_string(const bytes& b) const;
     sstring to_string(bytes_view bv) const {
         return to_string_impl(deserialize(bv));
     }
@@ -916,9 +913,6 @@ public:
         return _underlying_type->serialized_size(value);
     }
 
-    virtual sstring get_string(const bytes& b) const override {
-        return _underlying_type->get_string(b);
-    }
     virtual sstring to_json_string(bytes_view bv) const override {
         return _underlying_type->to_json_string(bv);
     }

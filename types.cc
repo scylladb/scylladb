@@ -3625,6 +3625,18 @@ static std::optional<data_type> update_user_type_aux(
     return std::nullopt;
 }
 
+sstring abstract_type::get_string(const bytes& b) const {
+    struct visitor {
+        const bytes& b;
+        sstring operator()(const abstract_type& t) {
+            t.validate(b, cql_serialization_format::latest());
+            return t.to_string(b);
+        }
+        sstring operator()(const reversed_type_impl& r) { return r.underlying_type()->get_string(b); }
+    };
+    return visit(*this, visitor{b});
+}
+
 sstring
 user_type_impl::get_name_as_string() const {
     auto real_utf8_type = static_cast<const utf8_type_impl*>(utf8_type.get());
