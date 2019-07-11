@@ -548,22 +548,12 @@ public:
      *
      * Note that a type should be compatible with at least itself.
      */
-    bool is_value_compatible_with(const abstract_type& other) const {
-        return is_value_compatible_with_internal(*other.underlying_type());
-    }
+    bool is_value_compatible_with(const abstract_type& other) const;
     bool references_user_type(const sstring& keyspace, const bytes& name) const;
     std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const;
     bool references_duration() const;
     std::optional<uint32_t> value_length_if_fixed() const {
         return _value_length_if_fixed;
-    }
-protected:
-    /**
-     * Needed to handle ReversedType in value-compatibility checks.  Subclasses should implement this instead of
-     * is_value_compatible_with().
-     */
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const {
-        return is_compatible_with(other);
     }
 public:
     bytes decompose(const data_value& value) const {
@@ -902,10 +892,6 @@ class reversed_type_impl : public abstract_type {
                         t->value_length_if_fixed(), t->imr_state().type_info())
         , _underlying_type(t)
     {}
-protected:
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const {
-        return _underlying_type->is_value_compatible_with(*(other.underlying_type()));
-    }
 public:
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         _underlying_type->validate(v, sf);

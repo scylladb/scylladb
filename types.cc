@@ -256,10 +256,6 @@ struct int32_type_impl : integer_type_impl<int32_t> {
 struct long_type_impl : integer_type_impl<int64_t> {
     long_type_impl() : integer_type_impl{kind::long_kind, long_type_name, 8}
     { }
-
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
-        return &other == this || &other == date_type.get() || &other == timestamp_type.get();
-    }
 };
 
 struct string_type_impl : public concrete_type<sstring> {
@@ -351,9 +347,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         auto v = static_cast<sstring_view>(string_value);
         v.remove_prefix(2);
         return bytes_type->from_string(v);
-    }
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
-        return true;
     }
  };
 
@@ -449,9 +442,6 @@ public:
             return long_type->decompose(json::to_int64_t(value));
         }
         return from_string(value.asString());
-    }
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
-        return &other == this || &other == timestamp_type.get() || &other == long_type.get();
     }
 
     friend abstract_type;
@@ -675,9 +665,6 @@ public:
         }
         return from_string(value.asString());
     }
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
-        return &other == this || &other == date_type.get() || &other == long_type.get();
-    }
     friend abstract_type;
 };
 logging::logger timestamp_type_impl::_logger(timestamp_type_name);
@@ -882,9 +869,6 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
-    }
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
-        return &other == this || &other == timeuuid_type.get();
     }
 };
 
@@ -1151,9 +1135,6 @@ public:
         } catch (...) {
             throw marshal_exception(format("unable to make int from '{}'", text));
         }
-    }
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
-        return &other == this || int32_type->is_value_compatible_with(other) || long_type->is_value_compatible_with(other);
     }
     friend class decimal_type_impl;
 };
@@ -1650,20 +1631,16 @@ static bool is_compatible_with_aux(const collection_type_impl& t, const abstract
     return t.value_comparator()->is_value_compatible_with(*cprev.value_comparator());
 }
 
-bool
-collection_type_impl::is_value_compatible_with_internal(const abstract_type& previous) const {
-    // for multi-cell collections, compatibility and value-compatibility are the same
-    if (is_multi_cell() || previous.is_multi_cell()) {
-        return is_compatible_with(previous);
-    }
-    if (!previous.is_collection()) {
+static bool is_value_compatible_with_internal_aux(const collection_type_impl& t, const abstract_type& previous) {
+    if (t.get_kind() != previous.get_kind()) {
         return false;
     }
     auto& cprev = static_cast<const collection_type_impl&>(previous);
-    if (get_kind() != cprev.get_kind()) {
-        return false;
+    // for multi-cell collections, compatibility and value-compatibility are the same
+    if (t.is_multi_cell() || cprev.is_multi_cell()) {
+        return t.is_compatible_with(previous);
     }
-    return is_value_compatible_with_frozen(cprev);
+    return t.is_value_compatible_with_frozen(cprev);
 }
 
 bytes
@@ -1837,6 +1814,9 @@ struct is_byte_order_equal_visitor {
 
 bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_order_equal_visitor{}); }
 
+static bool
+check_compatibility(const tuple_type_impl &t, const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const);
+
 bool abstract_type::is_compatible_with(const abstract_type& previous) const {
     if (this == &previous) {
         return true;
@@ -1884,7 +1864,7 @@ bool abstract_type::is_compatible_with(const abstract_type& previous) const {
             return false;
         }
         bool operator()(const tuple_type_impl& t) {
-            return t.check_compatibility(previous, &abstract_type::is_compatible_with);
+            return check_compatibility(t, previous, &abstract_type::is_compatible_with);
         }
         bool operator()(const collection_type_impl& t) { return is_compatible_with_aux(t, previous); }
         bool operator()(const abstract_type& t) { return false; }
@@ -2757,10 +2737,12 @@ list_type_impl::is_compatible_with_frozen(const collection_type_impl& previous) 
 
 }
 
+static bool is_value_compatible_with_internal(const abstract_type& t, const abstract_type& other);
+
 bool
 list_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previous) const {
     auto& lp = dynamic_cast<const list_type_impl&>(previous);
-    return _elements->is_value_compatible_with_internal(*lp._elements);
+    return is_value_compatible_with_internal(*_elements, *lp._elements);
 }
 
 void list_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
@@ -3549,22 +3531,51 @@ bytes user_type_impl::from_json_object(const Json::Value& value, cql_serializati
     return build_value(std::move(raw_tuple));
 }
 
-bool
-tuple_type_impl::is_value_compatible_with_internal(const abstract_type& previous) const {
-    return check_compatibility(previous, &abstract_type::is_value_compatible_with);
-}
-
-bool
-tuple_type_impl::check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const {
+static bool
+check_compatibility(const tuple_type_impl &t, const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) {
     auto* x = dynamic_cast<const tuple_type_impl*>(&previous);
     if (!x) {
         return false;
     }
     auto c = std::mismatch(
-                _types.begin(), _types.end(),
-                x->_types.begin(), x->_types.end(),
+                t.all_types().begin(), t.all_types().end(),
+                x->all_types().begin(), x->all_types().end(),
                 [predicate] (data_type a, data_type b) { return ((*a).*predicate)(*b); });
-    return c.second == x->_types.end();  // this allowed to be longer
+    return c.second == x->all_types().end();  // this allowed to be longer
+}
+
+static bool is_date_long_or_timestamp(const abstract_type& t) {
+    auto k = t.get_kind();
+    return k == abstract_type::kind::long_kind || k == abstract_type::kind::date || k == abstract_type::kind::timestamp;
+}
+
+// Needed to handle ReversedType in value-compatibility checks.
+static bool is_value_compatible_with_internal(const abstract_type& t, const abstract_type& other) {
+    struct visitor {
+        const abstract_type& other;
+        bool operator()(const abstract_type& t) { return t.is_compatible_with(other); }
+        bool operator()(const long_type_impl& t) { return is_date_long_or_timestamp(other); }
+        bool operator()(const date_type_impl& t) { return is_date_long_or_timestamp(other); }
+        bool operator()(const timestamp_type_impl& t) { return is_date_long_or_timestamp(other); }
+        bool operator()(const uuid_type_impl&) {
+            return other.get_kind() == abstract_type::kind::uuid || other.get_kind() == abstract_type::kind::timeuuid;
+        }
+        bool operator()(const varint_type_impl& t) {
+            return other == t || int32_type->is_value_compatible_with(other) ||
+                   long_type->is_value_compatible_with(other);
+        }
+        bool operator()(const tuple_type_impl& t) {
+            return check_compatibility(t, other, &abstract_type::is_value_compatible_with);
+        }
+        bool operator()(const collection_type_impl& t) { return is_value_compatible_with_internal_aux(t, other); }
+        bool operator()(const bytes_type_impl& t) { return true; }
+        bool operator()(const reversed_type_impl& t) { return t.underlying_type()->is_value_compatible_with(other); }
+    };
+    return visit(t, visitor{other});
+}
+
+bool abstract_type::is_value_compatible_with(const abstract_type& other) const {
+    return is_value_compatible_with_internal(*this, *other.underlying_type());
 }
 
 size_t
