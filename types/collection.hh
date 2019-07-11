@@ -27,6 +27,9 @@
 
 #include "types.hh"
 #include "utils/chunked_vector.hh"
+#include "schema_fwd.hh"
+
+class compaction_garbage_collector;
 
 class collection_type_impl : public abstract_type {
     static logging::logger _logger;
@@ -56,8 +59,8 @@ public:
         utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
         // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
         // Removes cells covered by tomb or this->tomb.
-        bool compact_and_expire(row_tombstone tomb, gc_clock::time_point query_time,
-            can_gc_fn&, gc_clock::time_point gc_before);
+        bool compact_and_expire(column_id id, row_tombstone tomb, gc_clock::time_point query_time,
+            can_gc_fn&, gc_clock::time_point gc_before, compaction_garbage_collector* collector = nullptr);
     };
     struct mutation_view {
         tombstone tomb;

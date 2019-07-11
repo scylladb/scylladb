@@ -1685,7 +1685,7 @@ bool row::compact_and_expire(
           cell.data.with_linearized([&] (bytes_view cell_bv) {
             auto m_view = ctype->deserialize_mutation_form(cell_bv);
             collection_type_impl::mutation m = m_view.materialize(*ctype);
-            any_live |= m.compact_and_expire(tomb, query_time, can_gc, gc_before);
+            any_live |= m.compact_and_expire(id, tomb, query_time, can_gc, gc_before);
             if (m.cells.empty() && m.tomb <= tomb.tomb()) {
                 erase = true;
             } else {
