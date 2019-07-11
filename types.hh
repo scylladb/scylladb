@@ -617,7 +617,6 @@ private:
 protected:
     // native_value_* methods are virualized versions of native_type's
     // sizeof/alignof/copy-ctor/move-ctor etc.
-    virtual void native_value_move(void* from, void* to) const = 0;
     virtual void* native_value_clone(const void* from) const = 0;
     virtual void native_value_destroy(void* object) const = 0;
     virtual void native_value_delete(void* object) const = 0;
@@ -706,9 +705,6 @@ public:
     using native_type = maybe_empty<NativeType>;
     using AbstractType::AbstractType;
 protected:
-    virtual void native_value_move(void* from, void* to) const override {
-        new (to) native_type(std::move(*reinterpret_cast<native_type*>(from)));
-    }
     virtual void native_value_destroy(void* object) const override {
         reinterpret_cast<native_type*>(object)->~native_type();
     }
@@ -916,7 +912,6 @@ public:
     }
 
 protected:
-    virtual void native_value_move(void* from, void* to) const override;
     virtual void native_value_destroy(void* object) const override;
     virtual void* native_value_clone(const void* object) const override;
     virtual void native_value_delete(void* object) const override;
