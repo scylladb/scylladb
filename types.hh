@@ -583,7 +583,7 @@ public:
     }
     sstring to_string_impl(const data_value& v) const;
     virtual bytes from_string(sstring_view text) const = 0;
-    virtual sstring to_json_string(bytes_view bv) const = 0;
+    sstring to_json_string(bytes_view bv) const;
     sstring to_json_string(const bytes& b) const {
         return to_json_string(bytes_view(b));
     }
@@ -627,7 +627,6 @@ protected:
     template <typename T> friend const T& value_cast(const data_value& value);
     template <typename T> friend T&& value_cast(data_value&& value);
     friend bool operator==(const abstract_type& x, const abstract_type& y);
-    static sstring quote_json_string(const sstring& s);
 };
 
 inline bool operator==(const abstract_type& x, const abstract_type& y)
@@ -868,9 +867,6 @@ public:
         _underlying_type->serialize(value, out);
     }
 
-    virtual sstring to_json_string(bytes_view bv) const override {
-        return _underlying_type->to_json_string(bv);
-    }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return _underlying_type->from_json_object(value, sf);
     }
