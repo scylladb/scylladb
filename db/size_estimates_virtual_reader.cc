@@ -84,7 +84,14 @@ public:
             , _ranges(std::ref(ranges))
             , _cf_names_idx(cf_names.size())
             , _ranges_idx(ranges.size())
-    { }
+    {
+        if (cf_names.empty() || ranges.empty()) {
+            // The product of an empty range with any range is an empty range.
+            // In this case we want the end iterator to be equal to the begin iterator,
+            // which has_ranges_idx = _cf_names_idx = 0.
+            _ranges_idx = _cf_names_idx = 0;
+        }
+    }
     virtual_row_iterator& operator++() {
         if (++_ranges_idx == _ranges.get().size() && ++_cf_names_idx < _cf_names.get().size()) {
             _ranges_idx = 0;
