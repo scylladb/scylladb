@@ -52,10 +52,13 @@ SEASTAR_TEST_CASE(test_query_size_estimates_virtual_table) {
         auto end_token1 = utf8_type->to_string(ranges[3].end);
         auto end_token2 = utf8_type->to_string(ranges[55].end);
 
+        auto rs = e.execute_cql("select * from system.size_estimates where keyspace_name = 'ks';").get0();
+        assert_that(rs).is_rows().with_size(0);
+
         e.execute_cql("create table cf1(pk text PRIMARY KEY, v int);").discard_result().get();
         e.execute_cql("create table cf2(pk text PRIMARY KEY, v int);").discard_result().get();
 
-        auto rs = e.execute_cql("select * from system.size_estimates where keyspace_name = 'ks';").get0();
+        rs = e.execute_cql("select * from system.size_estimates where keyspace_name = 'ks';").get0();
         assert_that(rs).is_rows().with_size(512);
 
         rs = e.execute_cql("select * from system.size_estimates where keyspace_name = 'ks' limit 100;").get0();
