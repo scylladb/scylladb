@@ -580,6 +580,29 @@ static Json::Value set_sum(const Json::Value& v1, const Json::Value& v2) {
     return ret;
 }
 
+// Take two JSON-encoded set values (e.g. {"SS": [...the actual list]}) and return the difference of s1 - s2,
+// again as a set value.
+static Json::Value set_diff(const Json::Value& v1, const Json::Value& v2) {
+    auto [set1_type, set1] = unwrap_set(v1);
+    auto [set2_type, set2] = unwrap_set(v2);
+    if (set1_type != set2_type) {
+        throw api_error("ValidationException", format("Mismatched set types: {} and {}", set1_type, set2_type));
+    }
+    if (!set1 || !set2) {
+        throw api_error("ValidationException", "UpdateExpression: DELETE operation can only be performed on a set");
+    }
+    std::set<Json::Value> set1_raw(set1->begin(), set1->end());
+    for (const auto& a : *set2) {
+        set1_raw.erase(a);
+    }
+    Json::Value ret(Json::objectValue);
+    Json::Value& result_set = ret[set1_type];
+    for (const auto& a : set1_raw) {
+        result_set.append(a);
+    }
+    return ret;
+}
+
 // Check if a given JSON object encodes a number (i.e., it is a {"N": [...]}
 // and returns an object representing it.
 static big_decimal unwrap_number(const Json::Value& v) {
