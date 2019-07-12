@@ -675,7 +675,6 @@ def test_update_expression_add_sets(test_table_s):
             ExpressionAttributeValues={':val1': 'hello'})
 
 # Test "DELETE" operation for sets
-@pytest.mark.xfail(reason="DELETE not yet implemented")
 def test_update_expression_delete_sets(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': set(['dog', 'cat', 'mouse']), 'b': 'hi'})
