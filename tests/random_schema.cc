@@ -1083,6 +1083,10 @@ future<std::vector<mutation>> generate_random_mutations(
             boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
                 return a.decorated_key().less_compare(*s, b.decorated_key());
             });
+            auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+                return a.decorated_key().equal(*s, b.decorated_key());
+            });
+            muts.erase(range.end(), muts.end());
             return std::move(muts);
         });
     });
