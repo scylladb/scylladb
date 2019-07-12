@@ -1003,8 +1003,14 @@ future<json::json_return_type> executor::update_item(std::string content) {
                         attrs_collector.put(to_bytes(column_name), serialize_item(result), ts);
                     },
                     [&] (const parsed::update_expression::action::del& a) {
-                        // FIXME: implement DELETE.
-                        throw api_error("ValidationException", "UpdateExpression: DELETE not yet supported.");
+                        parsed::value base;
+                        parsed::value subset;
+                        base.set_path(action._path);
+                        subset.set_valref(a._valref);
+                        Json::Value v1 = calculate_value(base, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                        Json::Value v2 = calculate_value(subset, update_info["ExpressionAttributeValues"], used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                        Json::Value result  = set_diff(v1, v2);
+                        attrs_collector.put(to_bytes(column_name), serialize_item(result), ts);
                     }
                 }, action._action);
             }
