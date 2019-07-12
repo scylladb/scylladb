@@ -53,7 +53,6 @@ public:
     const std::vector<bytes>& field_names() const { return _field_names; }
     sstring get_name_as_string() const;
 
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
 private:
     static sstring make_name(sstring keyspace,
                              bytes name,

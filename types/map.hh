@@ -59,7 +59,6 @@ public:
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     using abstract_type::deserialize;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,

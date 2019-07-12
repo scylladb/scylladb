@@ -590,7 +590,7 @@ public:
     sstring to_json_string(const bytes_opt& b) const {
         return b ? to_json_string(*b) : "null";
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const = 0;
+    bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const;
     bool is_counter() const;
     bool is_string() const;
     bool is_collection() const;
@@ -867,9 +867,6 @@ public:
         _underlying_type->serialize(value, out);
     }
 
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        return _underlying_type->from_json_object(value, sf);
-    }
     virtual bytes from_string(sstring_view s) const override {
         return _underlying_type->from_string(s);
     }

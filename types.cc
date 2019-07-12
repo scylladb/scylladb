@@ -199,12 +199,6 @@ struct integer_type_impl : simple_type_impl<T> {
     virtual bytes from_string(sstring_view s) const override {
         return decompose_value(parse_int(s));
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (value.isString()) {
-            return from_string(value.asString());
-        }
-        return this->decompose(T(json::to_int64_t(value)));
-    }
 };
 
 struct byte_type_impl : integer_type_impl<int8_t> {
@@ -266,9 +260,6 @@ struct string_type_impl : public concrete_type<sstring> {
     virtual bytes from_string(sstring_view s) const override {
         return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        return from_string(value.asString());
-    }
 };
 
 struct ascii_type_impl final : public string_type_impl {
@@ -293,18 +284,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
     virtual bytes from_string(sstring_view s) const override {
         return from_hex(s);
-    }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (!value.isString()) {
-            throw marshal_exception("bytes_type must be represented as string");
-        }
-        sstring string_value = value.asString();
-        if (string_value.size() < 2 && string_value[0] != '0' && string_value[1] != 'x') {
-            throw marshal_exception("Blob JSON strings must start with 0x");
-        }
-        auto v = static_cast<sstring_view>(string_value);
-        v.remove_prefix(2);
-        return bytes_type->from_string(v);
     }
  };
 
@@ -340,12 +319,6 @@ struct boolean_type_impl : public simple_type_impl<bool> {
             throw marshal_exception(format("unable to make boolean from '{}'", s));
         }
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (!value.isBool()) {
-            throw marshal_exception(format("Invalid JSON object {}", value.toStyledString()));
-        }
-        return this->decompose(value.asBool());
-    }
 };
 
 // This is the old version of timestamp_type_impl, but has been replaced as it
@@ -368,16 +341,6 @@ public:
         out = std::copy_n(reinterpret_cast<const char*>(&i), sizeof(i), out);
     }
     virtual bytes from_string(sstring_view s) const override;
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (!value.isString() && !value.isIntegral()) {
-            throw marshal_exception("date_type must be represented as string or integer");
-        }
-        if (value.isIntegral()) {
-            return long_type->decompose(json::to_int64_t(value));
-        }
-        return from_string(value.asString());
-    }
-
     friend abstract_type;
 };
 logging::logger date_type_impl::_logger(date_type_name);
@@ -419,12 +382,6 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
             throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
         }
         return v.serialize();
-    }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (!value.isString()) {
-            throw marshal_exception(format("{} must be represented as string in JSON", value.toStyledString()));
-        }
-        return from_string(value.asString());
     }
 private:
     friend abstract_type;
@@ -569,15 +526,6 @@ public:
         std::copy_n(reinterpret_cast<const int8_t*>(&ts), sizeof(ts), b.begin());
         return b;
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (!value.isString() && !value.isIntegral()) {
-            throw marshal_exception("uuid_type must be represented as string or integer");
-        }
-         if (value.isIntegral()) {
-            return long_type->decompose(json::to_int64_t(value));
-        }
-        return from_string(value.asString());
-    }
     friend abstract_type;
 };
 logging::logger timestamp_type_impl::_logger(timestamp_type_name);
@@ -644,9 +592,6 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         }
         days += 1UL << 31;
         return static_cast<uint32_t>(days);
-    }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        return from_string(value.asString());
     }
 };
 
@@ -720,9 +665,6 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         result += std::chrono::nanoseconds(nanoseconds);
         return result.count();
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        return from_string(value.asString());
-    }
 };
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
@@ -748,9 +690,6 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         }
         utils::UUID v(s);
         return v.serialize();
-    }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        return from_string(value.asString());
     }
 };
 
@@ -802,9 +741,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
         auto out = b.begin();
         serialize(&ip, out);
         return b;
-    }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        return from_string(value.asString());
     }
 };
 
@@ -881,21 +817,6 @@ struct floating_type_impl : public simple_type_impl<T> {
             throw marshal_exception(format("Invalid number format '{}'", s));
         }
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (value.isString()) {
-            return from_string(value.asString());
-        }
-        if (!value.isDouble()) {
-            throw marshal_exception("JSON value must be represented as double or string");
-        }
-        if constexpr (std::is_same<T, float>::value) {
-            return this->decompose(value.asFloat());
-        } else if constexpr (std::is_same<T, double>::value) {
-            return this->decompose(value.asDouble());
-        } else {
-            throw marshal_exception("Only float/double types can be parsed from JSON floating point object");
-        }
-    }
 };
 
 struct double_type_impl : floating_type_impl<double> {
@@ -937,12 +858,6 @@ public:
         }
         out = std::copy(b.crbegin(), b.crend(), out);
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (value.isString()) {
-            return from_string(value.asString());
-        }
-        return from_string(json::to_sstring(value));
-    }
     virtual bytes from_string(sstring_view text) const override {
         if (text.empty()) {
             return bytes();
@@ -978,15 +893,6 @@ public:
         varint_type_impl::native_type unscaled_value = bd.unscaled_value();
         varint_type->serialize(&unscaled_value, out);
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (value.isString()) {
-            return from_string(value.asString());
-        } else if (!value.isNumeric()) {
-            throw marshal_exception(format("{} must be represented as numeric or string in JSON", value.toStyledString()));
-        }
-
-        return from_string(json::to_sstring(value));
-    }
     virtual bytes from_string(sstring_view text) const override {
         if (text.empty()) {
             return bytes();
@@ -1008,12 +914,6 @@ public:
     counter_type_impl() : abstract_type{kind::counter, counter_type_name, { }, data::type_info::make_variable_size()} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         fail(unimplemented::cause::COUNTERS);
-    }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (!value.isIntegral()) {
-            throw marshal_exception("Counters must be represented as JSON integer");
-        }
-        return counter_cell_view::total_value_type()->decompose(json::to_int64_t(value));
     }
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
@@ -1100,12 +1000,6 @@ public:
             throw marshal_exception(e.what());
         }
     }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (!value.isString()) {
-            throw marshal_exception(format("{} must be represented as string in JSON", value.toStyledString()));
-        }
-        return from_string(value.asString());
-    }
     using counter_type = cql_duration::common_counter_type;
 
     static std::tuple<counter_type, counter_type, counter_type> deserialize_counters(bytes_view v) {
@@ -1128,9 +1022,6 @@ public:
 struct empty_type_impl : abstract_type {
     empty_type_impl() : abstract_type(kind::empty, empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
-    }
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        return {};
     }
     virtual bytes from_string(sstring_view text) const override {
         return {};
@@ -1862,23 +1753,23 @@ static sstring to_json_string_aux(const map_type_impl& t, bytes_view bv) {
     return out.str();
 }
 
-bytes map_type_impl::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
+static bytes from_json_object_aux(const map_type_impl& t, const Json::Value& value, cql_serialization_format sf) {
     if (!value.isObject()) {
         throw marshal_exception("map_type must be represented as JSON Object");
     }
     std::vector<bytes> raw_map;
     raw_map.reserve(value.size());
     for (auto it = value.begin(); it != value.end(); ++it) {
-        if (!_keys->is_compatible_with(*utf8_type)) {
+        if (!t.get_keys_type()->is_compatible_with(*utf8_type)) {
             // Keys in maps can only be strings in JSON, but they can also be a string representation
             // of another JSON type, which needs to be reparsed. Example - map<frozen<list<int>>, int>
             // will be represented like this: { "[1, 3, 6]": 3, "[]": 0, "[1, 2]": 2 }
             Json::Value map_key = json::to_json_value(it.key().asString());
-            raw_map.emplace_back(_keys->from_json_object(map_key, sf));
+            raw_map.emplace_back(t.get_keys_type()->from_json_object(map_key, sf));
         } else {
-            raw_map.emplace_back(_keys->from_json_object(it.key(), sf));
+            raw_map.emplace_back(t.get_keys_type()->from_json_object(it.key(), sf));
         }
-        raw_map.emplace_back(_values->from_json_object(*it, sf));
+        raw_map.emplace_back(t.get_values_type()->from_json_object(*it, sf));
     }
     return collection_type_impl::pack(raw_map.begin(), raw_map.end(), raw_map.size() / 2, sf);
 }
@@ -2323,14 +2214,14 @@ static sstring to_json_string_aux(const set_type_impl& t, bytes_view bv) {
     return out.str();
 }
 
-bytes set_type_impl::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
+static bytes from_json_object_aux(const set_type_impl& t, const Json::Value& value, cql_serialization_format sf) {
     if (!value.isArray()) {
         throw marshal_exception("set_type must be represented as JSON Array");
     }
     std::vector<bytes> raw_set;
     raw_set.reserve(value.size());
     for (const Json::Value& v : value) {
-        raw_set.emplace_back(_elements->from_json_object(v, sf));
+        raw_set.emplace_back(t.get_elements_type()->from_json_object(v, sf));
     }
     return collection_type_impl::pack(raw_set.begin(), raw_set.end(), raw_set.size(), sf);
 }
@@ -2490,13 +2381,13 @@ static sstring to_json_string_aux(const list_type_impl& t, bytes_view bv) {
     return out.str();
 }
 
-bytes list_type_impl::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
+static bytes from_json_object_aux(const list_type_impl& t, const Json::Value& value, cql_serialization_format sf) {
     std::vector<bytes> values;
     if (!value.isArray()) {
         throw marshal_exception("list_type must be represented as JSON Array");
     }
     for (const Json::Value& v : value) {
-        values.emplace_back(_elements->from_json_object(v, sf));
+        values.emplace_back(t.get_elements_type()->from_json_object(v, sf));
     }
     return collection_type_impl::pack(values.begin(), values.end(), values.size(), sf);
 }
@@ -3202,20 +3093,21 @@ static sstring to_json_string_aux(const tuple_type_impl& t, bytes_view bv) {
     return out.str();
 }
 
-bytes tuple_type_impl::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
+static bytes from_json_object_aux(const tuple_type_impl& t, const Json::Value& value, cql_serialization_format sf) {
     if (!value.isArray()) {
         throw marshal_exception("tuple_type must be represented as JSON Array");
     }
-    if (value.size() > _types.size()) {
-        throw marshal_exception(format("Too many values ({}) for tuple with size {}", value.size(), _types.size()));
+    if (value.size() > t.all_types().size()) {
+        throw marshal_exception(
+                format("Too many values ({}) for tuple with size {}", value.size(), t.all_types().size()));
     }
     std::vector<bytes_opt> raw_tuple;
     raw_tuple.reserve(value.size());
-    auto ti = _types.begin();
+    auto ti = t.all_types().begin();
     for (auto vi = value.begin(); vi != value.end(); ++vi, ++ti) {
         raw_tuple.emplace_back((*ti)->from_json_object(*vi, sf));
     }
-    return build_value(std::move(raw_tuple));
+    return t.build_value(std::move(raw_tuple));
 }
 
 static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
@@ -3309,7 +3201,7 @@ abstract_type::to_json_string(bytes_view bv) const {
     return visit(*this, to_json_string_visitor{bv});
 }
 
-bytes user_type_impl::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
+static bytes from_json_object_aux(const user_type_impl& ut, const Json::Value& value, cql_serialization_format sf) {
     if (!value.isObject()) {
         throw marshal_exception("user_type must be represented as JSON Object");
     }
@@ -3320,21 +3212,136 @@ bytes user_type_impl::from_json_object(const Json::Value& value, cql_serializati
     }
 
     std::vector<bytes_opt> raw_tuple;
-    for (unsigned i = 0; i < _field_names.size(); ++i) {
-        auto t = _types[i];
-        auto v = value.get(_string_field_names[i], Json::Value());
+    for (unsigned i = 0; i < ut.field_names().size(); ++i) {
+        auto t = ut.all_types()[i];
+        auto v = value.get(ut.field_name_as_string(i), Json::Value());
         if (v.isNull()) {
             raw_tuple.push_back(bytes_opt{});
         } else {
             raw_tuple.push_back(t->from_json_object(v, sf));
         }
-        remaining_names.erase(_string_field_names[i]);
+        remaining_names.erase(ut.field_name_as_string(i));
     }
 
     if (!remaining_names.empty()) {
-        throw marshal_exception(format("Extraneous field definition for user type {}: {}", get_name_as_string(), *remaining_names.begin()));
+        throw marshal_exception(format(
+                "Extraneous field definition for user type {}: {}", ut.get_name_as_string(), *remaining_names.begin()));
     }
-    return build_value(std::move(raw_tuple));
+    return ut.build_value(std::move(raw_tuple));
+}
+
+namespace {
+struct from_json_object_visitor {
+    const Json::Value& value;
+    cql_serialization_format sf;
+    bytes operator()(const reversed_type_impl& t) { return t.underlying_type()->from_json_object(value, sf); }
+    template <typename T> bytes operator()(const integer_type_impl<T>& t) {
+        if (value.isString()) {
+            return t.from_string(value.asString());
+        }
+        return t.decompose(T(json::to_int64_t(value)));
+    }
+    bytes operator()(const string_type_impl& t) { return t.from_string(value.asString()); }
+    bytes operator()(const bytes_type_impl& t) {
+        if (!value.isString()) {
+            throw marshal_exception("bytes_type must be represented as string");
+        }
+        sstring string_value = value.asString();
+        if (string_value.size() < 2 && string_value[0] != '0' && string_value[1] != 'x') {
+            throw marshal_exception("Blob JSON strings must start with 0x");
+        }
+        auto v = static_cast<sstring_view>(string_value);
+        v.remove_prefix(2);
+        return bytes_type->from_string(v);
+    }
+    bytes operator()(const boolean_type_impl& t) {
+        if (!value.isBool()) {
+            throw marshal_exception(format("Invalid JSON object {}", value.toStyledString()));
+        }
+        return t.decompose(value.asBool());
+    }
+    bytes operator()(const date_type_impl& t) {
+        if (!value.isString() && !value.isIntegral()) {
+            throw marshal_exception("date_type must be represented as string or integer");
+        }
+        if (value.isIntegral()) {
+            return long_type->decompose(json::to_int64_t(value));
+        }
+        return t.from_string(value.asString());
+    }
+    bytes operator()(const timeuuid_type_impl& t) {
+        if (!value.isString()) {
+            throw marshal_exception(format("{} must be represented as string in JSON", value.toStyledString()));
+        }
+        return t.from_string(value.asString());
+    }
+    bytes operator()(const timestamp_type_impl& t) {
+        if (!value.isString() && !value.isIntegral()) {
+            throw marshal_exception("uuid_type must be represented as string or integer");
+        }
+        if (value.isIntegral()) {
+            return long_type->decompose(json::to_int64_t(value));
+        }
+        return t.from_string(value.asString());
+    }
+    bytes operator()(const simple_date_type_impl& t) { return t.from_string(value.asString()); }
+    bytes operator()(const time_type_impl& t) { return t.from_string(value.asString()); }
+    bytes operator()(const uuid_type_impl& t) { return t.from_string(value.asString()); }
+    bytes operator()(const inet_addr_type_impl& t) { return t.from_string(value.asString()); }
+    template <typename T> bytes operator()(const floating_type_impl<T>& t) {
+        if (value.isString()) {
+            return t.from_string(value.asString());
+        }
+        if (!value.isDouble()) {
+            throw marshal_exception("JSON value must be represented as double or string");
+        }
+        if constexpr (std::is_same<T, float>::value) {
+            return t.decompose(value.asFloat());
+        } else if constexpr (std::is_same<T, double>::value) {
+            return t.decompose(value.asDouble());
+        } else {
+            throw marshal_exception("Only float/double types can be parsed from JSON floating point object");
+        }
+    }
+    bytes operator()(const varint_type_impl& t) {
+        if (value.isString()) {
+            return t.from_string(value.asString());
+        }
+        return t.from_string(json::to_sstring(value));
+    }
+    bytes operator()(const decimal_type_impl& t) {
+        if (value.isString()) {
+            return t.from_string(value.asString());
+        } else if (!value.isNumeric()) {
+            throw marshal_exception(
+                    format("{} must be represented as numeric or string in JSON", value.toStyledString()));
+        }
+
+        return t.from_string(json::to_sstring(value));
+    }
+    bytes operator()(const counter_type_impl& t) {
+        if (!value.isIntegral()) {
+            throw marshal_exception("Counters must be represented as JSON integer");
+        }
+        return counter_cell_view::total_value_type()->decompose(json::to_int64_t(value));
+    }
+    bytes operator()(const duration_type_impl& t) {
+        if (!value.isString()) {
+            throw marshal_exception(format("{} must be represented as string in JSON", value.toStyledString()));
+        }
+        return t.from_string(value.asString());
+    }
+    bytes operator()(const empty_type_impl& t) { return bytes(); }
+    bytes operator()(const map_type_impl& t) { return from_json_object_aux(t, value, sf); }
+    bytes operator()(const set_type_impl& t) { return from_json_object_aux(t, value, sf); }
+    bytes operator()(const list_type_impl& t) { return from_json_object_aux(t, value, sf); }
+    bytes operator()(const tuple_type_impl& t) { return from_json_object_aux(t, value, sf); }
+    bytes operator()(const user_type_impl& t) { return from_json_object_aux(t, value, sf); }
+};
+}
+
+bytes abstract_type::from_json_object(const Json::Value& value, cql_serialization_format sf) const {
+    return visit(*this, from_json_object_visitor{value, sf});
 }
 
 static bool
