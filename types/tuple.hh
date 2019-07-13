@@ -106,7 +106,6 @@ public:
     const std::vector<data_type>& all_types() const {
         return _types;
     }
-    virtual void validate(bytes_view v, cql_serialization_format sf) const;
     std::vector<bytes_view_opt> split(bytes_view v) const;
     template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
     static bytes build_value(RangeOf_bytes_opt&& range) {

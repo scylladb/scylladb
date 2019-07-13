@@ -518,9 +518,7 @@ public:
     data_value deserialize_value(bytes_view v) const {
         return deserialize(v);
     };
-    virtual void validate(bytes_view v, cql_serialization_format sf) const {
-        // FIXME
-    }
+    void validate(bytes_view v, cql_serialization_format sf) const;
     virtual void validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const {
         with_linearized(view, [this, sf] (bytes_view bv) {
             validate(bv, sf);
@@ -827,10 +825,6 @@ class reversed_type_impl : public abstract_type {
         , _underlying_type(t)
     {}
 public:
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        _underlying_type->validate(v, sf);
-    }
-
     shared_ptr<const abstract_type> underlying_type() const {
         return _underlying_type;
     }

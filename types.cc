@@ -167,11 +167,6 @@ struct integer_type_impl : simple_type_impl<T> {
         *reinterpret_cast<T*>(b.begin()) = (T)net::hton(v);
         return b;
     }
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != sizeof(T)) {
-            throw marshal_exception(format("Validation failed for type {}: got {:d} bytes", this->name(), v.size()));
-        }
-    }
     T parse_int(sstring_view s) const {
         try {
             auto value64 = boost::lexical_cast<int64_t>(s.begin(), s.size());
@@ -192,23 +187,11 @@ struct byte_type_impl : integer_type_impl<int8_t> {
     // so we have to pass disengaged optional for the value size
     byte_type_impl() : integer_type_impl{kind::byte, byte_type_name, {}}
     { }
-
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != 1) {
-            throw marshal_exception(format("Expected 1 byte for a tinyint ({:d})", v.size()));
-        }
-    }
 };
 
 struct short_type_impl : integer_type_impl<int16_t> {
     short_type_impl() : integer_type_impl{kind::short_kind, short_type_name, { }}
     { }
-
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != 2) {
-            throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size()));
-        }
-    }
 };
 
 struct int32_type_impl : integer_type_impl<int32_t> {
@@ -224,17 +207,6 @@ struct long_type_impl : integer_type_impl<int64_t> {
 struct string_type_impl : public concrete_type<sstring> {
     string_type_impl(kind k, sstring name)
         : concrete_type(k, name, { }, data::type_info::make_variable_size()) {}
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (as_cql3_type() == cql3::cql3_type::ascii) {
-            if (!utils::ascii::validate(v)) {
-                throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
-            }
-        } else {
-            if (!utils::utf8::validate(v)) {
-                 throw marshal_exception("Validation failed - non-UTF8 character in a UTF8 string");
-            }
-        }
-    }
 };
 
 struct ascii_type_impl final : public string_type_impl {
@@ -249,7 +221,6 @@ struct utf8_type_impl final : public string_type_impl {
 
 struct bytes_type_impl final : public concrete_type<bytes> {
     bytes_type_impl() : concrete_type(kind::bytes, bytes_type_name, { }, data::type_info::make_variable_size()) {}
-    virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
  };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
@@ -261,11 +232,6 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     }
     size_t serialized_size(bool value) const {
         return 1;
-    }
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != 1) {
-            throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size()));
-        }
     }
 };
 
@@ -282,17 +248,6 @@ logging::logger date_type_impl::_logger(date_type_name);
 
 struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     timeuuid_type_impl() : concrete_type<utils::UUID>(kind::timeuuid, timeuuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != 16) {
-            throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size()));
-        }
-        auto msb = read_simple<uint64_t>(v);
-        auto lsb = read_simple<uint64_t>(v);
-        utils::UUID uuid(msb, lsb);
-        if (uuid.version() != 1) {
-            throw marshal_exception(format("Unsupported UUID version ({:d})", uuid.version()));
-        }
-    }
 private:
     friend abstract_type;
 };
@@ -318,11 +273,6 @@ class timestamp_type_impl : public simple_type_impl<db_clock::time_point> {
 public:
     timestamp_type_impl() : simple_type_impl(kind::timestamp, timestamp_type_name, 8) {}
     // FIXME: isCompatibleWith(timestampuuid)
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != sizeof(uint64_t)) {
-            throw marshal_exception(format("Validation failed for timestamp - got {:d} bytes", v.size()));
-        }
-    }
     static boost::posix_time::ptime get_time(const std::smatch& sm) {
         // Unfortunately boost::date_time  parsers are more strict with regards
         // to the expected date format than we need to be.
@@ -422,11 +372,6 @@ logging::logger timestamp_type_impl::_logger(timestamp_type_name);
 struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, { }}
     { }
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != 4) {
-            throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
-        }
-    }
     static uint32_t days_from_string(sstring_view s) {
         std::string str;
         str.resize(s.size());
@@ -465,11 +410,6 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
 struct time_type_impl : public simple_type_impl<int64_t> {
     time_type_impl() : simple_type_impl{kind::time, time_type_name, { }}
     { }
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != 8) {
-            throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size()));
-        }
-    }
     static int64_t parse_time(sstring_view s) {
         static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
         auto hours_end = s.find(':');
@@ -515,22 +455,12 @@ struct time_type_impl : public simple_type_impl<int64_t> {
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
     uuid_type_impl() : concrete_type(kind::uuid, uuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != 16) {
-            throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
-        }
-    }
 };
 
 using inet_address = seastar::net::inet_address;
 
 struct inet_addr_type_impl : concrete_type<inet_address> {
     inet_addr_type_impl() : concrete_type<inet_address>(kind::inet, inet_addr_type_name, { }, data::type_info::make_variable_size()) {}
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
-            throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size()));
-        }
-    }
 };
 
 // Integer of same length of a given type. This is useful because our
@@ -567,11 +497,6 @@ template <typename T>
 struct floating_type_impl : public simple_type_impl<T> {
     floating_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
         : simple_type_impl<T>(k, std::move(name), std::move(value_length_if_fixed)) {}
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() != 0 && v.size() != sizeof(T)) {
-            throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
-        }
-    }
 };
 
 struct double_type_impl : floating_type_impl<double> {
@@ -612,38 +537,6 @@ auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
 class duration_type_impl : public concrete_type<cql_duration> {
 public:
     duration_type_impl() : concrete_type(kind::duration, duration_type_name, { }, data::type_info::make_variable_size()) {
-    }
-    virtual void validate(bytes_view v, cql_serialization_format sf) const override {
-        if (v.size() < 3) {
-            throw marshal_exception(format("Expected at least 3 bytes for a duration, got {:d}", v.size()));
-        }
-
-        counter_type months, days, nanoseconds;
-        std::tie(months, days, nanoseconds) = deserialize_counters(v);
-
-        auto check_counter_range = [] (counter_type value, auto counter_value_type_instance, std::string_view counter_name) {
-            using counter_value_type = decltype(counter_value_type_instance);
-
-            if (static_cast<counter_value_type>(value) != value) {
-                throw marshal_exception(format("The duration {} ({:d}) must be a {:d} bit integer",
-                                               counter_name,
-                                               value,
-                                               std::numeric_limits<counter_value_type>::digits + 1));
-            }
-        };
-
-        check_counter_range(months, months_counter::value_type(), "months");
-        check_counter_range(days, days_counter::value_type(), "days");
-        check_counter_range(nanoseconds, nanoseconds_counter::value_type(), "nanoseconds");
-
-        if (!(((months <= 0) && (days <= 0) && (nanoseconds <= 0))
-              || ((months >= 0) && (days >= 0) && (nanoseconds >= 0)))) {
-            throw marshal_exception(
-                    format("The duration months, days, and nanoseconds must be all of the same sign ({:d}, {:d}, {:d})",
-                           months,
-                           days,
-                           nanoseconds));
-        }
     }
 
     using counter_type = cql_duration::common_counter_type;
@@ -1327,11 +1220,11 @@ map_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
     return make_value(std::move(m));
 }
 
-void map_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
+static void validate_aux(const map_type_impl& t, bytes_view v, cql_serialization_format sf) {
     auto size = read_collection_size(v, sf);
     for (int i = 0; i < size; ++i) {
-        _keys->validate(read_collection_value(v, sf), sf);
-        _values->validate(read_collection_value(v, sf), sf);
+        t.get_keys_type()->validate(read_collection_value(v, sf), sf);
+        t.get_values_type()->validate(read_collection_value(v, sf), sf);
     }
 }
 
@@ -1781,10 +1674,10 @@ set_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previ
     return is_compatible_with(previous);
 }
 
-void set_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
+static void validate_aux(const set_type_impl& t, bytes_view v, cql_serialization_format sf) {
     auto nr = read_collection_size(v, sf);
     for (int i = 0; i != nr; ++i) {
-        _elements->validate(read_collection_value(v, sf), sf);
+        t.get_elements_type()->validate(read_collection_value(v, sf), sf);
     }
 }
 
@@ -1934,17 +1827,15 @@ list_type_impl::is_value_compatible_with_frozen(const collection_type_impl& prev
     return is_value_compatible_with_internal(*_elements, *lp._elements);
 }
 
-void list_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
+static void validate_aux(const list_type_impl& t, bytes_view v, cql_serialization_format sf) {
     auto nr = read_collection_size(v, sf);
     for (int i = 0; i != nr; ++i) {
-        _elements->validate(read_collection_value(v, sf), sf);
+        t.get_elements_type()->validate(read_collection_value(v, sf), sf);
     }
     if (!v.empty()) {
-        throw marshal_exception(
-                format("Validation failed for type {}: bytes remaining after reading all {} elements of the list -> [{}]",
-                       this->name(),
-                       nr,
-                       to_hex(v)));
+        throw marshal_exception(format("Validation failed for type {}: bytes remaining after "
+                                       "reading all {} elements of the list -> [{}]",
+                t.name(), nr, to_hex(v)));
     }
 }
 
@@ -2059,17 +1950,136 @@ tuple_type_impl::get_instance(std::vector<data_type> types) {
     return intern::get_instance(std::move(types));
 }
 
-void tuple_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
-    auto ti = _types.begin();
+static void validate_aux(const tuple_type_impl& t, bytes_view v, cql_serialization_format sf) {
+    auto ti = t.all_types().begin();
     auto vi = tuple_deserializing_iterator::start(v);
     auto end = tuple_deserializing_iterator::finish(v);
-    while (ti != _types.end() && vi != end) {
+    while (ti != t.all_types().end() && vi != end) {
         if (*vi) {
             (*ti)->validate(**vi, sf);
         }
         ++ti;
         ++vi;
     }
+}
+
+namespace {
+struct validate_visitor {
+    bytes_view v;
+    cql_serialization_format sf;
+    void operator()(const reversed_type_impl& t) { return t.underlying_type()->validate(v, sf); }
+    void operator()(const abstract_type&) {}
+    template <typename T> void operator()(const integer_type_impl<T>& t) {
+        if (v.size() != 0 && v.size() != sizeof(T)) {
+            throw marshal_exception(format("Validation failed for type {}: got {:d} bytes", t.name(), v.size()));
+        }
+    }
+    void operator()(const byte_type_impl& t) {
+        if (v.size() != 0 && v.size() != 1) {
+            throw marshal_exception(format("Expected 1 byte for a tinyint ({:d})", v.size()));
+        }
+    }
+    void operator()(const short_type_impl& t) {
+        if (v.size() != 0 && v.size() != 2) {
+            throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size()));
+        }
+    }
+    void operator()(const string_type_impl& t) {
+        if (t.as_cql3_type() == cql3::cql3_type::ascii) {
+            if (!utils::ascii::validate(v)) {
+                throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
+            }
+        } else {
+            if (!utils::utf8::validate(v)) {
+                throw marshal_exception("Validation failed - non-UTF8 character in a UTF8 string");
+            }
+        }
+    }
+    void operator()(const bytes_type_impl& t) {}
+    void operator()(const boolean_type_impl& t) {
+        if (v.size() != 0 && v.size() != 1) {
+            throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size()));
+        }
+    }
+    void operator()(const timeuuid_type_impl& t) {
+        if (v.size() != 0 && v.size() != 16) {
+            throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size()));
+        }
+        auto msb = read_simple<uint64_t>(v);
+        auto lsb = read_simple<uint64_t>(v);
+        utils::UUID uuid(msb, lsb);
+        if (uuid.version() != 1) {
+            throw marshal_exception(format("Unsupported UUID version ({:d})", uuid.version()));
+        }
+    }
+    void operator()(const timestamp_type_impl& t) {
+        if (v.size() != 0 && v.size() != sizeof(uint64_t)) {
+            throw marshal_exception(format("Validation failed for timestamp - got {:d} bytes", v.size()));
+        }
+    }
+    void operator()(const duration_type_impl& t) {
+        if (v.size() < 3) {
+            throw marshal_exception(format("Expected at least 3 bytes for a duration, got {:d}", v.size()));
+        }
+
+        duration_type_impl::counter_type months, days, nanoseconds;
+        std::tie(months, days, nanoseconds) = t.deserialize_counters(v);
+
+        auto check_counter_range = [] (duration_type_impl::counter_type value, auto counter_value_type_instance,
+                                           std::string_view counter_name) {
+            using counter_value_type = decltype(counter_value_type_instance);
+
+            if (static_cast<counter_value_type>(value) != value) {
+                throw marshal_exception(format("The duration {} ({:d}) must be a {:d} bit integer", counter_name, value,
+                        std::numeric_limits<counter_value_type>::digits + 1));
+            }
+        };
+
+        check_counter_range(months, months_counter::value_type(), "months");
+        check_counter_range(days, days_counter::value_type(), "days");
+        check_counter_range(nanoseconds, nanoseconds_counter::value_type(), "nanoseconds");
+
+        if (!(((months <= 0) && (days <= 0) && (nanoseconds <= 0)) ||
+                    ((months >= 0) && (days >= 0) && (nanoseconds >= 0)))) {
+            throw marshal_exception(format("The duration months, days, and nanoseconds must be all of "
+                                           "the same sign ({:d}, {:d}, {:d})",
+                    months, days, nanoseconds));
+        }
+    }
+    template <typename T> void operator()(const floating_type_impl<T>& t) {
+        if (v.size() != 0 && v.size() != sizeof(T)) {
+            throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
+        }
+    }
+    void operator()(const simple_date_type_impl& t) {
+        if (v.size() != 0 && v.size() != 4) {
+            throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
+        }
+    }
+    void operator()(const time_type_impl& t) {
+        if (v.size() != 0 && v.size() != 8) {
+            throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size()));
+        }
+    }
+    void operator()(const uuid_type_impl& t) {
+        if (v.size() != 0 && v.size() != 16) {
+            throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
+        }
+    }
+    void operator()(const inet_addr_type_impl& t) {
+        if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
+            throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size()));
+        }
+    }
+    void operator()(const map_type_impl& t) { validate_aux(t, v, sf); }
+    void operator()(const set_type_impl& t) { validate_aux(t, v, sf); }
+    void operator()(const list_type_impl& t) { validate_aux(t, v, sf); }
+    void operator()(const tuple_type_impl& t) { validate_aux(t, v, sf); }
+};
+}
+
+void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
+    visit(*this, validate_visitor{v, sf});
 }
 
 static void serialize_aux(const tuple_type_impl& t, const tuple_type_impl::native_type* v, bytes::iterator& out) {
