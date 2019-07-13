@@ -153,18 +153,6 @@ template<typename T>
 struct integer_type_impl : simple_type_impl<T> {
     integer_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
         : simple_type_impl<T>(k, name, std::move(value_length_if_fixed)) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto v1 = this->from_value(value);
-        if (v1.empty()) {
-            return;
-        }
-        auto v = v1.get();
-        auto u = net::hton(v);
-        out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
-    }
     T compose_value(bytes_view bv) const {
         if (bv.size() != sizeof(T)) {
             throw marshal_exception(format("Size mismatch for type {}: got {:d} bytes", this->name(), bv.size()));
@@ -239,13 +227,6 @@ struct long_type_impl : integer_type_impl<int64_t> {
 struct string_type_impl : public concrete_type<sstring> {
     string_type_impl(kind k, sstring name)
         : concrete_type(k, name, { }, data::type_info::make_variable_size()) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto& v = from_value(value);
-        out = std::copy(v.begin(), v.end(), out);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (as_cql3_type() == cql3::cql3_type::ascii) {
             if (!utils::ascii::validate(v)) {
@@ -274,13 +255,6 @@ struct utf8_type_impl final : public string_type_impl {
 
 struct bytes_type_impl final : public concrete_type<bytes> {
     bytes_type_impl() : concrete_type(kind::bytes, bytes_type_name, { }, data::type_info::make_variable_size()) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto& v = from_value(value);
-        out = std::copy(v.begin(), v.end(), out);
-    }
     virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
     virtual bytes from_string(sstring_view s) const override {
         return from_hex(s);
@@ -293,12 +267,6 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         if (!value.empty()) {
             *out++ = char(value);
         }
-    }
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        serialize_value(from_value(value), out);
     }
     size_t serialized_size(bool value) const {
         return 1;
@@ -328,18 +296,6 @@ class date_type_impl : public concrete_type<db_clock::time_point> {
     static logging::logger _logger;
 public:
     date_type_impl() : concrete_type(kind::date, date_type_name, 8, data::type_info::make_fixed_size(sizeof(uint64_t))) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto& v = from_value(value);
-        if (v.empty()) {
-            return;
-        }
-        int64_t i = v.get().time_since_epoch().count();
-        i = net::hton(uint64_t(i));
-        out = std::copy_n(reinterpret_cast<const char*>(&i), sizeof(i), out);
-    }
     virtual bytes from_string(sstring_view s) const override;
     friend abstract_type;
 };
@@ -347,17 +303,6 @@ logging::logger date_type_impl::_logger(date_type_name);
 
 struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     timeuuid_type_impl() : concrete_type<utils::UUID>(kind::timeuuid, timeuuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto& uuid1 = from_value(value);
-        if (uuid1.empty()) {
-            return;
-        }
-        auto uuid = uuid1.get();
-        uuid.serialize(out);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 16) {
             throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size()));
@@ -407,18 +352,6 @@ class timestamp_type_impl : public simple_type_impl<db_clock::time_point> {
     static logging::logger _logger;
 public:
     timestamp_type_impl() : simple_type_impl(kind::timestamp, timestamp_type_name, 8) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto&& v1 = from_value(value);
-        if (v1.empty()) {
-            return;
-        }
-        uint64_t v = v1.get().time_since_epoch().count();
-        v = net::hton(v);
-        out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
-    }
     // FIXME: isCompatibleWith(timestampuuid)
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(uint64_t)) {
@@ -533,19 +466,6 @@ logging::logger timestamp_type_impl::_logger(timestamp_type_name);
 struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, { }}
     { }
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto&& v1 = from_value(value);
-        if (v1.empty()) {
-            return;
-        }
-        uint32_t v = v1.get();
-        v = net::hton(v);
-        out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
-
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 4) {
             throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
@@ -598,18 +518,6 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
 struct time_type_impl : public simple_type_impl<int64_t> {
     time_type_impl() : simple_type_impl{kind::time, time_type_name, { }}
     { }
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto&& v1 = from_value(value);
-        if (v1.empty()) {
-            return;
-        }
-        uint64_t v = v1.get();
-        v = net::hton(v);
-        out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 8) {
             throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size()));
@@ -669,12 +577,6 @@ struct time_type_impl : public simple_type_impl<int64_t> {
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
     uuid_type_impl() : concrete_type(kind::uuid, uuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        from_value(value).get().serialize(out);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 16) {
             throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
@@ -697,30 +599,6 @@ using inet_address = seastar::net::inet_address;
 
 struct inet_addr_type_impl : concrete_type<inet_address> {
     inet_addr_type_impl() : concrete_type<inet_address>(kind::inet, inet_addr_type_name, { }, data::type_info::make_variable_size()) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto& ipv = from_value(value);
-        if (ipv.empty()) {
-            return;
-        }
-        auto& ip = ipv.get();
-        switch (ip.in_family()) {
-        case inet_address::family::INET:
-        {
-            const ::in_addr& in = ip;
-            out = std::copy_n(reinterpret_cast<const char*>(&in.s_addr), sizeof(in.s_addr), out);
-            break;
-        }
-        case inet_address::family::INET6:
-        {
-            const ::in6_addr& i6 = ip;
-            out = std::copy_n(i6.s6_addr, ip.size(), out);
-            break;
-        }
-        }
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
             throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size()));
@@ -778,24 +656,6 @@ template <typename T>
 struct floating_type_impl : public simple_type_impl<T> {
     floating_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
         : simple_type_impl<T>(k, std::move(name), std::move(value_length_if_fixed)) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        T d = this->from_value(value);
-        if (std::isnan(d)) {
-            // Java's Double.doubleToLongBits() documentation specifies that
-            // any nan must be serialized to the same specific value
-            d = std::numeric_limits<T>::quiet_NaN();
-        }
-        union {
-            T d;
-            typename int_of_size<T>::itype i;
-        } x;
-        x.d = d;
-        auto u = net::hton(x.i);
-        out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != sizeof(T)) {
             throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
@@ -810,7 +670,7 @@ struct floating_type_impl : public simple_type_impl<T> {
             bytes b(bytes::initialized_later(), sizeof(T));
             auto out = b.begin();
             auto val = this->make_value(d);
-            serialize(this->get_value_ptr(val), out);
+            this->serialize(this->get_value_ptr(val), out);
             return b;
         }
         catch(const boost::bad_lexical_cast& e) {
@@ -831,33 +691,6 @@ struct float_type_impl : floating_type_impl<float> {
 class varint_type_impl : public concrete_type<boost::multiprecision::cpp_int> {
 public:
     varint_type_impl() : concrete_type{kind::varint, varint_type_name, { }, data::type_info::make_variable_size()} { }
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto& num1 = from_value(value);
-        if (num1.empty()) {
-            return;
-        }
-        auto& num = std::move(num1).get();
-        boost::multiprecision::cpp_int pnum = boost::multiprecision::abs(num);
-
-        std::vector<uint8_t> b;
-        auto size = serialized_size(value);
-        b.reserve(size);
-        if (num.sign() < 0) {
-            pnum -= 1;
-        }
-        for (unsigned i = 0; i < size; i++) {
-            auto v = boost::multiprecision::integer_modulus(pnum, 256);
-            pnum >>= 8;
-            if (num.sign() < 0) {
-                v = ~v;
-            }
-            b.push_back(v);
-        }
-        out = std::copy(b.crbegin(), b.crend(), out);
-    }
     virtual bytes from_string(sstring_view text) const override {
         if (text.empty()) {
             return bytes();
@@ -879,20 +712,6 @@ public:
 class decimal_type_impl : public concrete_type<big_decimal> {
 public:
     decimal_type_impl() : concrete_type{kind::decimal, decimal_type_name, { }, data::type_info::make_variable_size()} { }
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (!value) {
-            return;
-        }
-        auto bd1 = from_value(value);
-        if (bd1.empty()) {
-            return;
-        }
-        auto&& bd = std::move(bd1).get();
-        auto u = net::hton(bd.scale());
-        out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(int32_t), out);
-        varint_type_impl::native_type unscaled_value = bd.unscaled_value();
-        varint_type->serialize(&unscaled_value, out);
-    }
     virtual bytes from_string(sstring_view text) const override {
         if (text.empty()) {
             return bytes();
@@ -912,9 +731,6 @@ public:
 class counter_type_impl : public abstract_type {
 public:
     counter_type_impl() : abstract_type{kind::counter, counter_type_name, { }, data::type_info::make_variable_size()} { }
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -933,22 +749,6 @@ auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
 class duration_type_impl : public concrete_type<cql_duration> {
 public:
     duration_type_impl() : concrete_type(kind::duration, duration_type_name, { }, data::type_info::make_variable_size()) {
-    }
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        if (value == nullptr) {
-            return;
-        }
-
-        auto& m = from_value(value);
-        if (m.empty()) {
-            return;
-        }
-
-        const auto& d = m.get();
-
-        out += signed_vint::serialize(d.months, out);
-        out += signed_vint::serialize(d.days, out);
-        out += signed_vint::serialize(d.nanoseconds, out);
     }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() < 3) {
@@ -1021,8 +821,6 @@ public:
 
 struct empty_type_impl : abstract_type {
     empty_type_impl() : abstract_type(kind::empty, empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-    }
     virtual bytes from_string(sstring_view text) const override {
         return {};
     }
@@ -1652,11 +1450,6 @@ map_type_impl::compare_maps(data_type keys, data_type values, bytes_view o1, byt
     return size1 == size2 ? 0 : (size1 < size2 ? -1 : 1);
 }
 
-void
-map_type_impl::serialize(const void* value, bytes::iterator& out) const {
-    return serialize(value, out, cql_serialization_format::internal());
-}
-
 static size_t map_serialized_size(const map_type_impl::native_type* m) {
     size_t len = collection_size_len(cql_serialization_format::internal());
     size_t psz = collection_value_len(cql_serialization_format::internal());
@@ -2158,11 +1951,6 @@ void set_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
     }
 }
 
-void
-set_type_impl::serialize(const void* value, bytes::iterator& out) const {
-    return serialize(value, out, cql_serialization_format::internal());
-}
-
 static size_t listlike_serialized_size(const std::vector<data_value>* s) {
     size_t len = collection_size_len(cql_serialization_format::internal());
     size_t psz = collection_value_len(cql_serialization_format::internal());
@@ -2330,11 +2118,6 @@ void list_type_impl::validate(bytes_view v, cql_serialization_format sf) const {
 }
 
 void
-list_type_impl::serialize(const void* value, bytes::iterator& out) const {
-    return serialize(value, out, cql_serialization_format::internal());
-}
-
-void
 list_type_impl::serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const {
     auto& s = from_value(value);
     write_collection_size(out, s.size(), sf);
@@ -2464,12 +2247,7 @@ void tuple_type_impl::validate(bytes_view v, cql_serialization_format sf) const 
     }
 }
 
-void
-tuple_type_impl::serialize(const void* value, bytes::iterator& out) const {
-    if (!value) {
-        return;
-    }
-    auto& v = from_value(value);
+static void serialize_aux(const tuple_type_impl& t, const tuple_type_impl::native_type* v, bytes::iterator& out) {
     auto do_serialize = [&out] (auto&& t_v) {
         const data_type& t = boost::get<0>(t_v);
         const data_value& v = boost::get<1>(t_v);
@@ -2479,11 +2257,170 @@ tuple_type_impl::serialize(const void* value, bytes::iterator& out) const {
         if (v.is_null()) {
             write(out, int32_t(-1));
         } else {
-            write(out, int32_t(t->serialized_size(t->get_value_ptr(v))));
-            t->serialize(t->get_value_ptr(v), out);
+            write(out, int32_t(v.serialized_size()));
+            v.serialize(out);
         }
     };
-    boost::range::for_each(boost::combine(_types, v), do_serialize);
+    boost::range::for_each(boost::combine(t.all_types(), *v), do_serialize);
+}
+
+static size_t concrete_serialized_size(const varint_type_impl::native_type& v);
+
+namespace {
+struct serialize_visitor {
+    bytes::iterator& out;
+    void operator()(const reversed_type_impl& t, const void* v) { return t.underlying_type()->serialize(v, out); }
+    template <typename T>
+    void operator()(const integer_type_impl<T>& t, const typename integer_type_impl<T>::native_type* v1) {
+        if (v1->empty()) {
+            return;
+        }
+        auto v = v1->get();
+        auto u = net::hton(v);
+        out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
+    }
+    void operator()(const string_type_impl& t, const string_type_impl::native_type* v) {
+        out = std::copy(v->begin(), v->end(), out);
+    }
+    void operator()(const bytes_type_impl& t, const bytes* v) {
+        out = std::copy(v->begin(), v->end(), out);
+    }
+    void operator()(const boolean_type_impl& t, const boolean_type_impl::native_type* v) {
+        if (!v->empty()) {
+            *out++ = char(*v);
+        }
+    }
+    void operator()(const date_type_impl& t, const date_type_impl::native_type* v) {
+        if (v->empty()) {
+            return;
+        }
+        int64_t i = v->get().time_since_epoch().count();
+        i = net::hton(uint64_t(i));
+        out = std::copy_n(reinterpret_cast<const char*>(&i), sizeof(i), out);
+    }
+    void operator()(const timeuuid_type_impl& t, const timeuuid_type_impl::native_type* uuid1) {
+        if (uuid1->empty()) {
+            return;
+        }
+        auto uuid = uuid1->get();
+        uuid.serialize(out);
+    }
+    void operator()(const timestamp_type_impl& t, const timestamp_type_impl::native_type* v1) {
+        if (v1->empty()) {
+            return;
+        }
+        uint64_t v = v1->get().time_since_epoch().count();
+        v = net::hton(v);
+        out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
+    }
+    void operator()(const simple_date_type_impl& t, const simple_date_type_impl::native_type* v1) {
+        if (v1->empty()) {
+            return;
+        }
+        uint32_t v = v1->get();
+        v = net::hton(v);
+        out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
+    }
+    void operator()(const time_type_impl& t, const time_type_impl::native_type* v1) {
+        if (v1->empty()) {
+            return;
+        }
+        uint64_t v = v1->get();
+        v = net::hton(v);
+        out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
+    }
+    void operator()(const empty_type_impl& t, const void*) {}
+    void operator()(const uuid_type_impl& t, const uuid_type_impl::native_type* value) {
+        value->get().serialize(out);
+    }
+    void operator()(const inet_addr_type_impl& t, const inet_addr_type_impl::native_type* ipv) {
+        if (ipv->empty()) {
+            return;
+        }
+        auto& ip = ipv->get();
+        switch (ip.in_family()) {
+        case inet_address::family::INET: {
+            const ::in_addr& in = ip;
+            out = std::copy_n(reinterpret_cast<const char*>(&in.s_addr), sizeof(in.s_addr), out);
+            break;
+        }
+        case inet_address::family::INET6: {
+            const ::in6_addr& i6 = ip;
+            out = std::copy_n(i6.s6_addr, ip.size(), out);
+            break;
+        }
+        }
+    }
+    template <typename T>
+    void operator()(const floating_type_impl<T>& t, const typename floating_type_impl<T>::native_type* value) {
+        T d = *value;
+        if (std::isnan(d)) {
+            // Java's Double.doubleToLongBits() documentation specifies that
+            // any nan must be serialized to the same specific value
+            d = std::numeric_limits<T>::quiet_NaN();
+        }
+        typename int_of_size<T>::itype i;
+        memcpy(&i, &d, sizeof(T));
+        auto u = net::hton(i);
+        out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
+    }
+    void operator()(const varint_type_impl& t, const varint_type_impl::native_type* num1) {
+        if (num1->empty()) {
+            return;
+        }
+        auto& num = std::move(*num1).get();
+        boost::multiprecision::cpp_int pnum = boost::multiprecision::abs(num);
+
+        std::vector<uint8_t> b;
+        auto size = concrete_serialized_size(*num1);
+        b.reserve(size);
+        if (num.sign() < 0) {
+            pnum -= 1;
+        }
+        for (unsigned i = 0; i < size; i++) {
+            auto v = boost::multiprecision::integer_modulus(pnum, 256);
+            pnum >>= 8;
+            if (num.sign() < 0) {
+                v = ~v;
+            }
+            b.push_back(v);
+        }
+        out = std::copy(b.crbegin(), b.crend(), out);
+    }
+    void operator()(const decimal_type_impl& t, const decimal_type_impl::native_type* bd1) {
+        if (bd1->empty()) {
+            return;
+        }
+        auto&& bd = std::move(*bd1).get();
+        auto u = net::hton(bd.scale());
+        out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(int32_t), out);
+        varint_type_impl::native_type unscaled_value = bd.unscaled_value();
+        const auto* real_varint_type = reinterpret_cast<const varint_type_impl*>(varint_type.get());
+        serialize_visitor{out}(*real_varint_type, &unscaled_value);
+    }
+    void operator()(const counter_type_impl& t, const void*) { fail(unimplemented::cause::COUNTERS); }
+    void operator()(const duration_type_impl& t, const duration_type_impl::native_type* m) {
+        if (m->empty()) {
+            return;
+        }
+        const auto& d = m->get();
+        out += signed_vint::serialize(d.months, out);
+        out += signed_vint::serialize(d.days, out);
+        out += signed_vint::serialize(d.nanoseconds, out);
+    }
+    void operator()(const collection_type_impl& t, const void* value) {
+        return t.serialize(value, out, cql_serialization_format::internal());
+    }
+    void operator()(const tuple_type_impl& t, const tuple_type_impl::native_type* value) {
+        return serialize_aux(t, value, out);
+    }
+};
+}
+
+void abstract_type::serialize(const void* value, bytes::iterator& out) const {
+    if (value) {
+        visit(*this, value, serialize_visitor{out});
+    }
 }
 
 static data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {

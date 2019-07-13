@@ -47,7 +47,6 @@ public:
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual void validate(bytes_view v, cql_serialization_format sf) const override;
-    virtual void serialize(const void* value, bytes::iterator& out) const override;
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     using abstract_type::deserialize;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;

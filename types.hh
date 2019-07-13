@@ -502,7 +502,7 @@ public:
         : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti), _kind(k) {}
     virtual ~abstract_type() {}
     const data::type_imr_descriptor& imr_state() const { return _imr_state; }
-    virtual void serialize(const void* value, bytes::iterator& out) const = 0;
+    void serialize(const void* value, bytes::iterator& out) const;
     void serialize(const data_value& value, bytes::iterator& out) const {
         return serialize(get_value_ptr(value), out);
     }
@@ -861,10 +861,6 @@ public:
 
     shared_ptr<const abstract_type> underlying_type() const {
         return _underlying_type;
-    }
-
-    virtual void serialize(const void* value, bytes::iterator& out) const override {
-        _underlying_type->serialize(value, out);
     }
 
     virtual bytes from_string(sstring_view s) const override {
