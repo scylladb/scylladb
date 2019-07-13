@@ -111,7 +111,6 @@ public:
     virtual void validate(bytes_view v, cql_serialization_format sf) const;
     virtual size_t serialized_size(const void* value) const override;
     virtual void serialize(const void* value, bytes::iterator& out) const override;
-    virtual data_value deserialize(bytes_view v) const override;
     std::vector<bytes_view_opt> split(bytes_view v) const;
     template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
     static bytes build_value(RangeOf_bytes_opt&& range) {

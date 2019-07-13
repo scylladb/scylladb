@@ -59,7 +59,7 @@ public:
     virtual void serialize(const void* value, bytes::iterator& out) const override;
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     virtual size_t serialized_size(const void* value) const;
-    virtual data_value deserialize(bytes_view v) const override;
+    using abstract_type::deserialize;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     virtual sstring to_json_string(bytes_view bv) const override;
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;

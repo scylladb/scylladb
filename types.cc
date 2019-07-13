@@ -192,14 +192,6 @@ struct integer_type_impl : simple_type_impl<T> {
         }
         return sizeof(v.get());
     }
-    virtual data_value deserialize(bytes_view v) const override {
-        auto x = read_simple_opt<T>(v);
-        if (!x) {
-            return this->make_empty();
-        } else {
-            return this->make_value(*x);
-        }
-    }
     T compose_value(bytes_view bv) const {
         if (bv.size() != sizeof(T)) {
             throw marshal_exception(format("Size mismatch for type {}: got {:d} bytes", this->name(), bv.size()));
@@ -301,10 +293,6 @@ struct string_type_impl : public concrete_type<sstring> {
         auto& v = from_value(value);
         return v.size();
     }
-    virtual data_value deserialize(bytes_view v) const override {
-        // FIXME: validation?
-        return make_value(std::make_unique<native_type>(reinterpret_cast<const char*>(v.begin()), v.size()));
-    }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
@@ -367,9 +355,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         auto& v = from_value(value);
         return v.size();
     }
-    virtual data_value deserialize(bytes_view v) const override {
-        return make_value(std::make_unique<native_type>(v.begin(), v.end()));
-    }
     virtual void validate(const fragmented_temporary_buffer::view&, cql_serialization_format) const override { }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
@@ -430,15 +415,6 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     size_t serialized_size(bool value) const {
         return 1;
     }
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_empty();
-        }
-        if (v.size() != 1) {
-            throw marshal_exception(format("Cannot deserialize boolean, size mismatch ({:d})", v.size()));
-        }
-        return make_value(*v.begin() != 0);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 1) {
             throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size()));
@@ -490,13 +466,6 @@ public:
             return 0;
         }
         return 8;
-    }
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_empty();
-        }
-        auto tmp = read_simple_exactly<uint64_t>(v);
-        return make_value(db_clock::time_point(db_clock::duration(tmp)));
     }
     virtual bool less(bytes_view b1, bytes_view b2) const override {
         return compare_unsigned(b1, b2) < 0;
@@ -554,18 +523,6 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
             return 0;
         }
         return 16;
-    }
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_empty();
-        }
-        uint64_t msb, lsb;
-        msb = read_simple<uint64_t>(v);
-        lsb = read_simple<uint64_t>(v);
-        if (!v.empty()) {
-            throw marshal_exception(format("Failed to deserialize timeuuid, extra bytes left ({:d})", v.size()));
-        }
-        return make_value(utils::UUID(msb, lsb));
     }
     virtual bool less(bytes_view b1, bytes_view b2) const override {
         if (b1.empty()) {
@@ -657,13 +614,6 @@ public:
             return 0;
         }
         return 8;
-    }
-    virtual data_value deserialize(bytes_view in) const override {
-        if (in.empty()) {
-            return make_empty();
-        }
-        auto v = read_simple_exactly<uint64_t>(in);
-        return make_value(db_clock::time_point(db_clock::duration(v)));
     }
     // FIXME: isCompatibleWith(timestampuuid)
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
@@ -824,13 +774,6 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         }
         return 4;
     }
-    virtual data_value deserialize(bytes_view in) const override {
-        if (in.empty()) {
-            return make_empty();
-        }
-        auto v = read_simple_exactly<uint32_t>(in);
-        return make_value(v);
-    }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 4) {
             throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
@@ -906,13 +849,6 @@ struct time_type_impl : public simple_type_impl<int64_t> {
             return 0;
         }
         return 8;
-    }
-    virtual data_value deserialize(bytes_view in) const override {
-        if (in.empty()) {
-            return make_empty();
-        }
-        auto v = read_simple_exactly<int64_t>(in);
-        return make_value(v);
     }
     virtual void validate(bytes_view v, cql_serialization_format sf) const override {
         if (v.size() != 0 && v.size() != 8) {
@@ -990,17 +926,6 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
             return 0;
         }
         return 16;
-    }
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_empty();
-        }
-        auto msb = read_simple<uint64_t>(v);
-        auto lsb = read_simple<uint64_t>(v);
-        if (!v.empty()) {
-            throw marshal_exception(format("Cannot deserialize uuid, {:d} bytes left", v.size()));
-        }
-        return make_value(utils::UUID(msb, lsb));
     }
     virtual bool less(bytes_view b1, bytes_view b2) const override {
         if (b1.size() < 16) {
@@ -1092,20 +1017,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
             return 0;
         }
         return ipv.get().size();
-    }
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_empty();
-        }
-        switch (v.size()) {
-        case 4:
-            // gah. read_simple_be, please...
-            return make_value(inet_address(::in_addr{net::hton(read_simple<uint32_t>(v))}));
-        case 16:
-            return make_value(inet_address(*reinterpret_cast<const ::in6_addr *>(v.data())));
-        default:
-            throw marshal_exception(format("Cannot deserialize inet_address, unsupported size {:d} bytes", v.size()));
-        }
     }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
@@ -1201,20 +1112,6 @@ struct floating_type_impl : public simple_type_impl<T> {
         return sizeof(T);
     }
 
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return this->make_empty();
-        }
-        union {
-            T d;
-            typename int_of_size<T>::itype i;
-        } x;
-        x.i = read_simple<typename int_of_size<T>::itype>(v);
-        if (!v.empty()) {
-            throw marshal_exception(format("Cannot deserialize floating - {:d} bytes left", v.size()));
-        }
-        return this->make_value(x.d);
-    }
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
@@ -1263,7 +1160,7 @@ struct floating_type_impl : public simple_type_impl<T> {
         }
     }
     virtual sstring to_json_string(bytes_view bv) const override {
-        auto v = deserialize(bv);
+        auto v = this->deserialize(bv);
         if (v.is_null()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
@@ -1362,24 +1259,6 @@ public:
         bytes b(v.begin(), v.end());
         return std::hash<sstring>()(to_string(b));
     }
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_empty();
-        }
-        auto negative = v.front() < 0;
-        boost::multiprecision::cpp_int num;
-        for (uint8_t b : v) {
-            if (negative) {
-                b = ~b;
-            }
-            num <<= 8;
-            num += b;
-        }
-        if (negative) {
-            num += 1;
-        }
-        return make_value(negative ? -num : num);
-    }
     virtual sstring to_json_string(bytes_view bv) const override {
         auto v = deserialize(bv);
         if (v.is_null()) {
@@ -1471,15 +1350,6 @@ public:
         bytes b(v.begin(), v.end());
         return std::hash<sstring>()(to_string(b));
     }
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_empty();
-        }
-        auto scale = read_simple<int32_t>(v);
-        data_value unscaled = varint_type->deserialize(v);
-        auto real_varint_type = static_cast<const varint_type_impl*>(varint_type.get()); // yuck
-        return make_value(big_decimal(scale, real_varint_type->from_value(unscaled).get()));
-    }
     virtual sstring to_json_string(bytes_view bv) const override {
         auto v = deserialize(bv);
         if (v.is_null()) {
@@ -1528,9 +1398,6 @@ public:
         fail(unimplemented::cause::COUNTERS);
     }
     virtual size_t hash(bytes_view v) const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
-    virtual data_value deserialize(bytes_view v) const override {
         fail(unimplemented::cause::COUNTERS);
     }
     virtual sstring to_json_string(bytes_view bv) const override {
@@ -1650,18 +1517,7 @@ public:
                            nanoseconds));
         }
     }
-    virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_empty();
-        }
 
-        counter_type months, days, nanoseconds;
-        std::tie(months, days, nanoseconds) = deserialize_counters(v);
-
-        return make_value(cql_duration(months_counter(months),
-                                       days_counter(days),
-                                       nanoseconds_counter(nanoseconds)));
-    }
     virtual bytes from_string(sstring_view s) const override {
         if (s.empty()) {
             return bytes();
@@ -1698,7 +1554,6 @@ public:
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
-private:
     using counter_type = cql_duration::common_counter_type;
 
     static std::tuple<counter_type, counter_type, counter_type> deserialize_counters(bytes_view v) {
@@ -1731,9 +1586,6 @@ struct empty_type_impl : abstract_type {
     }
     virtual size_t hash(bytes_view v) const override {
         return 0;
-    }
-    virtual data_value deserialize(bytes_view v) const override {
-        return data_value::make_null(shared_from_this());
     }
     virtual sstring to_json_string(bytes_view bv) const override {
         return "null";
@@ -2378,11 +2230,6 @@ map_type_impl::serialize(const void* value, bytes::iterator& out, cql_serializat
 }
 
 data_value
-map_type_impl::deserialize(bytes_view v) const {
-    return deserialize(v, cql_serialization_format::internal());
-}
-
-data_value
 map_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
     native_type m;
     auto size = read_collection_size(in, sf);
@@ -2907,11 +2754,6 @@ set_type_impl::serialize(const void* value, bytes::iterator& out, cql_serializat
 }
 
 data_value
-set_type_impl::deserialize(bytes_view in) const {
-    return deserialize(in, cql_serialization_format::internal());
-}
-
-data_value
 set_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
     auto nr = read_collection_size(in, sf);
     native_type s;
@@ -3099,11 +2941,6 @@ list_type_impl::serialized_size(const void* value) const {
 }
 
 data_value
-list_type_impl::deserialize(bytes_view in) const {
-    return deserialize(in, cql_serialization_format::internal());
-}
-
-data_value
 list_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
     auto nr = read_collection_size(in, sf);
     native_type s;
@@ -3283,13 +3120,12 @@ tuple_type_impl::serialize(const void* value, bytes::iterator& out) const {
     boost::range::for_each(boost::combine(_types, v), do_serialize);
 }
 
-data_value
-tuple_type_impl::deserialize(bytes_view v) const {
-    native_type ret;
-    ret.reserve(_types.size());
-    auto ti = _types.begin();
+static data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {
+    tuple_type_impl::native_type ret;
+    ret.reserve(t.all_types().size());
+    auto ti = t.all_types().begin();
     auto vi = tuple_deserializing_iterator::start(v);
-    while (ti != _types.end() && vi != tuple_deserializing_iterator::finish(v)) {
+    while (ti != t.all_types().end() && vi != tuple_deserializing_iterator::finish(v)) {
         data_value obj = data_value::make_null(*ti);
         if (*vi) {
             obj = (*ti)->deserialize(**vi);
@@ -3298,10 +3134,147 @@ tuple_type_impl::deserialize(bytes_view v) const {
         ++ti;
         ++vi;
     }
-    while (ti != _types.end()) {
+    while (ti != t.all_types().end()) {
         ret.push_back(data_value::make_null(*ti++));
     }
-    return make_value(std::move(ret));
+    return data_value::make(t.shared_from_this(), std::make_unique<tuple_type_impl::native_type>(std::move(ret)));
+}
+
+static boost::multiprecision::cpp_int deserialize_value(const varint_type_impl&, bytes_view v) {
+    auto negative = v.front() < 0;
+    boost::multiprecision::cpp_int num;
+    for (uint8_t b : v) {
+        if (negative) {
+            b = ~b;
+        }
+        num <<= 8;
+        num += b;
+    }
+    if (negative) {
+        num += 1;
+    }
+    return negative ? -num : num;
+}
+
+template <typename T> static T deserialize_value(const floating_type_impl<T>&, bytes_view v) {
+    typename int_of_size<T>::itype i = read_simple<typename int_of_size<T>::itype>(v);
+    if (!v.empty()) {
+        throw marshal_exception(format("cannot deserialize floating - {:d} bytes left", v.size()));
+    }
+    T d;
+    memcpy(&d, &i, sizeof(T));
+    return d;
+}
+
+static big_decimal deserialize_value(const decimal_type_impl& , bytes_view v) {
+    auto scale = read_simple<int32_t>(v);
+    auto unscaled = deserialize_value(static_cast<const varint_type_impl&>(*varint_type), v);
+    return big_decimal(scale, unscaled);
+}
+
+static cql_duration deserialize_value(const duration_type_impl& t, bytes_view v) {
+    duration_type_impl::counter_type months, days, nanoseconds;
+    std::tie(months, days, nanoseconds) = t.deserialize_counters(v);
+    return cql_duration(months_counter(months), days_counter(days), nanoseconds_counter(nanoseconds));
+}
+
+static inet_address deserialize_value(const inet_addr_type_impl&, bytes_view v) {
+    switch (v.size()) {
+    case 4:
+        // gah. read_simple_be, please...
+        return inet_address(::in_addr{net::hton(read_simple<uint32_t>(v))});
+    case 16:
+        return inet_address(*reinterpret_cast<const ::in6_addr*>(v.data()));
+    default:
+        throw marshal_exception(format("cannot deserialize inet_address, unsupported size {:d} bytes", v.size()));
+    }
+}
+
+static utils::UUID deserialize_value(const uuid_type_impl&, bytes_view v) {
+    auto msb = read_simple<uint64_t>(v);
+    auto lsb = read_simple<uint64_t>(v);
+    if (!v.empty()) {
+        throw marshal_exception(format("cannot deserialize uuid, {:d} bytes left", v.size()));
+    }
+    return utils::UUID(msb, lsb);
+}
+
+static utils::UUID deserialize_value(const timeuuid_type_impl&, bytes_view v) {
+    return deserialize_value(static_cast<const uuid_type_impl&>(*uuid_type), v);
+}
+
+static db_clock::time_point deserialize_value(const timestamp_type_impl&, bytes_view v) {
+    auto v2 = read_simple_exactly<uint64_t>(v);
+    return db_clock::time_point(db_clock::duration(v2));
+}
+
+static uint32_t deserialize_value(const simple_date_type_impl&, bytes_view v) {
+    return read_simple_exactly<uint32_t>(v);
+}
+
+static int64_t deserialize_value(const time_type_impl&, bytes_view v) {
+    return read_simple_exactly<int64_t>(v);
+}
+
+static db_clock::time_point deserialize_value(const date_type_impl&, bytes_view v) {
+    auto tmp = read_simple_exactly<uint64_t>(v);
+    return db_clock::time_point(db_clock::duration(tmp));
+}
+
+static bool deserialize_value(const boolean_type_impl&, bytes_view v) {
+    if (v.size() != 1) {
+        throw marshal_exception(format("cannot deserialize boolean, size mismatch ({:d})", v.size()));
+    }
+    return *v.begin() != 0;
+}
+
+template<typename T>
+static T deserialize_value(const integer_type_impl<T>& t, bytes_view v) {
+    return read_simple_exactly<T>(v);
+}
+
+static sstring deserialize_value(const string_type_impl&, bytes_view v) {
+    // FIXME: validation?
+    return sstring(reinterpret_cast<const char*>(v.begin()), v.size());
+}
+
+namespace {
+struct deserialize_visitor {
+    bytes_view v;
+    data_value operator()(const reversed_type_impl& t) { return t.underlying_type()->deserialize(v); }
+    template <typename T> data_value operator()(const T& t) {
+        if (v.empty()) {
+            return t.make_empty();
+        }
+        return t.make_value(deserialize_value(t, v));
+    }
+    data_value operator()(const ascii_type_impl& t) {
+         return t.make_value(deserialize_value(t, v));
+    }
+    data_value operator()(const utf8_type_impl& t) {
+         return t.make_value(deserialize_value(t, v));
+    }
+    data_value operator()(const bytes_type_impl& t) {
+        return t.make_value(std::make_unique<bytes_type_impl::native_type>(v.begin(), v.end()));
+    }
+    data_value operator()(const counter_type_impl& t) { fail(unimplemented::cause::COUNTERS); }
+    data_value operator()(const list_type_impl& t) {
+        return t.deserialize(v, cql_serialization_format::internal());
+    }
+    data_value operator()(const map_type_impl& t) {
+        return t.deserialize(v, cql_serialization_format::internal());
+    }
+    data_value operator()(const set_type_impl& t) {
+        return t.deserialize(v, cql_serialization_format::internal());
+    }
+    data_value operator()(const tuple_type_impl& t) { return deserialize_aux(t, v); }
+    data_value operator()(const user_type_impl& t) { return deserialize_aux(t, v); }
+    data_value operator()(const empty_type_impl& t) { return data_value::make_null(t.shared_from_this()); }
+};
+}
+
+data_value abstract_type::deserialize(bytes_view v) const {
+    return visit(*this, deserialize_visitor{v});
 }
 
 std::vector<bytes_view_opt>

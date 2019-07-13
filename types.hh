@@ -528,7 +528,7 @@ public:
             return 0;
         }
     }
-    virtual data_value deserialize(bytes_view v) const = 0;
+    data_value deserialize(bytes_view v) const;
     data_value deserialize_value(bytes_view v) const {
         return deserialize(v);
     };
@@ -959,9 +959,6 @@ public:
     }
     virtual size_t serialized_size(const void* value) const override {
         return _underlying_type->serialized_size(value);
-    }
-    virtual data_value deserialize(bytes_view v) const override {
-        return _underlying_type->deserialize(v);
     }
 
     virtual sstring get_string(const bytes& b) const override {
