@@ -2164,7 +2164,42 @@
                ]
             }
          ]
-      }
+      },
+      {
+         "path":"/storage_service/sstable_info",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"SSTable information",
+               "type":"array",
+               "items":{
+                  "type":"table_sstables"
+               },
+               "nickname":"sstable_info",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"column family name",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      }      
    ],
    "models":{
       "mapper":{
@@ -2324,6 +2359,92 @@
                "description":"The endpoint details"
             }
          }
+      },
+      "named_maps":{
+        "id":"named_maps",
+        "properties":{
+            "group":{
+                "type":"string"
+            },
+            "attributes":{
+                "type":"array",
+                "items":{
+                    "type":"mapper"
+                }
+            }
+        }
+      },
+      "sstable":{
+        "id":"sstable",
+        "properties":{
+            "size":{
+               "type":"long",
+               "description":"Total size in bytes of sstable"
+            },
+            "data_size":{
+                "type":"long",
+                "description":"The size in bytes on disk of data"
+            },
+            "index_size":{
+               "type":"long",
+               "description":"The size in bytes on disk of index"
+            },
+            "filter_size":{
+               "type":"long",
+               "description":"The size in bytes on disk of filter"
+            },
+            "timestamp":{
+                "type":"datetime",
+                "description":"File creation time"
+            },
+            "generation":{
+                "type":"long",
+                "description":"SSTable generation"
+            },
+            "level":{
+               "type":"long",
+               "description":"SSTable level"
+            },
+            "version":{
+               "type":"string",
+               "enum":[
+                  "ka", "la", "mc"
+               ],
+               "description":"SSTable version"
+            },
+            "properties":{
+                "type":"array",
+                "description":"SSTable attributes",
+                "items":{
+                    "type":"mapper"
+                }
+            },
+            "extended_properties":{
+                "type":"array",
+                "description":"SSTable extended attributes",
+                "items":{
+                    "type":"named_maps"
+                }
+            }
+        }
+      },
+      "table_sstables":{
+        "id":"table_sstables",
+        "description":"Per-table SSTable info and attributes",
+        "properties":{
+            "keyspace":{
+                "type":"string"
+            },
+            "table":{
+                "type":"string"
+            },
+            "sstables":{
+                "type":"array",
+                "items":{
+                    "$ref":"sstable"
+                }
+            }
+        }
       }
    }
 }
