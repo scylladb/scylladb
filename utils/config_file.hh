@@ -118,7 +118,9 @@ public:
         std::string_view type_name() const {
             return _type->name();
         }
-
+        config_file * get_config_file() const {
+            return _cf;
+        }
         virtual void add_command_line_option(
                         bpo::options_description_easy_init&, const std::string_view&,
                         const std::string_view&) = 0;

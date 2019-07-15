@@ -389,6 +389,21 @@ future<> utils::config_file::broadcast_to_all_shards() {
                 }
             }).get();
         }
+
+        // #4713
+        // We can have values retained that are not pointing to
+        // our storage (extension config). Need to broadcast
+        // these configs as well.
+        std::set<config_file *> files;
+        for (config_src& v : _cfgs) {
+            auto f = v.get_config_file();
+            if (f != this) {
+                files.insert(f);
+            }
+        }
+        for (auto* f : files) {
+            f->broadcast_to_all_shards().get();
+        }
     });
 }
 
