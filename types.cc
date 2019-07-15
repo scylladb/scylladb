@@ -498,29 +498,25 @@ auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
     return result_type{f(Ts)...};
 }
 
-class duration_type_impl : public concrete_type<cql_duration> {
-public:
-    duration_type_impl() : concrete_type(kind::duration, duration_type_name, { }, data::type_info::make_variable_size()) {
-    }
+duration_type_impl::duration_type_impl()
+    : concrete_type(kind::duration, duration_type_name, {}, data::type_info::make_variable_size()) {}
 
-    using counter_type = cql_duration::common_counter_type;
+using common_counter_type = cql_duration::common_counter_type;
+static std::tuple<common_counter_type, common_counter_type, common_counter_type> deserialize_counters(bytes_view v) {
+    auto deserialize_and_advance = [&v] (auto&& i) {
+        auto len = signed_vint::serialized_size_from_first_byte(v.front());
+        const auto d = signed_vint::deserialize(v);
+        v.remove_prefix(len);
 
-    static std::tuple<counter_type, counter_type, counter_type> deserialize_counters(bytes_view v) {
-        auto deserialize_and_advance = [&v](auto&& i) {
-            auto len = signed_vint::serialized_size_from_first_byte(v.front());
-            const auto d = signed_vint::deserialize(v);
-            v.remove_prefix(len);
+        if (v.empty() && (i != 2)) {
+            throw marshal_exception("Cannot deserialize duration");
+        }
 
-            if (v.empty() && (i != 2)) {
-                throw marshal_exception("Cannot deserialize duration");
-            }
+        return static_cast<common_counter_type>(d);
+    };
 
-            return static_cast<counter_type>(d);
-        };
-
-        return generate_tuple_from_index(std::make_index_sequence<3>(), std::move(deserialize_and_advance));
-    }
-};
+    return generate_tuple_from_index(std::make_index_sequence<3>(), std::move(deserialize_and_advance));
+}
 
 empty_type_impl::empty_type_impl()
     : abstract_type(kind::empty, empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
@@ -1985,10 +1981,10 @@ struct validate_visitor {
             throw marshal_exception(format("Expected at least 3 bytes for a duration, got {:d}", v.size()));
         }
 
-        duration_type_impl::counter_type months, days, nanoseconds;
-        std::tie(months, days, nanoseconds) = t.deserialize_counters(v);
+        common_counter_type months, days, nanoseconds;
+        std::tie(months, days, nanoseconds) = deserialize_counters(v);
 
-        auto check_counter_range = [] (duration_type_impl::counter_type value, auto counter_value_type_instance,
+        auto check_counter_range = [] (common_counter_type value, auto counter_value_type_instance,
                                            std::string_view counter_name) {
             using counter_value_type = decltype(counter_value_type_instance);
 
@@ -2274,8 +2270,8 @@ static big_decimal deserialize_value(const decimal_type_impl& , bytes_view v) {
 }
 
 static cql_duration deserialize_value(const duration_type_impl& t, bytes_view v) {
-    duration_type_impl::counter_type months, days, nanoseconds;
-    std::tie(months, days, nanoseconds) = t.deserialize_counters(v);
+    common_counter_type months, days, nanoseconds;
+    std::tie(months, days, nanoseconds) = deserialize_counters(v);
     return cql_duration(months_counter(months), days_counter(days), nanoseconds_counter(nanoseconds));
 }
 

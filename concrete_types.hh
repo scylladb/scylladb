@@ -78,3 +78,7 @@ struct float_type_impl final : public floating_type_impl<float> {
 struct decimal_type_impl final : public concrete_type<big_decimal> {
     decimal_type_impl();
 };
+
+struct duration_type_impl final : public concrete_type<cql_duration> {
+    duration_type_impl();
+};
