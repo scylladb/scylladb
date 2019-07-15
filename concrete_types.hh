@@ -26,3 +26,7 @@
 struct empty_type_impl final : public abstract_type {
     empty_type_impl();
 };
+
+struct counter_type_impl final : public abstract_type {
+    counter_type_impl();
+};

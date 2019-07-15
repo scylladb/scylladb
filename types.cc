@@ -519,10 +519,8 @@ public:
     decimal_type_impl() : concrete_type{kind::decimal, decimal_type_name, { }, data::type_info::make_variable_size()} { }
 };
 
-class counter_type_impl : public abstract_type {
-public:
-    counter_type_impl() : abstract_type{kind::counter, counter_type_name, { }, data::type_info::make_variable_size()} { }
-};
+counter_type_impl::counter_type_impl()
+    : abstract_type{kind::counter, counter_type_name, {}, data::type_info::make_variable_size()} {}
 
 // TODO(jhaberku): Move this to Seastar.
 template <size_t... Ts, class Function>
