@@ -1124,6 +1124,7 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
 void
 row::append_cell(column_id id, atomic_cell_or_collection value) {
     if (_type == storage_type::vector && id < max_vector_size) {
+        assert(_storage.vector.v.size() <= id);
         _storage.vector.v.resize(id);
         _storage.vector.v.emplace_back(cell_and_hash{std::move(value), cell_hash_opt()});
         _storage.vector.present.set(id);
