@@ -243,107 +243,102 @@ static int timeuuid_compare_bytes(bytes_view o1, bytes_view o2) {
                                 compare_pos(3, 0xff, 0))))))));
 }
 
+timestamp_type_impl::timestamp_type_impl() : simple_type_impl(kind::timestamp, timestamp_type_name, 8) {}
 
-class timestamp_type_impl : public simple_type_impl<db_clock::time_point> {
-    static logging::logger _logger;
-public:
-    timestamp_type_impl() : simple_type_impl(kind::timestamp, timestamp_type_name, 8) {}
-    // FIXME: isCompatibleWith(timestampuuid)
-    static boost::posix_time::ptime get_time(const std::smatch& sm) {
-        // Unfortunately boost::date_time  parsers are more strict with regards
-        // to the expected date format than we need to be.
-        auto year = boost::lexical_cast<int>(sm[1]);
-        auto month =  boost::lexical_cast<int>(sm[2]);
-        auto day =  boost::lexical_cast<int>(sm[3]);
-        boost::gregorian::date date(year, month, day);
+static boost::posix_time::ptime get_time(const std::smatch& sm) {
+    // Unfortunately boost::date_time  parsers are more strict with regards
+    // to the expected date format than we need to be.
+    auto year = boost::lexical_cast<int>(sm[1]);
+    auto month = boost::lexical_cast<int>(sm[2]);
+    auto day = boost::lexical_cast<int>(sm[3]);
+    boost::gregorian::date date(year, month, day);
 
-        auto hour = sm[5].length() ? boost::lexical_cast<int>(sm[5]) : 0;
-        auto minute = sm[6].length() ? boost::lexical_cast<int>(sm[6]) : 0;
-        auto second = sm[8].length() ? boost::lexical_cast<int>(sm[8]) : 0;
-        boost::posix_time::time_duration time(hour, minute, second);
+    auto hour = sm[5].length() ? boost::lexical_cast<int>(sm[5]) : 0;
+    auto minute = sm[6].length() ? boost::lexical_cast<int>(sm[6]) : 0;
+    auto second = sm[8].length() ? boost::lexical_cast<int>(sm[8]) : 0;
+    boost::posix_time::time_duration time(hour, minute, second);
 
-        if (sm[10].length()) {
-            static constexpr auto milliseconds_string_length = 3;
-            auto length = sm[10].length();
-            if (length > milliseconds_string_length) {
-                throw marshal_exception(format("Milliseconds length exceeds expected ({:d})", length));
-            }
-            auto value = boost::lexical_cast<int>(sm[10]);
-            while (length < milliseconds_string_length) {
-                value *= 10;
-                length++;
-            }
-            time += boost::posix_time::milliseconds(value);
+    if (sm[10].length()) {
+        static constexpr auto milliseconds_string_length = 3;
+        auto length = sm[10].length();
+        if (length > milliseconds_string_length) {
+            throw marshal_exception(format("Milliseconds length exceeds expected ({:d})", length));
         }
-
-        return boost::posix_time::ptime(date, time);
+        auto value = boost::lexical_cast<int>(sm[10]);
+        while (length < milliseconds_string_length) {
+            value *= 10;
+            length++;
+        }
+        time += boost::posix_time::milliseconds(value);
     }
-    static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
-        static constexpr const char* formats[] = {
+
+    return boost::posix_time::ptime(date, time);
+}
+
+static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
+    static constexpr const char* formats[] = {
             "%H:%M",
             "%H%M",
-        };
-        for (auto&& f : formats) {
-            auto tif = new boost::posix_time::time_input_facet(f);
-            std::istringstream ss(s);
-            ss.imbue(std::locale(ss.getloc(), tif));
-            auto sign = ss.get();
-            boost::posix_time::ptime p;
-            ss >> p;
-            if (ss.good() && ss.peek() == std::istringstream::traits_type::eof()) {
-                return p.time_of_day() * (sign == '-' ? -1 : 1);
-            }
-        }
-        throw marshal_exception("Cannot get UTC offset for a timestamp");
-    }
-    static int64_t timestamp_from_string(sstring_view s) {
-        try {
-            std::string str;
-            str.resize(s.size());
-            std::transform(s.begin(), s.end(), str.begin(), ::tolower);
-            if (str == "now") {
-                return db_clock::now().time_since_epoch().count();
-            }
-
-            char* end;
-            auto v = std::strtoll(s.begin(), &end, 10);
-            if (end == s.begin() + s.size()) {
-                return v;
-            }
-
-            std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
-            std::smatch dsm;
-            if (!std::regex_search(str, dsm, date_re)) {
-                throw marshal_exception(format("Unable to parse timestamp from '{}'", str));
-            }
-            auto t = get_time(dsm);
-
-            auto tz = dsm.suffix().str();
-            std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
-            std::smatch tsm;
-            if (std::regex_match(tz, tsm, tz_re)) {
-                t -= get_utc_offset(tsm.str());
-            } else if (tz.empty()) {
-                typedef boost::date_time::c_local_adjustor<boost::posix_time::ptime> local_tz;
-                // local_tz::local_to_utc(), where are you?
-                auto t1 = local_tz::utc_to_local(t);
-                auto tz_offset = t1 - t;
-                auto t2 = local_tz::utc_to_local(t - tz_offset);
-                auto dst_offset = t2 - t;
-                t -= tz_offset + dst_offset;
-            } else if (tz != "z") {
-                throw marshal_exception(format("Unable to parse timezone '{}'", tz));
-            }
-            return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
-        } catch (const marshal_exception& me) {
-            throw marshal_exception(format("unable to parse date '{}': {}", s, me.what()));
-        } catch (...) {
-            throw marshal_exception(format("unable to parse date '{}'", s));
+    };
+    for (auto&& f : formats) {
+        auto tif = new boost::posix_time::time_input_facet(f);
+        std::istringstream ss(s);
+        ss.imbue(std::locale(ss.getloc(), tif));
+        auto sign = ss.get();
+        boost::posix_time::ptime p;
+        ss >> p;
+        if (ss.good() && ss.peek() == std::istringstream::traits_type::eof()) {
+            return p.time_of_day() * (sign == '-' ? -1 : 1);
         }
     }
-    friend abstract_type;
-};
-logging::logger timestamp_type_impl::_logger(timestamp_type_name);
+    throw marshal_exception("Cannot get UTC offset for a timestamp");
+}
+
+static int64_t timestamp_from_string(sstring_view s) {
+    try {
+        std::string str;
+        str.resize(s.size());
+        std::transform(s.begin(), s.end(), str.begin(), ::tolower);
+        if (str == "now") {
+            return db_clock::now().time_since_epoch().count();
+        }
+
+        char* end;
+        auto v = std::strtoll(s.begin(), &end, 10);
+        if (end == s.begin() + s.size()) {
+            return v;
+        }
+
+        std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
+        std::smatch dsm;
+        if (!std::regex_search(str, dsm, date_re)) {
+            throw marshal_exception(format("Unable to parse timestamp from '{}'", str));
+        }
+        auto t = get_time(dsm);
+
+        auto tz = dsm.suffix().str();
+        std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
+        std::smatch tsm;
+        if (std::regex_match(tz, tsm, tz_re)) {
+            t -= get_utc_offset(tsm.str());
+        } else if (tz.empty()) {
+            typedef boost::date_time::c_local_adjustor<boost::posix_time::ptime> local_tz;
+            // local_tz::local_to_utc(), where are you?
+            auto t1 = local_tz::utc_to_local(t);
+            auto tz_offset = t1 - t;
+            auto t2 = local_tz::utc_to_local(t - tz_offset);
+            auto dst_offset = t2 - t;
+            t -= tz_offset + dst_offset;
+        } else if (tz != "z") {
+            throw marshal_exception(format("Unable to parse timezone '{}'", tz));
+        }
+        return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
+    } catch (const marshal_exception& me) {
+        throw marshal_exception(format("unable to parse date '{}': {}", s, me.what()));
+    } catch (...) {
+        throw marshal_exception(format("unable to parse date '{}'", s));
+    }
+}
 
 struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, { }}
@@ -935,12 +930,13 @@ bool abstract_type::is_compatible_with(const abstract_type& previous) const {
         }
         bool operator()(const timestamp_type_impl& t) {
             if (previous.get_kind() == kind::date) {
-                t._logger.warn("Changing from DateType to TimestampType is allowed, but be wary "
-                               "that they sort differently for pre-unix-epoch timestamps "
-                               "(negative timestamp values) and thus this change will corrupt "
-                               "your data if you have such negative timestamp. So unless you "
-                               "know that you don't have *any* pre-unix-epoch timestamp you "
-                               "should change back to DateType");
+                static logging::logger timestamp_logger(timestamp_type_name);
+                timestamp_logger.warn("Changing from DateType to TimestampType is allowed, but be wary "
+                                      "that they sort differently for pre-unix-epoch timestamps "
+                                      "(negative timestamp values) and thus this change will corrupt "
+                                      "your data if you have such negative timestamp. So unless you "
+                                      "know that you don't have *any* pre-unix-epoch timestamp you "
+                                      "should change back to DateType");
                 return true;
             }
             return false;
@@ -2725,7 +2721,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, db_clock::time_point(db_clock::duration(t.timestamp_from_string(s))));
+        return serialize_value(t, db_clock::time_point(db_clock::duration(timestamp_from_string(s))));
     }
     bytes operator()(const simple_date_type_impl& t) {
         if (s.empty()) {
@@ -2734,7 +2730,7 @@ struct from_string_visitor {
         return serialize_value(t, t.days_from_string(s));
     }
     bytes operator()(const date_type_impl& t) {
-        return serialize_value(t, db_clock::time_point(db_clock::duration(timestamp_type_impl::timestamp_from_string(s))));
+        return serialize_value(t, db_clock::time_point(db_clock::duration(timestamp_from_string(s))));
     }
     bytes operator()(const time_type_impl& t) {
         if (s.empty()) {
