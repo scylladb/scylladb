@@ -542,8 +542,9 @@ private:
 
     sstables_stats _stats;
 
+public:
     const bool has_component(component_type f) const;
-
+private:
     future<file> open_file(component_type, open_flags, file_open_options = {});
 
     template <component_type Type, typename T>
