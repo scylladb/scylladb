@@ -796,6 +796,10 @@ public:
 
     double get_compression_ratio() const;
 
+    const sstables::compression& get_compression() const {
+        return _components->compression;
+    }
+
     future<> mutate_sstable_level(uint32_t);
 
     const summary& get_summary() const {
