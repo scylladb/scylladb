@@ -204,11 +204,9 @@ boolean_type_impl::boolean_type_impl() : simple_type_impl<bool>(kind::boolean, b
 
 date_type_impl::date_type_impl() : concrete_type(kind::date, date_type_name, 8, data::type_info::make_fixed_size(sizeof(uint64_t))) {}
 
-struct timeuuid_type_impl : public concrete_type<utils::UUID> {
-    timeuuid_type_impl() : concrete_type<utils::UUID>(kind::timeuuid, timeuuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
-private:
-    friend abstract_type;
-};
+timeuuid_type_impl::timeuuid_type_impl()
+    : concrete_type<utils::UUID>(
+              kind::timeuuid, timeuuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
 
 static int timeuuid_compare_bytes(bytes_view o1, bytes_view o2) {
     auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
