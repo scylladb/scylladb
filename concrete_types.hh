@@ -40,3 +40,19 @@ template<typename T>
 struct integer_type_impl : public simple_type_impl<T> {
     integer_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed);
 };
+
+struct byte_type_impl final : public integer_type_impl<int8_t> {
+    byte_type_impl();
+};
+
+struct short_type_impl final : public integer_type_impl<int16_t> {
+    short_type_impl();
+};
+
+struct int32_type_impl final : public integer_type_impl<int32_t> {
+    int32_type_impl();
+};
+
+struct long_type_impl final : public integer_type_impl<int64_t> {
+    long_type_impl();
+};

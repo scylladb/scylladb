@@ -179,28 +179,16 @@ template <typename T> static T parse_int(const integer_type_impl<T>& t, sstring_
     }
 }
 
-struct byte_type_impl : integer_type_impl<int8_t> {
-    // Note that although byte_type is of a fixed size,
-    // Cassandra (erroneously) treats it as a variable-size
-    // so we have to pass disengaged optional for the value size
-    byte_type_impl() : integer_type_impl{kind::byte, byte_type_name, {}}
-    { }
-};
+// Note that although byte_type is of a fixed size,
+// Cassandra (erroneously) treats it as a variable-size
+// so we have to pass disengaged optional for the value size
+byte_type_impl::byte_type_impl() : integer_type_impl{kind::byte, byte_type_name, {}} {}
 
-struct short_type_impl : integer_type_impl<int16_t> {
-    short_type_impl() : integer_type_impl{kind::short_kind, short_type_name, { }}
-    { }
-};
+short_type_impl::short_type_impl() : integer_type_impl{kind::short_kind, short_type_name, {}} {}
 
-struct int32_type_impl : integer_type_impl<int32_t> {
-    int32_type_impl() : integer_type_impl{kind::int32, int32_type_name, 4}
-    { }
-};
+int32_type_impl::int32_type_impl() : integer_type_impl{kind::int32, int32_type_name, 4} {}
 
-struct long_type_impl : integer_type_impl<int64_t> {
-    long_type_impl() : integer_type_impl{kind::long_kind, long_type_name, 8}
-    { }
-};
+long_type_impl::long_type_impl() : integer_type_impl{kind::long_kind, long_type_name, 8} {}
 
 struct string_type_impl : public concrete_type<sstring> {
     string_type_impl(kind k, sstring name)
