@@ -26,7 +26,7 @@
 #include "cql3/lists.hh"
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
-#include "types.hh"
+#include "concrete_types.hh"
 #include <seastar/core/print.hh>
 #include <seastar/net/ip.hh>
 #include "utils/serialization.hh"
@@ -558,9 +558,8 @@ public:
     }
 };
 
-struct empty_type_impl : abstract_type {
-    empty_type_impl() : abstract_type(kind::empty, empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
-};
+empty_type_impl::empty_type_impl()
+    : abstract_type(kind::empty, empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
 
 template <typename Func> using visit_ret_type = std::invoke_result_t<Func, const ascii_type_impl&>;
 
