@@ -148,37 +148,36 @@ simple_type_impl<T>::simple_type_impl(abstract_type::kind k, sstring name, std::
     : concrete_type<T>(k, std::move(name), std::move(value_length_if_fixed),
               data::type_info::make_fixed_size(simple_type_traits<T>::serialized_size)) {}
 
-template<typename T>
-struct integer_type_impl : simple_type_impl<T> {
-    integer_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
-        : simple_type_impl<T>(k, name, std::move(value_length_if_fixed)) {}
-    T compose_value(bytes_view bv) const {
-        if (bv.size() != sizeof(T)) {
-            throw marshal_exception(format("Size mismatch for type {}: got {:d} bytes", this->name(), bv.size()));
+template <typename T>
+integer_type_impl<T>::integer_type_impl(
+        abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
+    : simple_type_impl<T>(k, name, std::move(value_length_if_fixed)) {}
+
+template <typename T> static T compose_value(const integer_type_impl<T>& t, bytes_view bv) {
+    if (bv.size() != sizeof(T)) {
+        throw marshal_exception(format("Size mismatch for type {}: got {:d} bytes", t.name(), bv.size()));
+    }
+    return (T)net::ntoh(*reinterpret_cast<const T*>(bv.data()));
+}
+
+template <typename T> static bytes decompose_value(T v) {
+    bytes b(bytes::initialized_later(), sizeof(v));
+    *reinterpret_cast<T*>(b.begin()) = (T)net::hton(v);
+    return b;
+}
+
+template <typename T> static T parse_int(const integer_type_impl<T>& t, sstring_view s) {
+    try {
+        auto value64 = boost::lexical_cast<int64_t>(s.begin(), s.size());
+        auto value = static_cast<T>(value64);
+        if (value != value64) {
+            throw marshal_exception(format("Value out of range for type {}: '{}'", t.name(), s));
         }
-        return (T)net::ntoh(*reinterpret_cast<const T*>(bv.data()));
+        return static_cast<T>(value);
+    } catch (const boost::bad_lexical_cast& e) {
+        throw marshal_exception(format("Invalid number format '{}'", s));
     }
-    T compose_value(const bytes& b) const {
-        return compose_value(bytes_view(b));
-    }
-    bytes decompose_value(T v) const {
-        bytes b(bytes::initialized_later(), sizeof(v));
-        *reinterpret_cast<T*>(b.begin()) = (T)net::hton(v);
-        return b;
-    }
-    T parse_int(sstring_view s) const {
-        try {
-            auto value64 = boost::lexical_cast<int64_t>(s.begin(), s.size());
-            auto value = static_cast<T>(value64);
-            if (value != value64) {
-                throw marshal_exception(format("Value out of range for type {}: '{}'", this->name(), s));
-            }
-            return static_cast<T>(value);
-        } catch (const boost::bad_lexical_cast& e) {
-            throw marshal_exception(format("Invalid number format '{}'", s));
-        }
-    }
-};
+}
 
 struct byte_type_impl : integer_type_impl<int8_t> {
     // Note that although byte_type is of a fixed size,
@@ -2726,7 +2725,7 @@ namespace {
 struct from_string_visitor {
     sstring_view s;
     bytes operator()(const reversed_type_impl& r) { return r.underlying_type()->from_string(s); }
-    template <typename T> bytes operator()(const integer_type_impl<T>& t) { return t.decompose_value(t.parse_int(s)); }
+    template <typename T> bytes operator()(const integer_type_impl<T>& t) { return decompose_value(parse_int(t, s)); }
     bytes operator()(const string_type_impl&) {
         return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
     }
@@ -3056,7 +3055,7 @@ namespace {
 struct to_json_string_visitor {
     bytes_view bv;
     sstring operator()(const reversed_type_impl& t) { return t.underlying_type()->to_json_string(bv); }
-    template <typename T> sstring operator()(const integer_type_impl<T>& t) { return to_sstring(t.compose_value(bv)); }
+    template <typename T> sstring operator()(const integer_type_impl<T>& t) { return to_sstring(compose_value(t, bv)); }
     template <typename T> sstring operator()(const floating_type_impl<T>& t) {
         if (bv.empty()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");

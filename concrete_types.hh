@@ -35,3 +35,8 @@ template <typename T>
 struct simple_type_impl : public concrete_type<T> {
     simple_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed);
 };
+
+template<typename T>
+struct integer_type_impl : public simple_type_impl<T> {
+    integer_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed);
+};
