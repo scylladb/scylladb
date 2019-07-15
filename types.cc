@@ -207,19 +207,9 @@ struct utf8_type_impl final : public string_type_impl {
 
 struct bytes_type_impl final : public concrete_type<bytes> {
     bytes_type_impl() : concrete_type(kind::bytes, bytes_type_name, { }, data::type_info::make_variable_size()) {}
- };
-
-struct boolean_type_impl : public simple_type_impl<bool> {
-    boolean_type_impl() : simple_type_impl<bool>(kind::boolean, boolean_type_name, 1) {}
-    void serialize_value(maybe_empty<bool> value, bytes::iterator& out) const {
-        if (!value.empty()) {
-            *out++ = char(value);
-        }
-    }
-    size_t serialized_size(bool value) const {
-        return 1;
-    }
 };
+
+boolean_type_impl::boolean_type_impl() : simple_type_impl<bool>(kind::boolean, boolean_type_name, 1) {}
 
 // This is the old version of timestamp_type_impl, but has been replaced as it
 // wasn't comparing pre-epoch timestamps correctly. This is kept for backward

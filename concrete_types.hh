@@ -56,3 +56,7 @@ struct int32_type_impl final : public integer_type_impl<int32_t> {
 struct long_type_impl final : public integer_type_impl<int64_t> {
     long_type_impl();
 };
+
+struct boolean_type_impl final : public simple_type_impl<bool> {
+    boolean_type_impl();
+};
