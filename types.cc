@@ -202,16 +202,7 @@ bytes_type_impl::bytes_type_impl()
 
 boolean_type_impl::boolean_type_impl() : simple_type_impl<bool>(kind::boolean, boolean_type_name, 1) {}
 
-// This is the old version of timestamp_type_impl, but has been replaced as it
-// wasn't comparing pre-epoch timestamps correctly. This is kept for backward
-// compatibility but shouldn't be used in new code.
-class date_type_impl : public concrete_type<db_clock::time_point> {
-    static logging::logger _logger;
-public:
-    date_type_impl() : concrete_type(kind::date, date_type_name, 8, data::type_info::make_fixed_size(sizeof(uint64_t))) {}
-    friend abstract_type;
-};
-logging::logger date_type_impl::_logger(date_type_name);
+date_type_impl::date_type_impl() : concrete_type(kind::date, date_type_name, 8, data::type_info::make_fixed_size(sizeof(uint64_t))) {}
 
 struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     timeuuid_type_impl() : concrete_type<utils::UUID>(kind::timeuuid, timeuuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
@@ -904,13 +895,14 @@ bool abstract_type::is_compatible_with(const abstract_type& previous) const {
         }
         bool operator()(const date_type_impl& t) {
             if (previous.get_kind() == kind::timestamp) {
-                t._logger.warn("Changing from TimestampType to DateType is allowed, but be wary "
-                               "that they sort differently for pre-unix-epoch timestamps "
-                               "(negative timestamp values) and thus this change will corrupt "
-                               "your data if you have such negative timestamp. There is no "
-                               "reason to switch from DateType to TimestampType except if you "
-                               "were using DateType in the first place and switched to "
-                               "TimestampType by mistake.");
+                static logging::logger date_logger(date_type_name);
+                date_logger.warn("Changing from TimestampType to DateType is allowed, but be wary "
+                                 "that they sort differently for pre-unix-epoch timestamps "
+                                 "(negative timestamp values) and thus this change will corrupt "
+                                 "your data if you have such negative timestamp. There is no "
+                                 "reason to switch from DateType to TimestampType except if you "
+                                 "were using DateType in the first place and switched to "
+                                 "TimestampType by mistake.");
                 return true;
             }
             return false;

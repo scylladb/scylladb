@@ -110,3 +110,10 @@ struct utf8_type_impl final : public string_type_impl {
 struct bytes_type_impl final : public concrete_type<bytes> {
     bytes_type_impl();
 };
+
+// This is the old version of timestamp_type_impl, but has been replaced as it
+// wasn't comparing pre-epoch timestamps correctly. This is kept for backward
+// compatibility but shouldn't be used in new code.
+struct date_type_impl final : public concrete_type<db_clock::time_point> {
+    date_type_impl();
+};
