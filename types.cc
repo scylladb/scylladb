@@ -400,9 +400,8 @@ static int64_t parse_time(sstring_view s) {
     return result.count();
 }
 
-struct uuid_type_impl : concrete_type<utils::UUID> {
-    uuid_type_impl() : concrete_type(kind::uuid, uuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
-};
+uuid_type_impl::uuid_type_impl()
+    : concrete_type(kind::uuid, uuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
 
 using inet_address = seastar::net::inet_address;
 
