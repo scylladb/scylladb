@@ -1161,7 +1161,13 @@ if args.antlr3_exec:
 else:
     antlr3_exec = "antlr3"
 
-with open(buildfile, 'w') as f:
+# configure.py may run automatically from an already-existing build.ninja.
+# If the user interrupts configure.py in the middle, we need build.ninja
+# to remain in a valid state.  So we write our output to a temporary
+# file, and only when done we rename it atomically to build.ninja.
+buildfile_tmp = buildfile + ".tmp"
+
+with open(buildfile_tmp, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -1410,3 +1416,5 @@ with open(buildfile, 'w') as f:
             command = ./SCYLLA-VERSION-GEN
         build build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE: scylla_version_gen
         ''').format(modes_list=' '.join(build_modes), **globals()))
+
+os.rename(buildfile_tmp, buildfile)
