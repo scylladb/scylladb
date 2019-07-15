@@ -193,9 +193,7 @@ long_type_impl::long_type_impl() : integer_type_impl{kind::long_kind, long_type_
 string_type_impl::string_type_impl(kind k, sstring name)
     : concrete_type(k, name, {}, data::type_info::make_variable_size()) {}
 
-struct ascii_type_impl final : public string_type_impl {
-    ascii_type_impl() : string_type_impl(kind::ascii, ascii_type_name) {}
-};
+ascii_type_impl::ascii_type_impl() : string_type_impl(kind::ascii, ascii_type_name) {}
 
 struct utf8_type_impl final : public string_type_impl {
     static const char* name;

@@ -98,3 +98,7 @@ struct time_type_impl final : public simple_type_impl<int64_t> {
 struct string_type_impl : public concrete_type<sstring> {
     string_type_impl(kind k, sstring name);
 };
+
+struct ascii_type_impl final : public string_type_impl {
+    ascii_type_impl();
+};
