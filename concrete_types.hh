@@ -102,3 +102,7 @@ struct string_type_impl : public concrete_type<sstring> {
 struct ascii_type_impl final : public string_type_impl {
     ascii_type_impl();
 };
+
+struct utf8_type_impl final : public string_type_impl {
+    utf8_type_impl();
+};

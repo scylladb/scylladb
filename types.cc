@@ -195,11 +195,7 @@ string_type_impl::string_type_impl(kind k, sstring name)
 
 ascii_type_impl::ascii_type_impl() : string_type_impl(kind::ascii, ascii_type_name) {}
 
-struct utf8_type_impl final : public string_type_impl {
-    static const char* name;
-    utf8_type_impl() : string_type_impl(kind::utf8, utf8_type_name) {}
-    using concrete_type::from_value;
-};
+utf8_type_impl::utf8_type_impl() : string_type_impl(kind::utf8, utf8_type_name) {}
 
 struct bytes_type_impl final : public concrete_type<bytes> {
     bytes_type_impl() : concrete_type(kind::bytes, bytes_type_name, { }, data::type_info::make_variable_size()) {}
@@ -3401,7 +3397,7 @@ sstring abstract_type::get_string(const bytes& b) const {
 sstring
 user_type_impl::get_name_as_string() const {
     auto real_utf8_type = static_cast<const utf8_type_impl*>(utf8_type.get());
-    return real_utf8_type->from_value(utf8_type->deserialize(_name));
+    return ::deserialize_value(*real_utf8_type, _name);
 }
 
 sstring
