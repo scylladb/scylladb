@@ -376,51 +376,49 @@ static uint32_t days_from_string(sstring_view s) {
     return serialize(str, date::local_days(t).time_since_epoch().count());
 }
 
-struct time_type_impl : public simple_type_impl<int64_t> {
-    time_type_impl() : simple_type_impl{kind::time, time_type_name, { }}
-    { }
-    static int64_t parse_time(sstring_view s) {
-        static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
-        auto hours_end = s.find(':');
-        if (hours_end == std::string::npos) {
-            throw marshal_exception(format_error);
-        }
-        int64_t hours = std::stol(sstring(s.substr(0, hours_end)));
-        if (hours < 0 || hours >= 24) {
-            throw marshal_exception(format("Hour out of bounds ({:d}).", hours));
-        }
-        auto minutes_end = s.find(':', hours_end+1);
-        if (minutes_end == std::string::npos) {
-            throw marshal_exception(format_error);
-        }
-        int64_t minutes = std::stol(sstring(s.substr(hours_end + 1, hours_end-minutes_end)));
-        if (minutes < 0 || minutes >= 60) {
-            throw marshal_exception(format("Minute out of bounds ({:d}).", minutes));
-        }
-        auto seconds_end = s.find('.', minutes_end+1);
-        if (seconds_end == std::string::npos) {
-            seconds_end = s.length();
-        }
-        int64_t seconds = std::stol(sstring(s.substr(minutes_end + 1, minutes_end-seconds_end)));
-        if (seconds < 0 || seconds >= 60) {
-            throw marshal_exception(format("Second out of bounds ({:d}).", seconds));
-        }
-        int64_t nanoseconds = 0;
-        if (seconds_end < s.length()) {
-            nanoseconds = std::stol(sstring(s.substr(seconds_end + 1)));
-            nanoseconds *= std::pow(10, 9-(s.length() - (seconds_end + 1)));
-            if (nanoseconds < 0 || nanoseconds >= 1000 * 1000 * 1000) {
-                throw marshal_exception(format("Nanosecond out of bounds ({:d}).", nanoseconds));
-            }
-        }
-        std::chrono::nanoseconds result{};
-        result += std::chrono::hours(hours);
-        result += std::chrono::minutes(minutes);
-        result += std::chrono::seconds(seconds);
-        result += std::chrono::nanoseconds(nanoseconds);
-        return result.count();
+time_type_impl::time_type_impl() : simple_type_impl{kind::time, time_type_name, {}} {}
+
+static int64_t parse_time(sstring_view s) {
+    static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
+    auto hours_end = s.find(':');
+    if (hours_end == std::string::npos) {
+        throw marshal_exception(format_error);
     }
-};
+    int64_t hours = std::stol(sstring(s.substr(0, hours_end)));
+    if (hours < 0 || hours >= 24) {
+        throw marshal_exception(format("Hour out of bounds ({:d}).", hours));
+    }
+    auto minutes_end = s.find(':', hours_end + 1);
+    if (minutes_end == std::string::npos) {
+        throw marshal_exception(format_error);
+    }
+    int64_t minutes = std::stol(sstring(s.substr(hours_end + 1, hours_end - minutes_end)));
+    if (minutes < 0 || minutes >= 60) {
+        throw marshal_exception(format("Minute out of bounds ({:d}).", minutes));
+    }
+    auto seconds_end = s.find('.', minutes_end + 1);
+    if (seconds_end == std::string::npos) {
+        seconds_end = s.length();
+    }
+    int64_t seconds = std::stol(sstring(s.substr(minutes_end + 1, minutes_end - seconds_end)));
+    if (seconds < 0 || seconds >= 60) {
+        throw marshal_exception(format("Second out of bounds ({:d}).", seconds));
+    }
+    int64_t nanoseconds = 0;
+    if (seconds_end < s.length()) {
+        nanoseconds = std::stol(sstring(s.substr(seconds_end + 1)));
+        nanoseconds *= std::pow(10, 9 - (s.length() - (seconds_end + 1)));
+        if (nanoseconds < 0 || nanoseconds >= 1000 * 1000 * 1000) {
+            throw marshal_exception(format("Nanosecond out of bounds ({:d}).", nanoseconds));
+        }
+    }
+    std::chrono::nanoseconds result{};
+    result += std::chrono::hours(hours);
+    result += std::chrono::minutes(minutes);
+    result += std::chrono::seconds(seconds);
+    result += std::chrono::nanoseconds(nanoseconds);
+    return result.count();
+}
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
     uuid_type_impl() : concrete_type(kind::uuid, uuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
@@ -2734,7 +2732,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, t.parse_time(s));
+        return serialize_value(t, parse_time(s));
     }
     bytes operator()(const uuid_type_impl&) {
         if (s.empty()) {
