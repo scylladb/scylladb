@@ -153,6 +153,9 @@ public:
         range_tombstone rt(bv_range.first, bv_range.second, t);
         return rt;
     }
+    range_tombstone make_range_tombstone(const query::clustering_range& range, gc_clock::time_point deletion_time) {
+        return make_range_tombstone(range, tombstone(new_timestamp(), deletion_time));
+    }
 
     mutation new_mutation(sstring pk) {
         return mutation(_s, make_pkey(pk));

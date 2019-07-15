@@ -2035,11 +2035,12 @@ std::deque<mutation_fragment> make_fragments_with_non_monotonic_positions(simple
     std::deque<mutation_fragment> fragments;
 
     fragments.emplace_back(partition_start{std::move(pkey), {}});
+    const auto tombstone_deletion_time = gc_clock::now();
 
     int i = 0;
     size_t mem_usage = fragments.back().memory_usage(*s.schema());
     while (mem_usage <= max_buffer_size * 2) {
-        fragments.emplace_back(s.make_range_tombstone(query::clustering_range::make(s.make_ckey(0), s.make_ckey(i + 1))));
+        fragments.emplace_back(s.make_range_tombstone(query::clustering_range::make(s.make_ckey(0), s.make_ckey(i + 1)), tombstone_deletion_time));
         mem_usage += fragments.back().memory_usage(*s.schema());
         ++i;
     }
