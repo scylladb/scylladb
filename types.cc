@@ -468,21 +468,14 @@ struct float_type_traits {
 template<> struct simple_type_traits<float> : public float_type_traits<float> {};
 template<> struct simple_type_traits<double> : public float_type_traits<double> {};
 
-
 template <typename T>
-struct floating_type_impl : public simple_type_impl<T> {
-    floating_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
-        : simple_type_impl<T>(k, std::move(name), std::move(value_length_if_fixed)) {}
-};
+floating_type_impl<T>::floating_type_impl(
+        abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
+    : simple_type_impl<T>(k, std::move(name), std::move(value_length_if_fixed)) {}
 
-struct double_type_impl : floating_type_impl<double> {
-    double_type_impl() : floating_type_impl{kind::double_kind, double_type_name, 8} { }
-};
+double_type_impl::double_type_impl() : floating_type_impl{kind::double_kind, double_type_name, 8} {}
 
-struct float_type_impl : floating_type_impl<float> {
-    float_type_impl() : floating_type_impl{kind::float_kind, float_type_name, 4} { }
-};
-
+float_type_impl::float_type_impl() : floating_type_impl{kind::float_kind, float_type_name, 4} {}
 
 class varint_type_impl : public concrete_type<boost::multiprecision::cpp_int> {
 public:

@@ -60,3 +60,16 @@ struct long_type_impl final : public integer_type_impl<int64_t> {
 struct boolean_type_impl final : public simple_type_impl<bool> {
     boolean_type_impl();
 };
+
+template <typename T>
+struct floating_type_impl : public simple_type_impl<T> {
+    floating_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed);
+};
+
+struct double_type_impl final : public floating_type_impl<double> {
+    double_type_impl();
+};
+
+struct float_type_impl final : public floating_type_impl<float> {
+    float_type_impl();
+};
