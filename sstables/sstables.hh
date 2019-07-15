@@ -33,6 +33,7 @@
 #include <seastar/core/distributed.hh>
 #include <unordered_set>
 #include <unordered_map>
+#include <variant>
 #include "types.hh"
 #include "clustering_key_filter.hh"
 #include <seastar/core/enum.hh>
@@ -948,6 +949,15 @@ class file_io_extension {
 public:
     virtual ~file_io_extension() {}
     virtual future<file> wrap_file(sstable&, component_type, file, open_flags flags) = 0;
+    // optionally return a map of attributes for a given sstable,
+    // suitable for "describe".
+    // This would preferably be interesting info on what/why the extension did
+    // to this table.
+    using attr_value_type = std::variant<sstring, std::map<sstring, sstring>>;
+    using attr_value_map = std::map<sstring, attr_value_type>;
+    virtual attr_value_map get_attributes(const sstable&) const {
+        return {};
+    }
 };
 
 }
