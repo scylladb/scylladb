@@ -566,7 +566,7 @@ static Json::Value set_sum(const Json::Value& v1, const Json::Value& v2) {
         throw api_error("ValidationException", format("Mismatched set types: {} and {}", set1_type, set2_type));
     }
     if (!set1 || !set2) {
-        throw api_error("ValidationException", "UpdateExpression: set_sum() given a non-set");
+        throw api_error("ValidationException", "UpdateExpression: ADD operation for sets must be given sets as arguments");
     }
     Json::Value sum = *set1;
     std::set<Json::Value> set1_raw(sum.begin(), sum.end());
