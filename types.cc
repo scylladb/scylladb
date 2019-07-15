@@ -406,9 +406,8 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
 
 using inet_address = seastar::net::inet_address;
 
-struct inet_addr_type_impl : concrete_type<inet_address> {
-    inet_addr_type_impl() : concrete_type<inet_address>(kind::inet, inet_addr_type_name, { }, data::type_info::make_variable_size()) {}
-};
+inet_addr_type_impl::inet_addr_type_impl()
+    : concrete_type<inet_address>(kind::inet, inet_addr_type_name, {}, data::type_info::make_variable_size()) {}
 
 // Integer of same length of a given type. This is useful because our
 // ntoh functions only know how to operate on integers.

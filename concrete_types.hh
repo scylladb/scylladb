@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <seastar/net/inet_address.hh>
+
 #include "types.hh"
 #include "utils/big_decimal.hh"
 
@@ -124,4 +126,8 @@ struct timeuuid_type_impl final : public concrete_type<utils::UUID> {
 
 struct varint_type_impl final : public concrete_type<boost::multiprecision::cpp_int> {
     varint_type_impl();
+};
+
+struct inet_addr_type_impl final : public concrete_type<seastar::net::inet_address> {
+    inet_addr_type_impl();
 };
