@@ -190,10 +190,8 @@ int32_type_impl::int32_type_impl() : integer_type_impl{kind::int32, int32_type_n
 
 long_type_impl::long_type_impl() : integer_type_impl{kind::long_kind, long_type_name, 8} {}
 
-struct string_type_impl : public concrete_type<sstring> {
-    string_type_impl(kind k, sstring name)
-        : concrete_type(k, name, { }, data::type_info::make_variable_size()) {}
-};
+string_type_impl::string_type_impl(kind k, sstring name)
+    : concrete_type(k, name, {}, data::type_info::make_variable_size()) {}
 
 struct ascii_type_impl final : public string_type_impl {
     ascii_type_impl() : string_type_impl(kind::ascii, ascii_type_name) {}
