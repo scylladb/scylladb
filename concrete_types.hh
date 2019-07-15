@@ -30,3 +30,8 @@ struct empty_type_impl final : public abstract_type {
 struct counter_type_impl final : public abstract_type {
     counter_type_impl();
 };
+
+template <typename T>
+struct simple_type_impl : public concrete_type<T> {
+    simple_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed);
+};

@@ -144,10 +144,9 @@ struct simple_type_traits<db_clock::time_point> {
 };
 
 template <typename T>
-struct simple_type_impl : concrete_type<T> {
-    simple_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
-        : concrete_type<T>(k, std::move(name), std::move(value_length_if_fixed), data::type_info::make_fixed_size(simple_type_traits<T>::serialized_size)) {}
-};
+simple_type_impl<T>::simple_type_impl(abstract_type::kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
+    : concrete_type<T>(k, std::move(name), std::move(value_length_if_fixed),
+              data::type_info::make_fixed_size(simple_type_traits<T>::serialized_size)) {}
 
 template<typename T>
 struct integer_type_impl : simple_type_impl<T> {
