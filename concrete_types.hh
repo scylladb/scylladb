@@ -22,6 +22,7 @@
 #pragma once
 
 #include "types.hh"
+#include "utils/big_decimal.hh"
 
 struct empty_type_impl final : public abstract_type {
     empty_type_impl();
@@ -72,4 +73,8 @@ struct double_type_impl final : public floating_type_impl<double> {
 
 struct float_type_impl final : public floating_type_impl<float> {
     float_type_impl();
+};
+
+struct decimal_type_impl final : public concrete_type<big_decimal> {
+    decimal_type_impl();
 };

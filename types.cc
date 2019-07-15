@@ -483,10 +483,7 @@ public:
     friend class decimal_type_impl;
 };
 
-class decimal_type_impl : public concrete_type<big_decimal> {
-public:
-    decimal_type_impl() : concrete_type{kind::decimal, decimal_type_name, { }, data::type_info::make_variable_size()} { }
-};
+decimal_type_impl::decimal_type_impl() : concrete_type{kind::decimal, decimal_type_name, { }, data::type_info::make_variable_size()} { }
 
 counter_type_impl::counter_type_impl()
     : abstract_type{kind::counter, counter_type_name, {}, data::type_info::make_variable_size()} {}
