@@ -121,3 +121,7 @@ struct date_type_impl final : public concrete_type<db_clock::time_point> {
 struct timeuuid_type_impl final : public concrete_type<utils::UUID> {
     timeuuid_type_impl();
 };
+
+struct varint_type_impl final : public concrete_type<boost::multiprecision::cpp_int> {
+    varint_type_impl();
+};

@@ -448,11 +448,7 @@ double_type_impl::double_type_impl() : floating_type_impl{kind::double_kind, dou
 
 float_type_impl::float_type_impl() : floating_type_impl{kind::float_kind, float_type_name, 4} {}
 
-class varint_type_impl : public concrete_type<boost::multiprecision::cpp_int> {
-public:
-    varint_type_impl() : concrete_type{kind::varint, varint_type_name, { }, data::type_info::make_variable_size()} { }
-    friend class decimal_type_impl;
-};
+varint_type_impl::varint_type_impl() : concrete_type{kind::varint, varint_type_name, { }, data::type_info::make_variable_size()} { }
 
 decimal_type_impl::decimal_type_impl() : concrete_type{kind::decimal, decimal_type_name, { }, data::type_info::make_variable_size()} { }
 
