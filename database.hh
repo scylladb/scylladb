@@ -460,6 +460,7 @@ private:
     // This semaphore ensures that an operation like snapshot won't have its selected
     // sstables deleted by compaction in parallel, a race condition which could
     // easily result in failure.
+    // Locking order: must be acquired either independently or after _sstables_lock
     seastar::semaphore _sstable_deletion_sem = {1};
     // There are situations in which we need to stop writing sstables. Flushers will take
     // the read lock, and the ones that wish to stop that process will take the write lock.

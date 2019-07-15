@@ -1958,6 +1958,7 @@ future<int64_t>
 table::disable_sstable_write() {
     _sstable_writes_disabled_at = std::chrono::steady_clock::now();
     return _sstables_lock.write_lock().then([this] {
+      // _sstable_deletion_sem must be acquired after _sstables_lock.write_lock
       return _sstable_deletion_sem.wait().then([this] {
         if (_sstables->all()->empty()) {
             return make_ready_future<int64_t>(0);
