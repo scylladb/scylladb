@@ -197,9 +197,8 @@ ascii_type_impl::ascii_type_impl() : string_type_impl(kind::ascii, ascii_type_na
 
 utf8_type_impl::utf8_type_impl() : string_type_impl(kind::utf8, utf8_type_name) {}
 
-struct bytes_type_impl final : public concrete_type<bytes> {
-    bytes_type_impl() : concrete_type(kind::bytes, bytes_type_name, { }, data::type_info::make_variable_size()) {}
-};
+bytes_type_impl::bytes_type_impl()
+    : concrete_type(kind::bytes, bytes_type_name, {}, data::type_info::make_variable_size()) {}
 
 boolean_type_impl::boolean_type_impl() : simple_type_impl<bool>(kind::boolean, boolean_type_name, 1) {}
 

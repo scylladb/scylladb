@@ -106,3 +106,7 @@ struct ascii_type_impl final : public string_type_impl {
 struct utf8_type_impl final : public string_type_impl {
     utf8_type_impl();
 };
+
+struct bytes_type_impl final : public concrete_type<bytes> {
+    bytes_type_impl();
+};
