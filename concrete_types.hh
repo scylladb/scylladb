@@ -86,3 +86,7 @@ struct duration_type_impl final : public concrete_type<cql_duration> {
 struct timestamp_type_impl final : public simple_type_impl<db_clock::time_point> {
     timestamp_type_impl();
 };
+
+struct simple_date_type_impl final : public simple_type_impl<uint32_t> {
+    simple_date_type_impl();
+};

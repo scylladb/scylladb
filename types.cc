@@ -340,43 +340,41 @@ static int64_t timestamp_from_string(sstring_view s) {
     }
 }
 
-struct simple_date_type_impl : public simple_type_impl<uint32_t> {
-    simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, { }}
-    { }
-    static uint32_t days_from_string(sstring_view s) {
-        std::string str;
-        str.resize(s.size());
-        std::transform(s.begin(), s.end(), str.begin(), ::tolower);
-        char* end;
-        auto v = std::strtoll(s.begin(), &end, 10);
-        if (end == s.begin() + s.size()) {
-            return v;
-        }
-        static std::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
-        std::smatch dsm;
-        if (!std::regex_match(str, dsm, date_re)) {
-            throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", str));
-        }
-        auto t = get_time(dsm);
-        return serialize(str, date::local_days(t).time_since_epoch().count());
+simple_date_type_impl::simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, {}} {}
+
+static date::year_month_day get_simple_date_time(const std::smatch& sm) {
+    auto year = boost::lexical_cast<long>(sm[1]);
+    auto month = boost::lexical_cast<unsigned>(sm[2]);
+    auto day = boost::lexical_cast<unsigned>(sm[3]);
+    return date::year_month_day{date::year{year}, date::month{month}, date::day{day}};
+}
+static uint32_t serialize(const std::string& input, int64_t days) {
+    if (days < std::numeric_limits<int32_t>::min()) {
+        throw marshal_exception(format("Input date {} is less than min supported date -5877641-06-23", input));
     }
-    static date::year_month_day get_time(const std::smatch& sm) {
-        auto year = boost::lexical_cast<long>(sm[1]);
-        auto month = boost::lexical_cast<unsigned>(sm[2]);
-        auto day = boost::lexical_cast<unsigned>(sm[3]);
-        return date::year_month_day{date::year{year}, date::month{month}, date::day{day}};
+    if (days > std::numeric_limits<int32_t>::max()) {
+        throw marshal_exception(format("Input date {} is greater than max supported date 5881580-07-11", input));
     }
-    static uint32_t serialize(const std::string& input, int64_t days) {
-        if (days < std::numeric_limits<int32_t>::min()) {
-            throw marshal_exception(format("Input date {} is less than min supported date -5877641-06-23", input));
-        }
-        if (days > std::numeric_limits<int32_t>::max()) {
-            throw marshal_exception(format("Input date {} is greater than max supported date 5881580-07-11", input));
-        }
-        days += 1UL << 31;
-        return static_cast<uint32_t>(days);
+    days += 1UL << 31;
+    return static_cast<uint32_t>(days);
+}
+static uint32_t days_from_string(sstring_view s) {
+    std::string str;
+    str.resize(s.size());
+    std::transform(s.begin(), s.end(), str.begin(), ::tolower);
+    char* end;
+    auto v = std::strtoll(s.begin(), &end, 10);
+    if (end == s.begin() + s.size()) {
+        return v;
     }
-};
+    static std::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
+    std::smatch dsm;
+    if (!std::regex_match(str, dsm, date_re)) {
+        throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", str));
+    }
+    auto t = get_simple_date_time(dsm);
+    return serialize(str, date::local_days(t).time_since_epoch().count());
+}
 
 struct time_type_impl : public simple_type_impl<int64_t> {
     time_type_impl() : simple_type_impl{kind::time, time_type_name, { }}
@@ -2727,7 +2725,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, t.days_from_string(s));
+        return serialize_value(t, days_from_string(s));
     }
     bytes operator()(const date_type_impl& t) {
         return serialize_value(t, db_clock::time_point(db_clock::duration(timestamp_from_string(s))));
