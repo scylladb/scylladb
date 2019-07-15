@@ -674,7 +674,9 @@ public:
             }
         }
         return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
-            return rm->stop();
+            return rm->stop().then([&rm] {
+                rm = {};
+            });
         }).then([repair_metas, from] {
             rlogger.debug("Removed all repair_meta for single node {}", from);
         });
@@ -688,7 +690,9 @@ public:
                 | boost::adaptors::map_values));
         repair_meta_map().clear();
         return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
-            return rm->stop();
+            return rm->stop().then([&rm] {
+                rm = {};
+            });
         }).then([repair_metas] {
             rlogger.debug("Removed all repair_meta for all nodes");
         });
