@@ -124,7 +124,9 @@ public:
 
     future<> announce_keyspace_drop(const sstring& ks_name, bool announce_locally = false);
 
-    future<> announce_column_family_drop(const sstring& ks_name, const sstring& cf_name, bool announce_locally = false);
+    class drop_views_tag;
+    using drop_views = bool_class<drop_views_tag>;
+    future<> announce_column_family_drop(const sstring& ks_name, const sstring& cf_name, bool announce_locally = false, drop_views drop_views = drop_views::no);
 
     future<> announce_type_drop(user_type dropped_type, bool announce_locally = false);
 

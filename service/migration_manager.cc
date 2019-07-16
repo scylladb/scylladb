@@ -691,7 +691,8 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name, bool 
 
 future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
                                                         const sstring& cf_name,
-                                                        bool announce_locally)
+                                                        bool announce_locally,
+                                                        drop_views drop_views)
 {
     try {
         auto& db = get_local_storage_proxy().get_db().local();
@@ -700,8 +701,11 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
         if (schema->is_view()) {
             throw exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View");
         }
+        // If drop_views is false (the default), we don't allow to delete a
+        // table which has views which aren't part of an index. If drop_views
+        // is true, we delete those views as well.
         auto&& views = old_cfm.views();
-        if (views.size() > schema->all_indices().size()) {
+        if (!drop_views && views.size() > schema->all_indices().size()) {
             auto explicit_view_names = views
                                        | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
                                        | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
@@ -716,9 +720,15 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
             auto builder = schema_builder(schema).without_indexes();
             drop_si_mutations = db::schema_tables::make_update_table_mutations(keyspace, schema, builder.build(), api::new_timestamp(), false);
         }
-
         auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, api::new_timestamp());
         mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
+        for (auto& v : views) {
+            if (!old_cfm.get_index_manager().is_index(v)) {
+                mlogger.info("Drop view '{}.{}' of table '{}'", v->ks_name(), v->cf_name(), schema->cf_name());
+                auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, api::new_timestamp());
+                mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
+            }
+        }
         return include_keyspace_and_announce(*keyspace, std::move(mutations), announce_locally);
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(format("Cannot drop non existing table '{}' in keyspace '{}'.", cf_name, ks_name));
