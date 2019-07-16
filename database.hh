@@ -458,6 +458,7 @@ private:
     // This semaphore ensures that an operation like snapshot won't have its selected
     // sstables deleted by compaction in parallel, a race condition which could
     // easily result in failure.
+    // Locking order: must be acquired either independently or after _sstables_lock
     seastar::semaphore _sstable_deletion_sem = {1};
     // There are situations in which we need to stop writing sstables. Flushers will take
     // the read lock, and the ones that wish to stop that process will take the write lock.
@@ -759,13 +760,7 @@ public:
 
     // SSTable writes are now allowed again, and generation is updated to new_generation if != -1
     // returns the amount of microseconds elapsed since we disabled writes.
-    std::chrono::steady_clock::duration enable_sstable_write(int64_t new_generation) {
-        if (new_generation != -1) {
-            update_sstables_known_generation(new_generation);
-        }
-        _sstables_lock.write_unlock();
-        return std::chrono::steady_clock::now() - _sstable_writes_disabled_at;
-    }
+    std::chrono::steady_clock::duration enable_sstable_write(int64_t new_generation);
 
     // Make sure the generation numbers are sequential, starting from "start".
     // Generations before "start" are left untouched.
