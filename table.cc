@@ -1030,6 +1030,7 @@ table::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
     };
 
     return do_with(work(start, std::move(all_generations)), [this] (work& work) {
+        tlogger.info("Reshuffling SSTables in {}...", _config.datadir);
         return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (fs::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
             if (comps.component != component_type::TOC) {
@@ -1957,6 +1958,8 @@ future<int64_t>
 table::disable_sstable_write() {
     _sstable_writes_disabled_at = std::chrono::steady_clock::now();
     return _sstables_lock.write_lock().then([this] {
+      // _sstable_deletion_sem must be acquired after _sstables_lock.write_lock
+      return _sstable_deletion_sem.wait().then([this] {
         if (_sstables->all()->empty()) {
             return make_ready_future<int64_t>(0);
         }
@@ -1965,9 +1968,18 @@ table::disable_sstable_write() {
             max = std::max(max, s->generation());
         }
         return make_ready_future<int64_t>(max);
+      });
     });
 }
 
+std::chrono::steady_clock::duration table::enable_sstable_write(int64_t new_generation) {
+    if (new_generation != -1) {
+        update_sstables_known_generation(new_generation);
+    }
+    _sstable_deletion_sem.signal();
+    _sstables_lock.write_unlock();
+    return std::chrono::steady_clock::now() - _sstable_writes_disabled_at;
+}
 
 void table::set_schema(schema_ptr s) {
     assert(s->is_counter() == _schema->is_counter());
