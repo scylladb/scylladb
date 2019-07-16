@@ -44,6 +44,7 @@ public:
     impl() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
+        _cfg.broadcast_to_all_shards().get();
         utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
         utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
         _feature_service.start().get();
