@@ -2815,7 +2815,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
                         BOOST_FAIL(format("Expected row with column {} having value {}, but it has value {}",
                                           def.id,
                                           int32_type->decompose(int32_t(val[idx])),
-                                          entry.first));
+                                          to_hex(entry.first)));
                     }
                     ++idx;
                 }
@@ -2858,7 +2858,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
                                    def.id,
                                    int32_type->decompose(int32_t(val[idx].first)),
                                    utf8_type->decompose(val[idx].second),
-                                   entry.first,
+                                   to_hex(entry.first),
                                    entry.second.value().linearize()));
                     }
                     ++idx;
