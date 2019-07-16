@@ -55,7 +55,7 @@ future<> ec2_multi_region_snitch::start() {
             inet_address local_public_address;
 
             try {
-                pub_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, PUBLIC_IP_QUERY_REQ).get0();
+                pub_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PUBLIC_IP_QUERY_REQ).get0();
                 local_public_address = inet_address(pub_addr);
             } catch (...) {
                 std::throw_with_nested(exceptions::configuration_exception("Failed to get a Public IP. Public IP is a requirement for Ec2MultiRegionSnitch. Consider using a different snitch if your instance doesn't have it"));
@@ -71,7 +71,7 @@ future<> ec2_multi_region_snitch::start() {
             utils::fb_utilities::set_broadcast_address(local_public_address);
             utils::fb_utilities::set_broadcast_rpc_address(local_public_address);
 
-            sstring priv_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, PRIVATE_IP_QUERY_REQ).get0();
+            sstring priv_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PRIVATE_IP_QUERY_REQ).get0();
             _local_private_address = priv_addr;
 
             //

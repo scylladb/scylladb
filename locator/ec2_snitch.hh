@@ -27,7 +27,8 @@ namespace locator {
 class ec2_snitch : public production_snitch_base {
 public:
     static constexpr const char* ZONE_NAME_QUERY_REQ = "/latest/meta-data/placement/availability-zone";
-    static constexpr const char* AWS_QUERY_SERVER_ADDR = "169.254.169.254:80";
+    static constexpr const char* AWS_QUERY_SERVER_ADDR = "169.254.169.254";
+    static constexpr uint16_t AWS_QUERY_SERVER_PORT = 80;
 
     ec2_snitch(const sstring& fname = "", unsigned io_cpu_id = 0);
     virtual future<> start() override;
@@ -36,7 +37,7 @@ public:
     }
 protected:
     future<> load_config();
-    future<sstring> aws_api_call(sstring addr, const sstring cmd);
+    future<sstring> aws_api_call(sstring addr, uint16_t port, const sstring cmd);
     future<sstring> read_property_file();
 private:
     connected_socket _sd;

@@ -17,7 +17,7 @@ future<> ec2_snitch::load_config() {
     using namespace boost::algorithm;
 
     if (engine().cpu_id() == io_cpu_id()) {
-        return aws_api_call(AWS_QUERY_SERVER_ADDR, ZONE_NAME_QUERY_REQ).then([this](sstring az){
+        return aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ).then([this](sstring az) {
             assert(az.size());
 
             std::vector<std::string> splits;
@@ -62,8 +62,8 @@ future<> ec2_snitch::start() {
     });
 }
 
-future<sstring> ec2_snitch::aws_api_call(sstring addr, sstring cmd) {
-    return engine().net().connect(socket_address(inet_address{addr}))
+future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cmd) {
+    return engine().net().connect(socket_address(inet_address{addr}, port))
     .then([this, addr, cmd] (connected_socket fd) {
         _sd = std::move(fd);
         _in = std::move(_sd.input());
