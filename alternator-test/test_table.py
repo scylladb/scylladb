@@ -3,6 +3,7 @@
 import pytest
 from botocore.exceptions import ClientError
 import re
+from util import list_tables
 
 # Utility function for create a table with a given name and some valid
 # schema.. This function initiates the table's creation, but doesn't
@@ -192,37 +193,6 @@ def test_describe_table_non_existent_table(dynamodb):
     err = response['Error']
     assert err['Code'] == 'ResourceNotFoundException'
     assert re.match(err['Message'], 'Requested resource not found: Table: non_existent_table not found')
-
-# DynamoDB's ListTables request returns up to a single page of table names
-# (e.g., up to 100) and it is up to the caller to call it again and again
-# to get the next page. This is a utility function which calls it repeatedly
-# as much as necessary to get the entire list.
-# We deliberately return a list and not a set, because we want the caller
-# to be able to recognize bugs in ListTables which causes the same table
-# to be returned twice.
-def list_tables(dynamodb, limit):
-    ret = []
-    pos = None
-    while True:
-        if pos:
-            page = dynamodb.meta.client.list_tables(Limit=limit, ExclusiveStartTableName=pos);
-        else:
-            page = dynamodb.meta.client.list_tables(Limit=limit);
-        results = page.get('TableNames', None)
-        assert(results)
-        ret = ret + results
-        newpos = page.get('LastEvaluatedTableName', None)
-        if not newpos:
-            break;
-        # It doesn't make sense for Dynamo to tell us we need more pages, but
-        # not send anything in *this* page!
-        assert len(results) > 0
-        assert newpos != pos
-        # Note that we only checked that we got back tables, not that we got
-        # any new tables not already in ret. So a buggy implementation might
-        # still cause an endless loop getting the same tables again and again.
-        pos = newpos
-    return ret
 
 # Test that all tables we create are listed, and pagination works properly.
 # Note that the DyanamoDB setup we run this against may have hundreds of
