@@ -7,7 +7,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError, ParamValidationError
-from util import create_test_table, random_string, full_scan, full_query, multiset
+from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -627,3 +627,45 @@ def test_gsi_non_scylla_name(dynamodb):
 @pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_very_long_name(dynamodb):
     create_gsi(dynamodb, 'n' * 255)
+
+# Verify that ListTables does not list materialized views used for indexes.
+# This is hard to test, because we don't really know which table names
+# should be listed beyond those we created, and don't want to assume that
+# no other test runs in parallel with us. So the method we chose is to use a
+# unique random name for an index, and check that no table contains this
+# name. This assumes that materialized-view names are composed using the
+# index's name (which is currently what we do).
+
+@pytest.fixture(scope="session")
+def test_table_gsi_random_name(dynamodb):
+    index_name = random_string()
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': index_name,
+                'KeySchema': [
+                    { 'AttributeName': 'c', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'p', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ],
+        )
+    yield [table, index_name]
+    table.delete()
+
+@pytest.mark.xfail(reason="GSI not supported; only base key")
+def test_gsi_list_tables(dynamodb, test_table_gsi_random_name):
+    table, index_name = test_table_gsi_random_name
+    # Check that the random "index_name" isn't a substring of any table name:
+    tables = list_tables(dynamodb)
+    for name in tables:
+        assert not index_name in name
+    # But of course, the table's name should be in the list:
+    assert table.name in tables

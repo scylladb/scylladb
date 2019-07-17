@@ -1556,7 +1556,7 @@ future<json::json_return_type> executor::list_tables(std::string content) {
     auto table_names = _proxy.get_db().local().get_column_families()
             | boost::adaptors::map_values
             | boost::adaptors::filtered([] (const lw_shared_ptr<table>& t) {
-                        return t->schema()->ks_name() == KEYSPACE_NAME;
+                        return t->schema()->ks_name() == KEYSPACE_NAME && !t->schema()->is_view();
                     })
             | boost::adaptors::transformed([] (const lw_shared_ptr<table>& t) {
                         return t->schema()->cf_name();
