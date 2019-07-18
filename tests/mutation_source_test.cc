@@ -1514,6 +1514,14 @@ static mutation_sets generate_mutation_sets() {
             result.unequal.emplace_back(mutations{m1, m2});
             m2.partition().apply_row_tombstone(*s1, key, tomb);
             result.equal.emplace_back(mutations{m1, m2});
+
+            // Add a row which falls under the tombstone prefix.
+            auto ts = new_timestamp();
+            auto key_full = clustering_key_prefix::from_deeply_exploded(*s1, {data_value(bytes("ck2_0")), data_value(bytes("ck1_1")), });
+            m1.set_clustered_cell(key_full, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.set_clustered_cell(key_full, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
+            result.equal.emplace_back(mutations{m1, m2});
         }
 
         {
