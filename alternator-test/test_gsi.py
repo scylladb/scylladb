@@ -115,6 +115,16 @@ def test_gsi_same_key(test_table_gsi_1):
     assert_index_query(test_table_gsi_1, 'hello', items,
         KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
 
+# Check we get an appropriate error when trying to read a non-existing index
+# of an existing table.
+@pytest.mark.xfail(reason="GSI not supported; only base key")
+def test_gsi_missing_index(test_table_gsi_1):
+    with pytest.raises(ClientError, match='ValidationException.*wrong_name'):
+        full_query(test_table_gsi_1, IndexName='wrong_name',
+            KeyConditions={'x': {'AttributeValueList': [1], 'ComparisonOperator': 'EQ'}})
+    with pytest.raises(ClientError, match='ValidationException.*wrong_name'):
+        full_scan(test_table_gsi_1, IndexName='wrong_name')
+
 # Verify that strongly-consistent reads on GSI are *not* allowed.
 @pytest.mark.xfail(reason="GSI not supported; only base key")
 def test_gsi_strong_consistency(test_table_gsi_1):
@@ -155,6 +165,58 @@ def test_gsi_missing_attribute_definition(dynamodb):
                     'Projection': { 'ProjectionType': 'ALL' }
                 }
             ])
+
+# test_table_gsi_1_hash_only is a variant of test_table_gsi_1: It's another
+# case where the index doesn't involve non-key attributes. Again the base
+# table has a hash and sort key, but in this case the index has *only* a
+# hash key (which is the base's hash key). In the materialized-view-based
+# implementation, we need to remember the other part of the base key as a
+# clustering key.
+@pytest.fixture(scope="session")
+def test_table_gsi_1_hash_only(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'c', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ],
+        )
+    yield table
+    table.delete()
+
+@pytest.mark.xfail(reason="GSI not supported; only base key")
+def test_gsi_key_not_in_index(test_table_gsi_1_hash_only):
+    # Test with items with different 'c' values:
+    items = [{'p': random_string(), 'c': random_string(), 'x': random_string()} for i in range(10)]
+    with test_table_gsi_1_hash_only.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    c = items[0]['c']
+    expected_items = [x for x in items if x['c'] == c]
+    assert_index_query(test_table_gsi_1_hash_only, 'hello', expected_items,
+        KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
+    # Test items with the same sort key 'c' but different hash key 'p'
+    c = random_string();
+    items = [{'p': random_string(), 'c': c, 'x': random_string()} for i in range(10)]
+    with test_table_gsi_1_hash_only.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    assert_index_query(test_table_gsi_1_hash_only, 'hello', items,
+        KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
+    # Scanning the entire table directly or via the index yields the same
+    # results (in different order).
+    assert_index_scan(test_table_gsi_1_hash_only, 'hello', full_scan(test_table_gsi_1_hash_only))
+
 
 # A second scenario of GSI. Base table has just hash key, Index has a
 # different hash key - one of the non-key attributes from the base table.
@@ -599,6 +661,9 @@ def create_gsi(dynamodb, index_name):
 # Like table names (tested in test_table.py), index names must must also
 # be 3-255 characters and match the regex [a-zA-Z0-9._-]+. This test
 # is similar to test_create_table_unsupported_names(), but for GSI names.
+# Note that Scylla is actually more limited in the length of the index
+# names, because both table name and index name, together, have to fit in
+# 221 characters. But we don't verify here this specific limitation.
 @pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_unsupported_names(dynamodb):
     # Unfortunately, the boto library tests for names shorter than the
@@ -621,12 +686,14 @@ def test_gsi_unsupported_names(dynamodb):
 def test_gsi_non_scylla_name(dynamodb):
     create_gsi(dynamodb, '.alternator_test')
 
-# names with 255 characters are allowed in Dynamo. If Scylla implements a
-# smaller limit, that's also acceptable and the test should be changed
+# Index names with 255 characters are allowed in Dynamo. In Scylla, the
+# limit is different - the sum of both table and index length cannot
+# exceed 211 characters. So we test a much shorter limit.
 # (compare test_create_and_delete_table_very_long_name()).
 @pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_very_long_name(dynamodb):
-    create_gsi(dynamodb, 'n' * 255)
+    #create_gsi(dynamodb, 'n' * 255)   # works on DynamoDB, but not on Scylla
+    create_gsi(dynamodb, 'n' * 190)
 
 # Verify that ListTables does not list materialized views used for indexes.
 # This is hard to test, because we don't really know which table names
