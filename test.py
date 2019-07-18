@@ -27,6 +27,7 @@ import subprocess
 import concurrent.futures
 import io
 import multiprocessing
+import xml.etree.ElementTree as ET
 
 boost_tests = [
     'bytes_ostream_test',
@@ -211,6 +212,8 @@ if __name__ == "__main__":
                         help='Verbose reporting')
     parser.add_argument('--jobs', '-j', action="store", default=default_num_jobs, type=int,
                         help="Number of jobs to use for running the tests")
+    parser.add_argument('--xunit', action="store",
+                        help="Name of a file to write results of non-boost tests to in xunit format")
     args = parser.parse_args()
 
     print_progress = print_status_verbose if args.verbose else print_progress_succint
@@ -299,7 +302,7 @@ if __name__ == "__main__":
             def report_subcause(e):
                 print('  with error {e}\n'.format(e=e), file=file)
             report_error(e, e, report_subcause=report_subcause)
-        return (path, boost_args + exec_args, success, file.getvalue())
+        return (path, boost_args + exec_args, type, success, file.getvalue())
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
     futures = []
@@ -310,9 +313,12 @@ if __name__ == "__main__":
         for _ in range(args.repeat):
             futures.append(executor.submit(run_test, path, test_type, exec_args))
 
+    results = []
     cookie = len(futures)
     for future in concurrent.futures.as_completed(futures):
-        test_path, test_args, success, out = future.result()
+        result = future.result()
+        results.append(result)
+        test_path, test_args, _, success, out = result
         cookie = print_progress(test_path, test_args, success, cookie)
         if not success:
             failed_tests.append((test_path, test_args, out))
@@ -321,10 +327,27 @@ if __name__ == "__main__":
         print('\nOK.')
     else:
         print('\n\nOutput of the failed tests:')
-        for test, args, out in failed_tests:
-            print("Test {} {} failed:\n{}".format(test, ' '.join(args), out))
+        for test, test_args, out in failed_tests:
+            print("Test {} {} failed:\n{}".format(test, ' '.join(test_args), out))
         print('\n\nThe following test(s) have failed:')
-        for test, args, _ in failed_tests:
-            print('  {} {}'.format(test, ' '.join(args)))
-        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(futures)))
+        for test, test_args, _ in failed_tests:
+            print('  {} {}'.format(test, ' '.join(test_args)))
+        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(results)))
+
+    if args.xunit:
+        other_results = [r for r in results if r[2] != 'boost']
+        num_other_failed = sum(1 for r in other_results if not r[3])
+
+        xml_results = ET.Element('testsuite', name='non-boost tests',
+                tests=str(len(other_results)), failures=str(num_other_failed), errors='0')
+
+        for test_path, test_args, _, success, out in other_results:
+            xml_res = ET.SubElement(xml_results, 'testcase', name=test_path)
+            if not success:
+                xml_fail = ET.SubElement(xml_res, 'failure')
+                xml_fail.text = "Test {} {} failed:\n{}".format(test_path, ' '.join(test_args), out)
+        with open(args.xunit, "w") as f:
+            ET.ElementTree(xml_results).write(f, encoding="unicode")
+
+    if failed_tests:
         sys.exit(1)
