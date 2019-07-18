@@ -1865,8 +1865,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     }
 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
-        auto make_populate = [] (bool evict_paused_readers) {
-            return [evict_paused_readers] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
+        auto make_populate = [] (bool evict_paused_readers, bool single_fragment_buffer) {
+            return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
                 // We need to group mutations that have the same token so they land on the same shard.
                 std::map<dht::token, std::vector<mutation>> mutations_by_token;
 
@@ -1894,22 +1894,26 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     remote_memtables->emplace_back(std::move(remote_mt));
                 }
 
-                return mutation_source([partitioner, remote_memtables, evict_paused_readers] (schema_ptr s,
+                return mutation_source([partitioner, remote_memtables, evict_paused_readers, single_fragment_buffer] (schema_ptr s,
                         const dht::partition_range& range,
                         const query::partition_slice& slice,
                         const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd_sm,
                         mutation_reader::forwarding fwd_mr) mutable {
-                    auto factory = [remote_memtables] (
+                    auto factory = [remote_memtables, single_fragment_buffer] (
                             schema_ptr s,
                             const dht::partition_range& range,
                             const query::partition_slice& slice,
                             const io_priority_class& pc,
                             tracing::trace_state_ptr trace_state,
                             mutation_reader::forwarding fwd_mr) {
-                            return remote_memtables->at(engine().cpu_id())->make_flat_reader(s, range, slice, pc, std::move(trace_state),
+                            auto reader = remote_memtables->at(engine().cpu_id())->make_flat_reader(s, range, slice, pc, std::move(trace_state),
                                     streamed_mutation::forwarding::no, fwd_mr);
+                            if (single_fragment_buffer) {
+                                reader.set_max_buffer_size(1);
+                            }
+                            return reader;
                     };
 
                     auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
@@ -1922,11 +1926,14 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
             };
         };
 
-        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=false)");
-        run_mutation_source_tests(make_populate(false));
+        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=false, single_fragment_buffer=false)");
+        run_mutation_source_tests(make_populate(false, false));
 
-        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=true)");
-        run_mutation_source_tests(make_populate(true));
+        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=true, single_fragment_buffer=false)");
+        run_mutation_source_tests(make_populate(true, false));
+
+        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=true, single_fragment_buffer=true)");
+        run_mutation_source_tests(make_populate(true, true));
 
         return make_ready_future<>();
     }).get();
