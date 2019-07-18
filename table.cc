@@ -510,8 +510,8 @@ table::make_streaming_reader(schema_ptr s,
     return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
 }
 
-flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range, mutation_reader::forwarding fwd_mr) const {
-    const auto& slice = schema->full_slice();
+flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+        const query::partition_slice& slice, mutation_reader::forwarding fwd_mr) const {
     const auto& pc = service::get_local_streaming_read_priority();
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;

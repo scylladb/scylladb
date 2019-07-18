@@ -682,7 +682,12 @@ public:
 
     // Single range overload.
     flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+            const query::partition_slice& slice,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) const;
+
+    flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range) {
+        return make_streaming_reader(schema, range, schema->full_slice());
+    }
 
     sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
     sstables::shared_sstable make_streaming_staging_sstable() {
