@@ -1929,7 +1929,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
         virtual flat_mutation_reader create_reader(
                 schema_ptr schema,
                 const dht::partition_range& range,
-                const query::partition_slice&,
+                const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr,
                 mutation_reader::forwarding fwd_mr) override {
@@ -1940,7 +1940,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
             _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
 
-            return cf.make_streaming_reader(std::move(schema), *_contexts[shard].range, fwd_mr);
+            return cf.make_streaming_reader(std::move(schema), *_contexts[shard].range, slice, fwd_mr);
         }
         virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
             reader_fut.then([this, zis = shared_from_this(), shard] (stopped_reader&& reader) mutable {
