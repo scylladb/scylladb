@@ -420,7 +420,11 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
 
     uint64_t _file_pos = 0;
     uint64_t _flush_pos = 0;
+
     bool _closed = false;
+    // Not the same as _closed since files can be reused
+    bool _closed_file = false;
+
     bool _terminated = false;
 
     using buffer_type = segment_manager::buffer_type;
@@ -486,7 +490,7 @@ public:
         clogger.debug("Created new {} segment {}", active ? "active" : "reserve", *this);
     }
     ~segment() {
-        if (!_closed) {
+        if (!_closed_file) {
             _segment_manager->add_file_to_close(std::move(_file));
         }
         if (is_clean()) {
@@ -560,7 +564,7 @@ public:
                     // and we should have waited out all pending.
                     return me->_pending_ops.close().finally([me] {
                         return me->_file.truncate(me->_flush_pos).then([me] {
-                            return me->_file.close();
+                            return me->_file.close().finally([me] { me->_closed_file = true; });
                         });
                     });
                 });
