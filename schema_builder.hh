@@ -239,12 +239,14 @@ public:
     column_definition& find_column(const cql3::column_identifier&);
     schema_builder& with_column(const column_definition& c);
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column, column_view_virtual view_virtual = column_view_virtual::no);
-    schema_builder& with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual view_virtual = column_view_virtual::no);
+    schema_builder& with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual view_virtual = column_view_virtual::no, column_computation_ptr computation = nullptr);
+    schema_builder& with_computed_column(bytes name, data_type type, column_kind kind, column_computation_ptr computation);
     schema_builder& remove_column(bytes name);
     schema_builder& without_column(sstring name, api::timestamp_type timestamp);
     schema_builder& without_column(sstring name, data_type, api::timestamp_type timestamp);
     schema_builder& rename_column(bytes from, bytes to);
     schema_builder& alter_column_type(bytes name, data_type new_type);
+    schema_builder& mark_column_computed(bytes name, column_computation_ptr computation);
 
     // Adds information about collection that existed in the past but the column
     // has since been removed. For adding colllections that are still alive

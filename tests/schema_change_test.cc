@@ -510,14 +510,16 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
 
 // We don't want schema digest to change between Scylla versions because that results in a schema disagreement
 // during rolling upgrade.
-SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
+future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_dir, std::set<sstring> disabled_features, std::vector<utils::UUID> expected_digests) {
     using namespace db;
     using namespace db::schema_tables;
 
     auto tmp = tmpdir();
+    // NOTICE: Regenerating data for this test may be necessary when a system table is added.
+    // This test uses pre-generated sstables and relies on the fact that they are up to date
+    // with the current system schema. If it is not, the schema will be updated, which will cause
+    // new timestamps to appear and schema digests will not match anymore.
     const bool regenerate = false;
-
-    sstring data_dir = "./tests/sstables/schema_digest_test";
 
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
@@ -527,8 +529,10 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
         fs::copy(std::string(data_dir), std::string(tmp.path().string()), fs::copy_options::recursive);
         db_cfg.data_file_directories({tmp.path().string()}, db::config::config_source::CommandLine);
     }
+    cql_test_config cfg_in(db_cfg_ptr);
+    cfg_in.disabled_features = std::move(disabled_features);
 
-    return do_with_cql_env_thread([regenerate](cql_test_env& e) {
+    return do_with_cql_env_thread([regenerate, expected_digests = std::move(expected_digests)](cql_test_env& e) {
         if (regenerate) {
             // Exercise many different kinds of schema changes.
             e.execute_cql(
@@ -566,25 +570,58 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
 
         schema_features sf = schema_features::of<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
 
-        expect_digest(sf, utils::UUID("492719e5-0169-30b1-a15e-3447674c0c0c"));
+        expect_digest(sf, expected_digests[0]);
 
         sf.set<schema_feature::VIEW_VIRTUAL_COLUMNS>();
-        expect_digest(sf, utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"));
+        expect_digest(sf, expected_digests[1]);
 
-        expect_digest(schema_features::full(), utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"));
+        sf.set<schema_feature::VIEW_VIRTUAL_COLUMNS>();
+        expect_digest(sf, expected_digests[2]);
+
+        expect_digest(schema_features::full(), expected_digests[3]);
 
         // Causes tombstones to become expired
         // This is in order to test that schema disagreement doesn't form due to expired tombstones being collected
         // Refs https://github.com/scylladb/scylla/issues/4485
         forward_jump_clocks(std::chrono::seconds(60*60*24*31));
 
-        expect_digest(schema_features::full(), utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"));
+        expect_digest(schema_features::full(), expected_digests[4]);
 
         // FIXME: schema_mutations::digest() is still sensitive to expiry, so we can check versions only after forward_jump_clocks()
         // otherwise the results would not be stable.
-        expect_version("tests", "table1", utils::UUID("4198e26c-f214-3888-9c49-c396eb01b8d7"));
-        expect_version("ks", "tbl", utils::UUID("5c9cadec-e5df-357e-81d0-0261530af64b"));
-        expect_version("ks", "tbl_view", utils::UUID("1d91ad22-ea7c-3e7f-9557-87f0f3bb94d7"));
-        expect_version("ks", "tbl_view_2", utils::UUID("2dcd4a37-cbb5-399b-b3c9-8eb1398b096b"));
-    }, db_cfg_ptr).then([tmp = std::move(tmp)] {});
+        expect_version("tests", "table1", expected_digests[5]);
+        expect_version("ks", "tbl", expected_digests[6]);
+        expect_version("ks", "tbl_view", expected_digests[7]);
+        expect_version("ks", "tbl_view_2", expected_digests[8]);
+    }, cfg_in).then([tmp = std::move(tmp)] {});
+}
+
+SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
+    std::vector<utils::UUID> expected_digests{
+        utils::UUID("492719e5-0169-30b1-a15e-3447674c0c0c"),
+        utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"),
+        utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"),
+        utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"),
+        utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"),
+        utils::UUID("4198e26c-f214-3888-9c49-c396eb01b8d7"),
+        utils::UUID("5c9cadec-e5df-357e-81d0-0261530af64b"),
+        utils::UUID("1d91ad22-ea7c-3e7f-9557-87f0f3bb94d7"),
+        utils::UUID("2dcd4a37-cbb5-399b-b3c9-8eb1398b096b")
+    };
+    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS"}, std::move(expected_digests));
+}
+
+SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
+    std::vector<utils::UUID> expected_digests{
+        utils::UUID("ddd2b841-1bbb-374a-972c-037d6bc14d28"),
+        utils::UUID("ea8433b3-d150-3c93-8249-a584537c1b4e"),
+        utils::UUID("ea8433b3-d150-3c93-8249-a584537c1b4e"),
+        utils::UUID("9837e11f-13b8-32ba-9171-5563248dc198"),
+        utils::UUID("9837e11f-13b8-32ba-9171-5563248dc198"),
+        utils::UUID("774d63ef-2f75-39f8-a2be-418d28d35a97"),
+        utils::UUID("5217fc3a-308f-32aa-8b9c-41a6f2bcc448"),
+        utils::UUID("d58e5214-516e-3d0b-95b5-01ab71584a8d"),
+        utils::UUID("e1b50bed-2ab8-3759-92c7-1f4288046ae6")
+    };
+    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test_computed_columns", std::set<sstring>{}, std::move(expected_digests));
 }

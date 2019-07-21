@@ -101,6 +101,7 @@ static constexpr auto FUNCTIONS = "functions";
 static constexpr auto AGGREGATES = "aggregates";
 static constexpr auto INDEXES = "indexes";
 static constexpr auto VIEW_VIRTUAL_COLUMNS = "view_virtual_columns"; // Scylla specific
+static constexpr auto COMPUTED_COLUMNS = "computed_columns"; // Scylla specific
 
 schema_ptr columns();
 schema_ptr view_virtual_columns();
@@ -109,6 +110,7 @@ schema_ptr indexes();
 schema_ptr tables();
 schema_ptr scylla_tables();
 schema_ptr views();
+schema_ptr computed_columns();
 
 }
 
@@ -205,6 +207,8 @@ std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata
 std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr old_view, view_ptr new_view, api::timestamp_type timestamp, bool include_base);
 
 std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp);
+
+future<> maybe_update_legacy_secondary_index_mv_schema(database& db, view_ptr v);
 
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);

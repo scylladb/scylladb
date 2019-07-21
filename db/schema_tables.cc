@@ -84,6 +84,7 @@
 #include "user_types_metadata.hh"
 
 #include "index/target_parser.hh"
+#include "service/storage_service.hh"
 
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;
@@ -155,9 +156,12 @@ struct user_types_to_drop final {
 
 static future<> do_merge_schema(distributed<service::storage_proxy>&, std::vector<mutation>, bool do_flush);
 
+using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
+static computed_columns_map get_computed_columns(const schema_mutations& sm);
+
 static std::vector<column_definition> create_columns_from_column_rows(
                 const query::result_set& rows, const sstring& keyspace,
-                const sstring& table, bool is_super, column_view_virtual is_view_virtual);
+                const sstring& table, bool is_super, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns);
 
 
 static std::vector<index_metadata> create_indices_from_index_rows(const query::result_set& rows,
@@ -169,6 +173,9 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
                      sstring table);
 
 static void add_column_to_schema_mutation(schema_ptr, const column_definition&,
+                api::timestamp_type, mutation&);
+
+static void add_computed_column_to_schema_mutation(schema_ptr, const column_definition&,
                 api::timestamp_type, mutation&);
 
 static void add_index_to_schema_mutation(schema_ptr table,
@@ -342,6 +349,38 @@ schema_ptr columns() {
 }
 schema_ptr view_virtual_columns() {
     static thread_local auto schema = columns_schema(VIEW_VIRTUAL_COLUMNS);
+    return schema;
+}
+
+// Computed columns are a special kind of columns. Rather than having their value provided directly
+// by the user, they are computed - possibly from other column values. This table stores which columns
+// for a given table are computed, and a serialized computation itself. Full column information is stored
+// in the `columns` table, this one stores only entries for computed columns, so it will be empty for tables
+// without any computed columns defined in the schema. `computation` is a serialized blob and its format
+// is defined in column_computation.hh and system_schema docs.
+//
+static schema_ptr computed_columns_schema(const char* columns_table_name) {
+    schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, columns_table_name), NAME, columns_table_name,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"table_name", utf8_type}, {"column_name", utf8_type}},
+        // regular columns
+        {{"computation", bytes_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "computed columns"
+        )));
+    builder.set_gc_grace_seconds(schema_gc_grace);
+    builder.with_version(generate_schema_version(builder.uuid()));
+    return builder.build();
+}
+
+schema_ptr computed_columns() {
+    static thread_local auto schema = computed_columns_schema(COMPUTED_COLUMNS);
     return schema;
 }
 
@@ -1662,6 +1701,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     add_table_params_to_mutations(m, ckey, table, timestamp);
 
     mutation columns_mutation(columns(), pkey);
+    mutation computed_columns_mutation(computed_columns(), pkey);
     mutation dropped_columns_mutation(dropped_columns(), pkey);
     mutation indices_mutation(indexes(), pkey);
 
@@ -1671,6 +1711,9 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
                 throw std::logic_error("view_virtual column found in non-view table");
             }
             add_column_to_schema_mutation(table, column, timestamp, columns_mutation);
+            if (column.is_computed()) {
+                add_computed_column_to_schema_mutation(table, column, timestamp, computed_columns_mutation);
+            }
         }
         for (auto&& index : table->indices()) {
             add_index_to_schema_mutation(table, index, timestamp, indices_mutation);
@@ -1682,7 +1725,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
         }
     }
 
-    return schema_mutations{std::move(m), std::move(columns_mutation), std::nullopt,
+    return schema_mutations{std::move(m), std::move(columns_mutation), std::nullopt, std::move(computed_columns_mutation),
                             std::move(indices_mutation), std::move(dropped_columns_mutation),
                             std::move(scylla_tables_mutation)};
 }
@@ -1743,6 +1786,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
         std::vector<mutation>& mutations) {
     mutation columns_mutation(columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
     mutation view_virtual_columns_mutation(view_virtual_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
+    mutation computed_columns_mutation(computed_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
 
     auto diff = difference(old_table->v3().columns_by_name(), new_table->v3().columns_by_name());
 
@@ -1759,6 +1803,9 @@ static void make_update_columns_mutations(schema_ptr old_table,
         } else {
             drop_column_from_schema_mutation(columns(), old_table, column.name_as_text(), timestamp, mutations);
         }
+        if (column.is_computed()) {
+            drop_column_from_schema_mutation(computed_columns(), old_table, column.name_as_text(), timestamp, mutations);
+        }
     }
 
     // newly added columns and old columns with updated attributes
@@ -1769,10 +1816,14 @@ static void make_update_columns_mutations(schema_ptr old_table,
         } else {
             add_column_to_schema_mutation(new_table, column, timestamp, columns_mutation);
         }
+        if (column.is_computed()) {
+            add_computed_column_to_schema_mutation(new_table, column, timestamp, computed_columns_mutation);
+        }
     }
 
     mutations.emplace_back(std::move(columns_mutation));
     mutations.emplace_back(std::move(view_virtual_columns_mutation));
+    mutations.emplace_back(std::move(computed_columns_mutation));
 
     // dropped columns
     auto dc_diff = difference(old_table->dropped_columns(), new_table->dropped_columns());
@@ -1826,6 +1877,9 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
         } else {
             drop_column_from_schema_mutation(columns(), table_or_view, column.name_as_text(), timestamp, mutations);
         }
+        if (column.is_computed()) {
+            drop_column_from_schema_mutation(computed_columns(), table_or_view, column.name_as_text(), timestamp, mutations);
+        }
     }
     for (auto& column : table_or_view->dropped_columns() | boost::adaptors::map_keys) {
         drop_column_from_schema_mutation(dropped_columns(), table_or_view, column, timestamp, mutations);
@@ -1860,11 +1914,12 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
         read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, view_virtual_columns(), table.keyspace_name, table.table_name),
+        read_schema_partition_for_table(proxy, computed_columns(), table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, dropped_columns(), table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name)).then(
-            [] (mutation cf_m, mutation col_m, mutation vv_col_m, mutation dropped_m, mutation idx_m, mutation st_m) {
-                return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
+            [] (mutation cf_m, mutation col_m, mutation vv_col_m, mutation c_col_m, mutation dropped_m, mutation idx_m, mutation st_m) {
+                return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
             });
 #if 0
         // FIXME:
@@ -2086,13 +2141,15 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
         }
     }
 
+    auto computed_columns = get_computed_columns(sm);
     std::vector<column_definition> column_defs = create_columns_from_column_rows(
             query::result_set(sm.columns_mutation()),
             ks_name,
             cf_name,/*,
             fullRawComparator, */
             cf == cf_type::super,
-            column_view_virtual::no);
+            column_view_virtual::no,
+            computed_columns);
 
 
     builder.set_is_dense(is_dense);
@@ -2163,6 +2220,16 @@ static void add_column_to_schema_mutation(schema_ptr table,
     m.set_clustered_cell(ckey, "position", pos, timestamp);
     m.set_clustered_cell(ckey, "clustering_order", sstring(order), timestamp);
     m.set_clustered_cell(ckey, "type", type->as_cql3_type().to_string(), timestamp);
+}
+
+static void add_computed_column_to_schema_mutation(schema_ptr table,
+        const column_definition& column,
+        api::timestamp_type timestamp,
+        mutation& m) {
+    auto ckey = clustering_key::from_exploded(*m.schema(),
+            {utf8_type->decompose(table->cf_name()), utf8_type->decompose(column.name_as_text())});
+
+    m.set_clustered_cell(ckey, "computation", data_value(column.get_computation().serialize()), timestamp);
 }
 
 sstring serialize_kind(column_kind kind)
@@ -2250,12 +2317,24 @@ static void drop_column_from_schema_mutation(
     mutations.emplace_back(m);
 }
 
+static computed_columns_map get_computed_columns(const schema_mutations& sm) {
+    if (!sm.computed_columns_mutation()) {
+        return {};
+    }
+    query::result_set computed_result(*sm.computed_columns_mutation());
+    return boost::copy_range<computed_columns_map>(
+            computed_result.rows() | boost::adaptors::transformed([] (const query::result_set_row& row) {
+        return computed_columns_map::value_type{to_bytes(row.get_nonnull<sstring>("column_name")), column_computation::deserialize(row.get_nonnull<bytes>("computation"))};
+    }));
+}
+
 static std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
                                                                const sstring& keyspace,
                                                                const sstring& table, /*,
                                                                AbstractType<?> rawComparator, */
                                                                bool is_super,
-                                                               column_view_virtual is_view_virtual)
+                                                               column_view_virtual is_view_virtual,
+                                                               const computed_columns_map& computed_columns)
 {
     std::vector<column_definition> columns;
     for (auto&& row : rows.rows()) {
@@ -2271,8 +2350,13 @@ static std::vector<column_definition> create_columns_from_column_rows(const quer
                 type = reversed_type_impl::get_instance(type);
             }
         }
+        column_computation_ptr computation;
+        auto computed_it = computed_columns.find(name_bytes);
+        if (computed_it != computed_columns.end()) {
+            computation = computed_it->second->clone();
+        }
 
-        columns.emplace_back(name_bytes, type, kind, position, is_view_virtual);
+        columns.emplace_back(name_bytes, type, kind, position, is_view_virtual, std::move(computation));
     }
     return columns;
 }
@@ -2317,12 +2401,13 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     schema_builder builder{ks_name, cf_name, id};
     prepare_builder_from_table_row(ctxt, builder, row);
 
-    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no);
+    auto computed_columns = get_computed_columns(sm);
+    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);
     for (auto&& cdef : column_defs) {
         builder.with_column(cdef);
     }
     if (sm.view_virtual_columns_mutation()) {
-        column_defs = create_columns_from_column_rows(query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes);
+        column_defs = create_columns_from_column_rows(query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns);
         for (auto&& cdef : column_defs) {
             builder.with_column(cdef);
         }
@@ -2394,9 +2479,9 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
 
     add_table_params_to_mutations(m, ckey, view, timestamp);
 
-
     mutation columns_mutation(columns(), pkey);
     mutation view_virtual_columns_mutation(view_virtual_columns(), pkey);
+    mutation computed_columns_mutation(computed_columns(), pkey);
     mutation dropped_columns_mutation(dropped_columns(), pkey);
     mutation indices_mutation(indexes(), pkey);
 
@@ -2406,6 +2491,9 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
                 add_column_to_schema_mutation(view, column, timestamp, view_virtual_columns_mutation);
             } else {
                 add_column_to_schema_mutation(view, column, timestamp, columns_mutation);
+            }
+            if (column.is_computed()) {
+                add_computed_column_to_schema_mutation(view, column, timestamp, computed_columns_mutation);
             }
         }
 
@@ -2419,7 +2507,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
 
     auto scylla_tables_mutation = make_scylla_tables_mutation(view, timestamp);
 
-    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(view_virtual_columns_mutation),
+    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(view_virtual_columns_mutation), std::move(computed_columns_mutation),
                             std::move(indices_mutation), std::move(dropped_columns_mutation),
                             std::move(scylla_tables_mutation)};
 }
@@ -2722,12 +2810,48 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     if (features.contains<schema_feature::VIEW_VIRTUAL_COLUMNS>()) {
         result.emplace_back(view_virtual_columns());
     }
+    if (features.contains<schema_feature::COMPUTED_COLUMNS>()) {
+        result.emplace_back(computed_columns());
+    }
     return result;
 }
 
 std::vector<sstring> all_table_names(schema_features features) {
     return boost::copy_range<std::vector<sstring>>(all_tables(features) |
            boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
+}
+
+future<> maybe_update_legacy_secondary_index_mv_schema(database& db, view_ptr v) {
+    // TODO(sarna): Remove once computed columns are guaranteed to be featured in the whole cluster.
+    // Legacy format for a secondary index used a hardcoded "token" column, which ensured a proper
+    // order for indexed queries. This "token" column is now implemented as a computed column,
+    // but for the sake of compatibility we assume that there might be indexes created in the legacy
+    // format, where "token" is not marked as computed. Once we're sure that all indexes have their
+    // columns marked as computed (because they were either created on a node that supports computed
+    // columns or were fixed by this utility function), it's safe to remove this function altogether.
+    if (!service::get_local_storage_service().cluster_supports_computed_columns()) {
+        return make_ready_future<>();
+    }
+
+    if (v->clustering_key_size() == 0) {
+        return make_ready_future<>();
+    }
+    const column_definition& first_view_ck = v->clustering_key_columns().front();
+    if (first_view_ck.is_computed()) {
+        return make_ready_future<>();
+    }
+
+    table& base = db.find_column_family(v->view_info()->base_id());
+    schema_ptr base_schema = base.schema();
+    // If the first clustering key part of a view is a column with name not found in base schema,
+    // it implies it might be backing an index created before computed columns were introduced,
+    // and as such it must be recreated properly.
+    if (base_schema->columns_by_name().count(first_view_ck.name()) == 0) {
+        schema_builder builder{schema_ptr(v)};
+        builder.mark_column_computed(first_view_ck.name(), std::make_unique<token_column_computation>());
+        return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build()), true);
+    }
+    return make_ready_future<>();
 }
 
 namespace legacy {

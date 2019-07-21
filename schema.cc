@@ -497,12 +497,13 @@ sstring index_metadata::get_default_index_name(const sstring& cf_name,
     return cf_name + "_idx";
 }
 
-column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, api::timestamp_type dropped_at)
+column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_computation_ptr computation, api::timestamp_type dropped_at)
         : _name(std::move(name))
         , _dropped_at(dropped_at)
         , _is_atomic(type->is_atomic())
         , _is_counter(type->is_counter())
         , _is_view_virtual(is_view_virtual)
+        , _computation(std::move(computation))
         , type(std::move(type))
         , id(component_index)
         , kind(kind)
@@ -515,6 +516,9 @@ std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
     os << ", kind=" << to_sstring(cd.kind);
     if (cd.is_view_virtual()) {
         os << ", view_virtual";
+    }
+    if (cd.is_computed()) {
+        os << ", computed:" << cd.get_computation().serialize();
     }
     os << ", componentIndex=" << (cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
     os << ", droppedAt=" << cd._dropped_at;
@@ -701,7 +705,7 @@ column_definition& schema_builder::find_column(const cql3::column_identifier& c)
 }
 
 schema_builder& schema_builder::with_column(const column_definition& c) {
-    return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position(), c.view_virtual());
+    return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position(), c.view_virtual(), c.get_computation_ptr());
 }
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_view_virtual is_view_virtual) {
@@ -709,8 +713,8 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, column_k
     return with_column(name, type, kind, 0, is_view_virtual);
 }
 
-schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual) {
-    _raw._columns.emplace_back(name, type, kind, component_index, is_view_virtual);
+schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_computation_ptr computation) {
+    _raw._columns.emplace_back(name, type, kind, component_index, is_view_virtual, std::move(computation));
     if (type->is_multi_cell()) {
         with_collection(name, type);
     } else if (type->is_counter()) {
@@ -719,12 +723,18 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, column_k
     return *this;
 }
 
+schema_builder& schema_builder::with_computed_column(bytes name, data_type type, column_kind kind, column_computation_ptr computation) {
+    return with_column(name, type, kind, 0, column_view_virtual::no, std::move(computation));
+}
+
 schema_builder& schema_builder::remove_column(bytes name)
 {
     auto it = boost::range::find_if(_raw._columns, [&] (auto& column) {
         return column.name() == name;
     });
-    assert(it != _raw._columns.end());
+    if(it == _raw._columns.end()) {
+        throw std::out_of_range(format("Cannot remove: column {} not found.", name));
+    }
     without_column(it->name_as_text(), it->type, api::new_timestamp());
     _raw._columns.erase(it);
     return *this;
@@ -767,6 +777,14 @@ schema_builder& schema_builder::alter_column_type(bytes name, data_type new_type
         assert(c_it != _raw._collections.end());
         c_it->second = new_type;
     }
+    return *this;
+}
+
+schema_builder& schema_builder::mark_column_computed(bytes name, column_computation_ptr computation) {
+    auto it = boost::find_if(_raw._columns, [&name] (const column_definition& c) { return c.name() == name; });
+    assert(it != _raw._columns.end());
+    it->set_computed(std::move(computation));
+
     return *this;
 }
 
@@ -1243,6 +1261,36 @@ raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool includ
         , _include_all_columns(include_all_columns)
         , _where_clause(where_clause)
 { }
+
+column_computation_ptr column_computation::deserialize(bytes_view raw) {
+    return deserialize(json::to_json_value(sstring(raw.begin(), raw.end())));
+}
+
+column_computation_ptr column_computation::deserialize(const Json::Value& parsed) {
+    if (!parsed.isObject()) {
+        throw std::runtime_error(format("Invalid column computation value: {}", parsed.toStyledString()));
+    }
+    Json::Value type_json = parsed.get("type", Json::Value());
+    if (!type_json.isString()) {
+        throw std::runtime_error(format("Type {} is not convertible to string", type_json.toStyledString()));
+    }
+    sstring type = type_json.asString();
+    if (type == "token") {
+        return std::make_unique<token_column_computation>();
+    }
+    throw std::runtime_error(format("Incorrect column computation type {} found when parsing {}", type, parsed.toStyledString()));
+}
+
+bytes token_column_computation::serialize() const {
+    Json::Value serialized(Json::objectValue);
+    serialized["type"] = Json::Value("token");
+    return to_bytes(json::to_sstring(serialized));
+}
+
+bytes_opt token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
+    dht::i_partitioner& partitioner = dht::global_partitioner();
+    return partitioner.token_to_bytes(partitioner.get_token(schema, key));
+}
 
 bool operator==(const raw_view_info& x, const raw_view_info& y) {
     return x._base_id == y._base_id
