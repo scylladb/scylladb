@@ -32,6 +32,7 @@
 
 #include "seastarx.hh"
 #include "utils/config_file.hh"
+#include "db/timeout_clock.hh"
 
 namespace seastar { class file; struct logging_settings; }
 
@@ -69,6 +70,8 @@ sstring config_value_as_json(const db::seed_provider_type& v);
 sstring config_value_as_json(const log_level& v);
 
 sstring config_value_as_json(const std::unordered_map<sstring, log_level>& v);
+
+sstring config_value_as_json(const std::chrono::milliseconds& v);
 
 }
 

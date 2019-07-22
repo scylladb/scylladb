@@ -34,6 +34,9 @@
 #include "extensions.hh"
 #include "log.hh"
 #include "utils/config_file_impl.hh"
+#include <chrono>
+
+using namespace std::chrono_literals;
 
 namespace utils {
 
@@ -65,6 +68,13 @@ json::json_return_type
 seed_provider_to_json(const db::seed_provider_type& spt) {
     return value_to_json("seed_provider_type");
 }
+
+static
+json::json_return_type
+duration_in_ms_json(const std::chrono::milliseconds& d) {
+    return value_to_json(std::chrono::duration_cast<std::chrono::milliseconds>(d).count());
+}
+
 
 template <>
 const config_type config_type_for<bool> = config_type("bool", value_to_json<bool>);
@@ -108,6 +118,9 @@ const config_type config_type_for<int32_t> = config_type("integer", value_to_jso
 template <>
 const config_type config_type_for<db::seed_provider_type> = config_type("seed provider", seed_provider_to_json);
 
+template <>
+const config_type config_type_for<std::chrono::milliseconds> = config_type("integer", duration_in_ms_json);
+
 }
 
 namespace YAML {
@@ -149,6 +162,18 @@ struct convert<db::config::seed_provider_type> {
                 }
             }
         }
+        return true;
+    }
+};
+
+template<>
+struct convert<std::chrono::milliseconds> {
+    static bool decode(const Node& node, std::chrono::milliseconds& v) {
+        uint32_t tmp;
+        if (!convert<uint32_t>::decode(node, tmp)) {
+            return false;
+        }
+        v = tmp * 1ms;
         return true;
     }
 };
@@ -792,6 +817,20 @@ void config_file::named_value<db::config::seed_provider_type>::add_command_line_
                     desc.data());
 }
 
+template<>
+void config_file::named_value<std::chrono::milliseconds>::add_command_line_option(
+                boost::program_options::options_description_easy_init& init,
+                const std::string_view& name, const std::string_view& desc) {
+    init((hyphenate(name)).data(),
+            value_ex<uint32_t>()->notifier(
+                    [this](uint32_t new_duration) {
+        auto old_duration = operator()();
+        old_duration = new_duration * 1ms;
+        set(std::move(old_duration), config_source::CommandLine);
+    }),
+    desc.data());
+}
+
 }
 
 boost::program_options::options_description_easy_init&
@@ -883,6 +922,10 @@ sstring
 config_value_as_json(const db::seed_provider_type& v) {
     // We don't support converting this to json yet
     return "seed_provider_type";
+}
+
+sstring config_value_as_json(const std::chrono::milliseconds& v) {
+    return to_sstring(std::chrono::duration_cast<std::chrono::milliseconds>(v).count());
 }
 
 sstring
