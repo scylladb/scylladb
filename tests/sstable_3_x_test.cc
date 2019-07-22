@@ -1575,7 +1575,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
     .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/{uncompressed,compressed}/partition_key_with_value_of_different_types
+// Following tests run on files in tests/sstables/3.x/{uncompressed,lz4,snappy,deflate,zstd}/partition_key_with_value_of_different_types
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -1591,9 +1591,14 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
 //                                   uuid_val UUID,
 //                                   text_val TEXT,
 //                                   PRIMARY KEY(pk))
-//      WITH compression = { 'enabled' : false };
+//      WITH compression = <compression>;
 //
-// "WITH compression = { 'enabled' : false };" is used only for uncompressed test. Compressed test does not use it.
+//  where <compression> is one of the following:
+//  {'enabled': false} for the uncompressed case,
+//  {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'} for the LZ4 case,
+//  {'sstable_compression': 'org.apache.cassandra.io.compress.SnappyCompressor'} for the Snappy case,
+//  {'sstable_compression': 'org.apache.cassandra.io.compress.DeflateCompressor'} for the Deflate case,
+//  {'sstable_compression': 'org.apache.cassandra.io.compress.ZstdCompressor', 'compression_level': 1} for the Zstd case.
 //
 // INSERT INTO test_ks.test_table(pk, bool_val, double_val, float_val, int_val, long_val, timestamp_val, timeuuid_val,
 //                                uuid_val, text_val)
@@ -1621,11 +1626,17 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
 //                                50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab,
 //                                'variable length text 5');
 
-static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
+static const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
     "tests/sstables/3.x/uncompressed/partition_key_with_values_of_different_types";
-static thread_local const sstring COMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
-    "tests/sstables/3.x/compressed/partition_key_with_values_of_different_types";
-static thread_local const schema_ptr PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA =
+static const sstring LZ4_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
+    "tests/sstables/3.x/lz4/partition_key_with_values_of_different_types";
+static const sstring SNAPPY_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
+    "tests/sstables/3.x/snappy/partition_key_with_values_of_different_types";
+static const sstring DEFLATE_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
+    "tests/sstables/3.x/deflate/partition_key_with_values_of_different_types";
+static const sstring ZSTD_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
+    "tests/sstables/3.x/zstd/partition_key_with_values_of_different_types";
+static thread_local const schema_builder PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA_BUILDER =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("bool_val", boolean_type)
@@ -1636,45 +1647,36 @@ static thread_local const schema_ptr PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPE
         .with_column("timestamp_val", timestamp_type)
         .with_column("timeuuid_val", timeuuid_type)
         .with_column("uuid_val", uuid_type)
-        .with_column("text_val", utf8_type)
-        .set_compressor_params(compression_parameters::no_compression())
-        .build();
+        .with_column("text_val", utf8_type);
 
-static void test_partition_key_with_values_of_different_types_read(const sstring& path) {
-    sstable_assertions sst(PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, path);
-    sst.load();
-    auto to_key = [] (int key) {
-        auto bytes = int32_type->decompose(int32_t(key));
-        auto pk = partition_key::from_single_value(*PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, pk);
-    };
+static void test_partition_key_with_values_of_different_types_read(const sstring& path, compression_parameters cp) {
+    auto s = schema_builder(PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA_BUILDER).set_compressor_params(cp).build();
 
-    auto bool_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("bool_val"));
+    auto bool_cdef = s->get_column_definition(to_bytes("bool_val"));
     BOOST_REQUIRE(bool_cdef);
-    auto double_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("double_val"));
+
+    auto double_cdef = s->get_column_definition(to_bytes("double_val"));
     BOOST_REQUIRE(double_cdef);
-    auto float_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("float_val"));
+
+    auto float_cdef = s->get_column_definition(to_bytes("float_val"));
     BOOST_REQUIRE(float_cdef);
-    auto int_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("int_val"));
+
+    auto int_cdef = s->get_column_definition(to_bytes("int_val"));
     BOOST_REQUIRE(int_cdef);
-    auto long_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("long_val"));
+
+    auto long_cdef = s->get_column_definition(to_bytes("long_val"));
     BOOST_REQUIRE(long_cdef);
-    auto timestamp_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("timestamp_val"));
+
+    auto timestamp_cdef = s->get_column_definition(to_bytes("timestamp_val"));
     BOOST_REQUIRE(timestamp_cdef);
-    auto timeuuid_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("timeuuid_val"));
+
+    auto timeuuid_cdef = s->get_column_definition(to_bytes("timeuuid_val"));
     BOOST_REQUIRE(timeuuid_cdef);
-    auto uuid_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("uuid_val"));
+
+    auto uuid_cdef = s->get_column_definition(to_bytes("uuid_val"));
     BOOST_REQUIRE(uuid_cdef);
-    auto text_cdef =
-        PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("text_val"));
+
+    auto text_cdef = s->get_column_definition(to_bytes("text_val"));
     BOOST_REQUIRE(text_cdef);
 
     auto generate = [&] (bool bool_val, double double_val, float float_val, int int_val, long long_val,
@@ -1693,6 +1695,15 @@ static void test_partition_key_with_values_of_different_types_read(const sstring
         columns.push_back({text_cdef, utf8_type->from_string(text_val)});
 
         return columns;
+    };
+
+    sstable_assertions sst(s, path);
+    sst.load();
+
+    auto to_key = [&s] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*s, bytes);
+        return dht::global_partitioner().decorate_key(*s, pk);
     };
 
     assert_that(sst.read_rows_flat())
@@ -1732,7 +1743,33 @@ static void test_partition_key_with_values_of_different_types_read(const sstring
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_values_of_different_types_read) {
     auto abj = defer([] { await_background_jobs().get(); });
     test_partition_key_with_values_of_different_types_read(
-        UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH);
+        UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compression_parameters::no_compression());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_lz4_partition_key_with_values_of_different_types_read) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    test_partition_key_with_values_of_different_types_read(
+        LZ4_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::lz4);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_snappy_partition_key_with_values_of_different_types_read) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    test_partition_key_with_values_of_different_types_read(
+        SNAPPY_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::snappy);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_deflate_partition_key_with_values_of_different_types_read) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    test_partition_key_with_values_of_different_types_read(
+        DEFLATE_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::deflate);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_zstd_partition_key_with_values_of_different_types_read) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    test_partition_key_with_values_of_different_types_read(
+        ZSTD_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::create({
+            {"sstable_compression", "org.apache.cassandra.io.compress.ZstdCompressor"},
+            {"compression_level", "1"}}));
 }
 
 // Following tests run on files in tests/sstables/3.x/uncompressed/subset_of_columns
