@@ -24,6 +24,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
+#include <seastar/core/weak_ptr.hh>
 
 #include "schema.hh"
 #include "flat_mutation_reader.hh"
@@ -97,7 +98,7 @@ struct toppartitions_item_key {
     explicit operator sstring() const;
 };
 
-class toppartitions_data_listener : public data_listener {
+class toppartitions_data_listener : public data_listener, public weakly_referencable<toppartitions_data_listener> {
     friend class toppartitions_query;
 
     database& _db;
