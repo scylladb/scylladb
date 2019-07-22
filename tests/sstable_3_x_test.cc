@@ -1772,6 +1772,52 @@ SEASTAR_THREAD_TEST_CASE(test_zstd_partition_key_with_values_of_different_types_
             {"compression_level", "1"}}));
 }
 
+// Following test runs on files in tests/sstables/3.x/zstd/multiple_chunks.
+// Size of data in the sstables is big enough that multiple compressed chunks were used.
+// The files were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table (val1 INT, val2 INT, PRIMARY KEY (val1, val2))
+//      WITH compression = {'sstable_compression': 'org.apache.cassandra.io.compress.ZstdCompressor',
+//                          'compression_level': 5,
+//                          'chunk_length_in_kb': 4};
+//
+// And for each `i` in the range [1, 2000],
+// INSERT INTO test_ks.test_table (val1, val2) VALUES (0, i);
+
+static thread_local const sstring ZSTD_MULTIPLE_CHUNKS_PATH =
+    "tests/sstables/3.x/zstd/multiple_chunks";
+static thread_local const schema_ptr ZSTD_MULTIPLE_CHUNKS_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("val1", int32_type, column_kind::partition_key)
+        .with_column("val2", int32_type, column_kind::clustering_key)
+        .set_compressor_params(compression_parameters{compressor::create({
+            {"sstable_compression", "org.apache.cassandra.io.compress.ZstdCompressor"},
+            {"compression_level", "5"},
+            {"chunk_length_in_kb", "4"}})})
+        .build();
+
+SEASTAR_THREAD_TEST_CASE(test_zstd_compression) {
+    auto abj = defer([] { await_background_jobs().get(); });
+
+    sstable_assertions sst(ZSTD_MULTIPLE_CHUNKS_SCHEMA, ZSTD_MULTIPLE_CHUNKS_PATH);
+    sst.load();
+
+    auto to_key = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, pk);
+    };
+
+    flat_reader_assertions assertions(sst.read_rows_flat());
+    assertions.produces_partition_start(to_key(0));
+    for (int i = 1; i <= 2000; ++i) {
+        assertions.produces_row_with_key(clustering_key::from_exploded(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, {int32_type->decompose(i)}));
+    }
+    assertions.produces_partition_end().produces_end_of_stream();
+}
+
 // Following tests run on files in tests/sstables/3.x/uncompressed/subset_of_columns
 // They were created using following CQL statements:
 //
@@ -3632,6 +3678,16 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_partitions_deflate) {
             "many_partitions_deflate",
             tombstone{},
             compression_parameters{compressor::deflate});
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_many_partitions_zstd) {
+    auto abj = defer([] { await_background_jobs().get(); });
+    test_write_many_partitions(
+            "many_partitions_zstd",
+            tombstone{},
+            compression_parameters{compressor::create({
+                {"sstable_compression", "org.apache.cassandra.io.compress.ZstdCompressor"}
+            })});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
