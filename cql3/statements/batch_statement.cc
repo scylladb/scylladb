@@ -289,7 +289,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     ++_stats.batches;
     _stats.statements_in_batches += _statements.size();
 
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + (options.get_timeout_config().*get_timeout_config_selector())();
     return get_mutations(storage, options, timeout, local, now, query_state).then([this, &storage, &options, timeout, tr_state = query_state.get_trace_state(),
                                                                                                                                permit = query_state.get_permit()] (std::vector<mutation> ms) mutable {
         return execute_without_conditions(storage, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
@@ -347,9 +347,9 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 
     db::timeout_clock::time_point now = db::timeout_clock::now();
     const timeout_config& cfg = options.get_timeout_config();
-    auto batch_timeout = now + cfg.write_timeout; // Statement timeout.
-    auto cas_timeout = now + cfg.cas_timeout;     // Ballot contention timeout.
-    auto read_timeout = now + cfg.read_timeout;   // Query timeout.
+    auto batch_timeout = now + cfg.write_timeout(); // Statement timeout.
+    auto cas_timeout = now + cfg.cas_timeout();     // Ballot contention timeout.
+    auto read_timeout = now + cfg.read_timeout();   // Query timeout.
 
     for (size_t i = 0; i < _statements.size(); ++i) {
 

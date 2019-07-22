@@ -3312,7 +3312,7 @@ public:
                     exec->on_read_resolved();
                 } else { // digest mismatch
                     if (is_datacenter_local(exec->_cl)) {
-                        auto write_timeout = exec->_proxy->_db.local().get_config().write_request_timeout_in_ms() * 1000;
+                        auto write_timeout = std::chrono::duration_cast<std::chrono::microseconds>(exec->_proxy->_db.local().get_config().write_request_timeout_in_ms()).count();
                         auto delta = int64_t(digest_resolver->last_modified()) - int64_t(exec->_cmd->read_timestamp);
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->_stats.global_read_repairs_canceled_due_to_concurrent_write++;
@@ -3399,7 +3399,7 @@ public:
         });
         auto& sr = _schema->speculative_retry();
         auto t = (sr.get_type() == speculative_retry::type::PERCENTILE) ?
-            std::min(_cf->get_coordinator_read_latency_percentile(sr.get_value()), std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2)) :
+            std::min(_cf->get_coordinator_read_latency_percentile(sr.get_value()), _proxy->get_db().local().get_config().read_request_timeout_in_ms()/2) :
             std::chrono::milliseconds(unsigned(sr.get_value()));
         _speculate_timer.arm(t);
 

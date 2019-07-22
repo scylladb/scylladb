@@ -870,7 +870,7 @@ int main(int ac, char** av) {
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");
             db::batchlog_manager_config bm_cfg;
-            bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
+            bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms();
             bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
 
             db::get_batchlog_manager().start(std::ref(qp), bm_cfg).get();

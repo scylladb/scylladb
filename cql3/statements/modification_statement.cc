@@ -322,7 +322,7 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
 future<>
 modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
     auto cl = options.get_consistency();
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + (options.get_timeout_config().*get_timeout_config_selector())();
     return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
@@ -355,9 +355,9 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     db::timeout_clock::time_point now = db::timeout_clock::now();
     const timeout_config& cfg = options.get_timeout_config();
 
-    auto statement_timeout = now + cfg.write_timeout; // All CAS networking operations run with write timeout.
-    auto cas_timeout = now + cfg.cas_timeout;         // When to give up due to contention.
-    auto read_timeout = now + cfg.read_timeout;       // When to give up on query.
+    auto statement_timeout = now + cfg.write_timeout(); // All CAS networking operations run with write timeout.
+    auto cas_timeout = now + cfg.cas_timeout();         // When to give up due to contention.
+    auto read_timeout = now + cfg.read_timeout();       // When to give up on query.
 
     json_cache_opt json_cache = maybe_prepare_json_cache(options);
     std::vector<dht::partition_range> keys = build_partition_keys(options, json_cache);

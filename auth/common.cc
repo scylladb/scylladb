@@ -103,7 +103,7 @@ future<> wait_for_schema_agreement(::service::migration_manager& mm, const datab
 }
 
 const timeout_config& internal_distributed_timeout_config() noexcept {
-    static const auto t = 5s;
+    static const utils::updateable_value<std::chrono::milliseconds> t(5s);
     static const timeout_config tc{t, t, t, t, t, t, t};
     return tc;
 }

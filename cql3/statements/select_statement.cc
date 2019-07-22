@@ -339,7 +339,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
-    auto timeout_duration = options.get_timeout_config().*get_timeout_config_selector();
+    db::timeout_clock::duration timeout_duration((options.get_timeout_config().*get_timeout_config_selector())());
     auto p = service::pager::query_pagers::pager(_schema, _selection,
             state, options, command, std::move(key_ranges), _stats, restrictions_need_filtering ? _restrictions : nullptr);
 
@@ -458,7 +458,7 @@ indexed_table_select_statement::do_execute_base_query(
         gc_clock::time_point now,
         ::shared_ptr<const service::pager::paging_state> paging_state) const {
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + (options.get_timeout_config().*get_timeout_config_selector())();
     uint32_t queried_ranges_count = partition_ranges.size();
     service::query_ranges_to_vnodes_generator ranges_to_vnodes(_schema, std::move(partition_ranges));
 
@@ -529,7 +529,7 @@ indexed_table_select_statement::do_execute_base_query(
         gc_clock::time_point now,
         ::shared_ptr<const service::pager::paging_state> paging_state) const {
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + (options.get_timeout_config().*get_timeout_config_selector())();
 
     struct base_query_state {
         query::result_merger merger;
@@ -608,7 +608,7 @@ select_statement::execute(service::storage_proxy& proxy,
     // is specified we need to get "limit" rows from each partition since there
     // is no way to tell which of these rows belong to the query result before
     // doing post-query ordering.
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + (options.get_timeout_config().*get_timeout_config_selector())();
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd, timeout](auto& prs) {
             assert(cmd->partition_limit == query::max_partitions);
@@ -1128,7 +1128,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
                                              const query_options& options) const
 {
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + (options.get_timeout_config().*get_timeout_config_selector())();
     return read_posting_list(proxy, options, get_limit(options), state, now, timeout, false).then(
             [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
@@ -1168,7 +1168,7 @@ future<std::vector<indexed_table_select_statement::primary_key>, ::shared_ptr<co
 indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const
 {
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + (options.get_timeout_config().*get_timeout_config_selector())();
     return read_posting_list(proxy, options, get_limit(options), state, now, timeout, true).then(
             [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
 

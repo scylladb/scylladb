@@ -100,7 +100,7 @@ future<> system_distributed_keyspace::stop() {
 
 static const timeout_config internal_distributed_timeout_config = [] {
     using namespace std::chrono_literals;
-    const auto t = 10s;
+    utils::updateable_value<std::chrono::milliseconds> t(10s);
     return timeout_config{ t, t, t, t, t, t, t };
 }();
 

@@ -61,7 +61,13 @@ const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG("node_slow_log");
 const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG_TIME_IDX("node_slow_log_time_idx");
 
 timeout_config tracing_db_timeout_config {
-    5s, 5s, 5s, 5s, 5s, 5s, 5s,
+    utils::updateable_value<std::chrono::milliseconds>(5s),
+    utils::updateable_value<std::chrono::milliseconds>(5s),
+    utils::updateable_value<std::chrono::milliseconds>(5s),
+    utils::updateable_value<std::chrono::milliseconds>(5s),
+    utils::updateable_value<std::chrono::milliseconds>(5s),
+    utils::updateable_value<std::chrono::milliseconds>(5s),
+    utils::updateable_value<std::chrono::milliseconds>(5s),
 };
 
 struct trace_keyspace_backend_sesssion_state final : public backend_session_state_base {

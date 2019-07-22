@@ -23,17 +23,19 @@
 #pragma once
 
 #include "db/timeout_clock.hh"
+#include "db/config.hh"
+#include "utils/updateable_value.hh"
 
 struct timeout_config {
-    db::timeout_clock::duration read_timeout;
-    db::timeout_clock::duration write_timeout;
-    db::timeout_clock::duration range_read_timeout;
-    db::timeout_clock::duration counter_write_timeout;
-    db::timeout_clock::duration truncate_timeout;
-    db::timeout_clock::duration cas_timeout;
-    db::timeout_clock::duration other_timeout;
+    utils::updateable_value<std::chrono::milliseconds> read_timeout;
+    utils::updateable_value<std::chrono::milliseconds> write_timeout;
+    utils::updateable_value<std::chrono::milliseconds> range_read_timeout;
+    utils::updateable_value<std::chrono::milliseconds> counter_write_timeout;
+    utils::updateable_value<std::chrono::milliseconds> truncate_timeout;
+    utils::updateable_value<std::chrono::milliseconds> cas_timeout;
+    utils::updateable_value<std::chrono::milliseconds> other_timeout;
 };
 
-using timeout_config_selector = db::timeout_clock::duration (timeout_config::*);
+using timeout_config_selector = utils::updateable_value<std::chrono::milliseconds> (timeout_config::*);
 
 extern const timeout_config infinite_timeout_config;
