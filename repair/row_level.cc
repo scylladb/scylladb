@@ -168,6 +168,7 @@ static thread_local row_level_repair_metrics _metrics;
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
         row_level_diff_detect_algorithm::send_full_set,
+        row_level_diff_detect_algorithm::send_full_set_rpc_stream,
     };
     return _algorithms;
 };
@@ -302,7 +303,7 @@ class repair_row {
     std::optional<repair_hash> _hash;
     lw_shared_ptr<mutation_fragment> _mf;
 public:
-    repair_row() = delete;
+    repair_row() = default;
     repair_row(std::optional<frozen_mutation_fragment> fm,
             std::optional<position_in_partition> pos,
             lw_shared_ptr<const decorated_key_with_hash> dk_with_hash,
@@ -811,12 +812,13 @@ public:
         });
     }
 
+    // Must run inside a seastar thread
     static std::unordered_set<repair_hash>
     get_set_diff(const std::unordered_set<repair_hash>& x, const std::unordered_set<repair_hash>& y) {
         std::unordered_set<repair_hash> set_diff;
         // Note std::set_difference needs x and y are sorted.
         std::copy_if(x.begin(), x.end(), std::inserter(set_diff, set_diff.end()),
-                [&y] (auto& item) { return y.find(item) == y.end(); });
+                [&y] (auto& item) { thread::maybe_yield(); return y.find(item) == y.end(); });
         return set_diff;
     }
 
@@ -836,10 +838,15 @@ public:
     }
 
     // Get a list of row hashes in _working_row_buf
-    std::unordered_set<repair_hash>
+    future<std::unordered_set<repair_hash>>
     working_row_hashes() {
-        return boost::copy_range<std::unordered_set<repair_hash>>(_working_row_buf |
-                boost::adaptors::transformed([] (repair_row& r) { return r.hash(); }));
+        return do_with(std::unordered_set<repair_hash>(), [this] (std::unordered_set<repair_hash>& hashes) {
+            return do_for_each(_working_row_buf, [&hashes] (repair_row& r) {
+                hashes.emplace(r.hash());
+            }).then([&hashes] {
+                return std::move(hashes);
+            });
+        });
     }
 
     std::pair<std::optional<repair_sync_boundary>, bool>
@@ -874,8 +881,13 @@ private:
 
     future<uint64_t> do_estimate_partitions_on_local_shard() {
         auto sstables = _cf.get_sstables();
-        uint64_t partition_count = boost::accumulate(*sstables, uint64_t(0), [this] (uint64_t x, auto&& sst) { return x + sst->estimated_keys_for_range(_range); });
-        return make_ready_future<uint64_t>(partition_count);
+        auto partition_count = make_lw_shared<uint64_t>(0);
+        return do_for_each(*sstables, [this, partition_count] (const sstables::shared_sstable& sst) mutable {
+            *partition_count += sst->estimated_keys_for_range(_range);
+            return make_ready_future<>();
+        }).then([partition_count] {
+            return *partition_count;
+        });
     }
 
     future<uint64_t> get_estimated_partitions() {
@@ -921,20 +933,30 @@ private:
                && engine().cpu_id() == _master_node_shard_config.shard;
     }
 
-    size_t get_repair_rows_size(const std::list<repair_row>& rows) const {
-        return boost::accumulate(rows, size_t(0), [] (size_t x, const repair_row& r) { return x + r.size(); });
+    future<size_t> get_repair_rows_size(const std::list<repair_row>& rows) const {
+        return do_with(size_t(0), [&rows] (size_t& sz) {
+            return do_for_each(rows, [&sz] (const repair_row& r) mutable {
+                sz += r.size();
+            }).then([&sz] {
+                return sz;
+            });
+        });
     }
 
     // Get the size of rows in _row_buf
-    size_t row_buf_size() const {
+    future<size_t> row_buf_size() const {
         return get_repair_rows_size(_row_buf);
     }
 
     // return the combined checksum of rows in _row_buf
-    repair_hash row_buf_csum() {
-        repair_hash combined;
-        boost::for_each(_row_buf, [&combined] (repair_row& r) { combined.add(r.hash()); });
-        return combined;
+    future<repair_hash> row_buf_csum() {
+        return do_with(repair_hash(), [this] (repair_hash& combined) {
+            return do_for_each(_row_buf, [&combined] (repair_row& r) mutable {
+                combined.add(r.hash());
+            }).then([&combined] {
+                return combined;
+            });
+        });
     }
 
     repair_hash do_hash_for_mf(const decorated_key_with_hash& dk_with_hash, const mutation_fragment& mf) {
@@ -945,7 +967,7 @@ private:
         return repair_hash(h.finalize_uint64());
     }
 
-    stop_iteration handle_mutation_fragment(mutation_fragment_opt mfopt, size_t& cur_size, std::list<repair_row>& cur_rows) {
+    stop_iteration handle_mutation_fragment(mutation_fragment_opt mfopt, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (!mfopt) {
             return stop_iteration::yes;
         }
@@ -967,6 +989,7 @@ private:
         _metrics.row_from_disk_nr++;
         _metrics.row_from_disk_bytes += r.size();
         cur_size += r.size();
+        new_rows_size += r.size();
         cur_rows.push_back(std::move(r));
         return stop_iteration::no;
     }
@@ -974,19 +997,19 @@ private:
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
     // This reads rows from where the reader left last time into _row_buf
     // _current_sync_boundary or _last_sync_boundary have no effect on the reader neither.
-    future<std::list<repair_row>>
+    future<std::list<repair_row>, size_t>
     read_rows_from_disk(size_t cur_size) {
-        return do_with(cur_size, std::list<repair_row>(), [this] (size_t& cur_size, std::list<repair_row>& cur_rows) {
-            return repeat([this, &cur_size, &cur_rows] () mutable {
+        return do_with(cur_size, size_t(0), std::list<repair_row>(), [this] (size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
+            return repeat([this, &cur_size, &cur_rows, &new_rows_size] () mutable {
                 if (cur_size >= _max_row_buf_size) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 _gate.check();
-                return _repair_reader.read_mutation_fragment().then([this, &cur_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
-                    return handle_mutation_fragment(std::move(mfopt), cur_size, cur_rows);
+                return _repair_reader.read_mutation_fragment().then([this, &cur_size, &new_rows_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
+                    return handle_mutation_fragment(std::move(mfopt), cur_size, new_rows_size, cur_rows);
                 });
-            }).then([&cur_rows] () mutable {
-                return std::move(cur_rows);
+            }).then([&cur_rows, &new_rows_size] () mutable {
+                return make_ready_future<std::list<repair_row>, size_t>(std::move(cur_rows), new_rows_size);
             });
         });
     }
@@ -1008,18 +1031,56 @@ private:
         // Here is the place we update _last_sync_boundary
         rlogger.trace("SET _last_sync_boundary from {} to {}", _last_sync_boundary, _current_sync_boundary);
         _last_sync_boundary = _current_sync_boundary;
-        size_t current_size = row_buf_size();
-        return read_rows_from_disk(current_size).then([this, skipped_sync_boundary = std::move(skipped_sync_boundary)] (std::list<repair_row> new_rows) mutable {
-            size_t new_rows_size = boost::accumulate(new_rows, size_t(0), [] (size_t x, const repair_row& r) { return x + r.size(); });
-            size_t new_rows_nr = new_rows.size();
-            _row_buf.splice(_row_buf.end(), new_rows);
-            std::optional<repair_sync_boundary> sb_max;
-            if (!_row_buf.empty()) {
-                sb_max = _row_buf.back().boundary();
-            }
-            rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
-                    new_rows.size(), sb_max, row_buf_size(), row_buf_csum(), skipped_sync_boundary);
-            return get_sync_boundary_response{sb_max, row_buf_csum(), row_buf_size(), new_rows_size, new_rows_nr};
+        return row_buf_size().then([this, sb = std::move(skipped_sync_boundary)] (size_t cur_size) {
+            return read_rows_from_disk(cur_size).then([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
+                size_t new_rows_nr = new_rows.size();
+                _row_buf.splice(_row_buf.end(), new_rows);
+                return row_buf_csum().then([this, new_rows_size, new_rows_nr, sb = std::move(sb)] (repair_hash row_buf_combined_hash) {
+                    return row_buf_size().then([this, new_rows_size, new_rows_nr, row_buf_combined_hash, sb = std::move(sb)] (size_t row_buf_bytes) {
+                        std::optional<repair_sync_boundary> sb_max;
+                        if (!_row_buf.empty()) {
+                            sb_max = _row_buf.back().boundary();
+                        }
+                        rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
+                                new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, sb);
+                        return get_sync_boundary_response{sb_max, row_buf_combined_hash, row_buf_bytes, new_rows_size, new_rows_nr};
+                    });
+                });
+            });
+        });
+    }
+
+    future<> move_row_buf_to_working_row_buf() {
+        if (_cmp(_row_buf.back().boundary(), *_current_sync_boundary) <= 0) {
+            // Fast path
+            _working_row_buf.swap(_row_buf);
+            return make_ready_future<>();
+        }
+        return do_with(_row_buf.rbegin(), [this, sz = _row_buf.size()] (auto& it) {
+            // Move the rows > _current_sync_boundary to _working_row_buf
+            // Delete the rows > _current_sync_boundary from _row_buf
+            // Swap _working_row_buf and _row_buf so that _working_row_buf
+            // contains rows within (_last_sync_boundary,
+            // _current_sync_boundary], _row_buf contains rows wthin
+            // (_current_sync_boundary, ...]
+            return repeat([this, &it, sz] () {
+                if (it == _row_buf.rend()) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                repair_row& r = *(it++);
+                if (_cmp(r.boundary(), *_current_sync_boundary) > 0) {
+                    _working_row_buf.push_front(std::move(r));
+                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                }
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }).then([this, sz] {
+                _row_buf.resize(_row_buf.size() - _working_row_buf.size());
+                _row_buf.swap(_working_row_buf);
+                if (sz != _working_row_buf.size() + _row_buf.size()) {
+                    throw std::runtime_error(format("incorrect row_buf and working_row_buf size, before={}, after={} + {}",
+                            sz, _working_row_buf.size(), _row_buf.size()));
+                }
+            });
         });
     }
 
@@ -1040,92 +1101,105 @@ private:
         if (_row_buf.empty()) {
             return make_ready_future<get_combined_row_hash_response>(get_combined_row_hash_response{repair_hash(), 0});
         }
-
-        auto sz = _row_buf.size();
-
-        // Fast path
-        if (_cmp(_row_buf.back().boundary(), *_current_sync_boundary) <= 0) {
-            _working_row_buf.swap(_row_buf);
-        } else {
-            auto it = std::find_if(_row_buf.rbegin(), _row_buf.rend(),
-                    [this] (repair_row& r) { return _cmp(r.boundary(), *_current_sync_boundary) <= 0; });
-            // Copy the items > _current_sync_boundary to _working_row_buf
-            // Delete the items > _current_sync_boundary from _row_buf
-            // Swap _working_row_buf and _row_buf
-            std::copy(it.base(), _row_buf.end(), std::back_inserter(_working_row_buf));
-            _row_buf.erase(it.base(), _row_buf.end());
-            _row_buf.swap(_working_row_buf);
-        }
-        rlogger.trace("before={}, after={} + {}", sz, _working_row_buf.size(), _row_buf.size());
-        if (sz != _working_row_buf.size() + _row_buf.size()) {
-            throw std::runtime_error("incorrect row_buf and working_row_buf size");
-        }
-
-        return parallel_for_each(_working_row_buf, [this] (repair_row& r) {
-            _working_row_buf_combined_hash.add(r.hash());
-            return make_ready_future<>();
-        }).then([this] {
-            return get_combined_row_hash_response{_working_row_buf_combined_hash, _working_row_buf.size()};
+        return move_row_buf_to_working_row_buf().then([this] {
+            return do_for_each(_working_row_buf, [this] (repair_row& r) {
+                _working_row_buf_combined_hash.add(r.hash());
+                return make_ready_future<>();
+            }).then([this] {
+                return get_combined_row_hash_response{_working_row_buf_combined_hash, _working_row_buf.size()};
+            });
         });
     }
 
-    std::unordered_set<repair_hash>
-    get_full_row_hashes() {
-        return working_row_hashes();
+    future<std::list<repair_row>>
+    copy_rows_from_working_row_buf() {
+        return do_with(std::list<repair_row>(), [this] (std::list<repair_row>& rows) {
+            return do_for_each(_working_row_buf, [this, &rows] (const repair_row& r) {
+                rows.push_back(r);
+            }).then([&rows] {
+                return std::move(rows);
+            });
+        });
+    }
+
+    future<std::list<repair_row>>
+    copy_rows_from_working_row_buf_within_set_diff(std::unordered_set<repair_hash> set_diff) {
+        return do_with(std::list<repair_row>(), std::move(set_diff),
+                [this] (std::list<repair_row>& rows, std::unordered_set<repair_hash>& set_diff) {
+            return do_for_each(_working_row_buf, [this, &set_diff, &rows] (const repair_row& r) {
+                if (set_diff.count(r.hash()) > 0) {
+                    rows.push_back(r);
+                }
+            }).then([&rows] {
+                return std::move(rows);
+            });
+        });
     }
 
     // Return rows in the _working_row_buf with hash within the given sef_diff
     // Give a set of row hashes, return the corresponding rows
     // If needs_all_rows is set, return all the rows in _working_row_buf, ignore the set_diff
-    std::list<repair_row>
-    get_row_diff(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
-        std::list<repair_row> rows;
+    future<std::list<repair_row>>
+    get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
         if (needs_all_rows) {
             if (!_repair_master || _nr_peer_nodes == 1) {
-                rows = std::move(_working_row_buf);
-            } else {
-                rows = _working_row_buf;
+                return make_ready_future<std::list<repair_row>>(std::move(_working_row_buf));
             }
+            return copy_rows_from_working_row_buf();
         } else {
-            rows = boost::copy_range<std::list<repair_row>>(_working_row_buf |
-                    boost::adaptors::filtered([&set_diff] (repair_row& r) { return set_diff.count(r.hash()) > 0; }));
+            return copy_rows_from_working_row_buf_within_set_diff(std::move(set_diff));
         }
-        return rows;
     }
 
     // Give a list of rows, apply the rows to disk and update the _working_row_buf and _peer_row_hash_sets if requested
-    future<>
-    apply_rows(repair_rows_on_wire rows, gms::inet_address from, update_working_row_buf update_buf,
+    // Must run inside a seastar thread
+    void apply_rows_on_master_in_thread(repair_rows_on_wire rows, gms::inet_address from, update_working_row_buf update_buf,
             update_peer_row_hash_sets update_hash_set, unsigned node_idx = 0) {
+        if (rows.empty()) {
+            return;
+        }
+        auto row_diff = to_repair_rows_list(rows).get0();
+        auto sz = get_repair_rows_size(row_diff).get0();
+        stats().rx_row_bytes += sz;
+        stats().rx_row_nr += row_diff.size();
+        stats().rx_row_nr_peer[from] += row_diff.size();
+        if (update_buf) {
+            std::list<repair_row> tmp;
+            tmp.swap(_working_row_buf);
+            // Both row_diff and _working_row_buf and are ordered, merging
+            // two sored list to make sure the combination of row_diff
+            // and _working_row_buf are ordered.
+            std::merge(tmp.begin(), tmp.end(), row_diff.begin(), row_diff.end(), std::back_inserter(_working_row_buf),
+                [this] (const repair_row& x, const repair_row& y) { thread::maybe_yield(); return _cmp(x.boundary(), y.boundary()) < 0; });
+        }
+        if (update_hash_set) {
+            _peer_row_hash_sets[node_idx] = boost::copy_range<std::unordered_set<repair_hash>>(row_diff |
+                    boost::adaptors::transformed([] (repair_row& r) { thread::maybe_yield(); return r.hash(); }));
+        }
+        _repair_writer.create_writer(node_idx);
+        for (auto& r : row_diff) {
+            if (update_buf) {
+                _working_row_buf_combined_hash.add(r.hash());
+            }
+            // The repair_row here is supposed to have
+            // mutation_fragment attached because we have stored it in
+            // to_repair_rows_list above where the repair_row is created.
+            mutation_fragment mf = std::move(r.get_mutation_fragment());
+            auto dk_with_hash = r.get_dk_with_hash();
+            _repair_writer.do_write(node_idx, std::move(dk_with_hash), std::move(mf)).get();
+        }
+    }
+
+    future<>
+    apply_rows_on_follower(repair_rows_on_wire rows) {
         if (rows.empty()) {
             return make_ready_future<>();
         }
-        return to_repair_rows_list(rows).then([this, from, node_idx, update_buf, update_hash_set] (std::list<repair_row> row_diff) {
-            return do_with(std::move(row_diff), [this, from, node_idx, update_buf, update_hash_set] (std::list<repair_row>& row_diff) {
-                if (_repair_master) {
-                    auto sz = get_repair_rows_size(row_diff);
-                    stats().rx_row_bytes += sz;
-                    stats().rx_row_nr += row_diff.size();
-                    stats().rx_row_nr_peer[from] += row_diff.size();
-                }
-                if (update_buf) {
-                    std::list<repair_row> tmp;
-                    tmp.swap(_working_row_buf);
-                    // Both row_diff and _working_row_buf and are ordered, merging
-                    // two sored list to make sure the combination of row_diff
-                    // and _working_row_buf are ordered.
-                    std::merge(tmp.begin(), tmp.end(), row_diff.begin(), row_diff.end(), std::back_inserter(_working_row_buf),
-                        [this] (const repair_row& x, const repair_row& y) { return _cmp(x.boundary(), y.boundary()) < 0; });
-                }
-                if (update_hash_set) {
-                    _peer_row_hash_sets[node_idx] = boost::copy_range<std::unordered_set<repair_hash>>(row_diff |
-                            boost::adaptors::transformed([] (repair_row& r) { return r.hash(); }));
-                }
+        return to_repair_rows_list(rows).then([this] (std::list<repair_row> row_diff) {
+            return do_with(std::move(row_diff), [this] (std::list<repair_row>& row_diff) {
+                unsigned node_idx = 0;
                 _repair_writer.create_writer(node_idx);
-                return do_for_each(row_diff, [this, node_idx, update_buf] (repair_row& r) {
-                    if (update_buf) {
-                        _working_row_buf_combined_hash.add(r.hash());
-                    }
+                return do_for_each(row_diff, [this, node_idx] (repair_row& r) {
                     // The repair_row here is supposed to have
                     // mutation_fragment attached because we have stored it in
                     // to_repair_rows_list above where the repair_row is created.
@@ -1138,24 +1212,26 @@ private:
     }
 
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
-        _metrics.tx_row_nr += row_list.size();
-        _metrics.tx_row_bytes += get_repair_rows_size(row_list);
         return do_with(repair_rows_on_wire(), std::move(row_list), [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list) {
-            return do_for_each(row_list, [this, &rows] (repair_row& r) {
-                auto pk = r.get_dk_with_hash()->dk.key();
-                // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
-                if (rows.empty()) {
-                    rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
-                } else {
-                    auto& row = rows.back();
-                    if (pk.legacy_equal(*_schema, row.get_key())) {
-                        row.push_mutation_fragment(std::move(r.get_frozen_mutation()));
-                    } else {
+            return get_repair_rows_size(row_list).then([this, &rows, &row_list] (size_t row_bytes) {
+                _metrics.tx_row_nr += row_list.size();
+                _metrics.tx_row_bytes += row_bytes;
+                return do_for_each(row_list, [this, &rows] (repair_row& r) {
+                    auto pk = r.get_dk_with_hash()->dk.key();
+                    // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
+                    if (rows.empty()) {
                         rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
+                    } else {
+                        auto& row = rows.back();
+                        if (pk.legacy_equal(*_schema, row.get_key())) {
+                            row.push_mutation_fragment(std::move(r.get_frozen_mutation()));
+                        } else {
+                            rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
+                        }
                     }
-                }
-            }).then([&rows] {
-                return std::move(rows);
+                }).then([&rows] {
+                    return std::move(rows);
+                });
             });
         });
     };
@@ -1286,7 +1362,7 @@ public:
     future<std::unordered_set<repair_hash>>
     get_full_row_hashes_handler() {
         return with_gate(_gate, [this] {
-            return get_full_row_hashes();
+            return working_row_hashes();
         });
     }
 
@@ -1415,10 +1491,11 @@ public:
 
     // RPC API
     // Return rows in the _working_row_buf with hash within the given sef_diff
-    future<> get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx) {
+    // Must run inside a seastar thread
+    void get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx) {
         if (needs_all_rows || !set_diff.empty()) {
             if (remote_node == _myip) {
-                return make_ready_future<>();
+                return;
             }
             if (needs_all_rows) {
                 set_diff.clear();
@@ -1427,68 +1504,60 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            return netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
-                    _repair_meta_id, std::move(set_diff), bool(needs_all_rows)).then([this, remote_node, node_idx] (repair_rows_on_wire rows) {
-                if (!rows.empty()) {
-                    return apply_rows(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::no, node_idx);
-                }
-                return make_ready_future<>();
-            });
+            repair_rows_on_wire rows = netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
+                    _repair_meta_id, std::move(set_diff), bool(needs_all_rows)).get0();
+            if (!rows.empty()) {
+                apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::no, node_idx);
+            }
         }
-        return make_ready_future<>();
     }
 
-    future<> get_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx) {
+    // Must run inside a seastar thread
+    void get_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx) {
         if (remote_node == _myip) {
-            return make_ready_future<>();
+            return;
         }
         stats().rpc_call_nr++;
-        return netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
-                _repair_meta_id, {}, bool(needs_all_rows_t::yes)).then([this, remote_node, node_idx] (repair_rows_on_wire rows) {
-            if (!rows.empty()) {
-                return apply_rows(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::yes, node_idx);
-            }
-            return make_ready_future<>();
-        });
-        return make_ready_future<>();
+        repair_rows_on_wire rows = netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
+                _repair_meta_id, {}, bool(needs_all_rows_t::yes)).get0();
+        if (!rows.empty()) {
+            apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::yes, node_idx);
+        }
     }
 
 private:
-    future<> get_row_diff_source_op(
+    // Must run inside a seastar thread
+    void get_row_diff_source_op(
             update_peer_row_hash_sets update_hash_set,
             gms::inet_address remote_node,
             unsigned node_idx,
             rpc::sink<repair_hash_with_cmd>& sink,
             rpc::source<repair_row_on_wire_with_cmd>& source) {
-        auto current_rows = make_lw_shared<repair_rows_on_wire>();
-        return repeat([this, current_rows, update_hash_set, remote_node, node_idx, &sink, &source] () mutable {
-            return source().then([this, current_rows, update_hash_set, remote_node, node_idx] (std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt) mutable {
-                if (row_opt) {
-                    if (inject_rpc_stream_error) {
-                        throw std::runtime_error("get_row_diff: Inject sender error in source loop");
-                    }
-                    auto row = std::move(std::get<0>(row_opt.value()));
-                    if (row.cmd == repair_stream_cmd::row_data) {
-                        rlogger.trace("get_row_diff: Got repair_row_on_wire with data");
-                        current_rows->push_back(std::move(row.row));
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
-                    } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
-                        rlogger.trace("get_row_diff: Got repair_row_on_wire with nullopt");
-                        return apply_rows(std::move(*current_rows), remote_node, update_working_row_buf::yes, update_hash_set, node_idx).then([current_rows] {
-                            current_rows->clear();
-                            return make_ready_future<stop_iteration>(stop_iteration::yes);
-                        });
-                    } else if (row.cmd == repair_stream_cmd::error) {
-                        throw std::runtime_error("get_row_diff: Peer failed to process");
-                    } else {
-                        throw std::runtime_error("get_row_diff: Got unexpected repair_stream_cmd");
-                    }
-                } else {
-                    _sink_source_for_get_row_diff.mark_source_closed(node_idx);
-                    throw std::runtime_error("get_row_diff: Got unexpected end of stream");
+        repair_rows_on_wire current_rows;
+        for (;;) {
+            std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt = source().get0();
+            if (row_opt) {
+                if (inject_rpc_stream_error) {
+                    throw std::runtime_error("get_row_diff: Inject sender error in source loop");
                 }
-            });
-        });
+                auto row = std::move(std::get<0>(row_opt.value()));
+                if (row.cmd == repair_stream_cmd::row_data) {
+                    rlogger.trace("get_row_diff: Got repair_row_on_wire with data");
+                    current_rows.push_back(std::move(row.row));
+                } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
+                    rlogger.trace("get_row_diff: Got repair_row_on_wire with nullopt");
+                    apply_rows_on_master_in_thread(std::move(current_rows), remote_node, update_working_row_buf::yes, update_hash_set, node_idx);
+                    break;
+                } else if (row.cmd == repair_stream_cmd::error) {
+                    throw std::runtime_error("get_row_diff: Peer failed to process");
+                } else {
+                    throw std::runtime_error("get_row_diff: Got unexpected repair_stream_cmd");
+                }
+            } else {
+                _sink_source_for_get_row_diff.mark_source_closed(node_idx);
+                throw std::runtime_error("get_row_diff: Got unexpected end of stream");
+            }
+        }
     }
 
     future<> get_row_diff_sink_op(
@@ -1521,7 +1590,8 @@ private:
     }
 
 public:
-    future<> get_row_diff_with_rpc_stream(
+    // Must run inside a seastar thread
+    void get_row_diff_with_rpc_stream(
             std::unordered_set<repair_hash> set_diff,
             needs_all_rows_t needs_all_rows,
             update_peer_row_hash_sets update_hash_set,
@@ -1529,7 +1599,7 @@ public:
             unsigned node_idx) {
         if (needs_all_rows || !set_diff.empty()) {
             if (remote_node == _myip) {
-                return make_ready_future<>();
+                return;
             }
             if (needs_all_rows) {
                 set_diff.clear();
@@ -1538,42 +1608,47 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            return _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx).then(
-                    [this, set_diff = std::move(set_diff), needs_all_rows, update_hash_set, remote_node, node_idx]
-                    (rpc::sink<repair_hash_with_cmd>& sink, rpc::source<repair_row_on_wire_with_cmd>& source) mutable {
-                auto source_op = get_row_diff_source_op(update_hash_set, remote_node, node_idx, sink, source);
-                auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
-                return when_all_succeed(std::move(source_op), std::move(sink_op));
-            });
+            auto f = _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx).get();
+            rpc::sink<repair_hash_with_cmd>& sink = std::get<0>(f);
+            rpc::source<repair_row_on_wire_with_cmd>& source = std::get<1>(f);
+            auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
+            get_row_diff_source_op(update_hash_set, remote_node, node_idx, sink, source);
+            sink_op.get();
         }
-        return make_ready_future<>();
     }
 
     // RPC handler
-    future<repair_rows_on_wire> get_row_diff_handler(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows) {
-        return with_gate(_gate, [this, &set_diff, needs_all_rows] {
-            std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
-            return to_repair_rows_on_wire(std::move(row_diff));
+    future<repair_rows_on_wire> get_row_diff_handler(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows) {
+        return with_gate(_gate, [this, set_diff = std::move(set_diff), needs_all_rows] () mutable {
+            return get_row_diff(std::move(set_diff), needs_all_rows).then([this] (std::list<repair_row> row_diff) {
+                return to_repair_rows_on_wire(std::move(row_diff));
+            });
         });
     }
 
     // RPC API
     // Send rows in the _working_row_buf with hash within the given sef_diff
-    future<> put_row_diff(const std::unordered_set<repair_hash>& set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node) {
+    future<> put_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node) {
         if (!set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
             }
-            std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
-            if (row_diff.size() != set_diff.size()) {
-                throw std::runtime_error("row_diff.size() != set_diff.size()");
-            }
-            stats().tx_row_nr += row_diff.size();
-            stats().tx_row_nr_peer[remote_node] += row_diff.size();
-            stats().tx_row_bytes += get_repair_rows_size(row_diff);
-            stats().rpc_call_nr++;
-            return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node] (repair_rows_on_wire rows)  {
-                return netw::get_local_messaging_service().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
+            auto sz = set_diff.size();
+            return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, sz] (std::list<repair_row> row_diff) {
+                if (row_diff.size() != sz) {
+                    throw std::runtime_error("row_diff.size() != set_diff.size()");
+                }
+                return do_with(std::move(row_diff), [this, remote_node] (std::list<repair_row>& row_diff) {
+                    return get_repair_rows_size(row_diff).then([this, remote_node, &row_diff] (size_t row_bytes) mutable {
+                        stats().tx_row_nr += row_diff.size();
+                        stats().tx_row_nr_peer[remote_node] += row_diff.size();
+                        stats().tx_row_bytes += row_bytes;
+                        stats().rpc_call_nr++;
+                        return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node] (repair_rows_on_wire rows)  {
+                            return netw::get_local_messaging_service().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
+                        });
+                    });
+                });
             });
         }
         return make_ready_future<>();
@@ -1628,28 +1703,34 @@ private:
 
 public:
     future<> put_row_diff_with_rpc_stream(
-            const std::unordered_set<repair_hash>& set_diff,
+            std::unordered_set<repair_hash> set_diff,
             needs_all_rows_t needs_all_rows,
             gms::inet_address remote_node, unsigned node_idx) {
         if (!set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
             }
-            std::list<repair_row> row_diff = get_row_diff(set_diff, needs_all_rows);
-            if (row_diff.size() != set_diff.size()) {
-                throw std::runtime_error("row_diff.size() != set_diff.size()");
-            }
-            stats().tx_row_nr += row_diff.size();
-            stats().tx_row_nr_peer[remote_node] += row_diff.size();
-            stats().tx_row_bytes += get_repair_rows_size(row_diff);
-            stats().rpc_call_nr++;
-            return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
-                return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then(
-                        [this, rows = std::move(rows), remote_node, node_idx]
-                        (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
-                    auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
-                    auto sink_op = put_row_diff_sink_op(std::move(rows), sink, remote_node);
-                    return when_all_succeed(std::move(source_op), std::move(sink_op));
+            auto sz = set_diff.size();
+            return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, node_idx, sz] (std::list<repair_row> row_diff) {
+                if (row_diff.size() != sz) {
+                    throw std::runtime_error("row_diff.size() != set_diff.size()");
+                }
+                return do_with(std::move(row_diff), [this, remote_node, node_idx] (std::list<repair_row>& row_diff) {
+                    return get_repair_rows_size(row_diff).then([this, remote_node, node_idx, &row_diff] (size_t row_bytes) mutable {
+                        stats().tx_row_nr += row_diff.size();
+                        stats().tx_row_nr_peer[remote_node] += row_diff.size();
+                        stats().tx_row_bytes += row_bytes;
+                        stats().rpc_call_nr++;
+                        return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
+                            return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then(
+                                    [this, rows = std::move(rows), remote_node, node_idx]
+                                    (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
+                                auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
+                                auto sink_op = put_row_diff_sink_op(std::move(rows), sink, remote_node);
+                                return when_all_succeed(std::move(source_op), std::move(sink_op));
+                            });
+                        });
+                    });
                 });
             });
         }
@@ -1658,8 +1739,8 @@ public:
 
     // RPC handler
     future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
-        return with_gate(_gate, [this, rows = std::move(rows), from] () mutable {
-            return apply_rows(std::move(rows), from, update_working_row_buf::no, update_peer_row_hash_sets::no);
+        return with_gate(_gate, [this, rows = std::move(rows)] () mutable {
+            return apply_rows_on_follower(std::move(rows));
         });
     }
 };
@@ -1683,9 +1764,14 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
             return make_exception_future<stop_iteration>(std::runtime_error("get_row_diff_with_rpc_stream: Inject error in handler loop"));
         }
         bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, set_diff = std::move(current_set_diff)] {
+        auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(current_set_diff)));
+        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, fp = std::move(fp)] {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-            return rm->get_row_diff_handler(set_diff, repair_meta::needs_all_rows_t(needs_all_rows));
+            if (fp.get_owner_shard() == engine().cpu_id()) {
+                return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows));
+            } else {
+                return rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows));
+            }
         }).then([sink] (repair_rows_on_wire rows_on_wire) mutable {
             if (rows_on_wire.empty()) {
                 return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
@@ -1723,9 +1809,14 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
         return make_ready_future<stop_iteration>(stop_iteration::no);
     } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
-        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, rows = std::move(current_rows)] () mutable {
+        auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(current_rows)));
+        return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] () mutable {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-            return rm->put_row_diff_handler(std::move(rows), from);
+            if (fp.get_owner_shard() == engine().cpu_id()) {
+                return rm->put_row_diff_handler(std::move(*fp), from);
+            } else {
+                return rm->put_row_diff_handler(*fp, from);
+            }
         }).then([sink] () mutable {
             return sink(repair_stream_cmd::put_rows_done);
         }).then([sink] () mutable {
@@ -1974,18 +2065,28 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
                 std::unordered_set<repair_hash> set_diff, bool needs_all_rows) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, set_diff = std::move(set_diff), needs_all_rows] () mutable {
+            auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(set_diff)));
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp), needs_all_rows] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->get_row_diff_handler(set_diff, repair_meta::needs_all_rows_t(needs_all_rows));
+                if (fp.get_owner_shard() == engine().cpu_id()) {
+                    return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows));
+                } else {
+                    return rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows));
+                }
             });
         });
         ms.register_repair_put_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
                 repair_rows_on_wire row_diff) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, row_diff = std::move(row_diff)] () mutable {
+            auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(row_diff)));
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->put_row_diff_handler(std::move(row_diff), from);
+                if (fp.get_owner_shard() == engine().cpu_id()) {
+                    return rm->put_row_diff_handler(std::move(*fp), from);
+                } else {
+                    return rm->put_row_diff_handler(*fp, from);
+                }
             });
         });
         ms.register_repair_row_level_start([] (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring ks_name,
@@ -2223,7 +2324,7 @@ private:
                 // local node and peer node have the same combined hash. This
                 // means we can set peer_row_hash_sets[n] to local row hashes
                 // without fetching it from peers to save network traffic.
-                master.peer_row_hash_sets(node_idx) = master.working_row_hashes();
+                master.peer_row_hash_sets(node_idx) = master.working_row_hashes().get0();
                 rlogger.debug("Calling optimize master.working_row_hashes for node {}, hash_sets={}",
                     node, master.peer_row_hash_sets(node_idx).size());
                 continue;
@@ -2234,10 +2335,10 @@ private:
                 master.peer_row_hash_sets(node_idx).clear();
                 if (master.use_rpc_stream()) {
                     rlogger.debug("FastPath: get_row_diff with needs_all_rows_t::yes rpc stream");
-                    master.get_row_diff_with_rpc_stream({}, repair_meta::needs_all_rows_t::yes, repair_meta::update_peer_row_hash_sets::yes, node, node_idx).get();
+                    master.get_row_diff_with_rpc_stream({}, repair_meta::needs_all_rows_t::yes, repair_meta::update_peer_row_hash_sets::yes, node, node_idx);
                 } else {
                     rlogger.debug("FastPath: get_row_diff with needs_all_rows_t::yes rpc verb");
-                    master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx).get();
+                    master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx);
                 }
                 continue;
             }
@@ -2260,19 +2361,19 @@ private:
             // sequentially because the rows from repair follower 1 to
             // repair master might reduce the amount of missing data
             // between repair master and repair follower 2.
-            std::unordered_set<repair_hash> set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes());
+            std::unordered_set<repair_hash> set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes().get0());
             // Request missing sets from peer node
             rlogger.debug("Before get_row_diff to node {}, local={}, peer={}, set_diff={}",
-                    node, master.working_row_hashes().size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
+                    node, master.working_row_hashes().get0().size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
             // If we need to pull all rows from the peer. We can avoid
             // sending the row hashes on wire by setting needs_all_rows flag.
             auto needs_all_rows = repair_meta::needs_all_rows_t(set_diff.size() == master.peer_row_hash_sets(node_idx).size());
             if (master.use_rpc_stream()) {
-                master.get_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, repair_meta::update_peer_row_hash_sets::no, node, node_idx).get();
+                master.get_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, repair_meta::update_peer_row_hash_sets::no, node, node_idx);
             } else {
-                master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx).get();
+                master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx);
             }
-            rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().size());
+            rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().get0().size());
         }
         return op_status::next_step;
     }
@@ -2283,15 +2384,20 @@ private:
         // So we can figure out which rows peer node are missing and send the missing rows to them
         check_in_shutdown();
         _ri.check_in_abort();
-        std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes();
-        parallel_for_each(boost::irange(size_t(0), _all_live_peer_nodes.size()), [&, this] (size_t idx) {
-            auto set_diff = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
+        std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes().get0();
+        auto sz = _all_live_peer_nodes.size();
+        std::vector<std::unordered_set<repair_hash>> set_diffs(sz);
+        for (size_t idx : boost::irange(size_t(0), sz)) {
+            set_diffs[idx] = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
+        }
+        parallel_for_each(boost::irange(size_t(0), sz), [&, this] (size_t idx) {
             auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());
+            auto& set_diff = set_diffs[idx];
             rlogger.debug("Calling master.put_row_diff to node {}, set_diff={}, needs_all_rows={}", _all_live_peer_nodes[idx], set_diff.size(), needs_all_rows);
             if (master.use_rpc_stream()) {
-                return master.put_row_diff_with_rpc_stream(set_diff, needs_all_rows, _all_live_peer_nodes[idx], idx);
+                return master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx);
             } else {
-                return master.put_row_diff(set_diff, needs_all_rows, _all_live_peer_nodes[idx]);
+                return master.put_row_diff(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx]);
             }
         }).get();
         master.stats().round_nr_slow_path++;
