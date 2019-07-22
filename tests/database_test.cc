@@ -328,3 +328,124 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
         return make_ready_future<>();
     }, db_cfg_ptr).get();
 }
+
+// Snapshot tests and their helpers
+future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
+    return seastar::async([func = std::move(func)] () mutable {
+        auto db_cfg_ptr = make_shared<db::config>();
+        db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir().path().string() }));
+        do_with_cql_env_thread([func = std::move(func)] (cql_test_env& e) {
+            e.create_table([](sstring ks_name) {
+                return schema({}, ks_name, "cf",
+                              {{"p1", utf8_type}},
+                              {{"c1", int32_type}, {"c2", int32_type}},
+                              {{"r1", int32_type}},
+                              {},
+                              utf8_type);
+            }).get();
+            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 1, 2, 3);").get();
+            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 2, 2, 3);").get();
+            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 3, 2, 3);").get();
+
+            return func(e);
+        }, db_cfg_ptr).get();
+    });
+}
+
+future<> take_snapshot(cql_test_env& e) {
+    return e.db().invoke_on_all([] (database& db) {
+        auto& cf = db.find_column_family("ks", "cf");
+        return cf.snapshot("test");
+    });
+}
+
+SEASTAR_TEST_CASE(snapshot_works) {
+    return do_with_some_data([] (cql_test_env& e) {
+        take_snapshot(e).get();
+
+        std::set<sstring> expected = {
+            "manifest.json",
+        };
+
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+            expected.insert(de.name);
+            return make_ready_future<>();
+        }).get();
+        // snapshot triggered a flush and wrote the data down.
+        BOOST_REQUIRE_GT(expected.size(), 1);
+
+        // all files were copied and manifest was generated
+        lister::scan_dir((fs::path(cf.dir()) / "snapshots" / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+            expected.erase(de.name);
+            return make_ready_future<>();
+        }).get();
+
+        BOOST_REQUIRE_EQUAL(expected.size(), 0);
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(snapshot_list_okay) {
+    return do_with_some_data([] (cql_test_env& e) {
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        take_snapshot(e).get();
+
+        auto details = cf.get_snapshot_details().get0();
+        BOOST_REQUIRE_EQUAL(details.size(), 1);
+
+        auto sd = details["test"];
+        BOOST_REQUIRE_EQUAL(sd.live, 0);
+        BOOST_REQUIRE_GT(sd.total, 0);
+
+        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [] (fs::path parent_dir, directory_entry de) {
+            fs::remove(parent_dir / de.name);
+            return make_ready_future<>();
+        }).get();
+
+        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+
+        BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
+        BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
+
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(snapshot_list_inexistent) {
+    return do_with_some_data([] (cql_test_env& e) {
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        auto details = cf.get_snapshot_details().get0();
+        BOOST_REQUIRE_EQUAL(details.size(), 0);
+        return make_ready_future<>();
+    });
+}
+
+
+SEASTAR_TEST_CASE(clear_snapshot) {
+    return do_with_some_data([] (cql_test_env& e) {
+        take_snapshot(e).get();
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+
+        unsigned count = 0;
+        lister::scan_dir((fs::path(cf.dir()) / "snapshots" / "test"), { directory_entry_type::regular }, [&count] (fs::path parent_dir, directory_entry de) {
+            count++;
+            return make_ready_future<>();
+        }).get();
+        BOOST_REQUIRE_GT(count, 1); // expect more than the manifest alone
+
+        e.local_db().clear_snapshot("test", {"ks"}).get();
+        count = 0;
+
+        BOOST_REQUIRE_EQUAL(fs::exists(fs::path(cf.dir()) / "snapshots" / "test"), false);
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
+    // no crashes, no exceptions
+    return do_with_some_data([] (cql_test_env& e) {
+        e.local_db().clear_snapshot("test", {"ks"}).get();
+        return make_ready_future<>();
+    });
+}
