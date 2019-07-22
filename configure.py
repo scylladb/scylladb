@@ -1132,7 +1132,12 @@ if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
 # thrift version detection, see #4538
-thrift_version = subprocess.check_output(["thrift", "-version"]).decode("utf-8").split(" ")[-1]
+proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+proc_res_output = proc_res.stdout.decode("utf-8")
+if proc_res.returncode != 0 and not re.search(r'^Thrift version', proc_res_output):
+    raise Exception("Thrift compiler must be missing: {}".format(proc_res_output))
+
+thrift_version = proc_res_output.split(" ")[-1]
 thrift_boost_versions = ["0.{}.".format(n) for n in range(1, 11)]
 if any(filter(thrift_version.startswith, thrift_boost_versions)):
     args.user_cflags += ' -DTHRIFT_USES_BOOST'
