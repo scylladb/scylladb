@@ -938,6 +938,7 @@ class shard_reader : public enable_lw_shared_from_this<shard_reader>, public fla
         void adjust_partition_slice();
         flat_mutation_reader recreate_reader();
         flat_mutation_reader resume_or_create_reader();
+        bool should_drop_fragment(const mutation_fragment& mf);
         future<> do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
         future<> ensure_buffer_contains_all_fragments_for_last_pos(flat_mutation_reader& reader, circular_buffer<mutation_fragment>& buffer,
                 db::timeout_clock::time_point timeout);
@@ -1129,35 +1130,28 @@ flat_mutation_reader shard_reader::remote_reader::resume_or_create_reader() {
     return recreate_reader();
 }
 
+bool shard_reader::remote_reader::should_drop_fragment(const mutation_fragment& mf) {
+    if (_drop_partition_start && mf.is_partition_start()) {
+        _drop_partition_start = false;
+        return true;
+    }
+    if (_drop_static_row && mf.is_static_row()) {
+        _drop_static_row = false;
+        return true;
+    }
+    return false;
+}
+
 future<> shard_reader::remote_reader::do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout) {
     if (!_drop_partition_start && !_drop_static_row) {
         return reader.fill_buffer(timeout);
     }
     return repeat([this, &reader, timeout] {
         return reader.fill_buffer(timeout).then([this, &reader] {
-            const auto eos = reader.is_end_of_stream();
-
-            if (reader.is_buffer_empty()) {
-                return stop_iteration(eos);
+            while (!reader.is_buffer_empty() && should_drop_fragment(reader.peek_buffer())) {
+                reader.pop_mutation_fragment();
             }
-            if (_drop_partition_start) {
-                _drop_partition_start = false;
-                if (reader.peek_buffer().is_partition_start()) {
-                    reader.pop_mutation_fragment();
-                }
-            }
-
-            if (reader.is_buffer_empty()) {
-                return stop_iteration(eos);
-            }
-            if (_drop_static_row) {
-                _drop_static_row = false;
-                if (reader.peek_buffer().is_static_row()) {
-                    reader.pop_mutation_fragment();
-                }
-            }
-
-            return stop_iteration(reader.is_buffer_full() || eos);
+            return stop_iteration(reader.is_buffer_full() || reader.is_end_of_stream());
         });
     });
 }
