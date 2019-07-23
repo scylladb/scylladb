@@ -356,7 +356,7 @@ table::make_sstable_reader(schema_ptr s,
                 });
             }
 
-            return mutation_source([semaphore, this, sstables=std::move(sstables)] (
+            return mutation_source([this, sstables=std::move(sstables)] (
                     schema_ptr s,
                     const dht::partition_range& pr,
                     const query::partition_slice& slice,
@@ -369,7 +369,7 @@ table::make_sstable_reader(schema_ptr s,
                         _stats.estimated_sstable_per_read, pr, slice, pc, tracker, std::move(trace_state), fwd, fwd_mr);
             });
         } else {
-            return mutation_source([semaphore, sstables=std::move(sstables)] (
+            return mutation_source([sstables=std::move(sstables)] (
                     schema_ptr s,
                     const dht::partition_range& pr,
                     const query::partition_slice& slice,
