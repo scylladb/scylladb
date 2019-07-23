@@ -125,6 +125,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
     mutation_reader::forwarding _fwd_mr;
+    reader_resource_tracker _reader_resource_tracker;
     bool _range_query;
     // When reader enters a partition, it must be set up for reading that
     // partition from the underlying mutation source (_underlying) in one of two ways:
@@ -148,7 +149,8 @@ public:
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
-            mutation_reader::forwarding fwd_mr)
+            mutation_reader::forwarding fwd_mr,
+            ::reader_resource_tracker read_resource_tracker)
         : _cache(cache)
         , _schema(std::move(schema))
         , _range(range)
@@ -156,6 +158,7 @@ public:
         , _pc(pc)
         , _trace_state(std::move(trace_state))
         , _fwd_mr(fwd_mr)
+        , _reader_resource_tracker(std::move(read_resource_tracker))
         , _range_query(!range.is_singular() || !range.start()->value().has_key())
         , _underlying(_cache, *this)
     {
@@ -187,6 +190,7 @@ public:
     const dht::decorated_key& key() const { return *_key; }
     void on_underlying_created() { ++_underlying_created; }
     bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
+    ::reader_resource_tracker read_resource_tracker() const { return _reader_resource_tracker; }
 private:
     future<> ensure_underlying(db::timeout_clock::time_point timeout) {
         if (_underlying_snapshot) {

@@ -40,6 +40,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include "flat_mutation_reader.hh"
 #include "mutation_cleaner.hh"
+#include "reader_concurrency_semaphore.hh"
 
 namespace bi = boost::intrusive;
 
@@ -495,7 +496,8 @@ public:
                                      const io_priority_class& = default_priority_class(),
                                      tracing::trace_state_ptr trace_state = nullptr,
                                      streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-                                     mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+                                     mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
+                                     reader_resource_tracker = no_resource_tracking());
 
     flat_mutation_reader make_reader(schema_ptr s, const dht::partition_range& range = query::full_partition_range) {
         auto& full_slice = s->full_slice();

@@ -48,7 +48,8 @@ using namespace cache;
 flat_mutation_reader
 row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, const dht::partition_range& pr) {
     ctx.on_underlying_created();
-    return src.make_reader(_schema, pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
+    return src.make_reader(_schema, pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes,
+            mutation_reader::forwarding::yes, ctx.read_resource_tracker());
 }
 
 cache_tracker::cache_tracker()
@@ -736,9 +737,10 @@ row_cache::make_reader(schema_ptr s,
                        const io_priority_class& pc,
                        tracing::trace_state_ptr trace_state,
                        streamed_mutation::forwarding fwd,
-                       mutation_reader::forwarding fwd_mr)
+                       mutation_reader::forwarding fwd_mr,
+                       ::reader_resource_tracker read_resource_tracker)
 {
-    auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, fwd_mr);
+    auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, fwd_mr, std::move(read_resource_tracker));
 
     if (!ctx->is_range_query() && !fwd_mr) {
         auto mr = _read_section(_tracker.region(), [&] {
