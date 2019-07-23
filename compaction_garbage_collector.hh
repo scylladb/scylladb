@@ -21,14 +21,16 @@
 
 #pragma once
 
-#include <seastar/core/shared_ptr.hh>
+#include "schema.hh"
+#include "types/collection.hh"
 
-using column_count_type = uint32_t;
+class atomic_cell;
+class row_marker;
 
-// Column ID, unique within column_kind
-using column_id = column_count_type;
-
-class schema;
-class schema_extension;
-
-using schema_ptr = seastar::lw_shared_ptr<const schema>;
+class compaction_garbage_collector {
+public:
+    virtual ~compaction_garbage_collector() = default;
+    virtual void collect(column_id id, atomic_cell) = 0;
+    virtual void collect(column_id id, collection_type_impl::mutation) = 0;
+    virtual void collect(row_marker) = 0;
+};

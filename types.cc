@@ -52,6 +52,7 @@
 #include "utils/ascii.hh"
 #include "mutation_partition.hh"
 #include "json.hh"
+#include "compaction_garbage_collector.hh"
 
 #include "types/user.hh"
 #include "types/tuple.hh"
@@ -2706,38 +2707,51 @@ do_serialize_mutation_form(
     return collection_mutation(ctype, ret);
 }
 
-bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb, gc_clock::time_point query_time,
-    can_gc_fn& can_gc, gc_clock::time_point gc_before)
+bool collection_type_impl::mutation::compact_and_expire(column_id id, row_tombstone base_tomb, gc_clock::time_point query_time,
+    can_gc_fn& can_gc, gc_clock::time_point gc_before, compaction_garbage_collector* collector)
 {
     bool any_live = false;
     auto t = tomb;
-    if (tomb <= base_tomb.regular() || (tomb.deletion_time < gc_before && can_gc(tomb))) {
+    tombstone purged_tomb;
+    if (tomb <= base_tomb.regular()) {
+        tomb = tombstone();
+    } else if (tomb.deletion_time < gc_before && can_gc(tomb)) {
+        purged_tomb = tomb;
         tomb = tombstone();
     }
     t.apply(base_tomb.regular());
     utils::chunked_vector<std::pair<bytes, atomic_cell>> survivors;
+    utils::chunked_vector<std::pair<bytes, atomic_cell>> losers;
     for (auto&& name_and_cell : cells) {
         atomic_cell& cell = name_and_cell.second;
         auto cannot_erase_cell = [&] {
             return cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
         };
 
-        if (cell.is_covered_by(t, false)) {
+        if (cell.is_covered_by(t, false) || cell.is_covered_by(base_tomb.shadowable().tomb(), false)) {
             continue;
         }
         if (cell.has_expired(query_time)) {
             if (cannot_erase_cell()) {
                 survivors.emplace_back(std::make_pair(
                     std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
+            } else if (collector) {
+                losers.emplace_back(std::pair(
+                        std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
             }
         } else if (!cell.is_live()) {
             if (cannot_erase_cell()) {
                 survivors.emplace_back(std::move(name_and_cell));
+            } else if (collector) {
+                losers.emplace_back(std::move(name_and_cell));
             }
-        } else if (!cell.is_covered_by(base_tomb.shadowable().tomb(), false)) {
+        } else {
             any_live |= true;
             survivors.emplace_back(std::move(name_and_cell));
         }
+    }
+    if (collector) {
+        collector->collect(id, mutation{purged_tomb, std::move(losers)});
     }
     cells = std::move(survivors);
     return any_live;

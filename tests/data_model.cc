@@ -31,10 +31,21 @@ namespace tests::data_model {
 mutation_description::atomic_value::atomic_value(bytes value, api::timestamp_type timestamp) : value(std::move(value)), timestamp(timestamp)
 { }
 
+mutation_description::atomic_value::atomic_value(bytes value, api::timestamp_type timestamp, gc_clock::duration ttl, gc_clock::time_point expiry_point)
+    : value(std::move(value)), timestamp(timestamp), expiring(expiry_info{ttl, expiry_point})
+{ }
+
 mutation_description::collection::collection(std::initializer_list<collection_element> elements) : elements(elements)
 { }
 
 mutation_description::collection::collection(std::vector<collection_element> elements) : elements(std::move(elements))
+{ }
+
+mutation_description::row_marker::row_marker(api::timestamp_type timestamp) : timestamp(timestamp)
+{ }
+
+mutation_description::row_marker::row_marker(api::timestamp_type timestamp, gc_clock::duration ttl, gc_clock::time_point expiry_point)
+    : timestamp(timestamp), expiring(expiry_info{ttl, expiry_point})
 { }
 
 void mutation_description::remove_column(row& r, const sstring& name) {
@@ -58,23 +69,12 @@ void mutation_description::add_static_cell(const sstring& column, value v) {
     _static_row.emplace_back(cell { column, std::move(v) });
 }
 
-void mutation_description::add_static_expiring_cell(const sstring& column, atomic_value v,
-                                                    gc_clock::duration ttl,
-                                                    gc_clock::time_point expiry_point) {
-    _static_row.emplace_back(cell { column, std::move(v), expiry_info { ttl, expiry_point } });
-}
-
 void mutation_description::add_clustered_cell(const key& ck, const sstring& column, value v) {
     _clustered_rows[ck].cells.emplace_back(cell { column, std::move(v) });
 }
 
-void mutation_description::add_clustered_expiring_cell(const key& ck, const sstring& column, atomic_value v,
-                                                       gc_clock::duration ttl, gc_clock::time_point expiry_point) {
-    _clustered_rows[ck].cells.emplace_back(cell { column, std::move(v), expiry_info { ttl, expiry_point } });
-}
-
-void mutation_description::add_clustered_row_marker(const key& ck, api::timestamp_type timestamp) {
-    _clustered_rows[ck].marker = timestamp;
+void mutation_description::add_clustered_row_marker(const key& ck, row_marker marker) {
+    _clustered_rows[ck].marker = marker;
 }
 
 void mutation_description::add_clustered_row_tombstone(const key& ck, row_tombstone tomb) {
@@ -103,28 +103,36 @@ void mutation_description::add_range_tombstone(nonwrapping_range<key> range, tom
 mutation mutation_description::build(schema_ptr s) const {
     auto m = mutation(s, partition_key::from_exploded(*s, _partition_key));
     m.partition().apply(_partition_tombstone);
-    for (auto& [ column, value_or_collection, expiring ] : _static_row) {
+    for (auto& [ column, value_or_collection ] : _static_row) {
         auto cdef = s->get_column_definition(utf8_type->decompose(column));
         assert(cdef);
         std::visit(make_visitor(
             [&] (const atomic_value& v) {
                 assert(cdef->is_atomic());
-                if (!expiring) {
+                if (!v.expiring) {
                     m.set_static_cell(*cdef, atomic_cell::make_live(*cdef->type, v.timestamp, v.value));
                 } else {
                     m.set_static_cell(*cdef, atomic_cell::make_live(*cdef->type, v.timestamp, v.value,
-                                                                    expiring->expiry_point, expiring->ttl));
+                                                                    v.expiring->expiry_point, v.expiring->ttl));
                 }
             },
             [&] (const collection& c) {
                 assert(!cdef->is_atomic());
-                assert(!expiring);
                 auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
                 collection_type_impl::mutation mut;
                 mut.tomb = c.tomb;
                 for (auto& [ key, value ] : c.elements) {
-                    mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(), value.timestamp,
-                                                                        value.value, atomic_cell::collection_member::yes));
+                    if (!value.expiring) {
+                        mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(), value.timestamp,
+                                                                            value.value, atomic_cell::collection_member::yes));
+                    } else {
+                        mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(),
+                                                                           value.timestamp,
+                                                                           value.value,
+                                                                           value.expiring->expiry_point,
+                                                                           value.expiring->ttl,
+                                                                           atomic_cell::collection_member::yes));
+                    }
                 }
                 m.set_static_cell(*cdef, ctype->serialize_mutation_form(std::move(mut)));
             }
@@ -133,17 +141,17 @@ mutation mutation_description::build(schema_ptr s) const {
     for (auto& [ ckey, cr ] : _clustered_rows) {
         auto& [ marker, tomb, cells ] = cr;
         auto ck = clustering_key::from_exploded(*s, ckey);
-        for (auto& [ column, value_or_collection, expiring ] : cells) {
+        for (auto& [ column, value_or_collection ] : cells) {
             auto cdef = s->get_column_definition(utf8_type->decompose(column));
             assert(cdef);
             std::visit(make_visitor(
             [&] (const atomic_value& v) {
                     assert(cdef->is_atomic());
-                    if (!expiring) {
+                    if (!v.expiring) {
                         m.set_clustered_cell(ck, *cdef, atomic_cell::make_live(*cdef->type, v.timestamp, v.value));
                     } else {
                         m.set_clustered_cell(ck, *cdef, atomic_cell::make_live(*cdef->type, v.timestamp, v.value,
-                                                                               expiring->expiry_point, expiring->ttl));
+                                                                               v.expiring->expiry_point, v.expiring->ttl));
                     }
                 },
             [&] (const collection& c) {
@@ -152,15 +160,29 @@ mutation mutation_description::build(schema_ptr s) const {
                     collection_type_impl::mutation mut;
                     mut.tomb = c.tomb;
                     for (auto& [ key, value ] : c.elements) {
-                        mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(), value.timestamp,
-                                                                        value.value, atomic_cell::collection_member::yes));
+                        if (!value.expiring) {
+                            mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(), value.timestamp,
+                                                                            value.value, atomic_cell::collection_member::yes));
+                        } else {
+                            mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(),
+                                                                               value.timestamp,
+                                                                               value.value,
+                                                                               value.expiring->expiry_point,
+                                                                               value.expiring->ttl,
+                                                                               atomic_cell::collection_member::yes));
+                        }
+
                     }
                     m.set_clustered_cell(ck, *cdef, ctype->serialize_mutation_form(std::move(mut)));
                 }
             ), value_or_collection);
         }
-        if (marker != api::missing_timestamp) {
-            m.partition().clustered_row(*s, ckey).apply(row_marker(marker));
+        if (marker.timestamp != api::missing_timestamp) {
+            if (marker.expiring) {
+                m.partition().clustered_row(*s, ckey).apply(::row_marker(marker.timestamp, marker.expiring->ttl, marker.expiring->expiry_point));
+            } else {
+                m.partition().clustered_row(*s, ckey).apply(::row_marker(marker.timestamp));
+            }
         }
         if (tomb) {
             m.partition().clustered_row(*s, ckey).apply(tomb);

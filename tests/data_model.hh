@@ -33,12 +33,25 @@ static constexpr const api::timestamp_type column_removal_timestamp = 300;
 
 class mutation_description {
 public:
+    struct expiry_info {
+        gc_clock::duration ttl;
+        gc_clock::time_point expiry_point;
+    };
+    struct row_marker {
+        api::timestamp_type timestamp;
+        std::optional<expiry_info> expiring;
+
+        row_marker(api::timestamp_type timestamp = data_timestamp);
+        row_marker(api::timestamp_type timestamp, gc_clock::duration ttl, gc_clock::time_point expiry_point);
+    };
     using key = std::vector<bytes>;
     struct atomic_value {
         bytes value;
         api::timestamp_type timestamp;
+        std::optional<expiry_info> expiring;
 
         atomic_value(bytes value, api::timestamp_type timestamp = data_timestamp);
+        atomic_value(bytes value, api::timestamp_type timestamp, gc_clock::duration ttl, gc_clock::time_point expiry_point);
     };
     struct collection_element {
         bytes key;
@@ -53,18 +66,13 @@ public:
         collection(std::vector<collection_element> elements);
     };
     using value = std::variant<atomic_value, collection>;
-    struct expiry_info {
-        gc_clock::duration ttl;
-        gc_clock::time_point expiry_point;
-    };
     struct cell {
         sstring column_name;
         value data_value;
-        std::optional<expiry_info> expiring;
     };
     using row = std::vector<cell>;
     struct clustered_row {
-        api::timestamp_type marker;
+        row_marker marker;
         row_tombstone tomb;
         row cells;
     };
@@ -89,12 +97,8 @@ public:
     void set_partition_tombstone(tombstone partition_tombstone);
 
     void add_static_cell(const sstring& column, value v);
-    void add_static_expiring_cell(const sstring& column, atomic_value v,
-                                  gc_clock::duration ttl, gc_clock::time_point expiry_point);
     void add_clustered_cell(const key& ck, const sstring& column, value v);
-    void add_clustered_expiring_cell(const key& ck, const sstring& column, atomic_value v,
-                                     gc_clock::duration ttl, gc_clock::time_point expiry_point);
-    void add_clustered_row_marker(const key& ck, api::timestamp_type timestamp = data_timestamp);
+    void add_clustered_row_marker(const key& ck, row_marker marker = row_marker(data_timestamp));
     void add_clustered_row_tombstone(const key& ck, row_tombstone tomb);
 
     void remove_static_column(const sstring& name);

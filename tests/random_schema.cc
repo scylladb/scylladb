@@ -713,6 +713,12 @@ timestamp_generator default_timestamp_generator() {
     };
 }
 
+expiry_generator no_expiry_expiry_generator() {
+    return [] (std::mt19937& engine, timestamp_destination destination) -> std::optional<expiry_info> {
+        return std::nullopt;
+    };
+}
+
 namespace {
 
 schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec) {
@@ -833,11 +839,15 @@ std::vector<sstring> column_names(schema_ptr schema, column_kind kind) {
     return col_names;
 }
 
-void decorate_with_timestamps(std::mt19937& engine, timestamp_generator& ts_gen, data_model::mutation_description::value& value) {
+void decorate_with_timestamps(const schema& schema, std::mt19937& engine, timestamp_generator& ts_gen, expiry_generator exp_gen,
+        data_model::mutation_description::value& value) {
     std::visit(
             make_visitor(
                     [&] (data_model::mutation_description::atomic_value& v) {
                         v.timestamp = ts_gen(engine, timestamp_destination::cell_timestamp, api::min_timestamp);
+                        if (auto expiry_opt = exp_gen(engine, timestamp_destination::cell_timestamp)) {
+                            v.expiring = data_model::mutation_description::expiry_info{expiry_opt->ttl, expiry_opt->expiry_point};
+                        }
                     },
                     [&] (data_model::mutation_description::collection& c) {
                         if (auto ts = ts_gen(engine, timestamp_destination::collection_tombstone, api::min_timestamp);
@@ -848,11 +858,16 @@ void decorate_with_timestamps(std::mt19937& engine, timestamp_generator& ts_gen,
                                 // tombstone's.
                                 ts--;
                             }
-                            c.tomb = tombstone(ts, {});
+                            auto expiry_opt = exp_gen(engine, timestamp_destination::collection_tombstone);
+                            const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now() + schema.gc_grace_seconds();
+                            c.tomb = tombstone(ts, deletion_time);
                         }
                         for (auto& [ key, value ] : c.elements) {
                             value.timestamp = ts_gen(engine, timestamp_destination::collection_cell_timestamp, c.tomb.timestamp);
                             assert(!c.tomb || value.timestamp > c.tomb.timestamp);
+                            if (auto expiry_opt = exp_gen(engine, timestamp_destination::collection_cell_timestamp)) {
+                                value.expiring = data_model::mutation_description::expiry_info{expiry_opt->ttl, expiry_opt->expiry_point};
+                            }
                         }
                     }),
             value);
@@ -879,6 +894,7 @@ data_model::mutation_description::key random_schema::make_partition_key(uint32_t
 }
 
 data_model::mutation_description::key random_schema::make_clustering_key(uint32_t n, value_generator& gen) const {
+    assert(_schema->clustering_key_size() > 0);
     return make_key(n, gen, _schema->clustering_key_columns(), std::numeric_limits<clustering_key::compound::element_type::size_type>::max());
 }
 
@@ -965,35 +981,47 @@ data_model::mutation_description random_schema::new_mutation(uint32_t n) {
     return new_mutation(make_pkey(n));
 }
 
-void random_schema::set_partition_tombstone(std::mt19937& engine, data_model::mutation_description& md, timestamp_generator ts_gen) {
-    md.set_partition_tombstone(tombstone(ts_gen(engine, timestamp_destination::partition_tombstone, api::min_timestamp), {}));
+void random_schema::set_partition_tombstone(std::mt19937& engine, data_model::mutation_description& md, timestamp_generator ts_gen,
+        expiry_generator exp_gen) {
+    if (const auto ts = ts_gen(engine, timestamp_destination::partition_tombstone, api::min_timestamp); ts != api::missing_timestamp) {
+        auto expiry_opt = exp_gen(engine, timestamp_destination::partition_tombstone);
+        const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now() + _schema->gc_grace_seconds();
+        md.set_partition_tombstone(tombstone(ts, deletion_time));
+    }
 }
 
 void random_schema::add_row(std::mt19937& engine, data_model::mutation_description& md, data_model::mutation_description::key ckey,
-        timestamp_generator ts_gen) {
+        timestamp_generator ts_gen, expiry_generator exp_gen) {
     value_generator gen;
     for (const auto& cdef : _schema->regular_columns()) {
         auto value = gen.generate_value(engine, *cdef.type);
-        decorate_with_timestamps(engine, ts_gen, value);
+        decorate_with_timestamps(*_schema, engine, ts_gen, exp_gen, value);
         md.add_clustered_cell(ckey, cdef.name_as_text(), std::move(value));
     }
     if (auto ts = ts_gen(engine, timestamp_destination::row_marker, api::min_timestamp); ts != api::missing_timestamp) {
-        md.add_clustered_row_marker(ckey, ts);
+        if (auto expiry_opt = exp_gen(engine, timestamp_destination::row_marker)) {
+            md.add_clustered_row_marker(ckey, tests::data_model::mutation_description::row_marker(ts, expiry_opt->ttl, expiry_opt->expiry_point));
+        } else {
+            md.add_clustered_row_marker(ckey, ts);
+        }
     }
     if (auto ts = ts_gen(engine, timestamp_destination::row_tombstone, api::min_timestamp); ts != api::missing_timestamp) {
-        md.add_clustered_row_tombstone(ckey, row_tombstone{tombstone{ts, {}}});
+        auto expiry_opt = exp_gen(engine, timestamp_destination::row_tombstone);
+        const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now() + _schema->gc_grace_seconds();
+        md.add_clustered_row_tombstone(ckey, row_tombstone{tombstone{ts, deletion_time}});
     }
 }
 
-void random_schema::add_row(std::mt19937& engine, data_model::mutation_description& md, uint32_t n, timestamp_generator ts_gen) {
-    add_row(engine, md, make_ckey(n), std::move(ts_gen));
+void random_schema::add_row(std::mt19937& engine, data_model::mutation_description& md, uint32_t n, timestamp_generator ts_gen,
+        expiry_generator exp_gen) {
+    add_row(engine, md, make_ckey(n), std::move(ts_gen), std::move(exp_gen));
 }
 
-void random_schema::add_static_row(std::mt19937& engine, data_model::mutation_description& md, timestamp_generator ts_gen) {
+void random_schema::add_static_row(std::mt19937& engine, data_model::mutation_description& md, timestamp_generator ts_gen, expiry_generator exp_gen) {
     value_generator gen;
     for (const auto& cdef : _schema->static_columns()) {
         auto value = gen.generate_value(engine, *cdef.type);
-        decorate_with_timestamps(engine, ts_gen, value);
+        decorate_with_timestamps(*_schema, engine, ts_gen, exp_gen, value);
         md.add_static_cell(cdef.name_as_text(), std::move(value));
     }
 }
@@ -1002,8 +1030,66 @@ void random_schema::delete_range(
         std::mt19937& engine,
         data_model::mutation_description& md,
         nonwrapping_range<data_model::mutation_description::key> range,
-        timestamp_generator ts_gen) {
-    md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), {}});
+        timestamp_generator ts_gen,
+        expiry_generator exp_gen) {
+    auto expiry_opt = exp_gen(engine, timestamp_destination::range_tombstone);
+    const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now() + _schema->gc_grace_seconds();
+    md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), deletion_time});
+}
+
+future<std::vector<mutation>> generate_random_mutations(
+        tests::random_schema& random_schema,
+        timestamp_generator ts_gen,
+        expiry_generator exp_gen,
+        std::uniform_int_distribution<size_t> partition_count_dist,
+        std::uniform_int_distribution<size_t> clustering_row_count_dist,
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist) {
+    auto engine = std::mt19937(tests::random::get_int<uint32_t>());
+    const auto schema_has_clustering_columns = random_schema.schema()->clustering_key_size() > 0;
+    const auto partition_count = partition_count_dist(engine);
+    std::vector<mutation> muts;
+    muts.reserve(partition_count);
+    return do_with(std::move(engine), std::move(muts), [=, &random_schema] (std::mt19937& engine,
+            std::vector<mutation>& muts) mutable {
+        auto r = boost::irange(size_t{0}, partition_count);
+        return do_for_each(r.begin(), r.end(), [=, &random_schema, &engine, &muts] (size_t pk) mutable {
+            auto mut = random_schema.new_mutation(pk);
+            random_schema.set_partition_tombstone(engine, mut, ts_gen, exp_gen);
+            random_schema.add_static_row(engine, mut, ts_gen, exp_gen);
+
+            if (!schema_has_clustering_columns) {
+                muts.emplace_back(mut.build(random_schema.schema()));
+                return;
+            }
+
+            const auto clustering_row_count = clustering_row_count_dist(engine);
+            auto ckeys = random_schema.make_ckeys(clustering_row_count);
+            for (uint32_t ck = 0; ck < clustering_row_count; ++ck) {
+                random_schema.add_row(engine, mut, ckeys[ck], ts_gen, exp_gen);
+            }
+
+            for (size_t i = 0; i < 4; ++i) {
+                const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+                const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+                random_schema.delete_range(
+                        engine,
+                        mut,
+                        nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
+                        ts_gen,
+                        exp_gen);
+            }
+            muts.emplace_back(mut.build(random_schema.schema()));
+        }).then([&random_schema, &muts] () mutable {
+            boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+                return a.decorated_key().less_compare(*s, b.decorated_key());
+            });
+            auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+                return a.decorated_key().equal(*s, b.decorated_key());
+            });
+            muts.erase(range.end(), muts.end());
+            return std::move(muts);
+        });
+    });
 }
 
 } // namespace tests

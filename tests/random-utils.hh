@@ -129,9 +129,14 @@ Real get_real() {
     return get_real<Real>(Real{0}, std::numeric_limits<Real>::max(), gen());
 }
 
-inline bool get_bool() {
+template <typename RandomEngine>
+inline bool get_bool(RandomEngine& engine) {
     static std::bernoulli_distribution dist;
-    return dist(gen());
+    return dist(engine);
+}
+
+inline bool get_bool() {
+    return get_bool(gen());
 }
 
 inline bytes get_bytes(size_t n) {

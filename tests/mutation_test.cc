@@ -50,6 +50,7 @@
 #include "tests/test_services.hh"
 #include "tests/failure_injecting_allocation_strategy.hh"
 #include "tests/sstable_utils.hh"
+#include "tests/random_schema.hh"
 #include "mutation_source_test.hh"
 #include "cell_locking.hh"
 #include "flat_mutation_reader_assertions.hh"
@@ -59,6 +60,8 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+
+logging::logger tlog("mutation_test");
 
 using namespace std::chrono_literals;
 
@@ -1830,7 +1833,7 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     // No collection tombstone, row tombstone covers all cells
     auto cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value));
     auto row_tomb = row_tombstone(tombstone { 1, gc_clock::time_point() });
-    auto any_live = cmut.compact_and_expire(row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
+    auto any_live = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
     BOOST_CHECK(!any_live);
     BOOST_CHECK(!cmut.tomb);
     BOOST_CHECK(cmut.cells.empty());
@@ -1838,7 +1841,7 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     // No collection tombstone, row tombstone doesn't cover anything
     cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value));
     row_tomb = row_tombstone(tombstone { -1, gc_clock::time_point() });
-    any_live = cmut.compact_and_expire(row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
+    any_live = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
     BOOST_CHECK(any_live);
     BOOST_CHECK(!cmut.tomb);
     BOOST_CHECK_EQUAL(cmut.cells.size(), 1);
@@ -1846,7 +1849,7 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     // Collection tombstone covers everything
     cmut = make_collection_mutation(tombstone { 2, gc_clock::time_point() }, key, make_collection_member(bytes_type, value));
     row_tomb = row_tombstone(tombstone { 1, gc_clock::time_point() });
-    any_live = cmut.compact_and_expire(row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
+    any_live = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
     BOOST_CHECK(!any_live);
     BOOST_CHECK(cmut.tomb);
     BOOST_CHECK_EQUAL(cmut.tomb.timestamp, 2);
@@ -1855,8 +1858,911 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     // Collection tombstone covered by row tombstone
     cmut = make_collection_mutation(tombstone { 2, gc_clock::time_point() }, key, make_collection_member(bytes_type, value));
     row_tomb = row_tombstone(tombstone { 3, gc_clock::time_point() });
-    any_live = cmut.compact_and_expire(row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
+    any_live = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
     BOOST_CHECK(!any_live);
     BOOST_CHECK(!cmut.tomb);
     BOOST_CHECK(cmut.cells.empty());
+}
+
+namespace {
+
+struct cell_summary {
+    api::timestamp_type timestamp;
+};
+
+struct collection_summary {
+    tombstone tomb;
+    std::vector<std::pair<bytes, cell_summary>> cells;
+};
+
+using value_summary = std::variant<cell_summary, collection_summary>;
+
+using row_summary = std::map<column_id, value_summary>;
+
+struct static_row_summary {
+    row_summary cells;
+};
+
+struct clustering_row_summary {
+    clustering_key key;
+    row_marker marker;
+    row_tombstone tomb;
+    row_summary cells;
+
+    explicit clustering_row_summary(clustering_key key) : key(std::move(key))
+    { }
+    clustering_row_summary(clustering_key key, row_marker marker, row_tombstone tomb, row_summary cells)
+        : key(std::move(key)), marker(marker), tomb(tomb), cells(std::move(cells))
+    { }
+};
+
+class clustering_fragment_summary {
+public:
+    class tri_cmp;
+    class less_cmp;
+
+private:
+    std::variant<clustering_row_summary, range_tombstone> _value;
+
+public:
+    clustering_fragment_summary(clustering_row_summary cr) : _value(std::move(cr)) { }
+    clustering_fragment_summary(range_tombstone rt) : _value(std::move(rt)) { }
+
+    const clustering_key_prefix& key() const {
+        return std::visit(make_visitor(
+                [] (const clustering_row_summary& cr) -> const clustering_key& {
+                    return cr.key;
+                },
+                [] (const range_tombstone& rt) -> const clustering_key& {
+                    return rt.start;
+                }),
+                _value);
+    }
+    position_in_partition_view position() const {
+        return std::visit(make_visitor(
+                [] (const clustering_row_summary& cr) {
+                    return position_in_partition_view::for_key(cr.key);
+                },
+                [] (const range_tombstone& rt) {
+                    return rt.position();
+                }),
+                _value);
+    }
+    bool is_range_tombstone() const {
+        return std::holds_alternative<range_tombstone>(_value);
+    }
+    bool is_clustering_row() const {
+        return std::holds_alternative<clustering_row_summary>(_value);
+    }
+    const range_tombstone& as_range_tombstone() const {
+        return std::get<range_tombstone>(_value);
+    }
+    const clustering_row_summary& as_clustering_row() const {
+        return std::get<clustering_row_summary>(_value);
+    }
+    range_tombstone& as_range_tombstone() {
+        return std::get<range_tombstone>(_value);
+    }
+    clustering_row_summary& as_clustering_row() {
+        return std::get<clustering_row_summary>(_value);
+    }
+};
+
+class clustering_fragment_summary::tri_cmp {
+    position_in_partition::tri_compare _pos_tri_cmp;
+    bound_view::tri_compare _bv_cmp;
+
+    int rt_tri_cmp(const range_tombstone& a, const range_tombstone& b) const {
+        auto start_bound_cmp = _pos_tri_cmp(a.position(), b.position());
+        if (start_bound_cmp) {
+            return start_bound_cmp;
+        }
+        // Range tombstones can have the same start position. In this case use
+        // the end bound to decide who's "less".
+        return _bv_cmp(a.end_bound(), b.end_bound());
+    }
+
+public:
+    explicit tri_cmp(const schema& schema) : _pos_tri_cmp(schema), _bv_cmp(schema) { }
+
+    int operator()(const clustering_fragment_summary& a, const clustering_fragment_summary& b) const {
+        if (const auto res = _pos_tri_cmp(a.position(), b.position()); res != 0) {
+            return res;
+        }
+        if (a.is_range_tombstone() && b.is_range_tombstone()) {
+            return rt_tri_cmp(a.as_range_tombstone(), b.as_range_tombstone());
+        }
+        // Sort range tombstones before clustering rows
+        if (a.is_range_tombstone() || b.is_range_tombstone()) {
+            return int(b.is_range_tombstone()) - int(a.is_range_tombstone());
+        }
+        return 0; // two clustering rows
+    }
+};
+
+class clustering_fragment_summary::less_cmp {
+    clustering_fragment_summary::tri_cmp _tri_cmp;
+public:
+    explicit less_cmp(const schema& schema) : _tri_cmp(schema) { }
+    bool operator()(const clustering_fragment_summary& a, const clustering_fragment_summary& b) const {
+        return _tri_cmp(a, b) < 0;
+    }
+};
+
+class collection_element_tri_cmp {
+    serialized_tri_compare _tri_cmp;
+public:
+    explicit collection_element_tri_cmp(const collection_type_impl& ctype) : _tri_cmp(ctype.name_comparator()->as_tri_comparator())
+    { }
+    int operator()(const std::pair<bytes, cell_summary>& a, const std::pair<bytes, cell_summary>& b) const {
+        return _tri_cmp(a.first, b.first);
+    }
+};
+
+struct partition_summary {
+    dht::decorated_key key;
+    tombstone tomb;
+    std::optional<static_row_summary> static_row;
+    std::set<clustering_fragment_summary, clustering_fragment_summary::less_cmp> clustering_fragments;
+
+    partition_summary(const schema& s, dht::decorated_key dk)
+        : key(std::move(dk))
+        , clustering_fragments(clustering_fragment_summary::less_cmp(s)) {
+    }
+    partition_summary(
+            dht::decorated_key dk,
+            tombstone tomb,
+            std::optional<static_row_summary> static_row,
+            std::set<clustering_fragment_summary, clustering_fragment_summary::less_cmp> clustering_fragments)
+        : key(std::move(dk))
+        , tomb(tomb)
+        , static_row(std::move(static_row))
+        , clustering_fragments(std::move(clustering_fragments)) {
+    }
+};
+
+template <bool OnlyPurged>
+class basic_compacted_fragments_consumer_base {
+    const schema& _schema;
+    gc_clock::time_point _query_time;
+    gc_clock::time_point _gc_before;
+    std::function<api::timestamp_type(const dht::decorated_key&)> _get_max_purgeable;
+    api::timestamp_type _max_purgeable;
+
+    std::vector<partition_summary> _partition_summaries;
+    std::optional<partition_summary> _partition_summary;
+
+private:
+    bool can_gc(tombstone t) {
+        if (!t) {
+            return true;
+        }
+        return t.timestamp < _max_purgeable;
+    }
+    bool is_tombstone_purgeable(const tombstone& t) {
+        return t.deletion_time < _gc_before && can_gc(t);
+    }
+    bool is_tombstone_purgeable(const row_tombstone& t) {
+        return t.max_deletion_time() < _gc_before && can_gc(t.tomb());
+    }
+    bool is_marker_purgeable(const row_marker& marker, tombstone tomb) {
+        return marker.timestamp() <= tomb.timestamp ||
+            (marker.is_dead(_query_time) && marker.expiry() < _gc_before && can_gc(tombstone(marker.timestamp(), marker.expiry())));
+    }
+    bool is_cell_purgeable(const atomic_cell_view& cell) {
+        return (cell.has_expired(_query_time) || !cell.is_live()) &&
+                cell.deletion_time() < _gc_before &&
+                can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
+    }
+    value_summary examine_cell(const column_definition& cdef, const atomic_cell_or_collection& cell_or_collection, const row_tombstone& tomb) {
+        if (cdef.type->is_atomic()) {
+            auto cell = cell_or_collection.as_atomic_cell(cdef);
+            if constexpr (OnlyPurged) {
+                BOOST_REQUIRE(!cell.is_covered_by(tomb.tomb(), cdef.is_counter()));
+            }
+            BOOST_REQUIRE_EQUAL(is_cell_purgeable(cell), OnlyPurged);
+            return cell_summary{cell.timestamp()};
+        } else if (cdef.type->is_collection()) {
+            auto cell = cell_or_collection.as_collection_mutation();
+            auto ctype = static_pointer_cast<const collection_type_impl>(cdef.type);
+            collection_summary summary;
+            cell.data.with_linearized([&] (bytes_view cell_bv) {
+                auto m_view = ctype->deserialize_mutation_form(cell_bv);
+
+                BOOST_REQUIRE(m_view.tomb.timestamp == api::missing_timestamp || m_view.tomb.timestamp > tomb.tomb().timestamp ||
+                        is_tombstone_purgeable(m_view.tomb) == OnlyPurged);
+                summary.tomb = m_view.tomb;
+                auto t = m_view.tomb;
+                t.apply(tomb.tomb());
+                for (const auto& [key, cell] : m_view.cells) {
+                    if constexpr (OnlyPurged) {
+                        BOOST_REQUIRE(!cell.is_covered_by(t, false));
+                    }
+                    BOOST_REQUIRE_EQUAL(is_cell_purgeable(cell), OnlyPurged);
+                    summary.cells.emplace_back(std::pair(key, cell_summary{cell.timestamp()}));
+                }
+            });
+            return std::move(summary);
+        }
+        throw std::runtime_error(fmt::format("Cannot check cell {} of unknown type {}", cdef.name_as_text(), cdef.type->name()));
+    }
+    row_summary examine_row(column_kind kind, const row& r, const row_tombstone& tomb) {
+        row_summary cr;
+        r.for_each_cell([&, this, kind] (column_id id, const atomic_cell_or_collection& cell) {
+            cr.emplace(id, examine_cell(_schema.column_at(kind, id), cell, tomb));
+        });
+        return cr;
+    }
+
+public:
+    basic_compacted_fragments_consumer_base(const schema& schema, gc_clock::time_point query_time,
+            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
+        : _schema(schema)
+        , _query_time(query_time)
+        , _gc_before(saturating_subtract(query_time, _schema.gc_grace_seconds()))
+        , _get_max_purgeable(std::move(get_max_purgeable)) {
+    }
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _max_purgeable = _get_max_purgeable(dk);
+        BOOST_REQUIRE(!_partition_summary);
+        _partition_summary.emplace(_schema, dk);
+    }
+    void consume(tombstone t) {
+        BOOST_REQUIRE(t);
+        BOOST_REQUIRE_EQUAL(is_tombstone_purgeable(t), OnlyPurged);
+
+        BOOST_REQUIRE(_partition_summary);
+        _partition_summary->tomb = t;
+    }
+    stop_iteration consume(static_row&& sr, tombstone tomb, bool is_live) {
+        BOOST_REQUIRE(!OnlyPurged || !is_live);
+
+        auto compacted_cells = examine_row(column_kind::static_column, sr.cells(), row_tombstone(tomb));
+
+        BOOST_REQUIRE(_partition_summary);
+        _partition_summary->static_row.emplace(static_row_summary{std::move(compacted_cells)});
+
+        return stop_iteration::no;
+    }
+    stop_iteration consume(clustering_row&& cr, row_tombstone tomb, bool is_live) {
+        BOOST_REQUIRE(!OnlyPurged || !is_live);
+
+        if (!cr.marker().is_missing()) {
+            BOOST_REQUIRE_EQUAL(is_marker_purgeable(cr.marker(), tomb.tomb()), OnlyPurged);
+        }
+        if (cr.tomb().regular()) {
+            BOOST_REQUIRE_EQUAL(is_tombstone_purgeable(cr.tomb()), OnlyPurged);
+        }
+        auto compacted_cells = examine_row(column_kind::regular_column, cr.cells(), tomb);
+
+        BOOST_REQUIRE(_partition_summary);
+        _partition_summary->clustering_fragments.emplace(clustering_row_summary{cr.key(), cr.marker(), cr.tomb(), std::move(compacted_cells)});
+
+        return stop_iteration::no;
+    }
+    stop_iteration consume(range_tombstone&& rt) {
+        BOOST_REQUIRE_EQUAL(is_tombstone_purgeable(rt.tomb), OnlyPurged);
+
+        BOOST_REQUIRE(_partition_summary);
+        _partition_summary->clustering_fragments.emplace(rt);
+
+        return stop_iteration::no;
+    }
+    stop_iteration consume_end_of_partition() {
+        BOOST_REQUIRE(_partition_summary);
+        _partition_summaries.emplace_back(std::move(*_partition_summary));
+        _partition_summary.reset();
+
+        return stop_iteration::no;
+    }
+    std::vector<partition_summary> consume_end_of_stream() {
+        BOOST_REQUIRE(!_partition_summary);
+
+        return _partition_summaries;
+    }
+};
+
+using survived_compacted_fragments_consumer = basic_compacted_fragments_consumer_base<false>;
+using purged_compacted_fragments_consumer = basic_compacted_fragments_consumer_base<true>;
+
+template <typename ForwardIt, typename TriCompare>
+/// Iterates two ordered ranges in a lockstep.
+///
+/// For two ranges:
+/// [1, 2, 4, 6, 7, 8]
+/// [1, 3, 6, 7]
+/// The iterator will dereference to:
+/// {1, 1}
+/// {2, null}
+/// {null, 3}
+/// {4, null}
+/// {6, 6}
+/// {7, 7}
+/// {8, null}
+/// FIXME: not a proper iterator as the iterated-over range is predetermined at
+/// construction time. Good enough for the purposes of this test.
+class lockstep_ordered_iterator {
+public:
+    using underlying_pointer = typename std::iterator_traits<ForwardIt>::pointer;
+    using iterator_category = std::forward_iterator_tag;
+    using difference_type = std::ptrdiff_t;
+    using value_type = std::pair<underlying_pointer, underlying_pointer>;
+    using pointer = value_type*;
+    using reference = value_type&;
+
+private:
+    ForwardIt _it1;
+    ForwardIt _end1;
+    ForwardIt _it2;
+    ForwardIt _end2;
+    TriCompare _tri_cmp;
+    mutable std::optional<value_type> _current_value;
+
+private:
+    void materialize() const {
+        if (_current_value) {
+            return;
+        }
+        _current_value.emplace(nullptr, nullptr);
+        if (_it1 == _end1 || _it2 == _end2) {
+            if (_it1 != _end1) {
+                _current_value->first = &*_it1;
+            } else {
+                _current_value->second = &*_it2;
+            }
+            return;
+        }
+        const auto res = _tri_cmp(*_it1, *_it2);
+        if (res < 0) {
+            _current_value->first = &*_it1;
+        } else if (res == 0) {
+            _current_value->first = &*_it1;
+            _current_value->second = &*_it2;
+        } else { // res > 0
+            _current_value->second = &*_it2;
+        }
+    }
+    reference dereference() const {
+        materialize();
+        return *_current_value;
+    }
+
+public:
+    lockstep_ordered_iterator(ForwardIt it1, ForwardIt end1, ForwardIt it2, ForwardIt end2, TriCompare tri_cmp)
+        : _it1(it1)
+        , _end1(end1)
+        , _it2(it2)
+        , _end2(end2)
+        , _tri_cmp(std::move(tri_cmp)) {
+    }
+
+    bool operator==(const lockstep_ordered_iterator& o) const {
+        return _it1 == o._it1 && _end1 == o._end1 && _it2 == o._it2 && _end2 == o._end2;
+    }
+    bool operator!=(const lockstep_ordered_iterator& o) const {
+        return !(*this == o);
+    }
+    pointer operator->() const {
+        return &dereference();
+    }
+    reference operator*() const {
+        return dereference();
+    }
+    lockstep_ordered_iterator operator++(int) {
+        auto it = *this;
+        ++(*this);
+        return it;
+    }
+    lockstep_ordered_iterator& operator++() {
+        const auto [v1, v2] = dereference();
+        if (v1) {
+            ++_it1;
+        }
+        if (v2) {
+            ++_it2;
+        }
+        _current_value.reset();
+        return *this;
+    }
+};
+
+template <typename Container, typename TriCompare>
+auto iterate_over_in_ordered_lockstep(Container& a, Container& b, TriCompare tri_cmp) {
+    using iterator = decltype(std::begin(a));
+    return boost::iterator_range<lockstep_ordered_iterator<iterator, TriCompare>>{
+        lockstep_ordered_iterator<iterator, TriCompare>(std::begin(a), std::end(a), std::begin(b), std::end(b), tri_cmp),
+        lockstep_ordered_iterator<iterator, TriCompare>(std::end(a), std::end(a), std::end(b), std::end(b), tri_cmp)};
+}
+
+template <typename Container, typename OutputIt>
+void merge_container(
+        Container a,
+        Container b,
+        OutputIt oit,
+        std::function<int(const typename Container::value_type&, const typename Container::value_type&)> tri_cmp,
+        std::function<typename Container::value_type(typename Container::value_type, typename Container::value_type)> merge_func) {
+    for (auto [v1, v2] : iterate_over_in_ordered_lockstep(a, b, tri_cmp)) {
+        if (v1 && v2) {
+            *oit++ = merge_func(std::move(*v1), std::move(*v2));
+        } else {
+            if (v1) {
+                *oit++ = std::move(*v1);
+            }
+            if (v2) {
+                *oit++ = std::move(*v2);
+            }
+        }
+    }
+}
+
+row_summary merge(const schema& schema, column_kind kind, row_summary a, row_summary b) {
+    row_summary merged;
+    merge_container(
+            std::move(a),
+            std::move(b),
+            std::inserter(merged, merged.end()),
+            [] (const std::pair<const column_id, value_summary>& a, const std::pair<const column_id, value_summary>& b) -> int {
+                return a.first - b.first;
+            },
+            [&schema, kind] (std::pair<const column_id, value_summary> a, std::pair<const column_id, value_summary> b) {
+                const auto& cdef = schema.column_at(kind, a.first);
+                // Only collections can be split into survivors and losers.
+                BOOST_REQUIRE(cdef.type->is_collection());
+                auto ctype = static_pointer_cast<const collection_type_impl>(cdef.type);
+
+                BOOST_REQUIRE(std::holds_alternative<collection_summary>(a.second));
+                BOOST_REQUIRE(std::holds_alternative<collection_summary>(b.second));
+                auto& collection_a = std::get<collection_summary>(a.second);
+                auto& collection_b = std::get<collection_summary>(b.second);
+
+                auto tomb = collection_a.tomb;
+                tomb.apply(collection_b.tomb);
+                std::vector<std::pair<bytes, cell_summary>> merged;
+                for (auto [v1, v2] : iterate_over_in_ordered_lockstep(collection_a.cells, collection_b.cells, collection_element_tri_cmp(*ctype))) {
+                    // Individual cells cannot be present in both collections.
+                    BOOST_REQUIRE(!v1 || !v2);
+                    if (v1) {
+                        merged.emplace_back(std::move(*v1));
+                    } else {
+                        merged.emplace_back(std::move(*v2));
+                    }
+                }
+                return std::pair(a.first, collection_summary{tomb, std::move(merged)});
+            });
+    return merged;
+}
+
+std::optional<static_row_summary> merge(const schema& schema, std::optional<static_row_summary> a, std::optional<static_row_summary> b) {
+    if (!a && !b) {
+        return {};
+    }
+    if (!a || !b) {
+        return a ? std::move(a) : std::move(b);
+    }
+    return static_row_summary{merge(schema, column_kind::static_column, std::move(a->cells), std::move(b->cells))};
+}
+
+clustering_row_summary merge(const schema& schema, clustering_row_summary a, clustering_row_summary b) {
+    if (!a.marker.is_missing() || !b.marker.is_missing()) {
+        BOOST_REQUIRE(a.marker.is_missing() != b.marker.is_missing());
+    }
+    if (a.tomb.regular() || b.tomb.regular()) {
+        BOOST_REQUIRE(bool(a.tomb.regular()) != bool(b.tomb.regular()));
+    }
+    return clustering_row_summary{
+            std::move(a.key),
+            (a.marker.is_missing() ? b.marker : a.marker),
+            (a.tomb.regular() ? a.tomb : b.tomb),
+            merge(schema, column_kind::regular_column, std::move(a.cells), std::move(b.cells))};
+}
+
+std::set<clustering_fragment_summary, clustering_fragment_summary::less_cmp> merge(
+        const schema& s,
+        std::set<clustering_fragment_summary, clustering_fragment_summary::less_cmp> a,
+        std::set<clustering_fragment_summary, clustering_fragment_summary::less_cmp> b) {
+    std::set<clustering_fragment_summary, clustering_fragment_summary::less_cmp> merged{clustering_fragment_summary::less_cmp(s)};
+    merge_container(
+            std::move(a),
+            std::move(b),
+            std::inserter(merged, merged.end()),
+            clustering_fragment_summary::tri_cmp(s),
+            [&s] (clustering_fragment_summary a, clustering_fragment_summary b) -> clustering_fragment_summary {
+                BOOST_REQUIRE_EQUAL(a.is_range_tombstone(), b.is_range_tombstone());
+                if (a.is_range_tombstone()) {
+                    // No need to merge range tombstones.
+                    return a;
+                }
+                return merge(s, std::move(a.as_clustering_row()), std::move(b.as_clustering_row()));
+            });
+    return merged;
+}
+
+std::vector<partition_summary> merge(const schema& s, std::vector<partition_summary> a, std::vector<partition_summary> b) {
+    std::vector<partition_summary> merged;
+    merge_container(
+            std::move(a),
+            std::move(b),
+            std::back_inserter(merged),
+            [&s] (const partition_summary& a, const partition_summary& b) {
+                return a.key.tri_compare(s, b.key);
+            },
+            [&s] (partition_summary a, partition_summary b) {
+                if (a.tomb || b.tomb) {
+                    BOOST_REQUIRE(bool(a.tomb) != bool(b.tomb));
+                }
+                return partition_summary{
+                        a.key,
+                        (a.tomb ? a.tomb : b.tomb),
+                        merge(s, std::move(a.static_row), std::move(b.static_row)),
+                        merge(s, std::move(a.clustering_fragments), std::move(b.clustering_fragments))};
+            });
+    return merged;
+}
+
+cell_summary summarize_cell(const atomic_cell_view& cell) {
+    return cell_summary{cell.timestamp()};
+}
+
+row_summary summarize_row(const schema& schema, column_kind kind, const row& r) {
+    row_summary summary;
+    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
+        auto cdef = schema.column_at(kind, id);
+        if (cdef.type->is_atomic()) {
+            summary.emplace(id, summarize_cell(cell_or_collection.as_atomic_cell(cdef)));
+        } else if (cdef.type->is_collection()) {
+            auto cell = cell_or_collection.as_collection_mutation();
+            auto ctype = static_pointer_cast<const collection_type_impl>(cdef.type);
+            collection_summary collection;
+            cell.data.with_linearized([&] (bytes_view cell_bv) {
+                auto m_view = ctype->deserialize_mutation_form(cell_bv);
+                collection.tomb = m_view.tomb;
+                for (const auto& [key, cell] : m_view.cells) {
+                    collection.cells.emplace_back(key, summarize_cell(cell));
+                }
+            });
+            summary.emplace(id, std::move(collection));
+        } else {
+            throw std::runtime_error(fmt::format("Cannot summarize cell {} of unknown type {}", cdef.name_as_text(), cdef.type->name()));
+        }
+    });
+    return summary;
+}
+
+partition_summary summarize_mutation(const mutation& m) {
+    const auto& schema = *m.schema();
+    std::set<clustering_fragment_summary, clustering_fragment_summary::less_cmp> clustering_fragments{clustering_fragment_summary::less_cmp(schema)};
+    for (const auto& entry : m.partition().clustered_rows()) {
+        const auto& r = entry.row();
+        clustering_fragments.emplace(clustering_row_summary(entry.key(), r.marker(), r.deleted_at(),
+                summarize_row(schema, column_kind::regular_column, r.cells())));
+    }
+    const auto& rts = m.partition().row_tombstones();
+    clustering_fragments.insert(rts.begin(), rts.end());
+    return partition_summary(
+            m.decorated_key(),
+            m.partition().partition_tombstone(),
+            m.partition().static_row().empty() ?
+                    std::nullopt :
+                    std::optional(static_row_summary{summarize_row(schema, column_kind::static_column, m.partition().static_row())}),
+            std::move(clustering_fragments));
+}
+
+std::vector<partition_summary> summarize_mutations(const std::vector<mutation>& mutations) {
+    std::vector<partition_summary> summaries;
+    summaries.reserve(mutations.size());
+    std::transform(mutations.cbegin(), mutations.cend(), std::back_inserter(summaries), summarize_mutation);
+    return summaries;
+}
+
+struct stats {
+    size_t partitions = 0;
+    size_t partition_tombstones = 0;
+    size_t static_rows = 0;
+    size_t static_cells = 0;
+    size_t clustering_rows = 0;
+    size_t row_markers = 0;
+    size_t row_tombstones = 0;
+    size_t clustering_cells = 0;
+    size_t range_tombstones = 0;
+};
+
+std::ostream& operator<<(std::ostream& os, const stats& s) {
+    os << "stats{";
+    os << "partitions=" << s.partitions;
+    os << ", partition_tombstones=" << s.partition_tombstones;
+    os << ", static_rows=" << s.static_rows;
+    os << ", static_cells=" << s.static_cells;
+    os << ", clustering_rows=" << s.clustering_rows;
+    os << ", row_markers=" << s.row_markers;
+    os << ", row_tombstones=" << s.row_tombstones;
+    os << ", clustering_cells=" << s.clustering_cells;
+    os << ", range_tombstones=" << s.range_tombstones;
+    os << "}";
+    return os;
+}
+
+stats create_stats(const std::vector<partition_summary>& summaries) {
+    stats s;
+
+    s.partitions = summaries.size();
+    for (const auto& summary : summaries) {
+        s.partition_tombstones += size_t(bool(summary.tomb));
+        if (summary.static_row) {
+            ++s.static_rows;
+            s.static_cells += summary.static_row->cells.size();
+        }
+
+        for (const auto& cf : summary.clustering_fragments) {
+            if (cf.is_range_tombstone()) {
+                ++s.range_tombstones;
+            } else {
+                const auto& cr = cf.as_clustering_row();
+                ++s.clustering_rows;
+                s.row_markers += size_t{!cr.marker.is_missing()};
+                s.row_tombstones += size_t{bool(cr.tomb.regular())};
+                s.clustering_cells += cr.cells.size();
+            }
+        }
+    }
+
+    return s;
+}
+
+void check_row_summaries(const schema& schema, column_kind kind, const row_summary& actual, const row_summary& expected, tombstone tomb) {
+    auto column_tri_cmp = [] (const std::pair<const column_id, value_summary>& a, const std::pair<const column_id, value_summary>& b) {
+        return a.first - b.first;
+    };
+    for (const auto [actual_column, expected_column] : iterate_over_in_ordered_lockstep(actual, expected, column_tri_cmp)) {
+        BOOST_REQUIRE(expected_column);
+        const auto [expected_column_id, expected_cell_or_collection] = *expected_column;
+        if (!actual_column) {
+            std::visit(make_visitor(
+                    [&] (const cell_summary& cell) {
+                        BOOST_REQUIRE_LE(cell.timestamp, tomb.timestamp);
+                    },
+                    [&] (const collection_summary& collection) {
+                        BOOST_REQUIRE_LE(collection.tomb.timestamp, tomb.timestamp);
+                        auto t = collection.tomb;
+                        t.apply(tomb);
+                        for (const auto& [key, cell] : collection.cells) {
+                            BOOST_REQUIRE_LE(cell.timestamp, t.timestamp);
+                        }
+                    }),
+                    expected_cell_or_collection);
+            continue;
+        }
+        const auto [actual_column_id, actual_cell_or_collection] = *actual_column;
+        BOOST_REQUIRE_EQUAL(actual_cell_or_collection.index(), expected_cell_or_collection.index());
+
+        if (std::holds_alternative<cell_summary>(expected_cell_or_collection)) {
+            auto expected_cell = std::get<cell_summary>(expected_cell_or_collection);
+            auto actual_cell = std::get<cell_summary>(actual_cell_or_collection);
+            BOOST_REQUIRE_EQUAL(actual_cell.timestamp, expected_cell.timestamp);
+        } else {
+            auto cdef = schema.column_at(kind, expected_column_id);
+            auto ctype = static_pointer_cast<const collection_type_impl>(cdef.type);
+            auto expected_collection = std::get<collection_summary>(expected_cell_or_collection);
+            auto actual_collection = std::get<collection_summary>(actual_cell_or_collection);
+            auto t = expected_collection.tomb;
+            if (!actual_collection.tomb) {
+                BOOST_REQUIRE_LE(actual_collection.tomb.timestamp, tomb.timestamp);
+            }
+            t.apply(tomb);
+            for (auto [actual_element, expected_element] : iterate_over_in_ordered_lockstep(actual_collection.cells, expected_collection.cells,
+                        collection_element_tri_cmp(*ctype))) {
+                BOOST_REQUIRE(expected_element);
+                if (actual_element) {
+                    BOOST_REQUIRE_EQUAL(actual_element->second.timestamp, expected_element->second.timestamp);
+                } else {
+                    BOOST_REQUIRE_LE(expected_element->second.timestamp, t.timestamp);
+                }
+            }
+        }
+    }
+}
+
+void check_clustering_row_summaries(const schema& schema, const clustering_row_summary& actual, const clustering_row_summary& expected,
+        tombstone tomb) {
+    if (expected.marker.is_missing()) {
+        BOOST_REQUIRE(actual.marker.is_missing());
+    } else {
+        // actual is allowed to be missing the marker only if it is
+        // covered by a tombstone.
+        BOOST_REQUIRE(
+                (actual.marker.timestamp() == expected.marker.timestamp()) ||
+                (expected.marker.timestamp() <= tomb.timestamp));
+    }
+    if (expected.tomb.regular()) {
+        // actual is allowed to be missing the row tombstone only
+        // if it is covered by a higher level tombstone.
+        BOOST_REQUIRE(
+                (actual.tomb == expected.tomb) ||
+                (expected.tomb.tomb().timestamp <= tomb.timestamp));
+    } else {
+        BOOST_REQUIRE(!expected.tomb.tomb());
+    }
+    check_row_summaries(schema, column_kind::regular_column, actual.cells, expected.cells, tomb);
+}
+
+void check_clustering_summaries(const schema& schema, const partition_summary& actual, const partition_summary& expected) {
+    range_tombstone_accumulator range_tombstones(schema, false);
+    range_tombstones.set_partition_tombstone(expected.tomb);
+
+    for (auto [actual_frag, expected_frag] : iterate_over_in_ordered_lockstep(actual.clustering_fragments, expected.clustering_fragments,
+                clustering_fragment_summary::tri_cmp(schema))) {
+        // actual cannot have a position that is not in expected, this would
+        // mean that a new fragment appeared from thin air while compacting.
+        BOOST_REQUIRE(expected_frag);
+
+        if (expected_frag->is_clustering_row()) {
+            BOOST_REQUIRE(!actual_frag || actual_frag->is_clustering_row());
+            const auto& cre = expected_frag->as_clustering_row();
+            auto tomb = cre.tomb;
+            tomb.apply(range_tombstones.tombstone_for_row(cre.key));
+            check_clustering_row_summaries(schema, actual_frag ? actual_frag->as_clustering_row() : clustering_row_summary(cre.key), cre, tomb.tomb());
+        } else {
+            const auto& rte = expected_frag->as_range_tombstone();
+            range_tombstones.apply(expected_frag->as_range_tombstone());
+            if (actual_frag) {
+                BOOST_REQUIRE(actual_frag->is_range_tombstone());
+                BOOST_REQUIRE_EQUAL(actual_frag->as_range_tombstone().tomb.timestamp, rte.tomb.timestamp);
+            } else {
+                BOOST_REQUIRE_LE(expected_frag->as_range_tombstone().tomb.timestamp, expected.tomb.timestamp);
+            }
+        }
+    }
+}
+
+// Ensure no data was lost in the split. The survived atoms merged with the
+// purged atoms should be equivalent to the original (expected) atoms.
+// Only atoms that were erased due to being covered by tombstones are allowed
+// to be missing.
+void check_partition_summaries(const schema& schema, const std::vector<partition_summary>& actual, const std::vector<partition_summary>& expected) {
+    BOOST_CHECK_EQUAL(actual.size(), expected.size());
+
+    for (auto actual_it = actual.cbegin(), expected_it = expected.cbegin(); actual_it != actual.cend(), expected_it != expected.cend();
+            ++actual_it, ++expected_it) {
+        BOOST_REQUIRE(actual_it->key.equal(schema, expected_it->key));
+        BOOST_REQUIRE_EQUAL(actual_it->tomb.timestamp, expected_it->tomb.timestamp);
+
+        if (expected_it->static_row) {
+            check_row_summaries(schema, column_kind::static_column, actual_it->static_row.value_or(static_row_summary{}).cells,
+                    expected_it->static_row->cells, expected_it->tomb);
+        }
+
+        check_clustering_summaries(schema, *actual_it, *expected_it);
+    }
+}
+
+void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_point query_time, const std::vector<mutation>& mutations) {
+    const auto expected_mutations_summary = summarize_mutations(mutations);
+
+    tlog.info("Original data: {}", create_stats(expected_mutations_summary));
+
+    auto reader = flat_mutation_reader_from_mutations(std::move(mutations));
+    auto get_max_purgeable = [] (const dht::decorated_key&) {
+        return api::max_timestamp;
+    };
+    auto consumer = make_stable_flattened_mutations_consumer<compact_for_compaction<survived_compacted_fragments_consumer, purged_compacted_fragments_consumer>>(
+            schema,
+            query_time,
+            get_max_purgeable,
+            survived_compacted_fragments_consumer(schema, query_time, get_max_purgeable),
+            purged_compacted_fragments_consumer(schema, query_time, get_max_purgeable));
+
+    auto [survived_partitions, purged_partitions] = reader.consume(std::move(consumer), db::no_timeout, flat_mutation_reader::consume_reversed_partitions::no).get0();
+
+    tlog.info("Survived data: {}", create_stats(survived_partitions));
+    tlog.info("Purged data:   {}", create_stats(purged_partitions));
+
+    auto merged_partition_summaries = merge(schema, std::move(survived_partitions), std::move(purged_partitions));
+
+    tlog.info("Merged data:   {}", create_stats(merged_partition_summaries));
+
+    check_partition_summaries(schema, merged_partition_summaries, expected_mutations_summary);
+}
+
+} // anonymous namespace
+
+SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
+    auto& partitioner = dht::global_partitioner();
+    auto spec = tests::make_random_schema_specification(get_name());
+
+    tests::random_schema random_schema(tests::random::get_int<uint32_t>(), *spec, partitioner);
+    const auto& schema = *random_schema.schema();
+
+    tlog.info("Random schema:\n{}", random_schema.cql());
+
+    const auto query_time = gc_clock::now();
+    const auto ttl = gc_clock::duration{schema.gc_grace_seconds().count() * 4};
+    const std::uniform_int_distribution<size_t> partition_count_dist = std::uniform_int_distribution<size_t>(16, 128);
+    const std::uniform_int_distribution<size_t> clustering_row_count_dist = std::uniform_int_distribution<size_t>(2, 32);
+
+    // Random data
+    {
+        tlog.info("Random data");
+        const auto ts_gen = tests::default_timestamp_generator();
+        // Half of the tombstones are gcable.
+        // Half of the cells are expiring. Half of those is expired.
+        const auto exp_gen = [query_time, ttl, schema] (std::mt19937& engine, tests::timestamp_destination destination)
+                -> std::optional<tests::expiry_info> {
+            const auto is_tombstone = (destination == tests::timestamp_destination::partition_tombstone ||
+                    destination == tests::timestamp_destination::row_tombstone ||
+                    destination == tests::timestamp_destination::range_tombstone ||
+                    destination == tests::timestamp_destination::collection_tombstone);
+            if (!is_tombstone && tests::random::get_bool(engine)) {
+                return std::nullopt;
+            }
+            const auto offset = (is_tombstone ? schema.gc_grace_seconds().count() : ttl.count()) / 2;
+            auto offset_dist = std::uniform_int_distribution<gc_clock::duration::rep>(-offset, offset);
+            return tests::expiry_info{ttl, query_time + gc_clock::duration{offset_dist(engine)}};
+        };
+        const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, exp_gen, partition_count_dist,
+                clustering_row_count_dist).get0();
+        run_compaction_data_stream_split_test(schema, query_time, mutations);
+    }
+
+    // All data is purged
+    {
+        tlog.info("All data is purged");
+        const auto ts_gen = [] (std::mt19937& engine, tests::timestamp_destination destination, api::timestamp_type min_timestamp) {
+            static const api::timestamp_type tomb_ts_min = 10000;
+            static const api::timestamp_type tomb_ts_max = 99999;
+            static const api::timestamp_type collection_tomb_ts_min = 100;
+            static const api::timestamp_type collection_tomb_ts_max = 999;
+            static const api::timestamp_type other_ts_min = 1000;
+            static const api::timestamp_type other_ts_max = 9999;
+
+            if (destination == tests::timestamp_destination::partition_tombstone ||
+                    destination == tests::timestamp_destination::row_tombstone ||
+                    destination == tests::timestamp_destination::range_tombstone) {
+                assert(min_timestamp < tomb_ts_max);
+                return tests::random::get_int<api::timestamp_type>(tomb_ts_min, tomb_ts_max, engine);
+            } else if (destination == tests::timestamp_destination::collection_tombstone) {
+                assert(min_timestamp < collection_tomb_ts_max);
+                return tests::random::get_int<api::timestamp_type>(collection_tomb_ts_min, collection_tomb_ts_max, engine);
+            } else {
+                assert(min_timestamp < other_ts_max);
+                return tests::random::get_int<api::timestamp_type>(other_ts_min, other_ts_max, engine);
+            }
+        };
+        const auto all_purged_exp_gen = [query_time, ttl, schema] (std::mt19937& engine, tests::timestamp_destination destination)
+                -> std::optional<tests::expiry_info> {
+            const auto offset = std::max(ttl.count(), schema.gc_grace_seconds().count());
+            auto offset_dist = std::uniform_int_distribution<gc_clock::duration::rep>(-offset * 2, -offset);
+            return tests::expiry_info{ttl, query_time + gc_clock::duration{offset_dist(engine)}};
+        };
+        const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, all_purged_exp_gen, partition_count_dist,
+                clustering_row_count_dist).get0();
+        run_compaction_data_stream_split_test(schema, query_time, mutations);
+    }
+
+    // No data is purged
+    {
+        tlog.info("No data is purged");
+        const auto ts_gen = [] (std::mt19937& engine, tests::timestamp_destination destination, api::timestamp_type min_timestamp) {
+            static const api::timestamp_type tomb_ts_min = 100;
+            static const api::timestamp_type tomb_ts_max = 999;
+            static const api::timestamp_type collection_tomb_ts_min = 1000;
+            static const api::timestamp_type collection_tomb_ts_max = 9999;
+            static const api::timestamp_type other_ts_min = 10000;
+            static const api::timestamp_type other_ts_max = 99999;
+
+            if (destination == tests::timestamp_destination::partition_tombstone ||
+                    destination == tests::timestamp_destination::row_tombstone ||
+                    destination == tests::timestamp_destination::range_tombstone) {
+                assert(min_timestamp < tomb_ts_max);
+                return tests::random::get_int<api::timestamp_type>(tomb_ts_min, tomb_ts_max, engine);
+            } else if (destination == tests::timestamp_destination::collection_tombstone) {
+                assert(min_timestamp < tomb_ts_max);
+                return tests::random::get_int<api::timestamp_type>(collection_tomb_ts_min, collection_tomb_ts_max, engine);
+            } else {
+                assert(min_timestamp < other_ts_max);
+                return tests::random::get_int<api::timestamp_type>(other_ts_min, other_ts_max, engine);
+            }
+        };
+        const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, tests::no_expiry_expiry_generator(), partition_count_dist,
+                clustering_row_count_dist).get0();
+        run_compaction_data_stream_split_test(schema, query_time, mutations);
+    }
 }

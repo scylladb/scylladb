@@ -589,13 +589,15 @@ SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
     auto md2_ttl = gc_clock::duration(std::chrono::seconds(1));
     md2.add_clustered_row_marker({ to_bytes("ck1") }, -10);
     md2.add_clustered_cell({ to_bytes("ck1") }, "v1", random_int32_value());
-    md2.add_clustered_expiring_cell({ to_bytes("ck2") }, "v2", random_int32_value(), md2_ttl, now + md2_ttl);
+    md2.add_clustered_cell({ to_bytes("ck2") }, "v2",
+            tests::data_model::mutation_description::atomic_value(random_int32_value(), tests::data_model::data_timestamp, md2_ttl, now + md2_ttl));
     auto m2 = md2.build(s);
 
     auto md3 = tests::data_model::mutation_description({ to_bytes("pk3") });
     auto md3_ttl = gc_clock::duration(std::chrono::seconds(2));
     auto md3_expiry_point = now - std::chrono::hours(8);
-    md3.add_static_expiring_cell("s1", random_int32_value(), md3_ttl, md3_expiry_point);
+    md3.add_static_cell("s1",
+            tests::data_model::mutation_description::atomic_value(random_int32_value(), tests::data_model::data_timestamp, md3_ttl, md3_expiry_point));
     auto m3 = md3.build(s);
 
     auto mt = make_lw_shared<memtable>(s);

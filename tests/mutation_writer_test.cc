@@ -228,7 +228,19 @@ public:
     }
 };
 
-std::vector<mutation> generate_mutations(std::mt19937& engine, tests::random_schema& random_schema) {
+} // anonymous namespace
+
+SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec, dht::global_partitioner()};
+
+    tlog.info("Random schema:\n{}", random_schema.cql());
+
     auto ts_gen = [&, underlying = tests::default_timestamp_generator()] (std::mt19937& engine,
             tests::timestamp_destination ts_dest, api::timestamp_type min_timestamp) -> api::timestamp_type {
         if (ts_dest == tests::timestamp_destination::partition_tombstone ||
@@ -242,54 +254,7 @@ std::vector<mutation> generate_mutations(std::mt19937& engine, tests::random_sch
         return underlying(engine, ts_dest, min_timestamp);
     };
 
-    auto muts = std::vector<mutation>{};
-    auto ckeys = random_schema.make_ckeys(100);
-    for (uint32_t pk = 0; pk < 10; ++pk) {
-        auto mut = random_schema.new_mutation(pk);
-        for (uint32_t ck = 0; ck < 100; ++ck) {
-            random_schema.add_row(engine, mut, ckeys[ck], ts_gen);
-        }
-        random_schema.add_static_row(engine, mut, ts_gen);
-
-        for (size_t i = 0; i < 4; ++i) {
-            const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
-            const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
-            random_schema.delete_range(
-                    engine,
-                    mut,
-                    nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
-                    ts_gen);
-        }
-        muts.emplace_back(mut.build(random_schema.schema()));
-    }
-
-    boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
-        return a.decorated_key().less_compare(*s, b.decorated_key());
-    });
-
-    return muts;
-}
-
-} // anonymous namespace
-
-SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
-    // Replace random seed here!
-    const uint32_t seed = std::random_device{}();
-    auto engine = std::mt19937(seed);
-
-    tlog.info("Random seed for {}: {}", get_name(), seed);
-
-    auto random_spec = tests::make_random_schema_specification(
-            get_name(),
-            std::uniform_int_distribution<size_t>(1, 4),
-            std::uniform_int_distribution<size_t>(2, 4),
-            std::uniform_int_distribution<size_t>(2, 8),
-            std::uniform_int_distribution<size_t>(2, 8));
-    auto random_schema = tests::random_schema{seed, *random_spec, dht::global_partitioner()};
-
-    tlog.info("Random schema:\n{}", random_schema.cql());
-
-    auto muts = generate_mutations(engine, random_schema);
+    auto muts = tests::generate_random_mutations(random_schema, ts_gen).get0();
 
     auto classify_fn = [] (api::timestamp_type ts) {
         return int64_t(ts % 2);

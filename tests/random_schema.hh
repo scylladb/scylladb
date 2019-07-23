@@ -140,6 +140,22 @@ using timestamp_generator = std::function<api::timestamp_type(std::mt19937& engi
 /// Ignores timestamp destination.
 timestamp_generator default_timestamp_generator();
 
+struct expiry_info {
+    gc_clock::duration ttl;
+    gc_clock::time_point expiry_point;
+};
+
+/// Functor that generates expiry for various destinations.
+/// A disengaged optional means the cell doesn't expire. When the destination is
+/// a tombstone, gc_clock::now() + schema::gc_grace_seconds() will be used as
+/// the expiry instead.
+/// The `expiry_info::ttl` is always ignored for tombstone destinations (because
+/// they have a fixed ttl as determined by `schema::gc_grace_seconds()`.
+using expiry_generator = std::function<std::optional<expiry_info>(std::mt19937& engine, timestamp_destination destination)>;
+
+/// Always returns disengaged optionals.
+expiry_generator no_expiry_expiry_generator();
+
 /// Utility class wrapping a randomly generated schema.
 ///
 /// The schema is generated when the class is constructed.
@@ -203,21 +219,40 @@ public:
 
     /// Set the partition tombstone
     void set_partition_tombstone(std::mt19937& engine, data_model::mutation_description& md,
-            timestamp_generator ts_gen = default_timestamp_generator());
+            timestamp_generator ts_gen = default_timestamp_generator(),
+            expiry_generator exp_gen = no_expiry_expiry_generator());
 
     void add_row(std::mt19937& engine, data_model::mutation_description& md, data_model::mutation_description::key ckey,
-            timestamp_generator ts_gen = default_timestamp_generator());
+            timestamp_generator ts_gen = default_timestamp_generator(),
+            expiry_generator exp_gen = no_expiry_expiry_generator());
 
     /// Add a new row with a key produced via `make_ckey(n)`.
-    void add_row(std::mt19937& engine, data_model::mutation_description& md, uint32_t n, timestamp_generator ts_gen = default_timestamp_generator());
+    void add_row(std::mt19937& engine, data_model::mutation_description& md, uint32_t n, timestamp_generator ts_gen = default_timestamp_generator(),
+            expiry_generator exp_gen = no_expiry_expiry_generator());
 
-    void add_static_row(std::mt19937& engine, data_model::mutation_description& md, timestamp_generator ts_gen = default_timestamp_generator());
+    void add_static_row(std::mt19937& engine, data_model::mutation_description& md, timestamp_generator ts_gen = default_timestamp_generator(),
+            expiry_generator exp_gen = no_expiry_expiry_generator());
 
     void delete_range(
             std::mt19937& engine,
             data_model::mutation_description& md,
             nonwrapping_range<data_model::mutation_description::key> range,
-            timestamp_generator ts_gen = default_timestamp_generator());
+            timestamp_generator ts_gen = default_timestamp_generator(),
+            expiry_generator exp_gen = no_expiry_expiry_generator());
 };
+
+/// Generate random mutations using the random schema.
+///
+/// `clustering_row_count_dist` and `range_tombstone_count_dist` will be used to
+/// generate the respective counts for *each* partition. These params are
+/// ignored if the schema has no clustering columns.
+/// Futurized to avoid stalls.
+future<std::vector<mutation>> generate_random_mutations(
+        tests::random_schema& random_schema,
+        timestamp_generator ts_gen = default_timestamp_generator(),
+        expiry_generator exp_gen = no_expiry_expiry_generator(),
+        std::uniform_int_distribution<size_t> partition_count_dist = std::uniform_int_distribution<size_t>(8, 16),
+        std::uniform_int_distribution<size_t> clustering_row_count_dist = std::uniform_int_distribution<size_t>(16, 128),
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16));
 
 } // namespace tests
