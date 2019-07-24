@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "cql3/restrictions/abstract_restriction.hh"
+#include "cql3/restrictions/restriction.hh"
 #include "cql3/restrictions/term_slice.hh"
 #include "cql3/term.hh"
 #include "cql3/abstract_marker.hh"
@@ -56,7 +56,7 @@ namespace cql3 {
 
 namespace restrictions {
 
-class single_column_restriction : public abstract_restriction {
+class single_column_restriction : public restriction {
 protected:
     /**
      * The definition of the column to which apply the restriction.
@@ -96,7 +96,7 @@ public:
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const = 0;
-    using abstract_restriction::is_satisfied_by;
+    using restriction::is_satisfied_by;
     virtual bool is_satisfied_by(bytes_view data, const query_options& options) const = 0;
     virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) = 0;
 #if 0
@@ -136,7 +136,7 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::term_uses_function(_value, ks_name, function_name);
+        return restriction::term_uses_function(_value, ks_name, function_name);
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
@@ -241,7 +241,7 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::term_uses_function(_values, ks_name, function_name);
+        return restriction::term_uses_function(_values, ks_name, function_name);
     }
 
     virtual std::vector<bytes_opt> values_raw(const query_options& options) const override {
@@ -305,8 +305,8 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return (_slice.has_bound(statements::bound::START) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
-                || (_slice.has_bound(statements::bound::END) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
+        return (_slice.has_bound(statements::bound::START) && restriction::term_uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
+                || (_slice.has_bound(statements::bound::END) && restriction::term_uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
@@ -530,10 +530,10 @@ public:
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::term_uses_function(_values, ks_name, function_name)
-            || abstract_restriction::term_uses_function(_keys, ks_name, function_name)
-            || abstract_restriction::term_uses_function(_entry_keys, ks_name, function_name)
-            || abstract_restriction::term_uses_function(_entry_values, ks_name, function_name);
+        return restriction::term_uses_function(_values, ks_name, function_name)
+            || restriction::term_uses_function(_keys, ks_name, function_name)
+            || restriction::term_uses_function(_entry_keys, ks_name, function_name)
+            || restriction::term_uses_function(_entry_values, ks_name, function_name);
     }
 
     virtual sstring to_string() const override {

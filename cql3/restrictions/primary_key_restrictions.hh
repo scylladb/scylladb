@@ -48,7 +48,7 @@
 #include "cql3/statements/bound.hh"
 #include "cql3/restrictions/restrictions.hh"
 #include "cql3/restrictions/restriction.hh"
-#include "cql3/restrictions/abstract_restriction.hh"
+#include "cql3/restrictions/restriction.hh"
 #include "types.hh"
 #include "query-request.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -63,7 +63,7 @@ namespace restrictions {
  * implementations of methods).
  */
 
-class partition_key_restrictions: public abstract_restriction, public restrictions, public enable_shared_from_this<partition_key_restrictions> {
+class partition_key_restrictions: public restriction, public restrictions, public enable_shared_from_this<partition_key_restrictions> {
 public:
     using bounds_range_type = dht::partition_range;
 
@@ -114,7 +114,7 @@ public:
     }
 };
 
-class clustering_key_restrictions : public abstract_restriction, public restrictions, public enable_shared_from_this<clustering_key_restrictions> {
+class clustering_key_restrictions : public restriction, public restrictions, public enable_shared_from_this<clustering_key_restrictions> {
 public:
     using bounds_range_type = query::clustering_range;
 
