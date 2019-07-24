@@ -1825,8 +1825,8 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
                     puppet_reader::fill_buffer_action::block,
                     std::vector<uint32_t>{0, 1})));
 
-            return make_ready_future<control_type, reader_type>(std::move(control), std::move(reader));
-        }).get();
+            return make_ready_future<std::tuple<control_type, reader_type>>(std::tuple(std::move(control), std::move(reader)));
+        }).get0();
 
         {
             auto reader = make_foreign_reader(s.schema(), std::move(remote_reader));
