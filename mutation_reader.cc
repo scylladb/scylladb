@@ -758,10 +758,11 @@ class foreign_reader : public flat_mutation_reader::impl {
                 if (pending_next_partition) {
                     reader->next_partition();
                 }
-                return op().then([=] (auto... results) {
+                // Not really variadic, we expect 0 (void) or 1 parameter.
+                return op().then([=] (auto... result) {
                     auto f = reader->is_end_of_stream() ? nullptr : std::make_unique<future<>>(reader->fill_buffer(timeout));
-                    return make_ready_future<foreign_unique_ptr<future<>>, decltype(results)...>(
-                                make_foreign(std::move(f)), std::move(results)...);
+                    return make_ready_future<std::tuple<foreign_unique_ptr<future<>>, decltype(result)...>>(
+                                std::tuple(make_foreign(std::move(f)), std::move(result)...));
                 });
             };
             if (read_ahead_future) {
@@ -769,9 +770,15 @@ class foreign_reader : public flat_mutation_reader::impl {
             } else {
                 return exec_op_and_read_ahead();
             }
-        }).then([this] (foreign_unique_ptr<future<>> new_read_ahead_future, auto... results) {
-            _read_ahead_future = std::move(new_read_ahead_future);
-            return make_ready_future<decltype(results)...>(std::move(results)...);
+        }).then([this] (auto fut_and_result) {
+            _read_ahead_future = std::get<0>(std::move(fut_and_result));
+            static_assert(std::tuple_size<decltype(fut_and_result)>::value <= 2);
+            if constexpr (std::tuple_size<decltype(fut_and_result)>::value == 1) {
+                return make_ready_future<>();
+            } else {
+                auto result = std::get<1>(std::move(fut_and_result));
+                return make_ready_future<decltype(result)>(std::move(result));
+            }
         });
     }
 public:
@@ -818,16 +825,21 @@ future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
         return make_ready_future();
     }
 
+    struct fill_buffer_result {
+        foreign_unique_ptr<fragment_buffer> buffer;
+        bool end_of_stream;
+    };
+
     return forward_operation(timeout, [reader = _reader.get(), timeout] () {
         auto f = reader->is_buffer_empty() ? reader->fill_buffer(timeout) : make_ready_future<>();
         return f.then([=] {
-            return make_ready_future<foreign_unique_ptr<fragment_buffer>, bool>(
+            return make_ready_future<fill_buffer_result>(fill_buffer_result{
                     std::make_unique<fragment_buffer>(reader->detach_buffer()),
-                    reader->is_end_of_stream());
+                    reader->is_end_of_stream()});
         });
-    }).then([this] (foreign_unique_ptr<fragment_buffer> buffer, bool end_of_stream) mutable {
-        _end_of_stream = end_of_stream;
-        for (const auto& mf : *buffer) {
+    }).then([this] (fill_buffer_result res) mutable {
+        _end_of_stream = res.end_of_stream;
+        for (const auto& mf : *res.buffer) {
             // Need a copy since the mf is on the remote shard.
             push_mutation_fragment(mutation_fragment(*_schema, mf));
         }
@@ -1247,16 +1259,22 @@ future<> shard_reader::remote_reader::fast_forward_to(const dht::partition_range
 future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     auto fill_buf_fut = make_ready_future<fill_buffer_result>();
     const auto pending_next_partition = std::exchange(_pending_next_partition, false);
+
+    struct reader_and_buffer_fill_result {
+        foreign_ptr<std::unique_ptr<remote_reader>> reader;
+        fill_buffer_result result;
+    };
+
     if (!_reader) {
         fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), pending_next_partition, timeout] {
             auto rreader = make_foreign(std::make_unique<remote_reader>(gs.get(), *_lifecycle_policy, *_pr, _ps, _pc, _trace_state, _fwd_mr));
             auto f = rreader->fill_buffer(*_pr, pending_next_partition, timeout);
             return f.then([rreader = std::move(rreader)] (fill_buffer_result res) mutable {
-                return make_ready_future<foreign_ptr<std::unique_ptr<remote_reader>>, fill_buffer_result>(std::move(rreader), std::move(res));
+                return make_ready_future<reader_and_buffer_fill_result>(reader_and_buffer_fill_result{std::move(rreader), std::move(res)});
             });
-        }).then([this, timeout] (foreign_ptr<std::unique_ptr<remote_reader>> reader, fill_buffer_result res) {
-            _reader = std::move(reader);
-            return std::move(res);
+        }).then([this, timeout] (reader_and_buffer_fill_result res) {
+            _reader = std::move(res.reader);
+            return std::move(res.result);
         });
     } else {
         fill_buf_fut = smp::submit_to(_shard, [this, pending_next_partition, timeout] () mutable {
