@@ -63,8 +63,9 @@ protected:
      */
     const column_definition& _column_def;
 public:
-    single_column_restriction(const column_definition& column_def)
-        : _column_def(column_def)
+    single_column_restriction(op op, const column_definition& column_def)
+        : restriction(op)
+        , _column_def(column_def)
     { }
 
     const column_definition& get_column_def() const {
@@ -131,7 +132,7 @@ private:
     ::shared_ptr<term> _value;
 public:
     EQ(const column_definition& column_def, ::shared_ptr<term> value)
-        : single_column_restriction(column_def)
+        : single_column_restriction(op::EQ, column_def)
         , _value(std::move(value))
     { }
 
@@ -141,10 +142,6 @@ public:
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
         return index.supports_expression(_column_def, cql3::operator_type::EQ);
-    }
-
-    virtual bool is_EQ() const override {
-        return true;
     }
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
@@ -188,12 +185,8 @@ public:
 class single_column_restriction::IN : public single_column_restriction {
 public:
     IN(const column_definition& column_def)
-        : single_column_restriction(column_def)
+        : single_column_restriction(op::IN, column_def)
     { }
-
-    virtual bool is_IN() const override {
-        return true;
-    }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
         return index.supports_expression(_column_def, cql3::operator_type::IN);
@@ -295,12 +288,12 @@ private:
     term_slice _slice;
 public:
     slice(const column_definition& column_def, statements::bound bound, bool inclusive, ::shared_ptr<term> term)
-        : single_column_restriction(column_def)
+        : single_column_restriction(op::SLICE, column_def)
         , _slice(term_slice::new_instance(bound, inclusive, std::move(term)))
     { }
 
     slice(const column_definition& column_def, term_slice slice)
-        : single_column_restriction(column_def)
+        : single_column_restriction(op::SLICE, column_def)
         , _slice(slice)
     { }
 
@@ -311,10 +304,6 @@ public:
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
         return _slice.is_supported_by(_column_def, index);
-    }
-
-    virtual bool is_slice() const override {
-        return true;
     }
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
@@ -397,8 +386,8 @@ private:
     ::shared_ptr<term> _value;
 public:
     LIKE(const column_definition& column_def, ::shared_ptr<term> value)
-            : single_column_restriction(column_def)
-          , _value(value)
+        : single_column_restriction(op::LIKE, column_def)
+        , _value(value)
     { }
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
@@ -413,10 +402,6 @@ public:
 
     virtual bool is_supported_by(const secondary_index::index& index) const {
         return index.supports_expression(_column_def, cql3::operator_type::LIKE);
-    }
-
-    virtual bool is_LIKE() const override {
-        return true;
     }
 
     virtual sstring to_string() const override {
@@ -450,7 +435,7 @@ private:
     std::vector<::shared_ptr<term>> _entry_values;
 public:
     contains(const column_definition& column_def, ::shared_ptr<term> t, bool is_key)
-            : single_column_restriction(column_def) {
+            : single_column_restriction(op::CONTAINS, column_def) {
         if (is_key) {
             _keys.emplace_back(std::move(t));
         } else {
@@ -459,17 +444,14 @@ public:
     }
 
     contains(const column_definition& column_def, ::shared_ptr<term> map_key, ::shared_ptr<term> map_value)
-            : single_column_restriction(column_def) {
+            : single_column_restriction(op::CONTAINS, column_def)
+        {
         _entry_keys.emplace_back(std::move(map_key));
         _entry_values.emplace_back(std::move(map_value));
     }
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
         return bind_and_get(_values, options);
-    }
-
-    virtual bool is_contains() const override {
-        return true;
     }
 
     virtual void merge_with(::shared_ptr<restriction> other_restriction) override {

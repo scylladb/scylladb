@@ -63,7 +63,19 @@ using allow_local_index = bool_class<allow_local_index_tag>;
  */
 class restriction {
 public:
+    enum class op {
+        EQ, SLICE, IN, CONTAINS, LIKE
+    };
+protected:
+    using op_enum = super_enum<restriction::op, restriction::op::EQ, restriction::op::SLICE, restriction::op::IN, restriction::op::CONTAINS, restriction::op::LIKE>;
+    enum_set<op_enum> _ops;
+public:
     virtual ~restriction() {}
+
+    restriction() = default;
+    explicit restriction(op op) {
+        _ops.set(op);
+    }
 
     virtual bool is_on_token() const {
         return false;
@@ -73,24 +85,28 @@ public:
         return false;
     }
 
-    virtual bool is_slice() const {
-        return false;
+    bool is_slice() const {
+        return _ops.contains(op::SLICE);
     }
 
-    virtual bool is_EQ() const {
-        return false;
+    bool is_EQ() const {
+        return _ops.contains(op::EQ);
     }
 
-    virtual bool is_IN() const {
-        return false;
+    bool is_IN() const {
+        return _ops.contains(op::IN);
     }
 
-    virtual bool is_contains() const {
-        return false;
+    bool is_contains() const {
+        return _ops.contains(op::CONTAINS);
     }
 
-    virtual bool is_LIKE() const {
-        return false;
+    bool is_LIKE() const {
+        return _ops.contains(op::LIKE);
+    }
+
+    const enum_set<op_enum>& get_ops() const {
+        return _ops;
     }
 
     /**

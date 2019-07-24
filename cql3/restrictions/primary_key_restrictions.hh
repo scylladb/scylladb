@@ -67,6 +67,9 @@ class partition_key_restrictions: public restriction, public restrictions, publi
 public:
     using bounds_range_type = dht::partition_range;
 
+    partition_key_restrictions() = default;
+    explicit partition_key_restrictions(op op) : restriction(op) {}
+
     virtual ::shared_ptr<partition_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
         merge_with(restriction);
         return this->shared_from_this();
@@ -117,6 +120,9 @@ public:
 class clustering_key_restrictions : public restriction, public restrictions, public enable_shared_from_this<clustering_key_restrictions> {
 public:
     using bounds_range_type = query::clustering_range;
+
+    clustering_key_restrictions() = default;
+    explicit clustering_key_restrictions(op op) : restriction(op) {}
 
     virtual ::shared_ptr<clustering_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
         merge_with(restriction);
