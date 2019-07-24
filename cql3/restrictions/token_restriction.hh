@@ -63,12 +63,9 @@ private:
     std::vector<const column_definition *> _column_definitions;
 public:
     token_restriction(op op, std::vector<const column_definition *> c)
-            : partition_key_restrictions(op), _column_definitions(std::move(c)) {
+            : partition_key_restrictions(op, target::TOKEN), _column_definitions(std::move(c)) {
     }
 
-    bool is_on_token() const override {
-        return true;
-    }
     std::vector<const column_definition*> get_column_defs() const override {
         return _column_definitions;
     }

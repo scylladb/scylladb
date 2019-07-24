@@ -94,10 +94,6 @@ public:
         }
     }
 
-    virtual bool is_on_token() const override {
-        return false;
-    }
-
     virtual bool is_all_eq() const override {
         return _restrictions->is_all_eq();
     }

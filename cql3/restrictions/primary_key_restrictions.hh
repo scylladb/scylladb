@@ -68,7 +68,7 @@ public:
     using bounds_range_type = dht::partition_range;
 
     partition_key_restrictions() = default;
-    explicit partition_key_restrictions(op op) : restriction(op) {}
+    partition_key_restrictions(op op, target target) : restriction(op, target) {}
 
     virtual ::shared_ptr<partition_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
         merge_with(restriction);
