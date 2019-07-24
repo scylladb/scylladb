@@ -745,7 +745,7 @@ protected:
     virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
         return std::nullopt;
     }
-protected:
+public:
     data_value make_value(std::unique_ptr<native_type> value) const {
         return data_value::make(this->shared_from_this(), std::move(value));
     }
@@ -758,6 +758,7 @@ protected:
     data_value make_empty() const {
         return make_value(native_type(empty_t()));
     }
+protected:
     const native_type& from_value(const void* v) const {
         return *reinterpret_cast<const native_type*>(v);
     }
