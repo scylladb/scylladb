@@ -66,14 +66,22 @@ public:
     enum class op {
         EQ, SLICE, IN, CONTAINS, LIKE
     };
+    enum class target {
+        SINGLE_COLUMN, MULTIPLE_COLUMNS
+    };
 protected:
     using op_enum = super_enum<restriction::op, restriction::op::EQ, restriction::op::SLICE, restriction::op::IN, restriction::op::CONTAINS, restriction::op::LIKE>;
     enum_set<op_enum> _ops;
+    target _target = target::SINGLE_COLUMN;
 public:
     virtual ~restriction() {}
 
     restriction() = default;
-    explicit restriction(op op) {
+    explicit restriction(op op) : _target(target::SINGLE_COLUMN) {
+        _ops.set(op);
+    }
+
+    restriction(op op, target target) : _target(target) {
         _ops.set(op);
     }
 
@@ -81,8 +89,8 @@ public:
         return false;
     }
 
-    virtual bool is_multi_column() const {
-        return false;
+    bool is_multi_column() const {
+        return _target == target::MULTIPLE_COLUMNS;
     }
 
     bool is_slice() const {

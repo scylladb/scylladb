@@ -98,10 +98,6 @@ public:
         return false;
     }
 
-    virtual bool is_multi_column() const override {
-        return false;
-    }
-
     virtual bool is_all_eq() const override {
         return _restrictions->is_all_eq();
     }

@@ -62,15 +62,11 @@ protected:
     std::vector<const column_definition*> _column_defs;
 public:
     multi_column_restriction(op op, schema_ptr schema, std::vector<const column_definition*>&& defs)
-        : clustering_key_restrictions(op)
+        : clustering_key_restrictions(op, target::MULTIPLE_COLUMNS)
         , _schema(schema)
         , _column_defs(std::move(defs))
     {
         update_asc_desc_existence();
-    }
-
-    virtual bool is_multi_column() const override {
-        return true;
     }
 
     virtual std::vector<const column_definition*> get_column_defs() const override {
