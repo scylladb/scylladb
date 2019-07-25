@@ -1170,15 +1170,6 @@ typename Type::value_type deserialize_value(Type& t, bytes_view v) {
     return t.deserialize_value(v);
 }
 
-template<typename Type, typename Value>
-static inline
-bytes serialize_value(Type& t, const Value& value) {
-    bytes b(bytes::initialized_later(), t.serialized_size(value));
-    auto i = b.begin();
-    t.serialize_value(value, i);
-    return b;
-}
-
 template<typename T>
 T read_simple(bytes_view& v) {
     if (v.size() < sizeof(T)) {
