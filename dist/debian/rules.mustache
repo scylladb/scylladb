@@ -2,41 +2,24 @@
 
 export PYBUILD_DISABLE=1
 jobs := $(shell echo $$DEB_BUILD_OPTIONS | sed -r "s/.*parallel=([0-9]+).*/-j\1/")
+{{#housekeeping}}
+install_arg := --housekeeping
+{{/housekeeping}}
+{{^housekeeping}}
+install_arg :=
+{{/housekeeping}}
+
 override_dh_auto_configure:
 
 override_dh_auto_build:
 
 override_dh_auto_clean:
 
-_override_dh_auto_install:
+override_dh_auto_install:
 	dh_auto_install
-	install -d $(CURDIR)/debian/{{product}}-server/usr/bin
-	ln -sf /opt/scylladb/bin/scylla $(CURDIR)/debian/{{product}}-server/usr/bin/scylla
-	ln -sf /opt/scylladb/bin/iotune $(CURDIR)/debian/{{product}}-server/usr/bin/iotune
-	ln -sf /opt/scylladb/scyllatop/scyllatop.py $(CURDIR)/debian/{{product}}-server/usr/bin/scyllatop
-	install -d $(CURDIR)/debian/{{product}}-server/opt/scylladb/scyllatop
-	cp -r tools/scyllatop/* $(CURDIR)/debian/{{product}}-server/opt/scylladb/scyllatop/
-	install -d $(CURDIR)/debian/{{product}}-server/opt/scylladb/scripts
-	cp -r dist/common/scripts/* $(CURDIR)/debian/{{product}}-server/opt/scylladb/scripts/
-	PYSCRIPTS=$$(find dist/common/scripts/ -maxdepth 1 -type f -exec grep -Pls '\A\#!/usr/bin/env python3' {} +) ; \
-	for i in $$PYSCRIPTS; do \
-		./relocate_python_scripts.py \
-			--installroot  $(CURDIR)/debian/scylla-server/opt/scylladb/scripts/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" $$i ;\
-	done
-	./relocate_python_scripts.py \
-	--installroot $(CURDIR)/debian/{{product}}-server/opt/scylladb/scripts/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" \
-	seastar/scripts/perftune.py seastar/scripts/seastar-addr2line seastar/scripts/perftune.py
-	./relocate_python_scripts.py \
-	--installroot $(CURDIR)/debian/{{product}}-server/opt/scylladb/scyllatop/ --with-python3 "$(CURDIR)/debian/{{product}}-server/opt/scylladb/python3/bin/python3" \
-	tools/scyllatop/scyllatop.py
-	install -d $(CURDIR)/debian/{{product}}-server/usr/sbin
-
-SBINFILES := $(shell cd dist/common/scripts/; echo scylla_*setup node_exporter_install node_health_check scylla_ec2_check scylla_kernel_check)
-
-$(addprefix $(CURDIR)/debian/{{product}}-server/usr/sbin/, $(SBINFILES)):
-	ln -srf $(addprefix /opt/scylladb/scripts/, $(notdir $@)) $@
-
-override_dh_auto_install: _override_dh_auto_install $(addprefix $(CURDIR)/debian/{{product}}-server/usr/sbin/, $(SBINFILES))
+	./install.sh --root "$(CURDIR)/debian/{{product}}-conf" $(install_arg) --target "stable" --pkg "conf" --disttype "debian"
+	./install.sh --root "$(CURDIR)/debian/{{product}}-kernel-conf" $(install_arg) --target "stable" --pkg "kernel-conf" --disttype "debian"
+	./install.sh --root "$(CURDIR)/debian/{{product}}-server" $(install_arg) --target "stable" --pkg "server" --disttype "debian"
 
 override_dh_installinit:
 {{#scylla}}
