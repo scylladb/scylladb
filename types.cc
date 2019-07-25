@@ -1199,7 +1199,7 @@ const sstring& abstract_type::cql3_type_name() const {
 }
 
 void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value) {
-    size_t val_len = type->serialized_size(type->get_value_ptr(value));
+    size_t val_len = value.serialized_size();
 
     if (sf.using_32_bits_for_collections()) {
         serialize_int32(out, val_len);
@@ -1724,7 +1724,7 @@ collection_type_impl::reserialize(cql_serialization_format from, cql_serializati
         return std::nullopt;
     }
     auto val = deserialize(*v, from);
-    bytes ret(bytes::initialized_later(), serialized_size(get_value_ptr(val)));  // FIXME: serialized_size want @to
+    bytes ret(bytes::initialized_later(), val.serialized_size());  // FIXME: serialized_size want @to
     auto out = ret.begin();
     serialize(get_value_ptr(val), out, to);
     return ret;
@@ -2682,9 +2682,11 @@ static size_t concrete_serialized_size(const tuple_type_impl::native_type& v) {
     return len;
 }
 
+static size_t serialized_size(const abstract_type& t, const void* value);
+
 namespace {
 struct serialized_size_visitor {
-    size_t operator()(const reversed_type_impl& t, const void* v) { return t.underlying_type()->serialized_size(v); }
+    size_t operator()(const reversed_type_impl& t, const void* v) { return serialized_size(*t.underlying_type(), v); }
     size_t operator()(const empty_type_impl&, const void*) { return 0; }
     template <typename T>
     size_t operator()(const concrete_type<T>& t, const typename concrete_type<T>::native_type* v) {
@@ -2702,11 +2704,8 @@ struct serialized_size_visitor {
 };
 }
 
-size_t abstract_type::serialized_size(const void* value) const {
-    if (!value) {
-        return 0;
-    }
-    return visit(*this, value, serialized_size_visitor{});
+static size_t serialized_size(const abstract_type& t, const void* value) {
+    return visit(t, value, serialized_size_visitor{});
 }
 
 template<typename T>
@@ -3401,13 +3400,18 @@ bytes abstract_type::decompose(const data_value& value) const {
     if (!value._value) {
         return {};
     }
-    bytes b(bytes::initialized_later(), serialized_size(value._value));
+    bytes b(bytes::initialized_later(), serialized_size(*this, value._value));
     auto i = b.begin();
     serialize(value, i);
     return b;
 }
 
-size_t data_value::serialized_size() const { return _type->serialized_size(_value); }
+size_t data_value::serialized_size() const {
+    if (!_value) {
+        return 0;
+    }
+    return ::serialized_size(*_type, _value);
+}
 
 bytes data_value::serialize() const {
     if (!_value) {
