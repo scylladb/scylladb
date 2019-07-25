@@ -329,8 +329,8 @@ public:
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
-        reader_concurrency_semaphore* read_concurrency_semaphore;
-        reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
+        reader_concurrency_semaphore* read_concurrency_semaphore = nullptr;
+        reader_concurrency_semaphore* streaming_read_concurrency_semaphore = nullptr;
         ::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
