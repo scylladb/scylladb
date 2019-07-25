@@ -3397,6 +3397,28 @@ const std::type_info& abstract_type::native_typeid() const {
     return visit(*this, native_typeid_visitor{});
 }
 
+bytes abstract_type::decompose(const data_value& value) const {
+    if (!value._value) {
+        return {};
+    }
+    bytes b(bytes::initialized_later(), serialized_size(value._value));
+    auto i = b.begin();
+    serialize(value, i);
+    return b;
+}
+
+size_t data_value::serialized_size() const { return _type->serialized_size(_value); }
+
+bytes data_value::serialize() const {
+    if (!_value) {
+        return {};
+    }
+    bytes b(bytes::initialized_later(), serialized_size());
+    auto i = b.begin();
+    serialize(i);
+    return b;
+}
+
 sstring abstract_type::get_string(const bytes& b) const {
     struct visitor {
         const bytes& b;

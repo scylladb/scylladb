@@ -553,15 +553,7 @@ public:
         return _value_length_if_fixed;
     }
 public:
-    bytes decompose(const data_value& value) const {
-        if (!value._value) {
-            return {};
-        }
-        bytes b(bytes::initialized_later(), serialized_size(value._value));
-        auto i = b.begin();
-        serialize(value._value, i);
-        return b;
-    }
+    bytes decompose(const data_value& value) const;
     // Safe to call across shards
     const sstring& name() const {
         return _name;
@@ -635,28 +627,9 @@ inline bool operator==(const abstract_type& x, const abstract_type& y)
 }
 
 inline
-size_t
-data_value::serialized_size() const {
-    return _type->serialized_size(_value);
-}
-
-
-inline
 void
 data_value::serialize(bytes::iterator& out) const {
     return _type->serialize(_value, out);
-}
-
-inline
-bytes
-data_value::serialize() const {
-    if (!_value) {
-        return {};
-    }
-    bytes b(bytes::initialized_later(), serialized_size());
-    auto i = b.begin();
-    serialize(i);
-    return b;
 }
 
 template <typename T>
