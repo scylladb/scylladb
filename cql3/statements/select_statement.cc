@@ -66,6 +66,11 @@ namespace statements {
 
 thread_local const shared_ptr<select_statement::parameters> select_statement::_default_parameters = ::make_shared<select_statement::parameters>();
 
+// Indexed reads perform a join between the materialized view backing the index and
+// the base table. This constant limits the concurrency of that join to limit memory
+// use. See also #3807.
+static constexpr unsigned max_join_concurrency = 100;
+
 select_statement::parameters::parameters()
     : _is_distinct{false}
     , _allow_filtering{false}
@@ -546,7 +551,7 @@ indexed_table_select_statement::do_execute_base_query(
         return repeat([this, &keys, &key_it, &merger, &proxy, &state, &options, cmd, timeout]() {
             // Starting with 1 key, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more key than before
-            auto key_it_end = std::min(key_it + std::distance(keys.begin(), key_it) + 1, keys.end());
+            auto key_it_end = std::min({key_it + std::distance(keys.begin(), key_it) + 1, key_it + max_join_concurrency, keys.end()});
             auto command = ::make_lw_shared<query::read_command>(*cmd);
 
             query::result_merger oneshot_merger(cmd->row_limit, query::max_partitions);
