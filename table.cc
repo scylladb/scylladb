@@ -336,25 +336,16 @@ table::make_sstable_reader(schema_ptr s,
     // we want to optimize and read exactly this partition. As a
     // consequence, fast_forward_to() will *NOT* work on the result,
     // regardless of what the fwd_mr parameter says.
-    {
-        if (pr.is_singular() && pr.start()->value().has_key()) {
-            const dht::ring_position& pos = pr.start()->value();
-            if (dht::shard_of(pos.token()) != engine().cpu_id()) {
-                {
-                    return make_empty_flat_reader(s); // range doesn't belong to this shard
-                }
-            }
-
-            {
-                return create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(sstables),
-                        _stats.estimated_sstable_per_read, pr, slice, pc, tracker, std::move(trace_state), fwd, fwd_mr);
-            }
-        } else {
-            {
-                return make_local_shard_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
-                        tracker, std::move(trace_state), fwd, fwd_mr);
-            }
+    if (pr.is_singular() && pr.start()->value().has_key()) {
+        const dht::ring_position& pos = pr.start()->value();
+        if (dht::shard_of(pos.token()) != engine().cpu_id()) {
+            return make_empty_flat_reader(s); // range doesn't belong to this shard
         }
+        return create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(sstables),
+                _stats.estimated_sstable_per_read, pr, slice, pc, tracker, std::move(trace_state), fwd, fwd_mr);
+    } else {
+        return make_local_shard_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
+                tracker, std::move(trace_state), fwd, fwd_mr);
     }
 }
 
