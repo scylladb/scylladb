@@ -685,7 +685,7 @@ public:
             const query::partition_slice& slice,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) const;
 
-    flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range) {
+    flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range) const {
         return make_streaming_reader(schema, range, schema->full_slice());
     }
 

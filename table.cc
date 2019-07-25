@@ -498,13 +498,7 @@ table::make_streaming_reader(schema_ptr s,
 
     auto source = mutation_source([this] (schema_ptr s, const dht::partition_range& range, const query::partition_slice& slice,
                                       const io_priority_class& pc, tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
-        std::vector<flat_mutation_reader> readers;
-        readers.reserve(_memtables->size() + 1);
-        for (auto&& mt : *_memtables) {
-            readers.emplace_back(mt->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
-        }
-        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-        return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
+        return make_streaming_reader(std::move(s), range);
     });
 
     return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
