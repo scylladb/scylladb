@@ -330,11 +330,8 @@ table::make_sstable_reader(schema_ptr s,
                                    const io_priority_class& pc,
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
-                                   mutation_reader::forwarding fwd_mr) const {
-    auto* semaphore = service::get_local_streaming_read_priority().id() == pc.id()
-        ? _config.streaming_read_concurrency_semaphore
-        : _config.read_concurrency_semaphore;
-
+                                   mutation_reader::forwarding fwd_mr,
+                                   reader_resource_tracker tracker) const {
     // CAVEAT: if make_sstable_reader() is called on a single partition
     // we want to optimize and read exactly this partition. As a
     // consequence, fast_forward_to() will *NOT* work on the result,
@@ -384,11 +381,7 @@ table::make_sstable_reader(schema_ptr s,
         }
     }();
 
-    if (semaphore) {
-        return make_restricted_flat_reader(*semaphore, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
-    } else {
-        return ms.make_reader(std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
-    }
+    return ms.make_reader(std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr, tracker);
 }
 
 // Exposed for testing, not performance critical.
@@ -428,13 +421,14 @@ table::find_row(schema_ptr s, const dht::decorated_key& partition_key, clusterin
 }
 
 flat_mutation_reader
-table::make_reader(schema_ptr s,
+table::do_make_reader(schema_ptr s,
                            const dht::partition_range& range,
                            const query::partition_slice& slice,
                            const io_priority_class& pc,
                            tracing::trace_state_ptr trace_state,
                            streamed_mutation::forwarding fwd,
-                           mutation_reader::forwarding fwd_mr) const {
+                           mutation_reader::forwarding fwd_mr,
+                           reader_resource_tracker tracker) const {
     if (_virtual_reader) {
         return (*_virtual_reader).make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr);
     }
@@ -467,9 +461,9 @@ table::make_reader(schema_ptr s,
     }
 
     if (_config.enable_cache && !slice.options.contains(query::partition_slice::option::bypass_cache)) {
-        readers.emplace_back(_cache.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(_cache.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr, tracker));
     } else {
-        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr, tracker));
     }
 
     auto comb_reader = make_combined_reader(s, std::move(readers), fwd, fwd_mr);
@@ -477,6 +471,50 @@ table::make_reader(schema_ptr s,
         return _config.data_listeners->on_read(s, range, slice, std::move(comb_reader));
     } else {
         return comb_reader;
+    }
+}
+
+mutation_source
+table::as_unrestricted_mutation_source() const {
+    return mutation_source([this] (
+            schema_ptr s,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr,
+            reader_resource_tracker tracker) {
+        return do_make_reader(std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr, tracker);
+    });
+}
+
+flat_mutation_reader
+table::make_reader(schema_ptr s,
+                           const dht::partition_range& range,
+                           const query::partition_slice& slice,
+                           const io_priority_class& pc,
+                           tracing::trace_state_ptr trace_state,
+                           streamed_mutation::forwarding fwd,
+                           mutation_reader::forwarding fwd_mr) const {
+    return maybe_restrict_reader(_config.read_concurrency_semaphore, std::move(s), range, slice, pc, std::move(trace_state),
+            fwd, fwd_mr, as_unrestricted_mutation_source());
+}
+
+flat_mutation_reader
+table::maybe_restrict_reader(reader_concurrency_semaphore* semaphore,
+        schema_ptr schema,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        mutation_source ms) {
+    if (semaphore) {
+        return make_restricted_flat_reader(*semaphore, std::move(ms), std::move(schema), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    } else {
+        return ms.make_reader(std::move(schema), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     }
 }
 
@@ -504,8 +542,8 @@ table::make_streaming_reader(schema_ptr s,
     return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
 }
 
-flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
-        const query::partition_slice& slice, mutation_reader::forwarding fwd_mr) const {
+flat_mutation_reader table::do_make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+        const query::partition_slice& slice, mutation_reader::forwarding fwd_mr, reader_resource_tracker tracker) const {
     const auto& pc = service::get_local_streaming_read_priority();
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
@@ -515,8 +553,24 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::
     for (auto&& mt : *_memtables) {
         readers.emplace_back(mt->make_flat_reader(schema, range, slice, pc, trace_state, fwd, fwd_mr));
     }
-    readers.emplace_back(make_sstable_reader(schema, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+    readers.emplace_back(make_sstable_reader(schema, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr, std::move(tracker)));
     return make_combined_reader(std::move(schema), std::move(readers), fwd, fwd_mr);
+}
+
+flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+        const query::partition_slice& slice, mutation_reader::forwarding fwd_mr) const {
+    const auto& pc = service::get_local_streaming_read_priority();
+    auto trace_state = tracing::trace_state_ptr();
+    const auto fwd = streamed_mutation::forwarding::no;
+
+    auto ms = mutation_source([this] (schema_ptr s, const dht::partition_range& pr, const query::partition_slice& slice,
+                    const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd_sm,
+                    mutation_reader::forwarding fwd_mr, reader_resource_tracker rt) {
+        return do_make_streaming_reader(std::move(s), pr, slice, fwd_mr, std::move(rt));
+    });
+
+    return maybe_restrict_reader(_config.streaming_read_concurrency_semaphore, std::move(schema), range, slice,
+            pc, std::move(trace_state), fwd, fwd_mr, std::move(ms));
 }
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
@@ -1590,8 +1644,9 @@ table::sstables_as_snapshot_source() {
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
-                mutation_reader::forwarding fwd_mr) {
-            return make_sstable_reader(std::move(s), sst_set, r, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                mutation_reader::forwarding fwd_mr,
+                reader_resource_tracker tracker) {
+            return make_sstable_reader(std::move(s), sst_set, r, slice, pc, std::move(trace_state), fwd, fwd_mr, std::move(tracker));
         }, [this, sst_set] {
             return make_partition_presence_checker(sst_set);
         });
@@ -2423,14 +2478,15 @@ table::run_with_compaction_disabled(std::function<future<> ()> func) {
 }
 
 flat_mutation_reader
-table::make_reader_excluding_sstable(schema_ptr s,
+table::do_make_reader_excluding_sstable(schema_ptr s,
         sstables::shared_sstable sst,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr) const {
+        mutation_reader::forwarding fwd_mr,
+        reader_resource_tracker tracker) const {
     std::vector<flat_mutation_reader> readers;
     readers.reserve(_memtables->size() + 1);
 
@@ -2441,8 +2497,31 @@ table::make_reader_excluding_sstable(schema_ptr s,
     auto effective_sstables = ::make_lw_shared<sstables::sstable_set>(*_sstables);
     effective_sstables->erase(sst);
 
-    readers.emplace_back(make_sstable_reader(s, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+    readers.emplace_back(make_sstable_reader(s, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr, std::move(tracker)));
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
+}
+
+flat_mutation_reader
+table::make_reader_excluding_sstable(schema_ptr s,
+        sstables::shared_sstable sst,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr) const {
+    auto ms = mutation_source([this, sst = std::move(sst)] (schema_ptr s,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr,
+            reader_resource_tracker tracker) {
+        return do_make_reader_excluding_sstable(std::move(s), sst, pr, slice, pc, std::move(trace_state), fwd, fwd_mr, std::move(tracker));
+    });
+    return maybe_restrict_reader(_config.streaming_read_concurrency_semaphore,
+            std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr, std::move(ms));
 }
 
 void table::move_sstable_from_staging_in_thread(sstables::shared_sstable sst) {

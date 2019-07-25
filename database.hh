@@ -592,12 +592,46 @@ private:
                                         const io_priority_class& pc,
                                         tracing::trace_state_ptr trace_state,
                                         streamed_mutation::forwarding fwd,
-                                        mutation_reader::forwarding fwd_mr) const;
+                                        mutation_reader::forwarding fwd_mr,
+                                        reader_resource_tracker tracker) const;
 
     snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
+    // do_make_reader() / do_make_streaming_reader() are called after the reader_concurrency_semaphore
+    // has been obtained.
+    flat_mutation_reader do_make_reader(schema_ptr schema,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr,
+            reader_resource_tracker tracker) const;
+    flat_mutation_reader do_make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+            const query::partition_slice& slice,
+            mutation_reader::forwarding fwd_mr,
+            reader_resource_tracker tracker) const;
+    flat_mutation_reader do_make_reader_excluding_sstable(schema_ptr schema,
+            sstables::shared_sstable sst,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr,
+            reader_resource_tracker tracker) const;
+    mutation_source as_unrestricted_mutation_source() const;
+    static flat_mutation_reader maybe_restrict_reader(reader_concurrency_semaphore* sem,
+            schema_ptr schema,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr,
+            mutation_source ms);
 public:
     bool has_shared_sstables() const {
         return bool(_sstables_need_rewrite.size());
