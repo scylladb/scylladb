@@ -1328,7 +1328,7 @@ class scylla_ptr(gdb.Command):
             ptr_meta.offset_in_object = ptr - span.start
 
         # FIXME: handle debug-mode build
-        index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr))
+        index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._store._segments_base) / \'logalloc::segment\'::size' % (ptr))
         desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
         ptr_meta.is_lsa = bool(desc['_region'])
 
@@ -1347,7 +1347,7 @@ class scylla_segment_descs(gdb.Command):
 
     def invoke(self, arg, from_tty):
         # FIXME: handle debug-mode build
-        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
+        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
