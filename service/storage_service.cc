@@ -726,12 +726,6 @@ void storage_service::join_token_ring(int delay) {
     set_gossip_tokens(_bootstrap_tokens, _cdc_streams_ts);
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
-    // remove the existing info about the replaced node.
-    if (!current.empty()) {
-        for (auto existing : current) {
-            _gossiper.replaced_endpoint(existing);
-        }
-    }
     if (_token_metadata.sorted_tokens().empty()) {
         auto err = format("join_token_ring: Sorted token in token_metadata is empty");
         slogger.error("{}", err);
@@ -1093,11 +1087,24 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     if (_gossiper.uses_host_id(endpoint)) {
         auto host_id = _gossiper.get_host_id(endpoint);
         auto existing = _token_metadata.get_endpoint_for_host_id(host_id);
+        auto replace_addr = db().local().get_replace_address();
         if (db().local().is_replacing() &&
-            db().local().get_replace_address() &&
-                _gossiper.get_endpoint_state_for_endpoint_ptr(db().local().get_replace_address().value())  &&
-            (host_id == _gossiper.get_host_id(db().local().get_replace_address().value()))) {
-            slogger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
+            replace_addr &&
+            _gossiper.get_endpoint_state_for_endpoint_ptr(*replace_addr) &&
+            host_id == _gossiper.get_host_id(*replace_addr)) {
+            slogger.warn("Not updating token metadata for {} because I am replacing it, myip={}, node={} becomes normal status, existing node={}, node to be replaced={}",
+                    endpoint, get_broadcast_address(), endpoint, existing, *replace_addr);
+            // If the replacing node becomes NORMAL status, we can remove the
+            // node to be replaced from token_metadata. However, if the
+            // replacing node has the same ip address as the node to be
+            // replaced, we should not remove the node itself from
+            // token_metadata.
+            if (endpoint == get_broadcast_address() && *replace_addr != get_broadcast_address()) {
+               slogger.info("Remove the node to be replaced={} from token_metadata because the replacing node={} has become NORMAL status",
+                        *replace_addr, get_broadcast_address());
+                _token_metadata.remove_endpoint(*replace_addr);
+                endpoints_to_remove.insert(*replace_addr);
+            }
         } else {
             if (existing && *existing != endpoint) {
                 if (*existing == get_broadcast_address()) {
@@ -1169,10 +1176,6 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
-        auto replace_addr = db().local().get_replace_address();
-        if (db().local().is_replacing() && replace_addr && *replace_addr == ep) {
-            _gossiper.replacement_quarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-        }
     }
     slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
     if (!owned_tokens.empty()) {
