@@ -1868,24 +1868,25 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
         auto make_populate = [] (bool evict_paused_readers, bool single_fragment_buffer) {
             return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
                 // We need to group mutations that have the same token so they land on the same shard.
-                std::map<dht::token, std::vector<mutation>> mutations_by_token;
+                std::map<dht::token, std::vector<frozen_mutation>> mutations_by_token;
 
                 for (const auto& mut : mutations) {
-                    mutations_by_token[mut.token()].push_back(mut);
+                    mutations_by_token[mut.token()].push_back(freeze(mut));
                 }
 
                 auto partitioner = make_lw_shared<dummy_partitioner>(dht::global_partitioner(), mutations_by_token);
 
-                auto merged_mutations = boost::copy_range<std::vector<std::vector<mutation>>>(mutations_by_token | boost::adaptors::map_values);
+                auto merged_mutations = boost::copy_range<std::vector<std::vector<frozen_mutation>>>(mutations_by_token | boost::adaptors::map_values);
 
                 auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<memtable>>>>();
                 for (unsigned shard = 0; shard < partitioner->shard_count(); ++shard) {
-                    auto remote_mt = smp::submit_to(shard, [shard, s = global_schema_ptr(s), &merged_mutations, partitioner = *partitioner] {
-                        auto mt = make_lw_shared<memtable>(s.get());
+                    auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &merged_mutations, partitioner = *partitioner] {
+                        auto s = gs.get();
+                        auto mt = make_lw_shared<memtable>(s);
 
                         for (unsigned i = shard; i < merged_mutations.size(); i += partitioner.shard_count()) {
                             for (auto& mut : merged_mutations[i]) {
-                                mt->apply(mut);
+                                mt->apply(mut.unfreeze(s));
                             }
                         }
 
