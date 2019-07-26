@@ -556,6 +556,10 @@ public:
 public:
     future<> wait_for_gossip_to_settle();
     future<> wait_for_range_setup();
+public:
+    void set_node_to_be_replaced(gms::inet_address node);
+    std::optional<gms::inet_address> get_node_to_be_replaced();
+
 private:
     future<> wait_for_gossip(std::chrono::milliseconds, std::optional<int32_t> = {});
 
@@ -564,6 +568,7 @@ private:
     bool _ms_registered = false;
     bool _gossiped_to_seed = false;
     bool _gossip_settled = false;
+    std::optional<gms::inet_address> _node_to_be_replaced;
 
     class msg_proc_guard;
 private:
