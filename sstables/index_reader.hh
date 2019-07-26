@@ -380,9 +380,17 @@ private:
             }
 
             return do_with(std::make_unique<reader>(_sstable, _pc, position, end, quantity), [this, summary_idx] (auto& entries_reader) {
-                return entries_reader->_context.consume_input().then([this, summary_idx, &entries_reader] {
+                return entries_reader->_context.consume_input().then_wrapped([this, summary_idx, &entries_reader] (future<> f) {
+                    std::exception_ptr ex;
+                    if (f.failed()) {
+                        ex = f.get_exception();
+                        sstlog.error("failed reading index for {}: {}", _sstable->get_filename(), ex);
+                    }
                     auto indexes = std::move(entries_reader->_consumer.indexes);
-                    return entries_reader->_context.close().then([indexes = std::move(indexes)] () mutable {
+                    return entries_reader->_context.close().then([indexes = std::move(indexes), ex = std::move(ex)] () mutable {
+                        if (ex) {
+                            std::rethrow_exception(std::move(ex));
+                        }
                         return std::move(indexes);
                     });
 
