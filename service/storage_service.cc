@@ -277,6 +277,8 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     if (get_replace_tokens().size() > 0 || get_replace_node()) {
          throw std::runtime_error("Replace method removed; use replace_address instead");
     }
+    bool replacing_a_node_with_same_ip = false;
+    bool replacing_a_node_with_diff_ip = false;
     if (db().local().is_replacing()) {
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
@@ -291,6 +293,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens));
         app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts));
         app_states.emplace(gms::application_state::STATUS, versioned_value::hibernate(true));
+        auto replace_address = db().local().get_replace_address();
+        replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
+        replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
     } else if (should_bootstrap()) {
         check_for_endpoint_collision(loaded_peer_features).get();
     } else {
@@ -362,6 +367,20 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                     "Restarting node in NORMAL status with CDC enabled, but no streams timestamp was proposed"
                     " by this node according to its local tables. Are we upgrading from a non-CDC supported version?");
         }
+    }
+
+    if (replacing_a_node_with_same_ip) {
+        slogger.info("Replacing a node with same IP address, my address={}, node being replaced={}",
+                    get_broadcast_address(), get_broadcast_address());
+        slogger.info("Update tokens for replacing node early, replacing node has the same IP address of the node being replaced");
+        _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
+    }
+
+    if (replacing_a_node_with_diff_ip) {
+        // replacing_a_node_with_diff_ip guarantees replace_address contains a value
+        auto replace_address = db().local().get_replace_address();
+        slogger.info("Replacing a node with different IP address, my address={}, node to being replaced={}",
+                get_broadcast_address(), *replace_address);
     }
 
     // have to start the gossip service before we can see any info on other nodes.  this is necessary
