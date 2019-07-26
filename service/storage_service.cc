@@ -429,6 +429,8 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     if (get_replace_tokens().size() > 0 || get_replace_node()) {
          throw std::runtime_error("Replace method removed; use replace_address instead");
     }
+    bool replacing_a_node_with_same_ip = false;
+    bool replacing_a_node_with_diff_ip = false;
     if (db().local().is_replacing()) {
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
@@ -439,6 +441,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         _bootstrap_tokens = prepare_replacement_info(loaded_peer_features).get0();
         app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens));
         app_states.emplace(gms::application_state::STATUS, value_factory.hibernate(true));
+        auto replace_address = db().local().get_replace_address();
+        replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
+        replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
     } else if (should_bootstrap()) {
         check_for_endpoint_collision(loaded_peer_features).get();
     } else {
@@ -505,6 +510,21 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     if (restarting_normal_node) {
         slogger.info("Restarting a node in NORMAL status");
         _token_metadata.update_normal_tokens(my_tokens, get_broadcast_address());
+    }
+
+    if (replacing_a_node_with_same_ip) {
+        slogger.info("Replacing a node with same IP address, my address={}, node being replaced={}",
+                    get_broadcast_address(), get_broadcast_address());
+        slogger.info("Update tokens for replacing node early, replacing node has the same IP address of the node being replaced");
+        _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
+    }
+
+    if (replacing_a_node_with_diff_ip) {
+        // replacing_a_node_with_diff_ip guarantees replace_address contains a value
+        auto replace_address = db().local().get_replace_address();
+        slogger.info("Replacing a node with different IP address, my address={}, node to being replaced={}",
+                get_broadcast_address(), *replace_address);
+        _gossiper.set_node_to_be_replaced(*replace_address);
     }
 
     // have to start the gossip service before we can see any info on other nodes.  this is necessary
