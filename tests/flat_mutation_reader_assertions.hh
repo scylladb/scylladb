@@ -428,12 +428,13 @@ public:
         });
     }
 
-    flat_reader_assertions& produces_compacted(const mutation& m, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+    flat_reader_assertions& produces_compacted(const mutation& m, gc_clock::time_point query_time,
+            const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
         BOOST_REQUIRE(bool(mo));
         memory::disable_failure_guard dfg;
         mutation got = *mo;
-        got.partition().compact_for_compaction(*m.schema(), always_gc, gc_clock::now());
+        got.partition().compact_for_compaction(*m.schema(), always_gc, query_time);
         assert_that(got).is_equal_to(m, ck_ranges);
         return *this;
     }

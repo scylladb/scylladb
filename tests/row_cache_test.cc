@@ -2844,7 +2844,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
             check_continuous(cache, pr, query::full_clustering_range);
 
             assert_that(cache.make_reader(s.schema(), pr))
-                .produces_compacted(m1 + m2 + m3 + m4)
+                .produces_compacted(m1 + m2 + m3 + m4, gc_clock::now())
                 .produces_end_of_stream();
         }
     });
@@ -2927,14 +2927,14 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
                 .produces_end_of_stream();
 
             assert_that(cache.make_reader(s, pr))
-                .produces_compacted(m1 + m2)
+                .produces_compacted(m1 + m2, gc_clock::now())
                 .produces_end_of_stream();
 
             auto slice34 = partition_slice_builder(*s)
                 .with_range(range_3_4)
                 .build();
             assert_that(cache.make_reader(s, pr, slice34))
-                .produces_compacted(m34)
+                .produces_compacted(m34, gc_clock::now())
                 .produces_end_of_stream();
         }
     });
@@ -2979,7 +2979,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_for_single_row_reads) {
         check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(7)));
 
         assert_that(cache.make_reader(s.schema()))
-            .produces_compacted(m1)
+            .produces_compacted(m1, gc_clock::now())
             .produces_end_of_stream();
     });
 }
