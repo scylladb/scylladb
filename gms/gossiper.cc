@@ -2062,6 +2062,11 @@ future<> gossiper::wait_for_range_setup() {
     return wait_for_gossip(ring_delay);
 }
 
+void gossiper::set_node_to_be_replaced(gms::inet_address node) {
+    logger.info("Set node to be replaced = {}", node);
+    _node_to_be_replaced = node;
+}
+
 bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     auto* eps = get_endpoint_state_for_endpoint_ptr(endpoint);
 
