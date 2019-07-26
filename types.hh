@@ -502,10 +502,6 @@ public:
         : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti), _kind(k) {}
     virtual ~abstract_type() {}
     const data::type_imr_descriptor& imr_state() const { return _imr_state; }
-    void serialize(const void* value, bytes::iterator& out) const;
-    void serialize(const data_value& value, bytes::iterator& out) const {
-        return serialize(get_value_ptr(value), out);
-    }
     bool less(bytes_view v1, bytes_view v2) const { return compare(v1, v2) < 0; }
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator() const ;
@@ -621,12 +617,6 @@ protected:
 inline bool operator==(const abstract_type& x, const abstract_type& y)
 {
      return &x == &y;
-}
-
-inline
-void
-data_value::serialize(bytes::iterator& out) const {
-    return _type->serialize(_value, out);
 }
 
 template <typename T>
