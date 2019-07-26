@@ -719,12 +719,6 @@ void storage_service::join_token_ring(int delay) {
     set_gossip_tokens(_bootstrap_tokens, _cdc_streams_ts);
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
-    // remove the existing info about the replaced node.
-    if (!current.empty()) {
-        for (auto existing : current) {
-            _gossiper.replaced_endpoint(existing);
-        }
-    }
     if (_token_metadata.sorted_tokens().empty()) {
         auto err = format("join_token_ring: Sorted token in token_metadata is empty");
         slogger.error("{}", err);
@@ -1095,34 +1089,28 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     std::unordered_set<inet_address> endpoints_to_remove;
 
+    auto do_remove_node = [&] (gms::inet_address node) {
+        _token_metadata.remove_endpoint(node);
+        endpoints_to_remove.insert(node);
+    };
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     if (_gossiper.uses_host_id(endpoint)) {
         auto host_id = _gossiper.get_host_id(endpoint);
         auto existing = _token_metadata.get_endpoint_for_host_id(host_id);
-        if (db().local().is_replacing() &&
-            db().local().get_replace_address() &&
-                _gossiper.get_endpoint_state_for_endpoint_ptr(db().local().get_replace_address().value())  &&
-            (host_id == _gossiper.get_host_id(db().local().get_replace_address().value()))) {
-            slogger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
-        } else {
-            if (existing && *existing != endpoint) {
-                if (*existing == get_broadcast_address()) {
-                    slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
-                    _token_metadata.remove_endpoint(endpoint);
-                    endpoints_to_remove.insert(endpoint);
-                } else if (_gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
-                    slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
-                    _token_metadata.remove_endpoint(*existing);
-                    endpoints_to_remove.insert(*existing);
-                    _token_metadata.update_host_id(host_id, endpoint);
-                } else {
-                    slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
-                    _token_metadata.remove_endpoint(endpoint);
-                    endpoints_to_remove.insert(endpoint);
-                }
-            } else {
+        if (existing && *existing != endpoint) {
+            if (*existing == get_broadcast_address()) {
+                slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
+                do_remove_node(endpoint);
+            } else if (_gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
+                slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
+                do_remove_node(*existing);
                 _token_metadata.update_host_id(host_id, endpoint);
+            } else {
+                slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
+                do_remove_node(endpoint);
             }
+        } else {
+            _token_metadata.update_host_id(host_id, endpoint);
         }
     }
 
@@ -1175,10 +1163,6 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
-        auto replace_addr = db().local().get_replace_address();
-        if (db().local().is_replacing() && replace_addr && *replace_addr == ep) {
-            _gossiper.replacement_quarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-        }
     }
     slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
     if (!owned_tokens.empty()) {
