@@ -133,3 +133,20 @@ BOOST_AUTO_TEST_CASE(set_iterator) {
 
     BOOST_REQUIRE(us2.empty());
 }
+
+BOOST_AUTO_TEST_CASE(set_add) {
+    auto fs0 = fruit_set();
+    auto fs1 = fruit_set::of<fruit::pear>();
+    auto fs2 = fruit_set::of<fruit::apple, fruit::banana>();
+    auto fs3 = fruit_set::of<fruit::apple>();
+    fs1.add(fs2);
+    fs3.add(fs2);
+    BOOST_REQUIRE(fs1.contains(fruit::pear) && fs1.contains(fruit::apple) && fs1.contains(fruit::banana));
+    BOOST_REQUIRE(!fs3.contains(fruit::pear) && fs3.contains(fruit::apple) && fs3.contains(fruit::banana));
+    fs1.add(fs0);
+    fs3.add(fs0);
+    BOOST_REQUIRE(fs1.contains(fruit::pear) && fs1.contains(fruit::apple) && fs1.contains(fruit::banana));
+    BOOST_REQUIRE(!fs3.contains(fruit::pear) && fs3.contains(fruit::apple) && fs3.contains(fruit::banana));
+    fs0.add(fruit_set::of<fruit::apple>());
+    BOOST_REQUIRE(!fs0.contains(fruit::pear) && fs0.contains(fruit::apple) && !fs0.contains(fruit::banana));
+}
