@@ -239,6 +239,10 @@ public:
         _mask |= mask_for(e);
     }
 
+    void add(const enum_set& other) {
+        _mask |= other._mask;
+    }
+
     explicit operator bool() const {
         return bool(_mask);
     }
