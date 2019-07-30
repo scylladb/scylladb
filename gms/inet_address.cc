@@ -44,8 +44,13 @@
 
 using namespace seastar;
 
-future<gms::inet_address> gms::inet_address::lookup(sstring name, opt_family family) {
-    return seastar::net::dns::resolve_name(name, family).then([](seastar::net::inet_address&& a) {
-        return make_ready_future<gms::inet_address>(a);
+future<gms::inet_address> gms::inet_address::lookup(sstring name, opt_family family, opt_family preferred) {
+    return seastar::net::dns::get_host_by_name(name, family).then([preferred](seastar::net::hostent&& h) {
+        for (auto& addr : h.addr_list) {
+            if (!preferred || addr.in_family() == preferred) {
+                return gms::inet_address(addr);
+            }
+        }
+        return gms::inet_address(h.addr_list.front());
     });
 }

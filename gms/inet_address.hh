@@ -93,7 +93,7 @@ public:
 
     using opt_family = std::optional<net::inet_address::family>;
 
-    static future<inet_address> lookup(sstring, opt_family = {});
+    static future<inet_address> lookup(sstring, opt_family family = {}, opt_family preferred = {});
 };
 
 std::ostream& operator<<(std::ostream& os, const inet_address& x);
