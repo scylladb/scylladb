@@ -61,15 +61,12 @@ protected:
     schema_ptr _schema;
     std::vector<const column_definition*> _column_defs;
 public:
-    multi_column_restriction(schema_ptr schema, std::vector<const column_definition*>&& defs)
-        : _schema(schema)
+    multi_column_restriction(op op, schema_ptr schema, std::vector<const column_definition*>&& defs)
+        : clustering_key_restrictions(op, target::MULTIPLE_COLUMNS)
+        , _schema(schema)
         , _column_defs(std::move(defs))
     {
         update_asc_desc_existence();
-    }
-
-    virtual bool is_multi_column() const override {
-        return true;
     }
 
     virtual std::vector<const column_definition*> get_column_defs() const override {
@@ -211,12 +208,12 @@ private:
     ::shared_ptr<term> _value;
 public:
     EQ(schema_ptr schema, std::vector<const column_definition*> defs, ::shared_ptr<term> value)
-        : multi_column_restriction(schema, std::move(defs))
+        : multi_column_restriction(op::EQ, schema, std::move(defs))
         , _value(std::move(value))
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::term_uses_function(_value, ks_name, function_name);
+        return restriction::term_uses_function(_value, ks_name, function_name);
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
@@ -285,7 +282,9 @@ public:
 
 class multi_column_restriction::IN : public multi_column_restriction {
 public:
-    using multi_column_restriction::multi_column_restriction;
+    IN(schema_ptr schema, std::vector<const column_definition*> defs)
+        :  multi_column_restriction(op::IN, schema, std::move(defs))
+    { }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
         for (auto* cdef : _column_defs) {
@@ -294,10 +293,6 @@ public:
             }
         }
         return false;
-    }
-
-    virtual bool is_IN() const override {
-        return true;
     }
 
     virtual std::vector<clustering_key_prefix> values_as_keys(const query_options& options) const override {
@@ -382,7 +377,7 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override  {
-        return abstract_restriction::term_uses_function(_values, ks_name, function_name);
+        return restriction::term_uses_function(_values, ks_name, function_name);
     }
 
     virtual sstring to_string() const override  {
@@ -436,7 +431,7 @@ private:
     term_slice _slice;
 
     slice(schema_ptr schema, std::vector<const column_definition*> defs, term_slice slice)
-        : multi_column_restriction(schema, std::move(defs))
+        : multi_column_restriction(op::SLICE, schema, std::move(defs))
         , _slice(slice)
     { }
 public:
@@ -451,10 +446,6 @@ public:
             }
         }
         return false;
-    }
-
-    virtual bool is_slice() const override {
-        return true;
     }
 
     virtual std::vector<clustering_key_prefix> values_as_keys(const query_options&) const override {
@@ -503,8 +494,8 @@ public:
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return (_slice.has_bound(statements::bound::START) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
-                || (_slice.has_bound(statements::bound::END) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
+        return (_slice.has_bound(statements::bound::START) && restriction::term_uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
+                || (_slice.has_bound(statements::bound::END) && restriction::term_uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
     }
 
     virtual bool is_inclusive(statements::bound b) const override {

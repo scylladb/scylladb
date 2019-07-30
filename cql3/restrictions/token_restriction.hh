@@ -62,13 +62,10 @@ private:
      */
     std::vector<const column_definition *> _column_definitions;
 public:
-    token_restriction(std::vector<const column_definition *> c)
-            : _column_definitions(std::move(c)) {
+    token_restriction(op op, std::vector<const column_definition *> c)
+            : partition_key_restrictions(op, target::TOKEN), _column_definitions(std::move(c)) {
     }
 
-    bool is_on_token() const override {
-        return true;
-    }
     std::vector<const column_definition*> get_column_defs() const override {
         return _column_definitions;
     }
@@ -148,16 +145,12 @@ private:
     ::shared_ptr<term> _value;
 public:
     EQ(std::vector<const column_definition*> column_defs, ::shared_ptr<term> value)
-        : token_restriction(column_defs)
+        : token_restriction(op::EQ, column_defs)
         , _value(std::move(value))
     {}
 
-    bool is_EQ() const {
-        return true;
-    }
-
     bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::term_uses_function(_value, ks_name, function_name);
+        return restriction::term_uses_function(_value, ks_name, function_name);
     }
 
     void merge_with(::shared_ptr<restriction>) override {
@@ -187,14 +180,9 @@ private:
     term_slice _slice;
 public:
     slice(std::vector<const column_definition*> column_defs, statements::bound bound, bool inclusive, ::shared_ptr<term> term)
-        : token_restriction(column_defs)
+        : token_restriction(op::SLICE, column_defs)
         , _slice(term_slice::new_instance(bound, inclusive, std::move(term)))
     {}
-
-    bool is_slice() const override {
-        return true;
-    }
-
     bool has_bound(statements::bound b) const override {
         return _slice.has_bound(b);
     }
@@ -210,11 +198,11 @@ public:
     bool uses_function(const sstring& ks_name,
             const sstring& function_name) const override {
         return (_slice.has_bound(statements::bound::START)
-                && abstract_restriction::term_uses_function(
+                && restriction::term_uses_function(
                         _slice.bound(statements::bound::START), ks_name,
                         function_name))
                 || (_slice.has_bound(statements::bound::END)
-                        && abstract_restriction::term_uses_function(
+                        && restriction::term_uses_function(
                                 _slice.bound(statements::bound::END),
                                 ks_name, function_name));
     }

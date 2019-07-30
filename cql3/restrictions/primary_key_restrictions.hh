@@ -48,7 +48,7 @@
 #include "cql3/statements/bound.hh"
 #include "cql3/restrictions/restrictions.hh"
 #include "cql3/restrictions/restriction.hh"
-#include "cql3/restrictions/abstract_restriction.hh"
+#include "cql3/restrictions/restriction.hh"
 #include "types.hh"
 #include "query-request.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -63,9 +63,12 @@ namespace restrictions {
  * implementations of methods).
  */
 
-class partition_key_restrictions: public abstract_restriction, public restrictions, public enable_shared_from_this<partition_key_restrictions> {
+class partition_key_restrictions: public restriction, public restrictions, public enable_shared_from_this<partition_key_restrictions> {
 public:
     using bounds_range_type = dht::partition_range;
+
+    partition_key_restrictions() = default;
+    partition_key_restrictions(op op, target target) : restriction(op, target) {}
 
     virtual ::shared_ptr<partition_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
         merge_with(restriction);
@@ -114,9 +117,12 @@ public:
     }
 };
 
-class clustering_key_restrictions : public abstract_restriction, public restrictions, public enable_shared_from_this<clustering_key_restrictions> {
+class clustering_key_restrictions : public restriction, public restrictions, public enable_shared_from_this<clustering_key_restrictions> {
 public:
     using bounds_range_type = query::clustering_range;
+
+    clustering_key_restrictions() = default;
+    clustering_key_restrictions(op op, target target) : restriction(op, target) {}
 
     virtual ::shared_ptr<clustering_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
         merge_with(restriction);

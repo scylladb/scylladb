@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "cql3/restrictions/abstract_restriction.hh"
+#include "cql3/restrictions/restriction.hh"
 #include "cql3/term.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "to_string.hh"

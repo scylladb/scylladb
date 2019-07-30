@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright (C) 2019 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -43,9 +43,12 @@
 
 #include <vector>
 
-#include "index/secondary_index_manager.hh"
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
 #include "cql3/query_options.hh"
+#include "cql3/term.hh"
 #include "cql3/statements/bound.hh"
+#include "index/secondary_index_manager.hh"
 #include "types.hh"
 
 namespace cql3 {
@@ -56,51 +59,80 @@ struct allow_local_index_tag {};
 using allow_local_index = bool_class<allow_local_index_tag>;
 
 /**
- * A restriction/clause on a column.
- * The goal of this class being to group all conditions for a column in a SELECT.
+ * Base class for <code>Restriction</code>s
  */
 class restriction {
 public:
+    enum class op {
+        EQ, SLICE, IN, CONTAINS, LIKE
+    };
+    enum class target {
+        SINGLE_COLUMN, MULTIPLE_COLUMNS, TOKEN
+    };
+protected:
+    using op_enum = super_enum<restriction::op, restriction::op::EQ, restriction::op::SLICE, restriction::op::IN, restriction::op::CONTAINS, restriction::op::LIKE>;
+    enum_set<op_enum> _ops;
+    target _target = target::SINGLE_COLUMN;
+public:
     virtual ~restriction() {}
-    virtual bool is_on_token() const = 0;
-    virtual bool is_slice() const = 0;
-    virtual bool is_EQ() const = 0;
-    virtual bool is_IN() const = 0;
-    virtual bool is_contains() const = 0;
-    virtual bool is_multi_column() const = 0;
 
-    virtual std::vector<bytes_opt> values(const query_options& options) const = 0;
-
-    virtual bytes_opt value(const query_options& options) const {
-        auto vec = values(options);
-        assert(vec.size() == 1);
-        return std::move(vec[0]);
+    restriction() = default;
+    explicit restriction(op op) : _target(target::SINGLE_COLUMN) {
+        _ops.set(op);
     }
 
-    /**
-     * Returns <code>true</code> if one of the restrictions use the specified function.
-     *
-     * @param ks_name the keyspace name
-     * @param function_name the function name
-     * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
-     */
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
+    restriction(op op, target target) : _target(target) {
+        _ops.set(op);
+    }
+
+    bool is_on_token() const {
+        return _target == target::TOKEN;
+    }
+
+    bool is_multi_column() const {
+        return _target == target::MULTIPLE_COLUMNS;
+    }
+
+    bool is_slice() const {
+        return _ops.contains(op::SLICE);
+    }
+
+    bool is_EQ() const {
+        return _ops.contains(op::EQ);
+    }
+
+    bool is_IN() const {
+        return _ops.contains(op::IN);
+    }
+
+    bool is_contains() const {
+        return _ops.contains(op::CONTAINS);
+    }
+
+    bool is_LIKE() const {
+        return _ops.contains(op::LIKE);
+    }
+
+    const enum_set<op_enum>& get_ops() const {
+        return _ops;
+    }
 
     /**
      * Checks if the specified bound is set or not.
      * @param b the bound type
      * @return <code>true</code> if the specified bound is set, <code>false</code> otherwise
      */
-    virtual bool has_bound(statements::bound b) const = 0;
+    virtual bool has_bound(statements::bound b) const {
+        return true;
+    }
 
-    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const = 0;
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const {
+        return values(options);
+    }
 
-    /**
-     * Checks if the specified bound is inclusive or not.
-     * @param b the bound type
-     * @return <code>true</code> if the specified bound is inclusive, <code>false</code> otherwise
-     */
-    virtual bool is_inclusive(statements::bound b) const = 0;
+    virtual bool is_inclusive(statements::bound b) const {
+        return true;
+    }
 
     /**
      * Merges this restriction with the specified one.
@@ -119,21 +151,74 @@ public:
      */
     virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const = 0;
 
-#if 0
-    /**
-     * Adds to the specified list the <code>IndexExpression</code>s corresponding to this <code>Restriction</code>.
-     *
-     * @param expressions the list to add the <code>IndexExpression</code>s to
-     * @param options the query options
-     * @throws InvalidRequestException if this <code>Restriction</code> cannot be converted into 
-     * <code>IndexExpression</code>s
-     */
-    public void addIndexExpressionTo(List<IndexExpression> expressions,
-                                     QueryOptions options)
-                                     throws InvalidRequestException;
-#endif
-
     virtual sstring to_string() const = 0;
+
+    /**
+     * Returns <code>true</code> if one of the restrictions use the specified function.
+     *
+     * @param ks_name the keyspace name
+     * @param function_name the function name
+     * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
+     */
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
+
+    virtual std::vector<bytes_opt> values(const query_options& options) const = 0;
+
+    virtual bytes_opt value(const query_options& options) const {
+        auto vec = values(options);
+        assert(vec.size() == 1);
+        return std::move(vec[0]);
+    }
+
+    /**
+     * Whether the specified row satisfied this restriction.
+     * Assumes the row is live, but not all cells. If a cell
+     * isn't live and there's a restriction on its column,
+     * then the function returns false.
+     *
+     * @param schema the schema the row belongs to
+     * @param key the partition key
+     * @param ckey the clustering key
+     * @param cells the remaining row columns
+     * @return the restriction resulting of the merge
+     * @throws InvalidRequestException if the restrictions cannot be merged
+     */
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const = 0;
+
+protected:
+    /**
+     * Checks if the specified term is using the specified function.
+     *
+     * @param term the term to check
+     * @param ks_name the function keyspace name
+     * @param function_name the function name
+     * @return <code>true</code> if the specified term is using the specified function, <code>false</code> otherwise.
+     */
+    static bool term_uses_function(::shared_ptr<term> term, const sstring& ks_name, const sstring& function_name) {
+        return bool(term) && term->uses_function(ks_name, function_name);
+    }
+
+    /**
+     * Checks if one of the specified term is using the specified function.
+     *
+     * @param terms the terms to check
+     * @param ks_name the function keyspace name
+     * @param function_name the function name
+     * @return <code>true</code> if one of the specified term is using the specified function, <code>false</code> otherwise.
+     */
+    static bool term_uses_function(const std::vector<::shared_ptr<term>>& terms, const sstring& ks_name, const sstring& function_name) {
+        for (auto&& value : terms) {
+            if (term_uses_function(value, ks_name, function_name)) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 }
