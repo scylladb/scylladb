@@ -111,6 +111,7 @@ public:
     named_value<sstring> cluster_name;
     named_value<sstring> listen_address;
     named_value<sstring> listen_interface;
+    named_value<bool> listen_interface_prefer_ipv6;
     named_value<sstring> commitlog_directory;
     named_value<string_list> data_file_directories;
     named_value<sstring> hints_directory;

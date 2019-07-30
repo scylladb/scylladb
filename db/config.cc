@@ -184,6 +184,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Never specify 0.0.0.0; it is always wrong.")
     , listen_interface(this, "listen_interface", value_status::Unused, "eth0",
         "The interface that Scylla binds to for connecting to other Scylla nodes. Interfaces must correspond to a single address, IP aliasing is not supported. See listen_address.")
+    , listen_interface_prefer_ipv6(this, "listen_interface_prefer_ipv6", value_status::Used, false,
+        "If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address\n"
+        "you can specify which should be chosen using listen_interface_prefer_ipv6. If false the first ipv4\n"
+        "address will be used. If true the first ipv6 address will be used. Defaults to false preferring\n"
+        "ipv4. If there is only one address it will be selected regardless of ipv4/ipv6."
+    )
     /* Default directories */
     /* If you have changed any of the default directories during installation, make sure you have root access and set these properties: */
     , commitlog_directory(this, "commitlog_directory", value_status::Used, "/var/lib/scylla/commitlog",
