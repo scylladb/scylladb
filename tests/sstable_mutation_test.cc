@@ -820,6 +820,60 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
     }).get();
 }
 
+// Reproducer for #4783
+static schema_ptr buffer_overflow_schema() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("test_ks", "test_tab"), "test_ks", "test_tab",
+        // partition key
+        {{"pk", int32_type}},
+        // clustering key
+        {{"ck1", int32_type}, {"ck2", int32_type}},
+        // regular columns
+        {{"data", utf8_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        ""
+       )));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return s;
+}
+SEASTAR_THREAD_TEST_CASE(buffer_overflow) {
+    auto s = buffer_overflow_schema();
+    auto sstp = ka_sst(s, "tests/sstables/buffer_overflow", 5).get0();
+    auto r = sstp->read_rows_flat(s);
+    auto pk1 = partition_key::from_exploded(*s, { int32_type->decompose(4) });
+    auto dk1 = dht::global_partitioner().decorate_key(*s, pk1);
+    auto pk2 = partition_key::from_exploded(*s, { int32_type->decompose(3) });
+    auto dk2 = dht::global_partitioner().decorate_key(*s, pk2);
+    auto ck1 = clustering_key::from_exploded(*s, {int32_type->decompose(2), int32_type->decompose(2)});
+    auto ck2 = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(2)});
+    tombstone tomb(api::new_timestamp(), gc_clock::now());
+    range_tombstone rt1(clustering_key::from_exploded(*s, {int32_type->decompose(2)}),
+                        clustering_key::from_exploded(*s, {int32_type->decompose(2)}),
+                        tomb);
+    range_tombstone rt2(clustering_key::from_exploded(*s, {int32_type->decompose(1)}),
+                        clustering_key::from_exploded(*s, {int32_type->decompose(1)}),
+                        tomb);
+    r.set_max_buffer_size(std::max(
+                mutation_fragment(partition_start(dk1, tomb)).memory_usage(*s)
+                    + mutation_fragment(range_tombstone(rt1)).memory_usage(*s),
+                mutation_fragment(clustering_row(ck1)).memory_usage(*s)));
+    flat_reader_assertions rd(std::move(r));
+    rd.produces_partition_start(dk1)
+        .produces_range_tombstone(rt1)
+        .produces_row_with_key(ck1)
+        .produces_partition_end()
+        .produces_partition_start(dk2)
+        .produces_range_tombstone(rt2)
+        .produces_row_with_key(ck2)
+        .produces_partition_end()
+        .produces_end_of_stream();
+}
+
 SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
     return seastar::async([] {
       auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
