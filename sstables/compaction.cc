@@ -384,12 +384,14 @@ private:
         sstring formatted_msg = format("ks={} cf={} [", _schema->ks_name(), _schema->cf_name());
         auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - _schema->gc_grace_seconds());
 
+        const char* delim = "";
         for (auto& sst : _sstables) {
             // Compacted sstable keeps track of its ancestors.
             _ancestors.push_back(sst->generation());
             _info->start_size += sst->bytes_on_disk();
             _info->total_partitions += sst->get_estimated_key_count();
-            formatted_msg += format("{}:level={:d}, ", sst->get_filename(), sst->get_sstable_level());
+            formatted_msg += format("{}{}:level={:d}", delim, sst->get_filename(), sst->get_sstable_level());
+            delim = ", ";
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
@@ -430,8 +432,10 @@ private:
         auto throughput = duration.count() > 0 ? (double(_info->end_size) / (1024*1024)) / duration.count() : double{};
         sstring new_sstables_msg;
 
+        const char* delim = "";
         for (auto& newtab : _info->new_sstables) {
-            new_sstables_msg += format("{}:level={:d}, ", newtab->get_filename(), newtab->get_sstable_level());
+            new_sstables_msg += format("{}{}:level={:d}", delim, newtab->get_filename(), newtab->get_sstable_level());
+            delim = ", ";
         }
 
         // FIXME: there is some missing information in the log message below.
