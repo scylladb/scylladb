@@ -152,11 +152,21 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
 
     uint64_t total_size = get_total_size(descriptor.sstables);
     int min_threshold = cf->schema()->min_compaction_threshold();
+    auto compacting_run_identifiers = boost::copy_range<std::unordered_set<utils::UUID>>(descriptor.sstables
+        | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier)));
 
-    while (descriptor.sstables.size() > size_t(min_threshold)) {
+    while (compacting_run_identifiers.size() > size_t(min_threshold)) {
         if (_weight_tracker.count(weight)) {
-            total_size -= descriptor.sstables.back()->data_size();
-            descriptor.sstables.pop_back();
+            auto run_id_to_remove = descriptor.sstables.back()->run_identifier();
+            auto e = boost::range::remove_if(descriptor.sstables, [&] (sstables::shared_sstable& sst) -> bool {
+                if (sst->run_identifier() != run_id_to_remove) {
+                    return false;
+                }
+                total_size -= sst->data_size();
+                return true;
+            });
+            descriptor.sstables.erase(e, descriptor.sstables.end());
+            compacting_run_identifiers.erase(run_id_to_remove);
             weight = calculate_weight(total_size);
         } else {
             break;
