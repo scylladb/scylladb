@@ -107,6 +107,9 @@ namespace sstables {
             const std::vector<shared_sstable> added;
         };
         std::vector<replacement> pending_replacements;
+        unsigned compaction_id;
+
+        compaction_info();
 
         bool is_stop_requested() const {
             return stop_requested.size() > 0;

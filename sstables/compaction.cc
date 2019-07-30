@@ -43,6 +43,7 @@
 #include <utility>
 #include <assert.h>
 #include <algorithm>
+#include <random>
 
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptors.hpp>
@@ -976,6 +977,11 @@ get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared
         }
     }
     return candidates;
+}
+
+compaction_info::compaction_info() {
+    static thread_local auto gen = std::default_random_engine(std::random_device{}());
+    compaction_id = gen();
 }
 
 }
