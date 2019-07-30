@@ -89,13 +89,6 @@ struct [[gnu::packed]] cql_binary_frame_v3 {
     }
 };
 
-enum class cql_load_balance {
-    none,
-    round_robin,
-};
-
-cql_load_balance parse_load_balance(sstring value);
-
 struct cql_query_state {
     service::query_state query_state;
     std::unique_ptr<cql3::query_options> options;
@@ -131,10 +124,9 @@ private:
     uint64_t _requests_served = 0;
     uint64_t _requests_serving = 0;
     uint64_t _requests_blocked_memory = 0;
-    cql_load_balance _lb;
     auth::service& _auth_service;
 public:
-    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&,
+    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, auth::service&,
             cql_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
