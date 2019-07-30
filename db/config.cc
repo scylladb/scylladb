@@ -247,6 +247,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Related information: Network\n")
     , rpc_interface(this, "rpc_interface", value_status::Unused, "eth1",
         "The listen address for client connections. Interfaces must correspond to a single address, IP aliasing is not supported. See rpc_address.")
+    , rpc_interface_prefer_ipv6(this, "rpc_interface_prefer_ipv6", value_status::Used, false,
+        "If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address\n"
+        "you can specify which should be chosen using rpc_interface_prefer_ipv6. If false the first ipv4\n"
+        "address will be used. If true the first ipv6 address will be used. Defaults to false preferring\n"
+        "ipv4. If there is only one address it will be selected regardless of ipv4/ipv6"
+    )
     , seed_provider(this, "seed_provider", value_status::Used, seed_provider_type("org.apache.cassandra.locator.SimpleSeedProvider"),
         "The addresses of hosts deemed contact points. Scylla nodes use the -seeds list to find each other and learn the topology of the ring.\n"
         "\n"
