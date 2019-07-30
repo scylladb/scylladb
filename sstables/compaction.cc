@@ -390,7 +390,8 @@ private:
             _ancestors.push_back(sst->generation());
             _info->start_size += sst->bytes_on_disk();
             _info->total_partitions += sst->get_estimated_key_count();
-            formatted_msg += format("{}{}:level={:d}", delim, sst->component_basename(component_type::Data), sst->get_sstable_level());
+            formatted_msg += format("{}{}:level={:d}:run={}", delim, sst->component_basename(component_type::Data),
+                    sst->get_sstable_level(), sst->run_identifier());
             delim = ", ";
 
             // Do not actually compact a sstable that is fully expired and can be safely
@@ -434,7 +435,8 @@ private:
 
         const char* delim = "";
         for (auto& newtab : _info->new_sstables) {
-            new_sstables_msg += format("{}{}:level={:d}", delim, newtab->component_basename(component_type::Data), newtab->get_sstable_level());
+            new_sstables_msg += format("{}{}:level={:d}:run={}", delim, newtab->component_basename(component_type::Data),
+                    newtab->get_sstable_level(), newtab->run_identifier());
             delim = ", ";
         }
 
