@@ -566,11 +566,11 @@ public:
     }
 
     void report_start(const sstring& formatted_msg) const override {
-        clogger.info("Compacting {}", formatted_msg);
+        clogger.info("[compaction {}] Compacting {}", format("{:#010x}", _info->compaction_id), formatted_msg);
     }
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.info("Compacted {}", formatted_msg);
+        clogger.info("[compaction {}] Compacted {}", format("{:#010x}", _info->compaction_id), formatted_msg);
     }
 
     void backlog_tracker_adjust_charges() override {
@@ -718,11 +718,11 @@ public:
     }
 
     void report_start(const sstring& formatted_msg) const override {
-        clogger.info("Cleaning {}", formatted_msg);
+        clogger.info("[compaction {}] Cleaning {}", format("{:#010x}", _info->compaction_id), formatted_msg);
     }
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.info("Cleaned {}", formatted_msg);
+        clogger.info("[compaction {}] Cleaned {}", format("{:#010x}", _info->compaction_id), formatted_msg);
     }
 
     std::function<bool(const dht::decorated_key&)> filter_func() const override {
@@ -819,11 +819,11 @@ public:
     }
 
     void report_start(const sstring& formatted_msg) const override {
-        clogger.info("Resharding {}", formatted_msg);
+        clogger.info("[compaction {}] Resharding {}", format("{:#010x}", _info->compaction_id), formatted_msg);
     }
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.info("Resharded {}", formatted_msg);
+        clogger.info("[compaction {}] Resharded {}", format("{:#010x}", _info->compaction_id), formatted_msg);
     }
 
     void backlog_tracker_adjust_charges() override { }
