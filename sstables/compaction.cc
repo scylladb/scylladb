@@ -381,7 +381,7 @@ private:
 
     flat_mutation_reader setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_schema));
-        sstring formatted_msg = "[";
+        sstring formatted_msg = format("ks={} cf={} [", _schema->ks_name(), _schema->cf_name());
         auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - _schema->gc_grace_seconds());
 
         for (auto& sst : _sstables) {
