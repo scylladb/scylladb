@@ -340,7 +340,7 @@ cql_server::connection::read_frame() {
 }
 
 future<cql_server::connection::processing_result>
-    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
+    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request, service_permit permit) {
     using auth_state = service::client_state::auth_state;
 
     auto cqlop = static_cast<cql_binary_opcode>(op);
@@ -363,7 +363,7 @@ future<cql_server::connection::processing_result>
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
-    return futurize_apply([this, cqlop, stream, &fbuf, client_state, linearization_buffer_ptr] () mutable {
+    return futurize_apply([this, cqlop, stream, &fbuf, client_state, linearization_buffer_ptr, permit = std::move(permit)] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -401,10 +401,10 @@ future<cql_server::connection::processing_result>
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(in), std::move(client_state));
         case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(in), std::move(client_state));
         case cql_binary_opcode::OPTIONS:       return process_options(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), std::move(client_state));
+        case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), std::move(client_state), std::move(permit));
         case cql_binary_opcode::PREPARE:       return process_prepare(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), std::move(client_state));
+        case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), std::move(client_state), std::move(permit));
+        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), std::move(client_state), std::move(permit));
         case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(in), std::move(client_state));
         default:                               throw exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop)));
         }
@@ -595,8 +595,8 @@ future<> cql_server::connection::process_request() {
             // Replacing the immediately-invoked lambda below with just its body costs 5-10 usec extra per invocation.
             // Cause not understood.
             auto istream = buf.get_istream();
-            (void)_process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested)
-                    .then_wrapped([this, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) mutable {
+            (void)_process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested, mem_permit)
+                    .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<processing_result> response_f) mutable {
                 try {
                     auto response = response_f.get0();
                     update_client_state(response);
@@ -739,10 +739,10 @@ cql_server::connection::init_cql_serialization_format() {
     _cql_serialization_format = cql_serialization_format(_version);
 }
 
-future<response_type> cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state client_state)
+future<response_type> cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
 {
     auto query = in.read_long_string_view();
-    auto q_state = std::make_unique<cql_query_state>(client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
     auto& query_state = q_state->query_state;
     q_state->options = in.read_options(_version, _cql_serialization_format, this->timeout_config());
     auto& options = *q_state->options;
@@ -798,7 +798,7 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, r
     });
 }
 
-future<response_type> cql_server::connection::process_execute(uint16_t stream, request_reader in, service::client_state client_state)
+future<response_type> cql_server::connection::process_execute(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
 {
     cql3::prepared_cache_key_type cache_key(in.read_short_bytes());
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
@@ -816,7 +816,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, r
         throw exceptions::prepared_query_not_found_exception(id);
     }
 
-    auto q_state = std::make_unique<cql_query_state>(client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
     auto& query_state = q_state->query_state;
     if (_version == 1) {
         std::vector<cql3::raw_value_view> values;
@@ -860,7 +860,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, r
 }
 
 future<response_type>
-cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state client_state)
+cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
 {
     if (_version == 1) {
         throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
@@ -939,7 +939,7 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
         values.emplace_back(std::move(tmp));
     }
 
-    auto q_state = std::make_unique<cql_query_state>(client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
     auto& query_state = q_state->query_state;
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
     q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(_version < 3 ? 1 : _version, _cql_serialization_format, this->timeout_config())), std::move(values)));

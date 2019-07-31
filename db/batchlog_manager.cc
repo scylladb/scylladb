@@ -68,6 +68,7 @@
 #include "idl/frozen_schema.dist.impl.hh"
 #include "message/messaging_service.hh"
 #include "cql3/untyped_result_set.hh"
+#include "service_permit.hh"
 
 static logging::logger blogger("batchlog_manager");
 
@@ -268,7 +269,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
                 // send to partially or wholly fail in actually sending stuff. Since we don't
                 // have hints (yet), send with CL=ALL, and hope we can re-do this soon.
                 // See below, we use retry on write failure.
-                return _qp.proxy().mutate(mutations, db::consistency_level::ALL, db::no_timeout, nullptr);
+                return _qp.proxy().mutate(mutations, db::consistency_level::ALL, db::no_timeout, nullptr, empty_service_permit());
             });
         }).then_wrapped([this, id](future<> batch_result) {
             try {

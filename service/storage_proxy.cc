@@ -1277,7 +1277,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
  * @param consistency_level the consistency level for the operation
  * @param tr_state trace state handle
  */
-future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, bool raw_counters) {
+future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
     return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), raw_counters);
 }
 
@@ -1332,13 +1332,13 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
 future<>
 storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
     clock_type::time_point timeout,
-    bool should_mutate_atomically, tracing::trace_state_ptr tr_state, bool raw_counters) {
+    bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
     warn(unimplemented::cause::TRIGGERS);
     if (should_mutate_atomically) {
         assert(!raw_counters);
-        return mutate_atomically(std::move(mutations), cl, timeout, std::move(tr_state));
+        return mutate_atomically(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit));
     }
-    return mutate(std::move(mutations), cl, timeout, std::move(tr_state), raw_counters);
+    return mutate(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
 }
 
 /**
@@ -1351,7 +1351,7 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
+storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
 
     utils::latency_counter lc;
     lc.start();

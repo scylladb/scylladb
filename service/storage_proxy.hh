@@ -61,6 +61,7 @@
 #include "storage_proxy_stats.hh"
 #include "cache_temperature.hh"
 #include "mutation_query.hh"
+#include "service_permit.hh"
 
 namespace locator {
 
@@ -149,15 +150,18 @@ public:
         clock_type::time_point _timeout;
 
     public:
+        service_permit permit;
         tracing::trace_state_ptr trace_state = nullptr;
         replicas_per_token_range preferred_replicas;
         std::optional<db::read_repair_decision> read_repair_decision;
 
         coordinator_query_options(clock_type::time_point timeout,
+                service_permit permit_,
                 tracing::trace_state_ptr trace_state = nullptr,
                 replicas_per_token_range preferred_replicas = { },
                 std::optional<db::read_repair_decision> read_repair_decision = { })
             : _timeout(timeout)
+            , permit(std::move(permit_))
             , trace_state(std::move(trace_state))
             , preferred_replicas(std::move(preferred_replicas))
             , read_repair_decision(read_repair_decision) {
@@ -371,7 +375,7 @@ public:
     * @param consistency_level the consistency level for the operation
     * @param tr_state trace state handle
     */
-    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, bool raw_counters = false);
+    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
 
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout);
@@ -380,7 +384,7 @@ public:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, clock_type::time_point timeout);
 
     future<> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
-                                  bool should_mutate_atomically, tracing::trace_state_ptr tr_state, bool raw_counters = false);
+                                  bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
 
     /**
     * See mutate. Adds additional steps before and after writing a batch.
@@ -392,7 +396,7 @@ public:
     * @param consistency_level the consistency level for the operation
     * @param tr_state trace state handle
     */
-    future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state);
+    future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
 
     // Send a mutation to one specific remote target.
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
