@@ -4611,6 +4611,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
                 mutations.push_back(make_insert(partition_key::from_deeply_exploded(*s, { local_keys.at(i) })));
             }
             auto sst = make_sstable_containing(sst_gen, mutations);
+            auto run_identifier = sst->run_identifier();
 
             auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(),
                 db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
@@ -4618,9 +4619,13 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             cf->start();
 
             auto cleanup_compaction = true;
-            auto ret = sstables::compact_sstables(sstables::compaction_descriptor({std::move(sst)}), *cf, sst_gen, sstables::replacer_fn_no_op(), cleanup_compaction).get0();
+            auto descriptor = sstables::compaction_descriptor({std::move(sst)}, compaction_descriptor::default_level,
+                compaction_descriptor::default_max_sstable_bytes, run_identifier);
+            auto ret = sstables::compact_sstables(std::move(descriptor), *cf, sst_gen, sstables::replacer_fn_no_op(), cleanup_compaction).get0();
 
             BOOST_REQUIRE(ret.total_keys_written == total_partitions);
+            BOOST_REQUIRE(ret.new_sstables.size() == 1);
+            BOOST_REQUIRE(ret.new_sstables.front()->run_identifier() == run_identifier);
         });
     });
 }

@@ -39,6 +39,8 @@ namespace sstables {
         int level;
         // Threshold size for sstable(s) to be created.
         uint64_t max_sstable_bytes;
+        // Run identifier of output sstables.
+        utils::UUID run_identifier;
         // Holds ownership of a weight assigned to this compaction iff it's a regular one.
         std::optional<compaction_weight_registration> weight_registration;
         // Calls compaction manager's task for this compaction to release reference to exhausted sstables.
@@ -46,10 +48,16 @@ namespace sstables {
 
         compaction_descriptor() = default;
 
-        explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = 0, uint64_t max_sstable_bytes = std::numeric_limits<uint64_t>::max())
+        static constexpr int default_level = 0;
+        static constexpr uint64_t default_max_sstable_bytes = std::numeric_limits<uint64_t>::max();
+
+        explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = default_level,
+                                       uint64_t max_sstable_bytes = default_max_sstable_bytes,
+                                       utils::UUID run_identifier = utils::make_random_uuid())
             : sstables(std::move(sstables))
             , level(level)
-            , max_sstable_bytes(max_sstable_bytes) {}
+            , max_sstable_bytes(max_sstable_bytes)
+            , run_identifier(run_identifier) {}
     };
 
     struct resharding_descriptor {

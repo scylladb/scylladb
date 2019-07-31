@@ -1347,7 +1347,10 @@ future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor, boo
             return with_semaphore(sem, 1, [this, &sst, &release_fn, is_actual_cleanup] {
                 // release reference to sstables cleaned up, otherwise space usage from their data and index
                 // components cannot be reclaimed until all of them are cleaned.
-                auto descriptor = sstables::compaction_descriptor({ std::move(sst) }, sst->get_sstable_level());
+                auto sstable_level = sst->get_sstable_level();
+                auto run_identifier = sst->run_identifier();
+                auto descriptor = sstables::compaction_descriptor({ std::move(sst) }, sstable_level,
+                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier);
                 descriptor.release_exhausted = release_fn;
                 return this->compact_sstables(std::move(descriptor), is_actual_cleanup);
             });
