@@ -549,6 +549,27 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
     });
 }
 
+namespace {
+
+using consume_result = std::tuple<std::optional<clustering_key_prefix>, reconcilable_result>;
+
+struct page_consume_result {
+    std::optional<clustering_key_prefix> last_ckey;
+    reconcilable_result result;
+    circular_buffer<mutation_fragment> unconsumed_fragments;
+    lw_shared_ptr<compact_for_mutation_query_state> compaction_state;
+
+    page_consume_result(consume_result&& result, circular_buffer<mutation_fragment>&& unconsumed_fragments,
+            lw_shared_ptr<compact_for_mutation_query_state>&& compaction_state)
+        : last_ckey(std::get<std::optional<clustering_key_prefix>>(std::move(result)))
+        , result(std::get<reconcilable_result>(std::move(result)))
+        , unconsumed_fragments(std::move(unconsumed_fragments))
+        , compaction_state(std::move(compaction_state)) {
+    }
+};
+
+} // anonymous namespace
+
 static future<reconcilable_result> do_query_mutations(
         distributed<database>& db,
         schema_ptr s,
@@ -579,27 +600,16 @@ static future<reconcilable_result> do_query_mutations(
             return do_with(std::move(reader), std::move(compaction_state), [&, accounter = std::move(accounter), timeout] (
                         flat_mutation_reader& reader, lw_shared_ptr<compact_for_mutation_query_state>& compaction_state) mutable {
                 auto rrb = reconcilable_result_builder(*reader.schema(), cmd.slice, std::move(accounter));
-                return query::consume_page(reader,
-                        compaction_state,
-                        cmd.slice,
-                        std::move(rrb),
-                        cmd.row_limit,
-                        cmd.partition_limit,
-                        cmd.timestamp,
-                        timeout).then([&] (std::optional<clustering_key_prefix>&& last_ckey, reconcilable_result&& result) mutable {
-                    return make_ready_future<std::optional<clustering_key_prefix>,
-                            reconcilable_result,
-                            circular_buffer<mutation_fragment>,
-                            lw_shared_ptr<compact_for_mutation_query_state>>(std::move(last_ckey), std::move(result), reader.detach_buffer(),
-                                    std::move(compaction_state));
+                return query::consume_page(reader, compaction_state, cmd.slice, std::move(rrb), cmd.row_limit, cmd.partition_limit, cmd.timestamp,
+                        timeout).then([&] (consume_result&& result) mutable {
+                    return make_ready_future<page_consume_result>(page_consume_result(std::move(result), reader.detach_buffer(), std::move(compaction_state)));
                 });
-            }).then_wrapped([&ctx] (future<std::optional<clustering_key_prefix>, reconcilable_result, circular_buffer<mutation_fragment>,
-                    lw_shared_ptr<compact_for_mutation_query_state>>&& result_fut) {
+            }).then_wrapped([&ctx] (future<page_consume_result>&& result_fut) {
                 if (result_fut.failed()) {
                     return make_exception_future<reconcilable_result>(std::move(result_fut.get_exception()));
                 }
 
-                auto [last_ckey, result, unconsumed_buffer, compaction_state] = result_fut.get();
+                auto [last_ckey, result, unconsumed_buffer, compaction_state] = result_fut.get0();
                 if (!compaction_state->are_limits_reached() && !result.is_short_read()) {
                     return make_ready_future<reconcilable_result>(std::move(result));
                 }
