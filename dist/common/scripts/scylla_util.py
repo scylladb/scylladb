@@ -408,7 +408,7 @@ def colorprint(msg, **kwargs):
 
 def get_mode_cpuset(nic, mode):
     try:
-        mode_cpu_mask = out('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask'.format(nic, mode))
+        mode_cpu_mask = out('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode))
         return hex2list(mode_cpu_mask)
     except subprocess.CalledProcessError:
         return '-1'
