@@ -64,9 +64,7 @@ defines=()
 {{#housekeeping}}
 install_arg="--housekeeping"
 {{/housekeeping}}
-./install.sh --root "$RPM_BUILD_ROOT" $install_arg --target {{target}} --pkg "conf" --disttype "redhat"
-./install.sh --root "$RPM_BUILD_ROOT" $install_arg --target {{target}} --pkg "kernel-conf" --disttype "redhat"
-./install.sh --root "$RPM_BUILD_ROOT" $install_arg --target {{target}} --pkg "server" --disttype "redhat"
+./install.sh --root "$RPM_BUILD_ROOT" $install_arg --target {{target}} --disttype "redhat"
 
 %pre server
 getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :

@@ -84,7 +84,7 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
-if [ "$pkg" != "server" -a "$pkg" != "conf" -a "$pkg" != "kernel-conf" ]; then
+if [ -n "$pkg" ] && [ "$pkg" != "server" -a "$pkg" != "conf" -a "$pkg" != "kernel-conf" ]; then
     print_usage
     exit 1
 fi
