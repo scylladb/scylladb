@@ -27,6 +27,7 @@
 #include "frozen_mutation.hh"
 #include "db/timeout_clock.hh"
 #include "querier.hh"
+#include "utils/chunked_vector.hh"
 #include <seastar/core/execution_stage.hh>
 
 class reconcilable_result;
@@ -72,17 +73,17 @@ class reconcilable_result {
     uint32_t _row_count;
     query::short_read _short_read;
     query::result_memory_tracker _memory_tracker;
-    std::vector<partition> _partitions;
+    utils::chunked_vector<partition> _partitions;
 public:
     ~reconcilable_result();
     reconcilable_result();
     reconcilable_result(reconcilable_result&&) = default;
     reconcilable_result& operator=(reconcilable_result&&) = default;
-    reconcilable_result(uint32_t row_count, std::vector<partition> partitions, query::short_read short_read,
+    reconcilable_result(uint32_t row_count, utils::chunked_vector<partition> partitions, query::short_read short_read,
                         query::result_memory_tracker memory_tracker = { });
 
-    const std::vector<partition>& partitions() const;
-    std::vector<partition>& partitions();
+    const utils::chunked_vector<partition>& partitions() const;
+    utils::chunked_vector<partition>& partitions();
 
     uint32_t row_count() const {
         return _row_count;
@@ -112,7 +113,7 @@ class reconcilable_result_builder {
     const schema& _schema;
     const query::partition_slice& _slice;
 
-    std::vector<partition> _result;
+    utils::chunked_vector<partition> _result;
     uint32_t _live_rows{};
 
     bool _has_ck_selector{};
