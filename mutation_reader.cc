@@ -812,7 +812,9 @@ foreign_reader::~foreign_reader() {
     if (!_read_ahead_future && !_reader) {
         return;
     }
-    smp::submit_to(_reader.get_owner_shard(), [reader = std::move(_reader), read_ahead_future = std::move(_read_ahead_future)] () mutable {
+    // Can't wait on this future directly. Right now we don't wait on it at all.
+    // If this proves problematic we can collect these somewhere and wait on them.
+    (void)smp::submit_to(_reader.get_owner_shard(), [reader = std::move(_reader), read_ahead_future = std::move(_read_ahead_future)] () mutable {
         if (read_ahead_future) {
             return read_ahead_future->finally([r = std::move(reader)] {});
         }
