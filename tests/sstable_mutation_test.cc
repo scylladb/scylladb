@@ -394,12 +394,14 @@ SEASTAR_THREAD_TEST_CASE(read_partial_range_2) {
 
 static
 mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
-        sstable_writer_config cfg, sstables::sstable::version_types version) {
+        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
     auto sst = env.make_sstable(s,
         dir,
         1 /* generation */,
         version,
-        sstables::sstable::format_types::big);
+        sstables::sstable::format_types::big,
+        default_sstable_buffer_size,
+        query_time);
 
     auto mt = make_lw_shared<memtable>(s);
 
@@ -417,9 +419,10 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
 static
 void test_mutation_source(sstables::test_env& env, sstable_writer_config cfg, sstables::sstable::version_types version) {
     std::vector<tmpdir> dirs;
-    run_mutation_source_tests([&env, &dirs, &cfg, version] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
+    run_mutation_source_tests([&env, &dirs, &cfg, version] (schema_ptr s, const std::vector<mutation>& partitions,
+                gc_clock::time_point query_time) -> mutation_source {
         dirs.emplace_back();
-        return make_sstable_mutation_source(env, s, dirs.back().path().string(), partitions, cfg, version);
+        return make_sstable_mutation_source(env, s, dirs.back().path().string(), partitions, cfg, version, query_time);
     });
 }
 

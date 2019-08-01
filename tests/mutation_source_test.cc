@@ -82,7 +82,7 @@ public:
 
 }
 
-static void test_slicing_and_fast_forwarding(populate_fn populate) {
+static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     simple_schema s;
@@ -161,7 +161,7 @@ static void test_slicing_and_fast_forwarding(populate_fn populate) {
         mutations.emplace_back(std::move(m));
     }
 
-    mutation_source ms = populate(s.schema(), mutations);
+    mutation_source ms = populate(s.schema(), mutations, gc_clock::now());
 
     auto test_ckey = [&] (std::vector<dht::partition_range> pranges, std::vector<mutation> mutations, mutation_reader::forwarding fwd_mr) {
         for (auto range_size = 1u; range_size <= ckey_count + 1; range_size++) {
@@ -359,7 +359,7 @@ static void test_slicing_and_fast_forwarding(populate_fn populate) {
     }
 }
 
-static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populate_fn populate) {
+static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     // Generates few random mutations and row slices and verifies that using
@@ -380,7 +380,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
 
         BOOST_TEST_MESSAGE(format("ranges: {}", ranges));
 
-        mutation_source ms = populate(m.schema(), {m});
+        mutation_source ms = populate(m.schema(), {m}, gc_clock::now());
 
         flat_mutation_reader sliced_reader =
             ms.make_reader(m.schema(), prange, slice_with_ranges);
@@ -444,7 +444,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
     }
 }
 
-static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
+static void test_streamed_mutation_forwarding_guarantees(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     simple_schema table;
@@ -469,7 +469,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
 
     table.add_static_row(m, "static_value");
 
-    mutation_source ms = populate(s, std::vector<mutation>({m}));
+    mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
 
     auto new_stream = [&ms, s, &m] () -> flat_reader_assertions {
         BOOST_TEST_MESSAGE("Creating new streamed_mutation");
@@ -576,7 +576,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
 }
 
 // Reproduces https://github.com/scylladb/scylla/issues/2733
-static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn populate) {
+static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     simple_schema table;
@@ -605,7 +605,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
         partitions.push_back(m);
     }
 
-    mutation_source ms = populate(s, partitions);
+    mutation_source ms = populate(s, partitions, gc_clock::now());
 
     auto pr = dht::partition_range::make({keys[0]}, {keys[1]});
     auto rd = assert_that(ms.make_reader(s,
@@ -649,7 +649,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
         .produces_end_of_stream();
 }
 
-static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate_fn populate) {
+static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     simple_schema table;
@@ -696,7 +696,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
     table.add_row(m, keys[10], "value");
 
     auto pr = dht::partition_range::make_singular(m.decorated_key());
-    mutation_source ms = populate(s, std::vector<mutation>({m}));
+    mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
 
     {
         auto slice = partition_slice_builder(*s)
@@ -740,7 +740,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
     }
 }
 
-static void test_streamed_mutation_forwarding_across_range_tombstones(populate_fn populate) {
+static void test_streamed_mutation_forwarding_across_range_tombstones(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     simple_schema table;
@@ -782,7 +782,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
         query::clustering_range::bound(keys[13], true)
     ));
 
-    mutation_source ms = populate(s, std::vector<mutation>({m}));
+    mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
     auto rd = assert_that(ms.make_reader(s,
         query::full_partition_range,
         s->full_slice(),
@@ -830,7 +830,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
     rd.produces_end_of_stream();
 }
 
-static void test_range_queries(populate_fn populate) {
+static void test_range_queries(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE("Testing range queries");
 
     auto s = schema_builder("ks", "cf")
@@ -863,7 +863,7 @@ static void test_range_queries(populate_fn populate) {
     dht::decorated_key key_after_all = partitions.back().decorated_key();
     partitions.pop_back();
 
-    auto ds = populate(s, partitions);
+    auto ds = populate(s, partitions, gc_clock::now());
 
     auto test_slice = [&] (dht::partition_range r) {
         BOOST_TEST_MESSAGE(format("Testing range {}", r));
@@ -962,20 +962,20 @@ static void test_range_queries(populate_fn populate) {
     test_slice(inclusive_token_range(128, partitions.size() - 1));
 }
 
-void test_all_data_is_read_back(populate_fn populate) {
+void test_all_data_is_read_back(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     const auto query_time = gc_clock::now();
 
     for_each_mutation([&populate, query_time] (const mutation& m) mutable {
-        auto ms = populate(m.schema(), {m});
+        auto ms = populate(m.schema(), {m}, query_time);
         mutation copy(m);
         copy.partition().compact_for_compaction(*copy.schema(), always_gc, query_time);
         assert_that(ms.make_reader(m.schema())).produces_compacted(copy, query_time);
     });
 }
 
-void test_mutation_reader_fragments_have_monotonic_positions(populate_fn populate) {
+void test_mutation_reader_fragments_have_monotonic_positions(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     for_each_mutation([] (const mutation& m) {
@@ -984,7 +984,7 @@ void test_mutation_reader_fragments_have_monotonic_positions(populate_fn populat
     });
 }
 
-static void test_date_tiered_clustering_slicing(populate_fn populate) {
+static void test_date_tiered_clustering_slicing(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     simple_schema ss;
@@ -1000,7 +1000,7 @@ static void test_date_tiered_clustering_slicing(populate_fn populate) {
     m1.partition().apply(ss.new_tombstone());
     ss.add_row(m1, ss.make_ckey(0), "v1");
 
-    mutation_source ms = populate(s, {m1});
+    mutation_source ms = populate(s, {m1}, gc_clock::now());
 
     // query row outside the range of existing rows to exercise sstable clustering key filter
     {
@@ -1024,7 +1024,7 @@ static void test_date_tiered_clustering_slicing(populate_fn populate) {
     }
 }
 
-static void test_clustering_slices(populate_fn populate) {
+static void test_clustering_slices(populate_fn_ex populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
     auto s = schema_builder("ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
@@ -1097,7 +1097,7 @@ static void test_clustering_slices(populate_fn populate) {
 
     mutation m = row1 + row2 + row3 + row4 + row5 + row6 + row7 + del_1 + del_2 + row8 + del_3;
 
-    mutation_source ds = populate(s, {m});
+    mutation_source ds = populate(s, {m}, gc_clock::now());
 
     auto pr = dht::partition_range::make_singular(pk);
 
@@ -1179,7 +1179,7 @@ static void test_clustering_slices(populate_fn populate) {
     }
 }
 
-static void test_query_only_static_row(populate_fn populate) {
+static void test_query_only_static_row(populate_fn_ex populate) {
     simple_schema s;
 
     auto pkeys = s.make_pkeys(1);
@@ -1190,7 +1190,7 @@ static void test_query_only_static_row(populate_fn populate) {
     s.add_row(m1, s.make_ckey(0), "v1");
     s.add_row(m1, s.make_ckey(1), "v2");
 
-    mutation_source ms = populate(s.schema(), {m1});
+    mutation_source ms = populate(s.schema(), {m1}, gc_clock::now());
 
     // fully populate cache
     {
@@ -1223,7 +1223,7 @@ static void test_query_only_static_row(populate_fn populate) {
     }
 }
 
-static void test_query_no_clustering_ranges_no_static_columns(populate_fn populate) {
+static void test_query_no_clustering_ranges_no_static_columns(populate_fn_ex populate) {
     simple_schema s(simple_schema::with_static::no);
 
     auto pkeys = s.make_pkeys(1);
@@ -1233,7 +1233,7 @@ static void test_query_no_clustering_ranges_no_static_columns(populate_fn popula
     s.add_row(m1, s.make_ckey(0), "v1");
     s.add_row(m1, s.make_ckey(1), "v2");
 
-    mutation_source ms = populate(s.schema(), {m1});
+    mutation_source ms = populate(s.schema(), {m1}, gc_clock::now());
 
     {
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
@@ -1265,7 +1265,7 @@ static void test_query_no_clustering_ranges_no_static_columns(populate_fn popula
     }
 }
 
-void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populate) {
+void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn_ex populate) {
     simple_schema s;
     auto cks = s.make_ckeys(6);
 
@@ -1273,7 +1273,7 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populat
     mutation m(s.schema(), pkey);
     s.add_row(m, cks[0], "data");
 
-    auto source = populate(s.schema(), {m});
+    auto source = populate(s.schema(), {m}, gc_clock::now());
     assert_that(source.make_reader(s.schema(),
                 query::full_partition_range,
                 s.schema()->full_slice(),
@@ -1301,7 +1301,7 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populat
 }
 
 static
-void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
+void test_slicing_with_overlapping_range_tombstones(populate_fn_ex populate) {
     simple_schema ss;
     auto s = ss.schema();
 
@@ -1316,7 +1316,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
     m2.partition().apply_delete(*s, rt2);
     ss.add_row(m2, ss.make_ckey(4), "v2"); // position after rt2.position() but before rt2.end_position().
 
-    mutation_source ds = populate(s, {m1, m2});
+    mutation_source ds = populate(s, {m1, m2}, gc_clock::now());
 
     // upper bound ends before the row in m2, so that the raw is fetched after next fast forward.
     auto range = ss.make_ckey_range(0, 3);
@@ -1374,7 +1374,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
     }
 }
 
-void run_mutation_reader_tests(populate_fn populate) {
+void run_mutation_reader_tests(populate_fn_ex populate) {
     test_slicing_and_fast_forwarding(populate);
     test_date_tiered_clustering_slicing(populate);
     test_fast_forwarding_across_partitions_to_empty_range(populate);
@@ -1390,7 +1390,7 @@ void run_mutation_reader_tests(populate_fn populate) {
     test_query_no_clustering_ranges_no_static_columns(populate);
 }
 
-void test_next_partition(populate_fn populate) {
+void test_next_partition(populate_fn_ex populate) {
     simple_schema s;
     auto pkeys = s.make_pkeys(4);
 
@@ -1402,7 +1402,7 @@ void test_next_partition(populate_fn populate) {
         s.add_row(m, s.make_ckey(1), "v2");
         mutations.push_back(std::move(m));
     }
-    auto source = populate(s.schema(), mutations);
+    auto source = populate(s.schema(), mutations, gc_clock::now());
     assert_that(source.make_reader(s.schema()))
         .next_partition() // Does nothing before first partition
         .produces_partition_start(pkeys[0])
@@ -1423,13 +1423,20 @@ void test_next_partition(populate_fn populate) {
         .produces_end_of_stream();
 }
 
-void run_flat_mutation_reader_tests(populate_fn populate) {
+void run_flat_mutation_reader_tests(populate_fn_ex populate) {
     test_next_partition(populate);
     test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
     test_slicing_with_overlapping_range_tombstones(populate);
 }
 
 void run_mutation_source_tests(populate_fn populate) {
+    auto populate_ex = [populate = std::move(populate)] (schema_ptr s, const std::vector<mutation>& muts, gc_clock::time_point) {
+        return populate(std::move(s), muts);
+    };
+    run_mutation_source_tests(std::move(populate_ex));
+}
+
+void run_mutation_source_tests(populate_fn_ex populate) {
     run_mutation_reader_tests(populate);
     run_flat_mutation_reader_tests(populate);
 }
@@ -1482,7 +1489,7 @@ static mutation_sets generate_mutation_sets() {
 
         clustering_key ck1 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
         clustering_key ck2 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck2_0")), data_value(bytes("ck2_1"))});
-        auto ttl = gc_clock::duration(1000);
+        auto ttl = gc_clock::duration(1);
 
         {
             auto tomb = new_tombstone();
