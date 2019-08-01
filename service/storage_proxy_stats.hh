@@ -93,6 +93,12 @@ struct write_stats {
     utils::estimated_histogram estimated_write;
 
     uint64_t writes = 0;
+    // A CQL write query arrived to a non-replica node and was
+    // forwarded by a coordinator to a replica
+    uint64_t writes_coordinator_outside_replica_set = 0;
+    // A CQL read query arrived to a non-replica node and was
+    // forwarded by a coordinator to a replica
+    uint64_t reads_coordinator_outside_replica_set = 0;
     uint64_t background_writes = 0; // client no longer waits for the write
     uint64_t background_write_bytes = 0;
     uint64_t queued_write_bytes = 0;

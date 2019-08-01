@@ -254,7 +254,8 @@ private:
             db::consistency_level cl,
             db::read_repair_decision repair_decision,
             tracing::trace_state_ptr trace_state,
-            const std::vector<gms::inet_address>& preferred_endpoints);
+            const std::vector<gms::inet_address>& preferred_endpoints,
+            bool& is_bounced_read);
     future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_options opts,
                                                                            tracing::trace_state_ptr trace_state,

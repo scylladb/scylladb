@@ -25,6 +25,8 @@
 
 namespace cql3 {
 
+// Shard-local CQL statistics
+// @sa cql3/query_processor.cc explains the meaning of each counter
 struct cql_stats {
     uint64_t reads = 0;
     uint64_t inserts = 0;
