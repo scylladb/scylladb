@@ -2265,8 +2265,8 @@ public:
 
         // build reconcilable_result from reconciled data
         // traverse backwards since large keys are at the start
-        std::vector<partition> vec;
-        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, std::ref(vec), [] (std::vector<partition>& a, const mutation_and_live_row_count& m_a_rc) {
+        utils::chunked_vector<partition> vec;
+        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, std::ref(vec), [] (utils::chunked_vector<partition>& a, const mutation_and_live_row_count& m_a_rc) {
             a.emplace_back(partition(m_a_rc.live_row_count, freeze(m_a_rc.mut)));
             return std::ref(a);
         });
