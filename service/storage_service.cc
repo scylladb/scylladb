@@ -409,6 +409,14 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         }
     }
 
+    // If this is a restarting node, we should update tokens before gossip starts
+    auto my_tokens = db::system_keyspace::get_saved_tokens().get0();
+    bool restarting_normal_node = db::system_keyspace::bootstrap_complete() && !db().local().is_replacing() && !my_tokens.empty();
+    if (restarting_normal_node) {
+        slogger.info("Restarting a node in NORMAL status");
+        _token_metadata.update_normal_tokens(my_tokens, get_broadcast_address());
+    }
+
     // have to start the gossip service before we can see any info on other nodes.  this is necessary
     // for bootstrap to get the load info it needs.
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
@@ -419,6 +427,12 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     }).get();
     auto features = get_config_supported_features();
     _token_metadata.update_host_id(local_host_id, get_broadcast_address());
+
+    // Replicate the tokens early because once gossip runs other nodes
+    // might send reads/writes to this node. Replicate it early to make
+    // sure the tokens are valid on all the shards.
+    replicate_to_all_cores().get();
+
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
     app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
@@ -429,6 +443,10 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
     app_states.emplace(gms::application_state::RPC_READY, value_factory.cql_ready(false));
     app_states.emplace(gms::application_state::VIEW_BACKLOG, versioned_value(""));
+    if (restarting_normal_node) {
+        app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(my_tokens));
+        app_states.emplace(gms::application_state::STATUS, value_factory.normal(my_tokens));
+    }
     slogger.info("Starting up server gossip");
 
     auto& gossiper = gms::get_local_gossiper();
@@ -697,6 +715,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...
         _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
+        replicate_to_all_cores().get();
         auto replace_addr = db().local().get_replace_address();
         if (replace_addr) {
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
@@ -1473,6 +1492,7 @@ future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
             auto tokens = db::system_keyspace::get_saved_tokens().get0();
             if (!tokens.empty()) {
                 _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
+                replicate_to_all_cores().get();
                 // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
                 gossiper.add_local_application_state({
                     { gms::application_state::TOKENS, value_factory.tokens(tokens) },
