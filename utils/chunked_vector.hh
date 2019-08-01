@@ -246,8 +246,10 @@ public:
 public:
     const T& front() const { return *cbegin(); }
     T& front() { return *begin(); }
-    iterator begin() const { return iterator(_chunks.data(), 0); }
-    iterator end() const { return iterator(_chunks.data(), _size); }
+    iterator begin() { return iterator(_chunks.data(), 0); }
+    iterator end() { return iterator(_chunks.data(), _size); }
+    const_iterator begin() const { return const_iterator(_chunks.data(), 0); }
+    const_iterator end() const { return const_iterator(_chunks.data(), _size); }
     const_iterator cbegin() const { return const_iterator(_chunks.data(), 0); }
     const_iterator cend() const { return const_iterator(_chunks.data(), _size); }
 public:
