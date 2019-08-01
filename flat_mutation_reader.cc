@@ -803,13 +803,22 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, std::deque<mutation_
                 (_fragments.front().is_partition_start() && _pr->after(_fragments.front().as_partition_start().key(), _cmp));
         }
 
+        void do_fast_forward_to(const dht::partition_range& pr) {
+            clear_buffer();
+            _pr = &pr;
+            _fragments.erase(_fragments.begin(), std::find_if(_fragments.begin(), _fragments.end(), [this] (const mutation_fragment& mf) {
+                return mf.is_partition_start() && !_pr->before(mf.as_partition_start().key(), _cmp);
+            }));
+            _end_of_stream = end_of_range();
+        }
+
     public:
         reader(schema_ptr schema, std::deque<mutation_fragment> fragments, const dht::partition_range& pr)
                 : flat_mutation_reader::impl(std::move(schema))
                 , _fragments(std::move(fragments))
                 , _pr(&pr)
                 , _cmp(*_schema) {
-            fast_forward_to(*_pr, db::no_timeout);
+            do_fast_forward_to(*_pr);
         }
         virtual future<> fill_buffer(db::timeout_clock::time_point) override {
             while (!(_end_of_stream = end_of_range()) && !is_buffer_full()) {
@@ -830,12 +839,7 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, std::deque<mutation_
             throw std::runtime_error("This reader can't be fast forwarded to another range.");
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
-            clear_buffer();
-            _pr = &pr;
-            _fragments.erase(_fragments.begin(), std::find_if(_fragments.begin(), _fragments.end(), [this] (const mutation_fragment& mf) {
-                return mf.is_partition_start() && !_pr->before(mf.as_partition_start().key(), _cmp);
-            }));
-            _end_of_stream = end_of_range();
+            do_fast_forward_to(pr);
             return make_ready_future<>();
         }
     };
