@@ -21,8 +21,12 @@
 
 #pragma once
 
+#include <seastar/core/sstring.hh>
+
 #include <functional>
 #include <system_error>
+
+namespace seastar { class logger; }
 
 typedef std::function<bool (const std::system_error &)> system_error_lambda_t;
 
@@ -45,3 +49,10 @@ public:
 
     const std::error_code& code() const { return _code; }
 };
+
+// Controls whether on_internal_error() aborts or throws.
+void set_abort_on_internal_error(bool do_abort);
+
+// Handles reporting of violation of internal invariants.
+// Callers can assume that it does not return. May throw.
+[[noreturn]] void on_internal_error(seastar::logger&, const seastar::sstring& reason);
