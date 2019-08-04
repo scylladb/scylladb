@@ -29,6 +29,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/batch_statement.hh"
+#include "cql3/cql_config.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -385,13 +386,16 @@ public:
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
+            sharded<cql3::cql_config> cql_config;
+            cql_config.start().get();
+            auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
             auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_generator>>();
 
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, true, cfg_in.disabled_features).get();
+            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, true, cfg_in.disabled_features).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;

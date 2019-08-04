@@ -69,6 +69,7 @@
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
+#include "cql3/cql_config.hh"
 
 namespace fs = std::filesystem;
 
@@ -676,6 +677,8 @@ int main(int ac, char** av) {
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
+            static sharded<cql3::cql_config> cql_config;
+            cql_config.start().get();
             auto& gossiper = gms::get_gossiper();
             gossiper.start(std::ref(feature_service), std::ref(*cfg)).get();
             // #293 - do not stop anything
@@ -683,7 +686,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg);
+            init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg);
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
