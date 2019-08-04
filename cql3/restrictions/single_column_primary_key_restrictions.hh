@@ -46,6 +46,7 @@
 #include "cartesian_product.hh"
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
+#include "cql3/cql_config.hh"
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -54,6 +55,29 @@
 namespace cql3 {
 
 namespace restrictions {
+
+namespace {
+
+template <typename ValueType>
+const char*
+restricted_component_name_v;
+
+template <>
+const char* restricted_component_name_v<partition_key> = "partition key";
+
+template <>
+const char* restricted_component_name_v<clustering_key> = "clustering key";
+
+
+inline
+void check_cartesian_product_size(size_t size, size_t max, const char* component_name) {
+    if (size > max) {
+        throw std::runtime_error(fmt::format("{} cartesian product size {} is greater than maximum {}",
+                component_name, size, max));
+    }
+}
+
+}
 
 /**
  * A set of single column restrictions on a primary key part (partition key or clustering key).
@@ -69,6 +93,8 @@ private:
     schema_ptr _schema;
     bool _allow_filtering;
     ::shared_ptr<single_column_restrictions> _restrictions;
+private:
+    static uint32_t max_cartesian_product_size(const restrictions_config& config);
 public:
     single_column_primary_key_restrictions(schema_ptr schema, bool allow_filtering)
         : _schema(schema)
@@ -184,7 +210,10 @@ public:
         }
 
         std::vector<ValueType> result;
-        result.reserve(cartesian_product_size(value_vector));
+        auto size = cartesian_product_size(value_vector);
+        check_cartesian_product_size(size, max_cartesian_product_size(options.get_cql_config().restrictions),
+                restricted_component_name_v<ValueType>);
+        result.reserve(size);
         for (auto&& v : make_cartesian_product(value_vector)) {
             result.emplace_back(ValueType::from_optional_exploded(*_schema, std::move(v)));
         }
@@ -259,7 +288,10 @@ private:
                     return ranges;
                 }
 
-                ranges.reserve(cartesian_product_size(vec_of_values));
+                auto size = cartesian_product_size(vec_of_values);
+                check_cartesian_product_size(size, max_cartesian_product_size(options.get_cql_config().restrictions),
+                        restricted_component_name_v<ValueType>);
+                ranges.reserve(size);
                 for (auto&& prefix : make_cartesian_product(vec_of_values)) {
                     auto read_bound = [r, &prefix, &options, this](statements::bound bound) -> range_bound {
                         if (r->has_bound(bound)) {
@@ -300,7 +332,10 @@ private:
             vec_of_values.emplace_back(std::move(values));
         }
 
-        ranges.reserve(cartesian_product_size(vec_of_values));
+        auto size = cartesian_product_size(vec_of_values);
+        check_cartesian_product_size(size, max_cartesian_product_size(options.get_cql_config().restrictions),
+                restricted_component_name_v<ValueType>);
+        ranges.reserve(size);
         for (auto&& prefix : make_cartesian_product(vec_of_values)) {
             ranges.emplace_back(range_type::make_singular(ValueType::from_optional_exploded(*_schema, std::move(prefix))));
         }
@@ -488,6 +523,19 @@ inline unsigned single_column_primary_key_restrictions<partition_key>::num_prefi
 //TODO(sarna): These should be transformed into actual class definitions after detemplatizing single_column_primary_key_restrictions<T>
 using single_column_partition_key_restrictions = single_column_primary_key_restrictions<partition_key>;
 using single_column_clustering_key_restrictions = single_column_primary_key_restrictions<clustering_key>;
+
+template <>
+inline
+uint32_t single_column_primary_key_restrictions<partition_key>::max_cartesian_product_size(const restrictions_config& config) {
+    return config.partition_key_restrictions_max_cartesian_product_size;
+}
+
+template <>
+inline
+uint32_t single_column_primary_key_restrictions<clustering_key>::max_cartesian_product_size(const restrictions_config& config) {
+    return config.clustering_key_restrictions_max_cartesian_product_size;
+}
+
 
 }
 }

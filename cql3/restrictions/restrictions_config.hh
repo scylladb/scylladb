@@ -23,14 +23,13 @@
 
 #pragma once
 
-#include "restrictions/restrictions_config.hh"
+#include <cstdint>
 
-namespace cql3 {
+namespace cql3::restrictions {
 
-struct cql_config {
-    restrictions::restrictions_config restrictions;
+struct restrictions_config {
+    uint32_t partition_key_restrictions_max_cartesian_product_size = 100;
+    uint32_t clustering_key_restrictions_max_cartesian_product_size = 100;
 };
-
-extern const cql_config default_cql_config;
 
 }
