@@ -18,7 +18,7 @@ static logging::logger slogger("alternator-serialization");
 namespace alternator {
 
 type_info type_info_from_string(std::string type) {
-    static const std::unordered_map<std::string, type_info> type_infos = {
+    static thread_local const std::unordered_map<std::string, type_info> type_infos = {
         {"S", {alternator_type::S, utf8_type}},
         {"B", {alternator_type::B, bytes_type}},
         {"BOOL", {alternator_type::BOOL, boolean_type}},
@@ -32,7 +32,7 @@ type_info type_info_from_string(std::string type) {
 }
 
 type_representation represent_type(alternator_type atype) {
-    static const std::unordered_map<alternator_type, type_representation> type_representations = {
+    static thread_local const std::unordered_map<alternator_type, type_representation> type_representations = {
         {alternator_type::S, {"S", utf8_type}},
         {alternator_type::B, {"B", bytes_type}},
         {alternator_type::BOOL, {"BOOL", boolean_type}},
