@@ -686,6 +686,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_shard_aware_drivers(this, "enable_shard_aware_drivers", value_status::Used, true, "Enable native transport drivers to use connection-per-shard for better performance")
     , enable_ipv6_dns_lookup(this, "enable_ipv6_dns_lookup", value_status::Used, false, "Use IPv6 address resolution")
     , abort_on_internal_error(this, "abort_on_internal_error", liveness::LiveUpdate, value_status::Used, false, "Abort the server instead of throwing exception when internal invariants are violated")
+    , max_partition_key_restrictions_per_query(this, "max_partition_key_restrictions_per_query", liveness::LiveUpdate, value_status::Used, 100,
+            "Maximum number of distinct partition keys restrictions per query. This limit places a bound on the size of IN tuples, "
+            "especially when multiple partition key columns have IN restrictions. Increasing this value can result in server instability.")
+    , max_clustering_key_restrictions_per_query(this, "max_clustering_key_restrictions_per_query", liveness::LiveUpdate, value_status::Used, 100,
+            "Maximum number of distinct clustering key restrictions per query. This limit places a bound on the size of IN tuples, "
+            "especially when multiple clustering key columns have IN restrictions. Increasing this value can result in server instability.")
+
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
