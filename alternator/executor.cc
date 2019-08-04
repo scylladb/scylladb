@@ -46,7 +46,7 @@ static logging::logger elogger("alternator-executor");
 namespace alternator {
 
 static map_type attrs_type() {
-    static auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
+    static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
     return t;
 }
 
