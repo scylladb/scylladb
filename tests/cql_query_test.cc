@@ -43,6 +43,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "db/config.hh"
+#include "cql3/cql_config.hh"
 #include "sstables/compaction_manager.hh"
 #include "exception_utils.hh"
 
@@ -3030,7 +3031,7 @@ SEASTAR_TEST_CASE(test_insert_large_collection_values) {
             BOOST_REQUIRE_THROW(e.execute_cql(format("INSERT INTO tbl (pk, m) VALUES ('Golding', {{'{}': 'value'}});", long_value)).get(), std::exception);
 
             auto make_query_options = [] (cql_protocol_version_type version) {
-                    return std::make_unique<cql3::query_options>(db::consistency_level::ONE, infinite_timeout_config, std::nullopt,
+                    return std::make_unique<cql3::query_options>(cql3::default_cql_config, db::consistency_level::ONE, infinite_timeout_config, std::nullopt,
                             std::vector<cql3::raw_value_view>(), false,
                             cql3::query_options::specific_options::DEFAULT, cql_serialization_format{version});
             };

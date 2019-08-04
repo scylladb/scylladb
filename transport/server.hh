@@ -127,9 +127,10 @@ private:
     uint64_t _requests_serving = 0;
     uint64_t _requests_blocked_memory = 0;
     auth::service& _auth_service;
+    const cql3::cql_config& _cql_config;
 public:
     cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, auth::service&,
-            cql_server_config config);
+            const cql3::cql_config& cql_config, cql_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
     future<> stop();
