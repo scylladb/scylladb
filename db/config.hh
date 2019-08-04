@@ -279,6 +279,7 @@ public:
     named_value<bool> enable_dangerous_direct_import_of_cassandra_counters;
     named_value<bool> enable_shard_aware_drivers;
     named_value<bool> enable_ipv6_dns_lookup;
+    named_value<bool> abort_on_internal_error;
 
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 

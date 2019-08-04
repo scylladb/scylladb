@@ -207,6 +207,10 @@ public:
             return updateable_value<T>(the_value());
         }
 
+        observer<T> observe(std::function<void (const T&)> callback) const {
+            return the_value().observe(std::move(callback));
+        }
+
         void add_command_line_option(bpo::options_description_easy_init&,
                         const std::string_view&, const std::string_view&) override;
         void set_value(const YAML::Node&) override;

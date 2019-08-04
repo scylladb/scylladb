@@ -29,6 +29,7 @@
 #include "sstables/mc/types.hh"
 #include "db/config.hh"
 #include "atomic_cell.hh"
+#include "utils/exceptions.hh"
 
 #include <functional>
 #include <boost/iterator/iterator_facade.hpp>
@@ -1382,10 +1383,15 @@ stop_iteration writer::consume_end_of_partition() {
         _first_key = *_partition_key;
     }
     _last_key = std::move(*_partition_key);
+    _partition_key = std::nullopt;
     return get_data_offset() < _cfg.max_sstable_size ? stop_iteration::no : stop_iteration::yes;
 }
 
 void writer::consume_end_of_stream() {
+    if (_partition_key) {
+        on_internal_error(sstlog, "Mutation stream ends with unclosed partition during write");
+    }
+
     _cfg.monitor->on_data_write_completed();
 
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state);
