@@ -365,6 +365,56 @@ SEASTAR_TEST_CASE(test_in_clause_validation) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_in_clause_cartesian_product_limits) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tab1 (pk1 int, pk2 int, PRIMARY KEY ((pk1, pk2)))").get();
+
+        // 100 partitions, should pass
+        e.execute_cql("SELECT * FROM tab1 WHERE pk1 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)"
+                "                           AND pk2 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)").get();
+        // 110 partitions, should fail
+        BOOST_REQUIRE_THROW(
+                e.execute_cql("SELECT * FROM tab1 WHERE pk1 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)"
+                        "                          AND pk2 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)").get(),
+                        std::runtime_error);
+
+        e.execute_cql("CREATE TABLE tab2 (pk1 int, ck1 int, ck2 int, PRIMARY KEY (pk1, ck1, ck2))").get();
+
+        // 100 clustering rows, should pass
+        e.execute_cql("SELECT * FROM tab2 WHERE pk1 = 1"
+                "                          AND ck1 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)"
+                "                          AND ck2 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)").get();
+        // 110 clustering rows, should fail
+        BOOST_REQUIRE_THROW(
+                e.execute_cql("SELECT * FROM tab2 WHERE pk1 = 1"
+                        "                           AND ck1 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)"
+                        "                           AND ck2 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)").get(),
+                        std::runtime_error);
+        auto make_tuple = [] (unsigned count) -> sstring {
+            std::ostringstream os;
+            os << "(0";
+            for (unsigned i = 1; i < count; ++i) {
+                os << "," << i;
+            }
+            os << ")";
+            return os.str();
+        };
+        e.execute_cql("CREATE TABLE tab3 (pk1 int, ck1 int, PRIMARY KEY (pk1, ck1))").get();
+        // tuple with 100 keys, should pass
+        e.execute_cql(fmt::format("SELECT * FROM tab3 WHERE pk1 IN {}", make_tuple(100))).get();
+        e.execute_cql(fmt::format("SELECT * FROM tab3 WHERE pk1 = 1 AND ck1 IN {}", make_tuple(100))).get();
+        // tuple with 101 keys, should fail
+        BOOST_REQUIRE_THROW(
+                e.execute_cql(fmt::format("SELECT * FROM tab3 WHERE pk1 IN {}", make_tuple(101))).get(),
+                std::runtime_error
+                );
+        BOOST_REQUIRE_THROW(
+                e.execute_cql(fmt::format("SELECT * FROM tab3 WHERE pk1 = 3 AND ck1 IN {}", make_tuple(101))).get(),
+                std::runtime_error
+                );
+    }).get();
+}
+
 SEASTAR_TEST_CASE(test_tuple_elements_validation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto test_inline = [&] (sstring value, bool should_throw) {
