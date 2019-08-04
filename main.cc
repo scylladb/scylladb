@@ -526,6 +526,9 @@ int main(int ac, char** av) {
             if (opts.count("developer-mode")) {
                 smp::invoke_on_all([] { engine().set_strict_dma(false); }).get();
             }
+
+            set_abort_on_internal_error(cfg->abort_on_internal_error());
+
             supervisor::notify("creating tracing");
             tracing::backend_registry tracing_backend_registry;
             tracing::register_tracing_keyspace_backend(tracing_backend_registry);
