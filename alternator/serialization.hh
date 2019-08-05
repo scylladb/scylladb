@@ -14,7 +14,7 @@
 #include "types.hh"
 #include "schema.hh"
 #include "keys.hh"
-#include "json.hh"
+#include "rjson.hh"
 
 namespace alternator {
 
@@ -35,15 +35,15 @@ struct type_representation {
 type_info type_info_from_string(std::string type);
 type_representation represent_type(alternator_type atype);
 
-bytes serialize_item(const Json::Value& item);
-Json::Value deserialize_item(bytes_view bv);
+bytes serialize_item(const rjson::value& item);
+rjson::value deserialize_item(bytes_view bv);
 
 std::string type_to_string(data_type type);
 
-bytes get_key_column_value(const Json::Value& item, const column_definition& column);
-Json::Value json_key_column_value(bytes_view cell, const column_definition& column);
+bytes get_key_column_value(const rjson::value& item, const column_definition& column);
+rjson::value json_key_column_value(bytes_view cell, const column_definition& column);
 
-partition_key pk_from_json(const Json::Value& item, schema_ptr schema);
-clustering_key ck_from_json(const Json::Value& item, schema_ptr schema);
+partition_key pk_from_json(const rjson::value& item, schema_ptr schema);
+clustering_key ck_from_json(const rjson::value& item, schema_ptr schema);
 
 }
