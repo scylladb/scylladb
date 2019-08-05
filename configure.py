@@ -1204,7 +1204,7 @@ with open(buildfile_tmp, 'w') as f:
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
-        pool seastar_pool
+        pool submodule_pool
             depth = 1
         rule gen
             command = echo -e $text > $out
@@ -1403,25 +1403,28 @@ with open(buildfile_tmp, 'w') as f:
 
         f.write('build seastar/build/{mode}/libseastar.a: ninja | always\n'
                 .format(**locals()))
-        f.write('  pool = seastar_pool\n')
+        f.write('  pool = submodule_pool\n')
         f.write('  subdir = seastar/build/{mode}\n'.format(**locals()))
         f.write('  target = seastar seastar_testing\n'.format(**locals()))
         f.write('build seastar/build/{mode}/apps/iotune/iotune: ninja\n'
                 .format(**locals()))
-        f.write('  pool = seastar_pool\n')
+        f.write('  pool = submodule_pool\n')
         f.write('  subdir = seastar/build/{mode}\n'.format(**locals()))
         f.write('  target = iotune\n'.format(**locals()))
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
             ''').format(**locals()))
         f.write('build build/{mode}/scylla-package.tar.gz: package build/{mode}/scylla build/{mode}/iotune build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE | always\n'.format(**locals()))
-        f.write('    mode = {mode}\n'.format(**locals()))
+        f.write('  pool = submodule_pool\n')
+        f.write('  mode = {mode}\n'.format(**locals()))
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
-        f.write('    command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../build/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
+        f.write('  command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../build/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
         f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
+        f.write('  pool = submodule_pool\n')
         f.write('build build/{mode}/zstd/lib/libzstd.a: ninja\n'.format(**locals()))
-        f.write('   subdir = build/{mode}/zstd\n'.format(**locals()))
-        f.write('   target = libzstd.a\n'.format(**locals()))
+        f.write('  pool = submodule_pool\n')
+        f.write('  subdir = build/{mode}/zstd\n'.format(**locals()))
+        f.write('  target = libzstd.a\n'.format(**locals()))
 
     mode = 'dev' if 'dev' in modes else modes[0]
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(mode, hh) for hh in headers])))
