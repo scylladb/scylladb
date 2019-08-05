@@ -44,6 +44,9 @@
 #include <boost/range/adaptor/map.hpp>
 
 static logging::logger tlogger("table");
+static seastar::metrics::label column_family_label("cf");
+static seastar::metrics::label keyspace_label("ks");
+
 
 using namespace std::chrono_literals;
 
@@ -1087,8 +1090,6 @@ table::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
     });
 }
 
-seastar::metrics::label column_family_label("cf");
-seastar::metrics::label keyspace_label("ks");
 void table::set_metrics() {
     auto cf = column_family_label(_schema->cf_name());
     auto ks = keyspace_label(_schema->ks_name());
@@ -1123,13 +1124,7 @@ void table::set_metrics() {
 
         // View metrics are created only for base tables, so there's no point in adding them to views (which cannot act as base tables for other views)
         if (!_schema->is_view()) {
-            _metrics.add_group("column_family", {
-                    ms::make_total_operations("view_updates_pushed_remote", _view_stats.view_updates_pushed_remote, ms::description("Number of updates (mutations) pushed to remote view replicas"))(cf)(ks),
-                    ms::make_total_operations("view_updates_failed_remote", _view_stats.view_updates_failed_remote, ms::description("Number of updates (mutations) that failed to be pushed to remote view replicas"))(cf)(ks),
-                    ms::make_total_operations("view_updates_pushed_local", _view_stats.view_updates_pushed_local, ms::description("Number of updates (mutations) pushed to local view replicas"))(cf)(ks),
-                    ms::make_total_operations("view_updates_failed_local", _view_stats.view_updates_failed_local, ms::description("Number of updates (mutations) that failed to be pushed to local view replicas"))(cf)(ks),
-                    ms::make_gauge("view_updates_pending", ms::description("Number of updates pushed to view and are still to be completed"), _view_stats.writes)(cf)(ks),
-            });
+            _view_stats.register_stats();
         }
 
         if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
@@ -1570,7 +1565,10 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
              cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()))
+    , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),
+                         keyspace_label(_schema->ks_name()),
+                         column_family_label(_schema->cf_name())
+                        )
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
     , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))

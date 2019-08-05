@@ -145,6 +145,28 @@ void view_info::initialize_base_dependent_fields(const schema& base) {
 namespace db {
 
 namespace view {
+stats::stats(const sstring& category, label_instance ks_label, label_instance cf_label) :
+        service::storage_proxy_stats::write_stats(category, false),
+        _ks_label(ks_label),
+        _cf_label(cf_label) {
+}
+
+void stats::register_stats() {
+    namespace ms = seastar::metrics;
+    namespace sp_stats = service::storage_proxy_stats;
+    _metrics.add_group("column_family", {
+            ms::make_total_operations("view_updates_pushed_remote", view_updates_pushed_remote, ms::description("Number of updates (mutations) pushed to remote view replicas"),
+                    {_cf_label, _ks_label}),
+            ms::make_total_operations("view_updates_failed_remote", view_updates_failed_remote, ms::description("Number of updates (mutations) that failed to be pushed to remote view replicas"),
+                    {_cf_label, _ks_label}),
+            ms::make_total_operations("view_updates_pushed_local", view_updates_pushed_local, ms::description("Number of updates (mutations) pushed to local view replicas"),
+                    {_cf_label, _ks_label}),
+            ms::make_total_operations("view_updates_failed_local", view_updates_failed_local, ms::description("Number of updates (mutations) that failed to be pushed to local view replicas"),
+                    {_cf_label, _ks_label}),
+            ms::make_gauge("view_updates_pending", ms::description("Number of updates pushed to view and are still to be completed"),
+                    {_cf_label, _ks_label}, writes),
+    });
+}
 
 bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key) {
     return view.select_statement().get_restrictions()->get_partition_key_restrictions()->is_satisfied_by(

@@ -33,7 +33,7 @@ namespace storage_proxy_stats {
 // split statistics counters
 struct split_stats {
     static seastar::metrics::label datacenter_label;
-    static seastar::metrics::label op_type_label;
+
 private:
     struct stats_counter {
         uint64_t val = 0;
@@ -122,11 +122,15 @@ public:
     write_stats();
     write_stats(const sstring& category, bool auto_register_stats);
 
-    void register_metrics_local();
-    void register_metrics_for(gms::inet_address ep);
+    void register_stats();
+    void register_split_metrics_local();
+    void register_split_metrics_for(gms::inet_address ep);
+protected:
+    seastar::metrics::metric_groups _metrics;
 };
 
 struct stats : public write_stats {
+    seastar::metrics::metric_groups _metrics;
     utils::timed_rate_moving_average read_timeouts;
     utils::timed_rate_moving_average read_unavailables;
     utils::timed_rate_moving_average range_slice_timeouts;
@@ -192,9 +196,9 @@ struct stats : public write_stats {
 
 public:
     stats();
-
-    void register_metrics_local();
-    void register_metrics_for(gms::inet_address ep);
+    void register_stats();
+    void register_split_metrics_local();
+    void register_split_metrics_for(gms::inet_address ep);
 };
 
 }
