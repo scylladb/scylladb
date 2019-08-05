@@ -33,8 +33,8 @@
 // a "compression_metadata" object, which also contains additional information
 // needed from decompression - such as the chunk size and compressor type.
 //
-// Cassandra supports three different compression algorithms for the chunks,
-// LZ4, Snappy, and Deflate - the default (and therefore most important) is
+// Cassandra supports four different compression algorithms for the chunks,
+// LZ4, Snappy, Deflate, and Zstd - the default (and therefore most important) is
 // LZ4. Each compressor is an implementation of the "compressor" class.
 //
 // Each compressed chunk is followed by a 4-byte checksum of the compressed
