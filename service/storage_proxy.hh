@@ -260,7 +260,8 @@ private:
             db::read_repair_decision repair_decision,
             tracing::trace_state_ptr trace_state,
             const std::vector<gms::inet_address>& preferred_endpoints,
-            bool& is_bounced_read);
+            bool& is_bounced_read,
+            service_permit permit);
     future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_options opts,
                                                                            tracing::trace_state_ptr trace_state,
@@ -286,7 +287,8 @@ private:
             tracing::trace_state_ptr trace_state,
             uint32_t remaining_row_count,
             uint32_t remaining_partition_count,
-            replicas_per_token_range preferred_replicas);
+            replicas_per_token_range preferred_replicas,
+            service_permit permit);
 
     future<coordinator_query_result> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
