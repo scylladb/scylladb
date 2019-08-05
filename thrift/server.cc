@@ -230,12 +230,14 @@ thrift_server::do_accepts(int which, bool keepalive) {
     if (_stop_gate.is_closed()) {
         return;
     }
-    with_gate(_stop_gate, [&, this] {
+    // Future is waited on indirectly in `stop()` (via `_stop_gate`).
+    (void)with_gate(_stop_gate, [&, this] {
         return _listeners[which].accept().then([this, which, keepalive] (accept_result ar) {
             auto&& [fd, addr] = ar;
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
-            with_gate(_stop_gate, [&, this] {
+            // Future is waited on indirectly in `stop()` (via `_stop_gate`).
+            (void)with_gate(_stop_gate, [&, this] {
                 return do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
                     return conn.process().then_wrapped([this, &conn] (future<> f) {
                         conn.shutdown();
@@ -262,7 +264,8 @@ void thrift_server::maybe_retry_accept(int which, bool keepalive, std::exception
     };
     auto retry_with_backoff = [&] {
         // FIXME: Consider using exponential backoff
-        sleep(1ms).then([retry = std::move(retry)] { retry(); });
+        // Done in the background.
+        (void)sleep(1ms).then([retry = std::move(retry)] { retry(); });
     };
     try {
         std::rethrow_exception(std::move(ex));

@@ -405,7 +405,8 @@ public:
             ++stats().throttled_base_writes;
             tracing::trace(trace, "Delaying user write due to view update backlog {}/{} by {}us",
                           backlog.current, backlog.max, delay.count());
-            sleep_abortable<seastar::steady_clock_type>(delay).finally([self = shared_from_this(), on_resume = std::forward<Func>(on_resume)] {
+            // Waited on indirectly.
+            (void)sleep_abortable<seastar::steady_clock_type>(delay).finally([self = shared_from_this(), on_resume = std::forward<Func>(on_resume)] {
                 --self->stats().throttled_base_writes;
                 on_resume(self.get());
             }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
@@ -1636,7 +1637,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             }
         }
 
-        f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
+        // Waited on indirectly.
+        (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
             ++stats.writes_errors.get_ep_stat(coordinator);
             p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt);
             try {
@@ -2476,9 +2478,11 @@ protected:
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
-        make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout).finally([exec]{});
+        // Waited on indirectly.
+        (void)make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout).finally([exec]{});
 
-        data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
+        // Waited on indirectly.
+        (void)data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
             try {
                 f.get();
                 auto rr_opt = data_resolver->resolve(_schema, *cmd, original_row_limit(), original_per_partition_row_limit(), original_partition_limit()); // reconciliation happens here
@@ -2495,7 +2499,8 @@ protected:
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
                     // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
-                    _proxy->schedule_repair(data_resolver->get_diffs_for_repair(), _cl, _trace_state, _permit).then([this, result = std::move(result)] () mutable {
+                    // Waited on indirectly.
+                    (void)_proxy->schedule_repair(data_resolver->get_diffs_for_repair(), _cl, _trace_state, _permit).then([this, result = std::move(result)] () mutable {
                         _result_promise.set_value(std::move(result));
                         on_read_resolved();
                     }).handle_exception([this, exec] (std::exception_ptr eptr) {
@@ -2560,11 +2565,13 @@ public:
                 db::is_datacenter_local(_cl) ? db::count_local_endpoints(_targets): _targets.size(), timeout);
         auto exec = shared_from_this();
 
-        make_requests(digest_resolver, timeout).finally([exec]() {
+        // Waited on indirectly.
+        (void)make_requests(digest_resolver, timeout).finally([exec]() {
             // hold on to executor until all queries are complete
         });
 
-        digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<foreign_ptr<lw_shared_ptr<query::result>>, bool> f) mutable {
+        // Waited on indirectly.
+        (void)digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<foreign_ptr<lw_shared_ptr<query::result>>, bool> f) mutable {
             bool background_repair_check = false;
             try {
                 exec->got_cl();
@@ -2598,7 +2605,8 @@ public:
                 exec->on_read_resolved();
             }
 
-            digest_resolver->done().then([exec, digest_resolver, timeout, background_repair_check] () mutable {
+            // Waited on indirectly.
+            (void)digest_resolver->done().then([exec, digest_resolver, timeout, background_repair_check] () mutable {
                 if (background_repair_check && !digest_resolver->digests_match()) {
                     exec->_proxy->_stats.read_repair_repaired_background++;
                     exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
@@ -2661,7 +2669,8 @@ public:
                         return make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout, true);
                     }
                 };
-                send_request(resolver->has_data()).finally([exec = shared_from_this()]{});
+                // Waited on indirectly.
+                (void)send_request(resolver->has_data()).finally([exec = shared_from_this()]{});
             }
         });
         auto& sr = _schema->speculative_retry();

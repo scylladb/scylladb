@@ -113,7 +113,7 @@ void stream_manager::remove_stream(UUID plan_id) {
     _initiated_streams.erase(plan_id);
     _receiving_streams.erase(plan_id);
     // FIXME: Do not ignore the future
-    remove_progress_on_all_shards(plan_id).handle_exception([plan_id] (auto ep) {
+    (void)remove_progress_on_all_shards(plan_id).handle_exception([plan_id] (auto ep) {
         sslog.info("stream_manager: Fail to remove progress for plan_id={}: {}", plan_id, ep);
     });
 }

@@ -209,7 +209,8 @@ future<> trace_keyspace_helper::start() {
 }
 
 void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_records> records) {
-    with_gate(_pending_writes, [this, records = std::move(records)] {
+    // Future is waited on indirectly in `stop()` (via `_pending_writes`).
+    (void)with_gate(_pending_writes, [this, records = std::move(records)] {
         auto num_records = records->size();
         return this->flush_one_session_mutations(std::move(records)).finally([this, num_records] { _local_tracing.write_complete(num_records); });
     }).handle_exception([this] (auto ep) {

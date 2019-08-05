@@ -161,7 +161,8 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
     auto sf = _schema_promise.get_shared_future();
     _state = state::LOADING;
     slogger.trace("Loading {}", _version);
-    f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
+    // Move to background.
+    (void)f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             slogger.trace("Loading of {} aborted", _version);
@@ -223,7 +224,8 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
             });
             auto sf = _synced_promise.get_shared_future();
             _sync_state = schema_registry_entry::sync_state::SYNCING;
-            f.then_wrapped([this, self = shared_from_this()] (auto&& f) {
+            // Move to background.
+            (void)f.then_wrapped([this, self = shared_from_this()] (auto&& f) {
                 if (_sync_state != sync_state::SYNCING) {
                     return;
                 }

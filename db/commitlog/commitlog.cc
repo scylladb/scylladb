@@ -1447,7 +1447,7 @@ void db::commitlog::segment_manager::discard_unused_segments() {
     // segments on deletion queue could be non-empty, and we don't want
     // those accidentally left around for replay.
     if (!_shutdown) {
-        with_gate(_gate, [this] {
+        (void)with_gate(_gate, [this] {
             return do_pending_deletes();
         });
     }
@@ -1598,7 +1598,7 @@ future<> db::commitlog::segment_manager::clear() {
  */
 void db::commitlog::segment_manager::sync() {
     for (auto s : _segments) {
-        s->sync(); // we do not care about waiting...
+        (void)s->sync(); // we do not care about waiting...
     }
 }
 
@@ -1606,7 +1606,7 @@ void db::commitlog::segment_manager::on_timer() {
     // Gate, because we are starting potentially blocking ops
     // without waiting for them, so segement_manager could be shut down
     // while they are running.
-    seastar::with_gate(_gate, [this] {
+    (void)seastar::with_gate(_gate, [this] {
         if (cfg.mode != sync_mode::BATCH) {
             sync();
         }

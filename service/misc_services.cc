@@ -106,7 +106,8 @@ void cache_hitrate_calculator::recalculate_timer() {
 
 void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
     if (!_stopped) {
-        _me.invoke_on(master, [d] (cache_hitrate_calculator& local) {
+        // Do it in the background.
+        (void)_me.invoke_on(master, [d] (cache_hitrate_calculator& local) {
             local._timer.arm(d);
         }).handle_exception_type([] (seastar::no_sharded_instance_exception&) { /* ignore */ });
     }

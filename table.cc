@@ -1196,7 +1196,7 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
     rebuild_statistics();
 
     // This is done in the background, so we can consider this compaction completed.
-    seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
+    (void)seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
        return with_semaphore(_sstable_deletion_sem, 1, [this, sstables_to_remove = std::move(sstables_to_remove)] {
         return sstables::delete_atomically(sstables_to_remove).then_wrapped([this, sstables_to_remove] (future<> f) {
             std::exception_ptr eptr;

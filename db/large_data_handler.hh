@@ -55,7 +55,9 @@ private:
     template<typename Func>
     future<> with_sem(Func&& func) {
         return get_units(_sem, 1).then([func = std::forward<Func>(func)] (auto units) mutable {
-            func().finally([units = std::move(units)] {});
+            // Future is discarded purposefully, see method description.
+            // FIXME: error handling.
+            (void)func().finally([units = std::move(units)] {});
         });
     }
 

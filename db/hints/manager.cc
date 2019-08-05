@@ -158,7 +158,8 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
 
 bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
-        with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state] () mutable {
+        // Future is waited on indirectly in `stop()` (via `_store_gate`).
+        (void)with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state] () mutable {
             ++_hints_in_progress;
             size_t mut_size = fm->representation().size();
             shard_stats().size_of_hints_in_progress += mut_size;
@@ -534,7 +535,8 @@ void manager::drain_for(gms::inet_address endpoint) {
 
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
-    with_gate(_draining_eps_gate, [this, endpoint] {
+    // Future is waited on indirectly in `stop()` (via `_draining_eps_gate`).
+    (void)with_gate(_draining_eps_gate, [this, endpoint] {
         return futurize_apply([this, endpoint] () {
             if (utils::fb_utilities::is_me(endpoint)) {
                 return parallel_for_each(_ep_managers, [] (auto& pair) {
@@ -672,7 +674,8 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
-        with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
+        // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
+        (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
             try {
                 try {
                     ctx_ptr->rps_set.emplace(rp);
