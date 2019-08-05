@@ -108,8 +108,6 @@ struct write_stats {
     // forwarded by a coordinator to a replica
     uint64_t reads_coordinator_outside_replica_set = 0;
     uint64_t background_writes = 0; // client no longer waits for the write
-    uint64_t background_write_bytes = 0;
-    uint64_t queued_write_bytes = 0;
     uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
     uint64_t throttled_base_writes = 0; // current number of base writes delayed due to view update backlog
     uint64_t background_writes_failed = 0;
@@ -199,6 +197,28 @@ public:
     void register_stats();
     void register_split_metrics_local();
     void register_split_metrics_for(gms::inet_address ep);
+};
+
+ /*** This struct represents stats that has meaning (only or also)
+ * globally. For example background_write_bytes are used to decide
+ * if to throttle requests and it make little sense to check it
+ * per scheduling group, on the other hand this statistic has value
+ * in figuring out how much load each scheduling group generates
+ * on the system, this statistic should be handled elsewhere, i.e:
+ * in the write_stats struct.
+ */
+struct global_write_stats {
+    seastar::metrics::metric_groups _metrics;
+    uint64_t background_write_bytes = 0;
+    uint64_t queued_write_bytes = 0;
+    void register_stats();
+};
+
+/***
+ *  Following the convention of stats and write_stats
+ */
+struct global_stats : public global_write_stats {
+    void register_stats();
 };
 
 }
