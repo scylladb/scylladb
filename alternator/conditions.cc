@@ -11,16 +11,16 @@
 #include <list>
 #include <map>
 #include "alternator/conditions.hh"
-#include "alternator/serialization.hh"
 #include "alternator/error.hh"
 #include "cql3/constants.hh"
 #include <unordered_map>
+#include "rjson.hh"
 
 namespace alternator {
 
 static logging::logger clogger("alternator-conditions");
 
-comparison_operator_type get_comparison_operator(const Json::Value& comparison_operator) {
+comparison_operator_type get_comparison_operator(const rjson::value& comparison_operator) {
     static std::unordered_map<std::string, comparison_operator_type> ops = {
             {"EQ", comparison_operator_type::EQ},
             {"LE", comparison_operator_type::LE},
@@ -30,10 +30,10 @@ comparison_operator_type get_comparison_operator(const Json::Value& comparison_o
             {"BETWEEN", comparison_operator_type::BETWEEN},
             {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
     }; //TODO(sarna): NE, IN, CONTAINS, NULL, NOT_NULL
-    if (!comparison_operator.isString()) {
-        throw api_error("ValidationException", format("Invalid comparison operator definition {}", comparison_operator.toStyledString()));
+    if (!comparison_operator.IsString()) {
+        throw api_error("ValidationException", format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
-    std::string op = comparison_operator.asString();
+    std::string op = comparison_operator.GetString();
     auto it = ops.find(op);
     if (it == ops.end()) {
         throw api_error("ValidationException", format("Unsupported comparison operator {}", op));
@@ -41,7 +41,7 @@ comparison_operator_type get_comparison_operator(const Json::Value& comparison_o
     return it->second;
 }
 
-::shared_ptr<cql3::restrictions::single_column_restriction::contains> make_map_element_restriction(const column_definition& cdef, const std::string& key, const Json::Value& value) {
+::shared_ptr<cql3::restrictions::single_column_restriction::contains> make_map_element_restriction(const column_definition& cdef, const std::string& key, const rjson::value& value) {
     bytes raw_key = utf8_type->from_string(sstring(key));
     auto key_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_key)));
     bytes raw_value = serialize_item(value);
@@ -49,15 +49,15 @@ comparison_operator_type get_comparison_operator(const Json::Value& comparison_o
     return make_shared<cql3::restrictions::single_column_restriction::contains>(cdef, std::move(key_value), std::move(entry_value));
 }
 
-::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const Json::Value& query_filter) {
-    clogger.trace("Getting filtering restrictions for: {}", query_filter.toStyledString());
+::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const rjson::value& query_filter) {
+    clogger.trace("Getting filtering restrictions for: {}", rjson::print(query_filter));
     auto filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(schema, true);
-    for (auto it = query_filter.begin(); it != query_filter.end(); ++it) {
-        std::string column_name = it.key().asString();
-        const Json::Value& condition = *it;
+    for (auto it = query_filter.MemberBegin(); it != query_filter.MemberEnd(); ++it) {
+        std::string column_name = it->name.GetString();
+        const rjson::value& condition = it->value;
 
-        Json::Value comp_definition = condition.get("ComparisonOperator", Json::Value());
-        Json::Value attr_list = condition.get("AttributeValueList", Json::Value(Json::arrayValue));
+        const rjson::value& comp_definition = rjson::get(condition, "ComparisonOperator");
+        const rjson::value& attr_list = rjson::get(condition, "AttributeValueList");
         comparison_operator_type op = get_comparison_operator(comp_definition);
 
         if (schema->get_column_definition(to_bytes(column_name))) {
@@ -67,8 +67,8 @@ comparison_operator_type get_comparison_operator(const Json::Value& comparison_o
         if (op != comparison_operator_type::EQ) {
             throw api_error("ValidationException", "Filtering is currently implemented for EQ operator only");
         }
-        if (attr_list.size() != 1) {
-            throw api_error("ValidationException", format("EQ restriction needs exactly 1 attribute value: {}", attr_list.toStyledString()));
+        if (attr_list.Size() != 1) {
+            throw api_error("ValidationException", format("EQ restriction needs exactly 1 attribute value: {}", rjson::print(attr_list)));
         }
 
         filtering_restrictions->add_restriction(make_map_element_restriction(attrs_col, column_name, attr_list[0]), false, true);
