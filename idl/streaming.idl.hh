@@ -51,4 +51,10 @@ enum class stream_reason : uint8_t {
     repair,
 };
 
+enum class stream_mutation_fragments_cmd : uint8_t {
+    error,
+    mutation_fragment_data,
+    end_of_stream,
+};
+
 }
