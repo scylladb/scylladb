@@ -177,6 +177,10 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
                         sm::description(
                             seastar::format("Holds an incrementing counter with the requests that ever blocked due to reaching the memory quota limit ({}B). "
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
+       sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
+                        sm::description(
+                            seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
+                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size))),
 
     });
 }
