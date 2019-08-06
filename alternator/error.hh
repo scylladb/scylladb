@@ -11,6 +11,7 @@
 #pragma once
 
 #include <seastar/http/httpd.hh>
+#include "seastarx.hh"
 
 namespace alternator {
 
@@ -21,10 +22,11 @@ namespace alternator {
 // will be wrapped into a JSON object returned to the client.
 class api_error : public std::exception {
 public:
-    reply::status_type _http_code;
+    using status_type = httpd::reply::status_type;
+    status_type _http_code;
     std::string _type;
     std::string _msg;
-    api_error(std::string type, std::string msg, reply::status_type http_code = reply::status_type::bad_request)
+    api_error(std::string type, std::string msg, status_type http_code = status_type::bad_request)
         : _http_code(std::move(http_code))
         , _type(std::move(type))
         , _msg(std::move(msg))
