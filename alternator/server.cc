@@ -141,9 +141,9 @@ future<> server::init(uint16_t port) {
     }).then([this] {
         return _control.start();
     }).then([this] {
-        _control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1));
+        return _control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1));
     }).then([this, port] {
-        _control.listen(port);
+        return _control.listen(port);
     }).then([port] {
         slogger.info("Alternator HTTP server listening on port {}", port);
     }).handle_exception([port] (std::exception_ptr e) {
