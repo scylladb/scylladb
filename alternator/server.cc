@@ -16,6 +16,7 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include "error.hh"
+#include "rjson.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -54,6 +55,8 @@ public:
                      resf.get();
                  } catch (api_error &ae) {
                      ret = ae;
+                 } catch (rjson::error & re) {
+                     ret = api_error("ValidationException", re.what());
                  } catch (...) {
                      ret = api_error(
                              "Internal Server Error",
