@@ -161,7 +161,7 @@ void stream_session::init_messaging_service_handler() {
             });
         });
     });
-    ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment> source) {
+    ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
@@ -173,15 +173,41 @@ void stream_session::init_messaging_service_handler() {
         return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(), [from, estimated_partitions, plan_id, schema_id, &cf, source, reason] () mutable {
                 return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
                     auto sink = ms().make_sink_for_stream_mutation_fragments(source);
-                    auto get_next_mutation_fragment = [source, plan_id, from, s] () mutable {
-                        return source().then([plan_id, from, s] (std::optional<std::tuple<frozen_mutation_fragment>> fmf_opt) mutable {
-                            if (fmf_opt) {
-                                frozen_mutation_fragment& fmf = std::get<0>(fmf_opt.value());
+                    struct stream_mutation_fragments_cmd_status {
+                        bool got_cmd = false;
+                        bool got_end_of_stream = false;
+                    };
+                    auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
+                    auto get_next_mutation_fragment = [source, plan_id, from, s, cmd_status] () mutable {
+                        return source().then([plan_id, from, s, cmd_status] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+                            if (opt) {
+                                auto cmd = std::get<1>(*opt);
+                                if (cmd) {
+                                    cmd_status->got_cmd = true;
+                                    switch (*cmd) {
+                                    case stream_mutation_fragments_cmd::mutation_fragment_data:
+                                        break;
+                                    case stream_mutation_fragments_cmd::error:
+                                        return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender failed"));
+                                    case stream_mutation_fragments_cmd::end_of_stream:
+                                        cmd_status->got_end_of_stream = true;
+                                        return make_ready_future<mutation_fragment_opt>();
+                                    default:
+                                        return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender sent wrong cmd"));
+                                    }
+                                }
+                                frozen_mutation_fragment& fmf = std::get<0>(*opt);
                                 auto sz = fmf.representation().size();
                                 auto mf = fmf.unfreeze(*s);
                                 streaming::get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
                                 return make_ready_future<mutation_fragment_opt>(std::move(mf));
                             } else {
+                                // If the sender has sent stream_mutation_fragments_cmd it means it is
+                                // a node that understands the new protocol. It must send end_of_stream
+                                // before close the stream.
+                                if (cmd_status->got_cmd && !cmd_status->got_end_of_stream) {
+                                    return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender did not sent end_of_stream"));
+                                }
                                 return make_ready_future<mutation_fragment_opt>();
                             }
                         });

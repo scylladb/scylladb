@@ -176,7 +176,7 @@ future<> send_mutations(lw_shared_ptr<send_info> si) {
 future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
   return si->estimate_partitions().then([si] (size_t estimated_partitions) {
     sslog.info("[Stream #{}] Start sending ks={}, cf={}, estimated_partitions={}, with new rpc streaming", si->plan_id, si->cf.schema()->ks_name(), si->cf.schema()->cf_name(), estimated_partitions);
-    return netw::get_local_messaging_service().make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->id).then([si] (rpc::sink<frozen_mutation_fragment> sink, rpc::source<int32_t> source) mutable {
+    return netw::get_local_messaging_service().make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->id).then([si] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd> sink, rpc::source<int32_t> source) mutable {
         auto got_error_from_peer = make_lw_shared<bool>(false);
 
         auto source_op = [source, got_error_from_peer, si] () mutable -> future<> {
@@ -199,17 +199,26 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         }();
 
         auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
-            return do_with(std::move(sink), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment>& sink) {
+            return do_with(std::move(sink), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd>& sink) {
                 return repeat([&sink, si, got_error_from_peer] () mutable {
                     return si->reader(db::no_timeout).then([&sink, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
                         if (mf && !(*got_error_from_peer)) {
                             frozen_mutation_fragment fmf = freeze(*s, *mf);
                             auto size = fmf.representation().size();
                             streaming::get_local_stream_manager().update_progress(si->plan_id, si->id.addr, streaming::progress_info::direction::OUT, size);
-                            return sink(fmf).then([] { return stop_iteration::no; });
+                            return sink(fmf, stream_mutation_fragments_cmd::mutation_fragment_data).then([] { return stop_iteration::no; });
                         } else {
                             return make_ready_future<stop_iteration>(stop_iteration::yes);
                         }
+                    });
+                }).then([&sink] () mutable {
+                    return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::end_of_stream);
+                }).then([&sink] () mutable {
+                    return sink.flush();
+                }).handle_exception([&sink] (std::exception_ptr ep) mutable {
+                    // Notify the receiver the sender has failed
+                    return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::error).then([ep = std::move(ep)] () mutable {
+                        return make_exception_future<>(std::move(ep));
                     });
                 }).finally([&sink] () mutable {
                     return sink.close();
