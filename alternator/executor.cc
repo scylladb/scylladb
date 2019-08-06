@@ -252,7 +252,7 @@ future<json::json_return_type> executor::create_table(std::string content) {
 
     schema_ptr schema = builder.build();
 
-    return _mm.announce_new_column_family(schema, false).then([table_info = std::move(table_info), schema] () mutable {
+    return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([table_info = std::move(table_info), schema] () mutable {
         Json::Value status(Json::objectValue);
         supplement_table_info(table_info, *schema);
         status["TableDescription"] = std::move(table_info);
