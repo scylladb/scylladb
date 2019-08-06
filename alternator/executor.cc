@@ -1239,7 +1239,7 @@ future<json::json_return_type> executor::batch_get_item(std::string content) {
 
     // If got here, all "requests" are valid, so let's start them all
     // in parallel. The requests object are then immediately destroyed.
-    std::vector<future<std::tuple<std::string, std::unique_ptr<rjson::value>>>> response_futures;
+    std::vector<future<std::tuple<std::string, std::optional<rjson::value>>>> response_futures;
     for (const auto& rs : requests) {
         for (const auto &r : rs.requests) {
             dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*rs.schema, std::move(r.pk)))};
@@ -1253,18 +1253,11 @@ future<json::json_return_type> executor::batch_get_item(std::string content) {
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
-            future<std::tuple<std::string, std::unique_ptr<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(db::no_timeout)).then(
+            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(db::no_timeout)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
                 std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get));
-                // Unfortunately, future<std::optional<rjson::value>> doesn't
-                // work because rjson::value doesn't have a non-throwing move
-                // constructor. So we need to convert it to a std::unique_ptr.
-                std::unique_ptr<rjson::value> v;
-                if (json) {
-                    v = std::make_unique<rjson::value>(std::move(*json));
-                }
-                return make_ready_future<std::tuple<std::string, std::unique_ptr<rjson::value>>>(
-                        std::make_tuple(schema->cf_name(), std::move(v)));
+                return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
+                        std::make_tuple(schema->cf_name(), std::move(json)));
             });
             response_futures.push_back(std::move(f));
         }
@@ -1278,10 +1271,10 @@ future<json::json_return_type> executor::batch_get_item(std::string content) {
     // handled it above), but this case does include things like timeouts,
     // unavailable CL, etc.
     return when_all_succeed(response_futures.begin(), response_futures.end()).then(
-            [] (std::vector<std::tuple<std::string, std::unique_ptr<rjson::value>>> responses) {
+            [] (std::vector<std::tuple<std::string, std::optional<rjson::value>>> responses) {
         rjson::value response = rjson::empty_object();
         rjson::set(response, "Responses", rjson::empty_object());
-        for (const auto& t : responses) {
+        for (auto& t : responses) {
             if (!response["Responses"].HasMember(std::get<0>(t).c_str())) {
                 rjson::set_with_string_name(response["Responses"], std::get<0>(t), rjson::empty_array());
             }
