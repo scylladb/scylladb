@@ -235,16 +235,16 @@ future<>
 cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     return repeat([this, which, keepalive, server_addr] {
         ++_connections_being_accepted;
-        return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<connected_socket, socket_address> f_cs_sa) mutable {
+        return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
             --_connections_being_accepted;
             if (_stopping) {
                 f_cs_sa.ignore_ready_future();
                 maybe_idle();
                 return stop_iteration::yes;
             }
-            auto cs_sa = f_cs_sa.get();
-            auto fd = std::get<0>(std::move(cs_sa));
-            auto addr = std::get<1>(std::move(cs_sa));
+            auto cs_sa = f_cs_sa.get0();
+            auto fd = std::move(cs_sa.connection);
+            auto addr = std::move(cs_sa.remote_address);
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
             auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));

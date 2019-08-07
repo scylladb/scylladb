@@ -230,7 +230,8 @@ thrift_server::do_accepts(int which, bool keepalive) {
         return;
     }
     with_gate(_stop_gate, [&, this] {
-        return _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) {
+        return _listeners[which].accept().then([this, which, keepalive] (accept_result ar) {
+            auto&& [fd, addr] = ar;
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
             with_gate(_stop_gate, [&, this] {
