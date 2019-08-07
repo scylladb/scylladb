@@ -66,6 +66,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "../db/view/view_update_generator.hh"
 #include "mutation_source_metadata.hh"
+#include "streaming/stream_mutation_fragments_cmd.hh"
 
 namespace streaming {
 
