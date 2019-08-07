@@ -1087,7 +1087,6 @@ if args.target != '':
 seastar_ldflags = args.user_ldflags
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' % (seastar_ldflags),
                   '--c++-dialect=gnu++17', '--use-std-optional-variant-stringview=1', '--optflags=%s' % (modes['release']['cxx_ld_flags']), ]
-seastar_flags += ['--api-level=1']   # old-style variadic future return from server_socket::accept()
 
 libdeflate_cflags = seastar_cflags
 zstd_cflags = seastar_cflags + ' -Wno-implicit-fallthrough'
