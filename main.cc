@@ -59,6 +59,7 @@
 #include "message/messaging_service.hh"
 #include <seastar/net/dns.hh>
 #include <seastar/core/io_queue.hh>
+#include <seastar/core/abort_on_ebadf.hh>
 
 #include "db/view/view_update_generator.hh"
 #include "service/cache_hitrate_calculator.hh"
@@ -1117,6 +1118,7 @@ int main(int ac, char** av) {
                     return logalloc::shard_tracker().enable_abort_on_bad_alloc();
                 }).get();
             }
+            seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first

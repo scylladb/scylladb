@@ -22,6 +22,7 @@
 #include <seastar/rpc/rpc.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/backtrace.hh>
+#include <seastar/core/abort_on_ebadf.hh>
 
 #include <exception>
 #include <system_error>

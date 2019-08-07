@@ -295,6 +295,7 @@ public:
     named_value<uint16_t> alternator_https_port;
     named_value<sstring> alternator_address;
     named_value<bool> alternator_enforce_authorization;
+    named_value<bool> abort_on_ebadf;
 
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
