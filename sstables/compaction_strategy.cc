@@ -639,8 +639,8 @@ public:
     }
 };
 
-bool compaction_strategy::ignore_partial_runs() const {
-    return _compaction_strategy_impl->ignore_partial_runs();
+bool compaction_strategy::can_compact_partial_runs() const {
+    return _compaction_strategy_impl->can_compact_partial_runs();
 }
 
 

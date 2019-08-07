@@ -207,9 +207,13 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const c
 
     // Filter out sstables that are being compacted.
     for (auto& sst : cf.candidates_for_compaction()) {
-        if (!_compacting_sstables.count(sst) && (!cs.ignore_partial_runs() || !partial_run_identifiers.count(sst->run_identifier()))) {
-            candidates.push_back(sst);
+        if (_compacting_sstables.count(sst)) {
+            continue;
         }
+        if (!cs.can_compact_partial_runs() && partial_run_identifiers.count(sst->run_identifier())) {
+            continue;
+        }
+        candidates.push_back(sst);
     }
     return candidates;
 }

@@ -3638,9 +3638,9 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
 
 // Must be run in a seastar thread
 static
-shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg, const sstables::sstable::version_types version) {
+shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg, const sstables::sstable::version_types version, int64_t generation = 1) {
     auto s = rd.schema();
-    auto sst = env.make_sstable(s, path.string(), 1, version, big);
+    auto sst = env.make_sstable(s, path.string(), generation, version, big);
     sst->write_components(std::move(rd), 1, s, cfg, encoding_stats{}).get();
     sst->load().get();
     return sst;
@@ -5046,4 +5046,62 @@ SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
     subtract(957694089857623813, 6052133625299168475, 1);
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
+    BOOST_REQUIRE(smp::count == 1);
+    return test_env::do_with_async([] (test_env& env) {
+        storage_service_for_tests ssft;
+
+        auto s = schema_builder("tests", "partial_sstable_run_filtered_out_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type).build();
+
+        auto tmp = tmpdir();
+
+        auto cm = make_lw_shared<compaction_manager>();
+        cm->start();
+
+        column_family::config cfg = column_family_test_config();
+        cfg.datadir = tmp.path().string();
+        cfg.enable_commitlog = false;
+        cfg.enable_incremental_backups = false;
+        auto cl_stats = make_lw_shared<cell_locker_stats>();
+        auto tracker = make_lw_shared<cache_tracker>();
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+        cf->start();
+        cf->mark_ready_for_writes();
+
+        utils::UUID partial_sstable_run_identifier = utils::make_random_uuid();
+        mutation mut(s, partition_key::from_exploded(*s, {to_bytes("alpha")}));
+        mut.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 0);
+
+        sstable_writer_config sst_cfg;
+        sst_cfg.run_identifier = partial_sstable_run_identifier;
+        auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), flat_mutation_reader_from_mutations({ std::move(mut) }),
+                                                         sst_cfg, la, 1);
+
+        column_family_test(cf).add_sstable(partial_sstable_run_sst);
+        column_family_test::update_sstables_known_generation(*cf, partial_sstable_run_sst->generation());
+
+        auto generation_exists = [&cf] (int64_t generation) {
+            auto sstables = cf->get_sstables();
+            auto entry = boost::range::find_if(*sstables, [generation] (shared_sstable sst) { return generation == sst->generation(); });
+            return entry != sstables->end();
+        };
+
+        BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
+
+        // register partial sstable run
+        auto c_info = make_lw_shared<compaction_info>();
+        c_info->run_identifier = partial_sstable_run_identifier;
+        cm->register_compaction(c_info);
+
+        cf->compact_all_sstables().get();
+
+        // make sure partial sstable run has none of its fragments compacted.
+        BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
+
+        cm->stop().get();
+    });
 }

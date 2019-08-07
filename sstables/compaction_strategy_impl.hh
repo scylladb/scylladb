@@ -86,7 +86,7 @@ public:
         return _use_clustering_key_filter;
     }
 
-    virtual bool ignore_partial_runs() const {
+    virtual bool can_compact_partial_runs() const {
         return false;
     }
 
