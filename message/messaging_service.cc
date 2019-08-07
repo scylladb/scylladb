@@ -657,6 +657,9 @@ rpc::sink<int32_t> messaging_service::make_sink_for_stream_mutation_fragments(rp
 
 future<rpc::sink<frozen_mutation_fragment>, rpc::source<int32_t>>
 messaging_service::make_sink_and_source_for_stream_mutation_fragments(utils::UUID schema_id, utils::UUID plan_id, utils::UUID cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, msg_addr id) {
+    if (is_stopping()) {
+        return make_exception_future<rpc::sink<frozen_mutation_fragment>, rpc::source<int32_t>>(rpc::closed_error());
+    }
     auto rpc_client = get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, id);
     return rpc_client->make_stream_sink<netw::serializer, frozen_mutation_fragment>().then([this, plan_id, schema_id, cf_id, estimated_partitions, reason, rpc_client] (rpc::sink<frozen_mutation_fragment> sink) mutable {
         auto rpc_handler = rpc()->make_client<rpc::source<int32_t> (utils::UUID, utils::UUID, utils::UUID, uint64_t, streaming::stream_reason, rpc::sink<frozen_mutation_fragment>)>(messaging_verb::STREAM_MUTATION_FRAGMENTS);
