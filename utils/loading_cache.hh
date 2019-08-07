@@ -580,7 +580,9 @@ private:
         }
 
         // Reload all those which value needs to be reloaded.
-        with_gate(_timer_reads_gate, [this] {
+        // We can discard the return value of with_gate() since stop() will wait
+        // got the gate to be closed (and thus for these continuations to complete).
+        (void)with_gate(_timer_reads_gate, [this] {
             auto to_reload = boost::copy_range<utils::chunked_vector<timestamped_val_ptr>>(_lru_list
                     | boost::adaptors::filtered([this] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value().loaded() + _refresh < loading_cache_clock_type::now();
