@@ -213,8 +213,6 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                     });
                 }).then([&sink] () mutable {
                     return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::end_of_stream);
-                }).then([&sink] () mutable {
-                    return sink.flush();
                 }).handle_exception([&sink] (std::exception_ptr ep) mutable {
                     // Notify the receiver the sender has failed
                     return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::error).then([ep = std::move(ep)] () mutable {
