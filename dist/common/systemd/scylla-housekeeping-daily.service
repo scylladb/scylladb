@@ -1,0 +1,14 @@
+[Unit]
+Description=Scylla Housekeeping daily mode
+After=network.target
+
+[Service]
+Type=simple
+User=scylla
+Group=scylla
+EnvironmentFile=/etc/sysconfig/scylla-housekeeping
+ExecStart=/opt/scylladb/scripts/scylla-housekeeping --uuid-file $UUID_FILE -q -c $CONFIG_FILE --repo-files $REPO_FILES version --mode d
+Slice=scylla-helper.slice
+
+[Install]
+WantedBy=multi-user.target

@@ -64,7 +64,7 @@ defines=()
 {{#housekeeping}}
 install_arg="--housekeeping"
 {{/housekeeping}}
-./install.sh --root "$RPM_BUILD_ROOT" $install_arg --target {{target}} --disttype "redhat"
+./install.sh --root "$RPM_BUILD_ROOT" $install_arg
 
 %pre server
 getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -107,6 +107,7 @@ rm -rf $RPM_BUILD_ROOT
 %defattr(-,root,root)
 
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
+%config(noreplace) %{_sysconfdir}/sysconfig/scylla-housekeeping
 %{_sysconfdir}/security/limits.d/scylla.conf
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf

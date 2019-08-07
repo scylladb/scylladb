@@ -17,9 +17,17 @@ override_dh_auto_clean:
 
 override_dh_auto_install:
 	dh_auto_install
-	./install.sh --root "$(CURDIR)/debian/{{product}}-conf" $(install_arg) --target "stable" --pkg "conf" --disttype "debian"
-	./install.sh --root "$(CURDIR)/debian/{{product}}-kernel-conf" $(install_arg) --target "stable" --pkg "kernel-conf" --disttype "debian"
-	./install.sh --root "$(CURDIR)/debian/{{product}}-server" $(install_arg) --target "stable" --pkg "server" --disttype "debian"
+	./install.sh --root "$(CURDIR)/debian/{{product}}-conf" $(install_arg) --sysconfdir "/etc/default" --pkg "conf"
+	./install.sh --root "$(CURDIR)/debian/{{product}}-kernel-conf" $(install_arg) --sysconfdir "/etc/default" --pkg "kernel-conf"
+	./install.sh --root "$(CURDIR)/debian/{{product}}-server" $(install_arg) --sysconfdir "/etc/default" --pkg "server"
+{{#housekeeping}}
+	# XXX: since housekeeping.cfg is mistakenly belongs to different package
+	# in .rpm/.deb, we need this workaround to make package upgradable
+	mv $(CURDIR)/debian/{{product}}-conf/etc/scylla.d/housekeeping.cfg $(CURDIR)/debian/{{product}}-server/etc/scylla.d/housekeeping.cfg
+	rm -rf $(CURDIR)/debian/{{product}}-conf/etc/scylla.d
+{{/housekeeping}}
+	# don't use default sysconfig file, use Debian version
+	cp dist/debian/sysconfig/scylla-housekeeping $(CURDIR)/debian/{{product}}-server/etc/default/
 
 override_dh_installinit:
 {{#scylla}}

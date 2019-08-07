@@ -31,9 +31,8 @@ Options:
   --prefix /prefix         directory prefix (default /usr)
   --python3 /opt/python3   path of the python3 interpreter relative to install root (default /opt/scylladb/python3/bin/python3)
   --housekeeping           enable housekeeping service
-  --target centos          specify target distribution
-  --disttype [redhat|debian] specify type of distribution (redhat or debian)
   --pkg package            specify build package (server/conf/kernel-conf)
+  --sysconfdir /etc/sysconfig   specify sysconfig directory name
   --help                   this helpful message
 EOF
     exit 1
@@ -42,8 +41,8 @@ EOF
 root=/
 prefix=/opt/scylladb
 housekeeping=false
-target=centos
 python3=/opt/scylladb/python3/bin/python3
+sysconfdir=/etc/sysconfig
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -59,20 +58,16 @@ while [ $# -gt 0 ]; do
             housekeeping=true
             shift 1
             ;;
-        "--target")
-            target="$2"
-            shift 2
-            ;;
         "--python3")
             python3="$2"
             shift 2
             ;;
-        "--disttype")
-            disttype="$2"
-            shift 2
-            ;;
         "--pkg")
             pkg="$2"
+            shift 2
+            ;;
+        "--sysconfdir")
+            sysconfdir="$2"
             shift 2
             ;;
         "--help")
@@ -116,37 +111,14 @@ rprefix="$root/$prefix"
 retc="$root/etc"
 rusr="$root/usr"
 rdoc="$rprefix/share/doc"
-
-is_redhat=false
-is_debian=false
-MUSTACHE_DIST="\"$target\": true, \"target\": \"$target\""
-if [ "$disttype" = "redhat" ]; then
-    MUSTACHE_DIST="\"redhat\": true, $MUSTACHE_DIST"
-    is_redhat=true
-    sysconfdir=sysconfig
-elif [ "$disttype" = "debian" ]; then
-    MUSTACHE_DIST="\"debian\": true, $MUSTACHE_DIST"
-    is_debian=true
-    sysconfdir=default
-else
-    print_usage
-    exit 1
-fi
-
-mkdir -p build
-pystache dist/common/systemd/scylla-server.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-server.service
-pystache dist/common/systemd/scylla-housekeeping-daily.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-daily.service
-pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-restart.service
-
+rsysconfdir="$root/$sysconfdir"
 
 if [ -z "$pkg" ] || [ "$pkg" = "conf" ]; then
     install -d -m755 "$retc"/scylla
     install -d -m755 "$retc"/scylla.d
     install -m644 conf/scylla.yaml -Dt "$retc"/scylla
     install -m644 conf/cassandra-rackdc.properties -Dt "$retc"/scylla
-    # XXX: since housekeeping.cfg is mistakenly belongs to different package
-    # in .rpm/.deb, we need this workaround to make package upgradable
-    if $is_redhat && $housekeeping; then
+    if $housekeeping; then
         install -m644 conf/housekeeping.cfg -Dt "$retc"/scylla.d
     fi
 fi
@@ -155,15 +127,14 @@ if [ -z "$pkg" ] || [ "$pkg" = "kernel-conf" ]; then
     install -m644 dist/common/sysctl.d/*.conf -Dt "$rusr"/lib/sysctl.d
 fi
 if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
-    install -m755 -d "$retc/$sysconfdir"
+    install -m755 -d "$rsysconfdir"
     install -m755 -d "$retc/security/limits.d"
     install -m755 -d "$retc/scylla.d"
-    install -m644 dist/common/sysconfig/scylla-server -Dt "$retc"/$sysconfdir
+    install -m644 dist/common/sysconfig/* -Dt "$rsysconfdir"
     install -m644 dist/common/limits.d/scylla.conf -Dt "$retc"/security/limits.d
     install -m644 dist/common/scylla.d/*.conf -Dt "$retc"/scylla.d
 
     install -d -m755 "$retc"/scylla "$rusr/lib/systemd/system" "$rusr/bin" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts"
-    install -m644 build/*.service -Dt "$rusr"/lib/systemd/system
     install -m644 dist/common/systemd/*.service -Dt "$rusr"/lib/systemd/system
     install -m644 dist/common/systemd/*.slice -Dt "$rusr"/lib/systemd/system
     install -m644 dist/common/systemd/*.timer -Dt "$rusr"/lib/systemd/system
@@ -179,11 +150,6 @@ if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
     ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
 
-    # XXX: since housekeeping.cfg is mistakenly belongs to different package
-    # in .rpm/.deb, we need this workaround to make package upgradable
-    if $is_debian && $housekeeping; then
-        install -m644 conf/housekeeping.cfg -Dt "$retc"/scylla.d
-    fi
     install -d -m755 "$rdoc"/scylla
     install -m644 README.md -Dt "$rdoc"/scylla/
     install -m644 README-DPDK.md -Dt "$rdoc"/scylla
@@ -213,6 +179,23 @@ if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
     done
+    if [ "$sysconfdir" != "/etc/sysconfig" ]; then
+        install -d -m755 "$retc"/systemd/system/scylla-server.service.d
+        cat << EOS > "$retc"/systemd/system/scylla-server.service.d/sysconfdir.conf
+[Service]
+EnvironmentFile=
+EnvironmentFile=$sysconfdir/scylla-server
+EnvironmentFile=/etc/scylla.d/*.conf
+EOS
+        for i in daily restart; do
+            install -d -m755 "$retc"/systemd/system/scylla-housekeeping-$i.service.d
+            cat << EOS > "$retc"/systemd/system/scylla-housekeeping-$i.service.d/sysconfdir.conf
+[Service]
+EnvironmentFile=
+EnvironmentFile=$sysconfdir/scylla-housekeeping
+EOS
+        done
+    fi
 
     install -m755 scylla-gdb.py -Dt "$rprefix"/scripts/
 
