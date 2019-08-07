@@ -85,7 +85,7 @@ if [ -z "$NINJA" ]; then
     exit 1
 fi
 
-FLAGS="--with=scylla --with=iotune --enable-dpdk --mode=$MODE"
+FLAGS="--enable-dpdk --mode=$MODE"
 if [ -n "$COMPILER" ]; then
     FLAGS="$FLAGS --compiler $COMPILER"
 fi
