@@ -4,6 +4,7 @@
 
 print_usage() {
     echo "build_reloc.sh --jobs 2"
+    echo "  --mode  specify build mode (default: 'release')"
     echo "  --jobs  specify number of jobs"
     echo "  --clean clean build directory"
     echo "  --compiler  C++ compiler path"
@@ -12,6 +13,7 @@ print_usage() {
     exit 1
 }
 
+MODE=release
 JOBS=
 CLEAN=
 COMPILER=
@@ -19,6 +21,10 @@ CCOMPILER=
 NODEPS=
 while [ $# -gt 0 ]; do
     case "$1" in
+        "--mode")
+            MODE=$2
+            shift 2
+            ;;
         "--jobs")
             JOBS="-j$2"
             shift 2
@@ -62,8 +68,8 @@ if [ "$CLEAN" = "yes" ]; then
     rm -rf build
 fi
 
-if [ -f build/release/scylla-package.tar.gz ]; then
-    rm build/release/scylla-package.tar.gz
+if [ -f build/$MODE/scylla-package.tar.gz ]; then
+    rm build/$MODE/scylla-package.tar.gz
 fi
 
 if [ -z "$NODEPS" ]; then
@@ -79,7 +85,7 @@ if [ -z "$NINJA" ]; then
     exit 1
 fi
 
-FLAGS="--with=scylla --with=iotune --enable-dpdk --mode=release"
+FLAGS="--with=scylla --with=iotune --enable-dpdk --mode=$MODE"
 if [ -n "$COMPILER" ]; then
     FLAGS="$FLAGS --compiler $COMPILER"
 fi
@@ -88,4 +94,4 @@ if [ -n "$CCOMPILER" ]; then
 fi
 ./configure.py $FLAGS
 python3 -m compileall ./dist/common/scripts/ ./seastar/scripts/perftune.py ./tools/scyllatop
-$NINJA $JOBS build/release/scylla-package.tar.gz
+$NINJA $JOBS build/$MODE/scylla-package.tar.gz
