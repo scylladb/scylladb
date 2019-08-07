@@ -90,6 +90,7 @@
 #include "frozen_mutation.hh"
 #include "flat_mutation_reader.hh"
 #include "streaming/stream_manager.hh"
+#include "streaming/stream_mutation_fragments_cmd.hh"
 
 namespace netw {
 

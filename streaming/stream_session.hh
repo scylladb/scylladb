@@ -350,10 +350,4 @@ private:
     future<> receiving_failed(UUID cf_id);
 };
 
-enum class stream_mutation_fragments_cmd : uint8_t {
-    error,
-    mutation_fragment_data,
-    end_of_stream,
-};
-
 } // namespace streaming

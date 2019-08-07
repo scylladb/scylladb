@@ -36,6 +36,7 @@
 #include "tracing/tracing.hh"
 #include "digest_algorithm.hh"
 #include "streaming/stream_reason.hh"
+#include "streaming/stream_mutation_fragments_cmd.hh"
 #include "cache_temperature.hh"
 
 #include <list>
