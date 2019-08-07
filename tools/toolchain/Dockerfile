@@ -10,4 +10,4 @@ RUN dnf -y install 'dnf-command(copr)' \
     && echo 'ALL ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers \
     && cp system-auth /etc/pam.d \
     && echo 'Defaults !requiretty' >> /etc/sudoers
-
+CMD /bin/bash
