@@ -37,6 +37,10 @@ if [[ "$1" = -* ]]; then
     shift
 fi
 
+MAVEN_LOCAL_REPO="$HOME/.m2"
+
+mkdir -p "$MAVEN_LOCAL_REPO"
+
 docker_common_args=(
        --network host \
        -u "$(id -u):$(id -g)" \
@@ -45,6 +49,7 @@ docker_common_args=(
        -v "$PWD:$PWD:z" \
        -v "$toplevel:$toplevel:z" \
        -v /tmp:/tmp:z \
+       -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO:z" \
        -v /etc/passwd:/etc/passwd:ro \
        -v /etc/group:/etc/group:ro \
        -v /etc/localtime:/etc/localtime:ro \
