@@ -985,7 +985,6 @@ future<json::json_return_type> executor::update_item(std::string content) {
     rjson::value update_info = rjson::parse(content);
     elogger.trace("update_item {}", update_info);
     schema_ptr schema = get_table(_proxy, update_info);
-    // FIXME: handle missing Key.
     if (!update_info.HasMember("Key")) {
         throw api_error("ValidationException", "UpdateItem requires a Key parameter");
     }
