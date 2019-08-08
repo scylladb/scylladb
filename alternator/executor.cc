@@ -950,11 +950,12 @@ static bool check_needs_read_before_write(const std::vector<parsed::update_expre
 // FIXME: Getting the previous item does not offer any synchronization guarantees nor linearizability.
 // It should be overridden once we can leverage a consensus protocol.
 static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(service::storage_proxy& proxy, schema_ptr schema, const partition_key& pk, const clustering_key& ck,
-        bool has_update_expression, const parsed::update_expression& expression) {
+        bool has_update_expression, const parsed::update_expression& expression, alternator::stats& stats) {
     const bool needs_read_before_write = has_update_expression && check_needs_read_before_write(expression.actions());
     if (!needs_read_before_write) {
         return make_ready_future<std::unique_ptr<rjson::value>>();
     }
+    stats.reads_before_write++;
 
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*schema, pk))};
     std::vector<query::clustering_range> bounds;
@@ -972,7 +973,6 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(service::st
 
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
-    //TODO(sarna): RBW stats
     return proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(db::no_timeout, empty_service_permit())).then(
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
         auto previous_item = describe_item(schema, partition_slice, *selection, std::move(qr.query_result), {});
@@ -1022,7 +1022,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
         attribute_updates = update_info["AttributeUpdates"];
     }
 
-    return maybe_get_previous_item(_proxy, schema, pk, ck, has_update_expression, expression).then(
+    return maybe_get_previous_item(_proxy, schema, pk, ck, has_update_expression, expression, _stats).then(
             [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck),
              update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector), attribute_updates = rjson::copy(attribute_updates), ts] (std::unique_ptr<rjson::value> previous_item) mutable {
         if (has_update_expression) {
