@@ -55,7 +55,8 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
 
         int i = 0;
         for (auto& p : e->promises) {
-            e->queue.run_with_ordered_post_op(i, [&p, i] {
+            // FIXME: discarded future.
+            (void)e->queue.run_with_ordered_post_op(i, [&p, i] {
                 return p.get_future().then([i] {
                     return make_ready_future<int>(i);
                 });
@@ -110,7 +111,8 @@ SEASTAR_TEST_CASE(test_queue_ordering_multi_ops) {
             int i = dist(e1);
 
             if (e->queue.has_operation(i) || (!e->queue.empty() && e->queue.highest_key() < i)) {
-                e->queue.run_with_ordered_post_op(i, [e, i] {
+                // FIXME: discarded future.
+                (void)e->queue.run_with_ordered_post_op(i, [e, i] {
                     return e->sem.wait().then([i] {
                         return make_ready_future<int>(i);
                     });

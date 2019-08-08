@@ -909,7 +909,8 @@ future<> run_concurrently(size_t count, size_t concurrency, noncopyable_function
     return do_with(std::move(func), gate(), semaphore(concurrency), std::exception_ptr(),
             [count] (noncopyable_function<future<>(size_t)>& func, gate& gate, semaphore& sem, std::exception_ptr& error) {
         for (size_t i = 0; i < count; ++i) {
-            with_gate(gate, [&func, &sem, &error, i] {
+            // Future is waited on indirectly (via `gate`).
+            (void)with_gate(gate, [&func, &sem, &error, i] {
                 return with_semaphore(sem, 1, [&func, &error, i] {
                     if (error) {
                         tlog.trace("Skipping func({}) due to previous func() returning with error", i);

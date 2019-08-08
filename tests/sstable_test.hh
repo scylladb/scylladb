@@ -633,7 +633,8 @@ public:
             , _listing(_f.list_directory([this] (directory_entry de) { return _remove(de); })) {
     }
     ~test_setup() {
-        _f.close().finally([save = _f] {});
+        // FIXME: discarded future.
+        (void)_f.close().finally([save = _f] {});
     }
 protected:
     future<> _create_directory(sstring name) {

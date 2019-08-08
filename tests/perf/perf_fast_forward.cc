@@ -1730,7 +1730,8 @@ static std::initializer_list<test_group> test_groups = {
 auto make_compaction_disabling_guard(std::vector<table*> tables) {
     shared_promise<> pr;
     for (auto&& t : tables) {
-        t->run_with_compaction_disabled([f = shared_future<>(pr.get_shared_future())] {
+        // FIXME: discarded future.
+        (void)t->run_with_compaction_disabled([f = shared_future<>(pr.get_shared_future())] {
             return f.get_future();
         });
     }

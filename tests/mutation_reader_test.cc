@@ -1895,7 +1895,8 @@ public:
                 std::move(trace_state), fwd_mr);
     }
     virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
-        reader.then([shard, this] (stopped_reader&& reader) {
+        // Move to the background.
+        (void)reader.then([shard, this] (stopped_reader&& reader) {
             return smp::submit_to(shard, [handle = std::move(reader.handle), ctx = std::move(_contexts[shard])] () mutable {
                 ctx.semaphore->unregister_inactive_read(std::move(*handle));
             });
@@ -1908,7 +1909,8 @@ public:
                 _contexts[shard].semaphore = make_foreign(std::make_unique<reader_concurrency_semaphore>(0, std::numeric_limits<ssize_t>::max()));
                  // Add a waiter, so that all registered inactive reads are
                  // immediately evicted.
-                _contexts[shard].semaphore->wait_admission(1);
+                 // We don't care about the returned future.
+                (void)_contexts[shard].semaphore->wait_admission(1);
             } else {
                 _contexts[shard].semaphore = make_foreign(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}));
             }
@@ -2614,7 +2616,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
         auto expected_reader = flat_mutation_reader_from_mutations(expected_muts);
 
-        handle.push(std::move(*expected_reader(db::no_timeout).get0()));
+        handle.push(std::move(*expected_reader(db::no_timeout).get0())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
@@ -2644,7 +2646,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
         auto expected_reader = flat_mutation_reader_from_mutations(expected_muts);
 
-        handle.push(std::move(*expected_reader(db::no_timeout).get0()));
+        handle.push(std::move(*expected_reader(db::no_timeout).get0())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
@@ -2665,7 +2667,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
         auto expected_reader = flat_mutation_reader_from_mutations(expected_muts);
 
-        handle.push(std::move(*expected_reader(db::no_timeout).get0()));
+        handle.push(std::move(*expected_reader(db::no_timeout).get0())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 

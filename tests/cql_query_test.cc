@@ -1209,10 +1209,8 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
         }).then([&e] {
             // overwrite whole map, but bad syntax
             return e.execute_cql("update cf set map1 = {1003, 4003} where p1 = 'key1';");
-        }).then_wrapped([](future<shared_ptr<cql_transport::messages::result_message>> f) {
+        }).then_wrapped([&e](future<shared_ptr<cql_transport::messages::result_message>> f) {
             BOOST_REQUIRE(f.failed());
-            std::move(f).discard_result();
-        }).then([&e] {
             // overwrite whole map
             return e.execute_cql(
                 "update cf set map1 = {1001: 5001, 1002: 5002, 1003: 5003} where p1 = 'key1';").discard_result();
@@ -1833,11 +1831,11 @@ SEASTAR_TEST_CASE(test_validate_table) {
 SEASTAR_TEST_CASE(test_table_compression) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tb1 (foo text PRIMARY KEY, bar text) with compression = { };").get();
-        e.require_table_exists("ks", "tb1");
+        e.require_table_exists("ks", "tb1").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb1")->get_compressor_params().get_compressor() == nullptr);
 
         e.execute_cql("create table tb5 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : '' };").get();
-        e.require_table_exists("ks", "tb5");
+        e.require_table_exists("ks", "tb5").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb5")->get_compressor_params().get_compressor() == nullptr);
 
         BOOST_REQUIRE_THROW(e.execute_cql(
@@ -1851,20 +1849,20 @@ SEASTAR_TEST_CASE(test_table_compression) {
                 std::exception);
 
         e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 2 };").get();
-        e.require_table_exists("ks", "tb2");
+        e.require_table_exists("ks", "tb2").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().get_compressor() == compressor::lz4);
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().chunk_length() == 2 * 1024);
 
         e.execute_cql("create table tb3 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'DeflateCompressor' };").get();
-        e.require_table_exists("ks", "tb3");
+        e.require_table_exists("ks", "tb3").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb3")->get_compressor_params().get_compressor() == compressor::deflate);
 
         e.execute_cql("create table tb4 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'org.apache.cassandra.io.compress.DeflateCompressor' };").get();
-        e.require_table_exists("ks", "tb4");
+        e.require_table_exists("ks", "tb4").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb4")->get_compressor_params().get_compressor() == compressor::deflate);
 
         e.execute_cql("create table tb6 (foo text PRIMARY KEY, bar text);").get();
-        e.require_table_exists("ks", "tb6");
+        e.require_table_exists("ks", "tb6").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb6")->get_compressor_params().get_compressor() == compressor::lz4);
     });
 }
@@ -2008,7 +2006,7 @@ SEASTAR_TEST_CASE(test_types) {
                 "    s time,"
                 "    u duration,"
                 ");").get();
-        e.require_table_exists("ks", "all_types");
+        e.require_table_exists("ks", "all_types").get();
 
         e.execute_cql(
             "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) VALUES ("
@@ -2124,7 +2122,7 @@ SEASTAR_TEST_CASE(test_types) {
 SEASTAR_TEST_CASE(test_order_by) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table torder (p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2));").discard_result().get();
-        e.require_table_exists("ks", "torder");
+        e.require_table_exists("ks", "torder").get();
 
         e.execute_cql("insert into torder (p1, c1, c2, r1) values (0, 1, 2, 3);").get();
         e.execute_cql("insert into torder (p1, c1, c2, r1) values (0, 2, 1, 0);").get();
@@ -2296,7 +2294,7 @@ SEASTAR_TEST_CASE(test_order_by_validate) {
 SEASTAR_TEST_CASE(test_multi_column_restrictions) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tmcr (p1 int, c1 int, c2 int, c3 int, r1 int, PRIMARY KEY (p1, c1, c2, c3));").get();
-        e.require_table_exists("ks", "tmcr");
+        e.require_table_exists("ks", "tmcr").get();
         e.execute_cql("insert into tmcr (p1, c1, c2, c3, r1) values (0, 0, 0, 0, 0);").get();
         e.execute_cql("insert into tmcr (p1, c1, c2, c3, r1) values (0, 0, 0, 1, 1);").get();
         e.execute_cql("insert into tmcr (p1, c1, c2, c3, r1) values (0, 0, 1, 0, 2);").get();
@@ -2370,7 +2368,7 @@ SEASTAR_TEST_CASE(test_multi_column_restrictions) {
 SEASTAR_TEST_CASE(test_select_distinct) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tsd (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1));").get();
-        e.require_table_exists("ks", "tsd");
+        e.require_table_exists("ks", "tsd").get();
         e.execute_cql("insert into tsd (p1, c1, r1) values (0, 0, 0);").get();
         e.execute_cql("insert into tsd (p1, c1, r1) values (1, 1, 1);").get();
         e.execute_cql("insert into tsd (p1, c1, r1) values (1, 1, 2);").get();
@@ -2392,7 +2390,7 @@ SEASTAR_TEST_CASE(test_select_distinct) {
         }
 
         e.execute_cql("create table tsd2 (p1 int, p2 int, c1 int, r1 int, PRIMARY KEY ((p1, p2), c1));").get();
-        e.require_table_exists("ks", "tsd2");
+        e.require_table_exists("ks", "tsd2").get();
         e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (0, 0, 0, 0);").get();
         e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (0, 0, 1, 1);").get();
         e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (1, 1, 0, 0);").get();
@@ -2509,7 +2507,7 @@ APPLY BATCH;)"
 SEASTAR_TEST_CASE(test_in_restriction) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tir (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1));").get();
-        e.require_table_exists("ks", "tir");
+        e.require_table_exists("ks", "tir").get();
         e.execute_cql("insert into tir (p1, c1, r1) values (0, 0, 0);").get();
         e.execute_cql("insert into tir (p1, c1, r1) values (1, 0, 1);").get();
         e.execute_cql("insert into tir (p1, c1, r1) values (1, 1, 2);").get();
@@ -2567,7 +2565,7 @@ SEASTAR_TEST_CASE(test_in_restriction) {
         }
 
         e.execute_cql("create table tir2 (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1,r1));").get();
-        e.require_table_exists("ks", "tir2");
+        e.require_table_exists("ks", "tir2").get();
         e.execute_cql("insert into tir2 (p1, c1, r1) values (0, 0, 0);").get();
         e.execute_cql("insert into tir2 (p1, c1, r1) values (1, 0, 1);").get();
         e.execute_cql("insert into tir2 (p1, c1, r1) values (1, 1, 2);").get();

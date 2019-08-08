@@ -4286,7 +4286,7 @@ SEASTAR_TEST_CASE(test_conflicting_batch) {
 
         BOOST_TEST_PASSPOINT();
 
-        e.execute_cql("INSERT INTO t (p, c, v) VALUES (0, 0, 0)");
+        e.execute_cql("INSERT INTO t (p, c, v) VALUES (0, 0, 0)").get();
         eventually([&] {
             auto msg = e.execute_cql("SELECT * FROM mv").get0();
             assert_that(msg).is_rows().with_rows({

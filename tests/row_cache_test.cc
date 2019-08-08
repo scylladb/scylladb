@@ -1174,7 +1174,8 @@ public:
 
             auto f1 = p1.get_future();
 
-            p2.get_future().then([p1 = std::move(p1), p3 = std::move(_p)] () mutable {
+            // Intentional, the future is waited on indirectly.
+            (void)p2.get_future().then([p1 = std::move(p1), p3 = std::move(_p)] () mutable {
                 p1.set_value();
                 p3.set_value();
             });
