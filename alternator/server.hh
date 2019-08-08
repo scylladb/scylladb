@@ -22,7 +22,7 @@ class server {
 public:
     server(seastar::sharded<executor>& executor) : _executor(executor) {}
 
-    seastar::future<> init(uint16_t port);
+    seastar::future<> init(net::inet_address addr, uint16_t port);
 private:
     void set_routes(seastar::httpd::routes& r);
 };

@@ -284,6 +284,7 @@ public:
     named_value<bool> abort_on_internal_error;
 
     named_value<uint16_t> alternator_port;
+    named_value<sstring> alternator_address;
 
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
