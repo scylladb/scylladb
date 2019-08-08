@@ -80,25 +80,54 @@ static void supplement_table_info(rjson::value& descr, const schema& schema) {
     rjson::set(descr, "TableId", rjson::from_string(schema_id_str));
 }
 
+// We would have liked to support table names up to 255 bytes, like DynamoDB.
+// But Scylla creates a directory whose name is the table's name plus 33
+// bytes (dash and UUID), and since directory names are limited to 255 bytes,
+// we need to limit table names to 222 bytes, instead of 255.
+// See https://github.com/scylladb/scylla/issues/4480
+static constexpr int max_table_name_length = 222;
+
 // The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
 // specifies that table names "names must be between 3 and 255 characters long
 // and can contain only the following characters: a-z, A-Z, 0-9, _ (underscore), - (dash), . (dot)
 // validate_table_name throws the appropriate api_error if this validation fails.
 static void validate_table_name(const std::string& name) {
-    // FIXME: Although we would like to support table names up to 255
-    // bytes, like DynamoDB, Scylla creates a directory whose name is the
-    // table's name plus 33 bytes (dash and UUID), and since directory names
-    // are limited to 255 bytes, we need to limit table names to 222 bytes,
-    // instead of 255. See https://github.com/scylladb/scylla/issues/4480
-    if (name.length() < 3 || name.length() > 222) {
+    if (name.length() < 3 || name.length() > max_table_name_length) {
         throw api_error("ValidationException",
-                "TableName must be at least 3 characters long and at most 222 characters long");
+                format("TableName must be at least 3 characters long and at most {} characters long", max_table_name_length));
     }
     static const std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
     if (!std::regex_match(name.c_str(), valid_table_name_chars)) {
         throw api_error("ValidationException",
                 "TableName must satisfy regular expression pattern: [a-zA-Z0-9_.-]+");
     }
+}
+
+// In DynamoDB index names are local to a table, while in Scylla, materialized
+// view names are global (in a keyspace). So we need to compose a unique name
+// for the view taking into account both the table's name and the index name.
+// We concatenate the table and index name separated by a ":" character
+// (a character not allowed by DynamoDB in ordinary table names).
+// The downside of this approach is that it limits the sum of the lengths,
+// instead of each component individually as DynamoDB does.
+// The view_name() function assumes the table_name has already been validated
+// but validates the legality of index_name and the combination of both.
+static std::string view_name(const std::string& table_name, const std::string& index_name) {
+    static const std::regex valid_index_name_chars ("[a-zA-Z0-9_.-]*");
+    if (index_name.length() < 3) {
+        throw api_error("ValidationException", "IndexName must be at least 3 characters long");
+    }
+    if (!std::regex_match(index_name.c_str(), valid_index_name_chars)) {
+        throw api_error("ValidationException",
+                format("IndexName '{}' must satisfy regular expression pattern: [a-zA-Z0-9_.-]+", index_name));
+    }
+    std::string ret = table_name + ":" + index_name;
+    if (ret.length() > max_table_name_length) {
+        throw api_error("ValidationException",
+                format("The total length of TableName ('{}') and IndexName ('{}') cannot exceed {} characters",
+                        table_name, index_name, max_table_name_length - 1));
+    }
+    return ret;
 }
 
 /** Extract table name from a request.
@@ -133,6 +162,40 @@ static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& r
     } catch(no_such_column_family&) {
         throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
+    }
+}
+
+// get_table_or_view() is similar to to get_table(), except it returns either
+// a table or a materialized view from which to read, based on the TableName
+// and optional IndexName in the request. Only requests like Query and Scan
+// which allow IndexName should use this function.
+static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
+    std::string table_name = get_table_name(request);
+    const rjson::value* index_name = rjson::find(request, "IndexName");
+    std::string orig_table_name;
+    if (index_name) {
+        if (index_name->IsString()) {
+            orig_table_name = std::move(table_name);
+            table_name = view_name(orig_table_name, index_name->GetString());
+        } else {
+            throw api_error("ValidationException",
+                    format("Non-string IndexName '{}'", index_name->GetString()));
+        }
+    }
+    try {
+        return proxy.get_db().local().find_schema(executor::KEYSPACE_NAME, table_name);
+    } catch(no_such_column_family&) {
+        if (index_name) {
+            // The "Query" documentation specifies that if "The operation
+            // tried to access a nonexistent table or index" it should return
+            // ResourceNotFoundException. But in practice, DynamoDB returns a
+            // ValidationException in the index case.
+            throw api_error("ValidationException",
+                format("Requested resource not found: Table {} index {} not found", orig_table_name, index_name->GetString()));
+        } else {
+            throw api_error("ResourceNotFoundException",
+                format("Requested resource not found: Table: {} not found", table_name));
+        }
     }
 }
 
@@ -174,8 +237,7 @@ future<json::json_return_type> executor::delete_table(std::string content) {
         throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
     }
-
-    return _mm.announce_column_family_drop(KEYSPACE_NAME, table_name).then([table_name = std::move(table_name)] {
+    return _mm.announce_column_family_drop(KEYSPACE_NAME, table_name, false, service::migration_manager::drop_views::yes).then([table_name = std::move(table_name)] {
         // FIXME: need more attributes?
         rjson::value table_description = rjson::empty_object();
         rjson::set(table_description, "TableName", rjson::from_string(table_name));
@@ -215,45 +277,127 @@ static void add_column(schema_builder& builder, const std::string& name, const r
             format("KeySchema key '{}' missing in AttributeDefinitions", name));
 }
 
+// Parse the KeySchema request attribute, which specifies the column names
+// for a key. A KeySchema must include up to two elements, the first must be
+// the HASH key name, and the second one, if exists, must be a RANGE key name.
+// The function returns the two column names - the first is the hash key
+// and always present, the second is the range key and may be an empty string.
+static std::pair<std::string, std::string> parse_key_schema(const rjson::value& obj) {
+    const rjson::value *key_schema;
+    if (!obj.IsObject() || !(key_schema = rjson::find(obj, "KeySchema"))) {
+        throw api_error("ValidationException", "Missing KeySchema member");
+    }
+    if (!key_schema->IsArray() || key_schema->Size() < 1 || key_schema->Size() > 2) {
+        throw api_error("ValidationException", "KeySchema must list exactly one or two key columns");
+    }
+    if (!(*key_schema)[0].IsObject()) {
+        throw api_error("ValidationException", "First element of KeySchema must be an object");
+    }
+    const rjson::value *v = rjson::find((*key_schema)[0], "KeyType");
+    if (!v || !v->IsString() || v->GetString() != std::string("HASH")) {
+        throw api_error("ValidationException", "First key in KeySchema must be a HASH key");
+    }
+    v = rjson::find((*key_schema)[0], "AttributeName");
+    if (!v || !v->IsString()) {
+        throw api_error("ValidationException", "First key in KeySchema must have string AttributeName");
+    }
+    std::string hash_key = v->GetString();
+    std::string range_key;
+    if (key_schema->Size() == 2) {
+        if (!(*key_schema)[1].IsObject()) {
+            throw api_error("ValidationException", "Second element of KeySchema must be an object");
+        }
+        v = rjson::find((*key_schema)[1], "KeyType");
+        if (!v || !v->IsString() || v->GetString() != std::string("RANGE")) {
+            throw api_error("ValidationException", "Second key in KeySchema must be a RANGE key");
+        }
+        v = rjson::find((*key_schema)[1], "AttributeName");
+        if (!v || !v->IsString()) {
+            throw api_error("ValidationException", "Second key in KeySchema must have string AttributeName");
+        }
+        range_key = v->GetString();
+    }
+    return {hash_key, range_key};
+}
+
+
 future<json::json_return_type> executor::create_table(std::string content) {
     _stats.api_operations.create_table++;
     rjson::value table_info = rjson::parse(content);
     elogger.trace("Creating table {}", table_info);
     std::string table_name = get_table_name(table_info);
-    const rjson::value& key_schema = table_info["KeySchema"];
     const rjson::value& attribute_definitions = table_info["AttributeDefinitions"];
 
     schema_builder builder(KEYSPACE_NAME, table_name);
-    // DynamoDB requires that KeySchema includes up to two elements, the
-    // first must be a HASH, the optional second one can be a RANGE.
-    // These key names must also be present in the attributes_definitions.
-    if (!key_schema.IsArray() || key_schema.Size() < 1 || key_schema.Size() > 2) {
-        throw api_error("ValidationException",
-                "KeySchema must list exactly one or two key columns");
-    }
-    if (key_schema[0]["KeyType"] != "HASH") {
-        throw api_error("ValidationException",
-                "First key in KeySchema must be a HASH key");
-    }
-    add_column(builder, key_schema[0]["AttributeName"].GetString(), attribute_definitions, column_kind::partition_key);
-    if (key_schema.Size() == 2) {
-        if (key_schema[1]["KeyType"] != "RANGE") {
-            throw api_error("ValidationException",
-                    "Second key in KeySchema must be a RANGE key");
-        }
-        add_column(builder, key_schema[1]["AttributeName"].GetString(), attribute_definitions, column_kind::clustering_key);
+    auto [hash_key, range_key] = parse_key_schema(table_info);
+    add_column(builder, hash_key, attribute_definitions, column_kind::partition_key);
+    if (!range_key.empty()) {
+        add_column(builder, range_key, attribute_definitions, column_kind::clustering_key);
     }
     builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
-    if (table_info.HasMember("GlobalSecondaryIndexes")) {
-        throw api_error("ValidationException", "FIXME: GSI not yet supported.");
-    }
     schema_ptr schema = builder.build();
 
-    return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([table_info = std::move(table_info), schema] () mutable {
-        rjson::value status = rjson::empty_object();
-        supplement_table_info(table_info, *schema);
-        rjson::set(status, "TableDescription", std::move(table_info));
-        return make_ready_future<json::json_return_type>(make_jsonable(std::move(status)));
+    // Parse GlobalSecondaryIndexes parameters before creating the base
+    // table, so if we have a parse errors we can fail without creating
+    // any table.
+    const rjson::value* gsi = rjson::find(table_info, "GlobalSecondaryIndexes");
+    std::vector<schema_builder> view_builders;
+    if (gsi) {
+        if (!gsi->IsArray()) {
+            throw api_error("ValidationException", "GlobalSecondaryIndexes must be an array.");
+        }
+        for (const rjson::value& g : gsi->GetArray()) {
+            const rjson::value* index_name = rjson::find(g, "IndexName");
+            if (!index_name || !index_name->IsString()) {
+                throw api_error("ValidationException", "GlobalSecondaryIndexes IndexName must be a string.");
+            }
+            std::string vname(view_name(table_name, index_name->GetString()));
+            elogger.trace("Adding GSI {}", index_name->GetString());
+            // FIXME: read and handle "Projection" parameter. This will
+            // require the MV code to copy just parts of the attrs map.
+            schema_builder view_builder(KEYSPACE_NAME, vname);
+            auto [view_hash_key, view_range_key] = parse_key_schema(g);
+            if (view_hash_key != hash_key && view_hash_key != range_key) {
+                throw api_error("ValidationException", "FIXME: indexing non-key attributes not yet implemented!");
+            }
+            add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
+            if (!view_range_key.empty()) {
+                if (view_range_key != hash_key && view_range_key != range_key) {
+                    throw api_error("ValidationException", "FIXME: indexing non-key attributes not yet implemented!");
+                }
+                add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
+            }
+            // Base key columns which aren't part of the index's key need to
+            // be added to the view nontheless, as (additional) clustering
+            // key(s).
+            if  (hash_key != view_hash_key && hash_key != view_range_key) {
+                add_column(view_builder, hash_key, attribute_definitions, column_kind::clustering_key);
+            }
+            if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
+                add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
+            }
+            view_builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
+            // Note above we do didn't need to add virtual columns, as all
+            // base columns were copied to view. TODO: reconsider the need
+            // for virtual columns when we support Projection.
+            sstring where_clause = "\"" + view_hash_key + "\" IS NOT NULL";
+            if (!view_range_key.empty()) {
+                where_clause = where_clause + " AND \"" + view_hash_key + "\" IS NOT NULL";
+            }
+            const bool include_all_columns = true;
+            view_builder.with_view_info(*schema, include_all_columns, where_clause);
+            view_builders.emplace_back(std::move(view_builder));
+        }
+    }
+    return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
+        return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
+            return service::get_local_migration_manager().announce_new_view(view_ptr(builder.build()));
+        }).then([table_info = std::move(table_info), schema] () mutable {
+            rjson::value status = rjson::empty_object();
+            supplement_table_info(table_info, *schema);
+            rjson::set(status, "TableDescription", std::move(table_info));
+            return make_ready_future<json::json_return_type>(make_jsonable(std::move(status)));
+        });
     }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
         return make_exception_future<json::json_return_type>(
                 api_error("ResourceInUseException",
@@ -1438,7 +1582,7 @@ future<json::json_return_type> executor::scan(std::string content) {
     rjson::value request_info = rjson::parse(content);
     elogger.trace("Scanning {}", request_info);
 
-    schema_ptr schema = get_table(_proxy, request_info);
+    schema_ptr schema = get_table_or_view(_proxy, request_info);
 
     rjson::value* exclusive_start_key = rjson::find(request_info, "ExclusiveStartKey");
     //FIXME(sarna): ScanFilter is deprecated in favor of FilterExpression
@@ -1588,7 +1732,7 @@ future<json::json_return_type> executor::query(std::string content) {
     rjson::value request_info = rjson::parse(content);
     elogger.trace("Querying {}", request_info);
 
-    schema_ptr schema = get_table(_proxy, request_info);
+    schema_ptr schema = get_table_or_view(_proxy, request_info);
 
     rjson::value* exclusive_start_key = rjson::find(request_info, "ExclusiveStartKey");
     db::consistency_level cl = get_read_consistency(request_info);

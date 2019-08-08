@@ -36,7 +36,6 @@ def assert_index_scan(table, index_name, expected_items, **kwargs):
 
 # Although quite silly, it is actually allowed to create an index which is
 # identical to the base table.
-@pytest.mark.xfail(reason="GSI not supported; only base key")
 def test_gsi_identical(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -86,7 +85,6 @@ def test_table_gsi_1(dynamodb):
     yield table
     table.delete()
 
-@pytest.mark.xfail(reason="GSI not supported; only base key")
 def test_gsi_simple(test_table_gsi_1):
     items = [{'p': random_string(), 'c': random_string(), 'x': random_string()} for i in range(10)]
     with test_table_gsi_1.batch_writer() as batch:
@@ -104,7 +102,6 @@ def test_gsi_simple(test_table_gsi_1):
     # results (in different order).
     assert_index_scan(test_table_gsi_1, 'hello', full_scan(test_table_gsi_1))
 
-@pytest.mark.xfail(reason="GSI not supported; only base key")
 def test_gsi_same_key(test_table_gsi_1):
     c = random_string();
     # All these items have the same sort key 'c' but different hash key 'p'
@@ -117,7 +114,6 @@ def test_gsi_same_key(test_table_gsi_1):
 
 # Check we get an appropriate error when trying to read a non-existing index
 # of an existing table.
-@pytest.mark.xfail(reason="GSI not supported; only base key")
 def test_gsi_missing_index(test_table_gsi_1):
     with pytest.raises(ClientError, match='ValidationException.*wrong_name'):
         full_query(test_table_gsi_1, IndexName='wrong_name',
@@ -126,7 +122,7 @@ def test_gsi_missing_index(test_table_gsi_1):
         full_scan(test_table_gsi_1, IndexName='wrong_name')
 
 # Verify that strongly-consistent reads on GSI are *not* allowed.
-@pytest.mark.xfail(reason="GSI not supported; only base key")
+@pytest.mark.xfail(reason="GSI strong consistency not checked")
 def test_gsi_strong_consistency(test_table_gsi_1):
     with pytest.raises(ClientError, match='ValidationException.*Consistent'):
         full_query(test_table_gsi_1, KeyConditions={'c': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}, IndexName='hello', ConsistentRead=True)
@@ -134,7 +130,7 @@ def test_gsi_strong_consistency(test_table_gsi_1):
         full_scan(test_table_gsi_1, IndexName='hello', ConsistentRead=True)
 
 # Verify that a GSI is correctly listed in describe_table
-@pytest.mark.xfail(reason="GSI not supported; only base key")
+@pytest.mark.xfail(reason="GSI describe_table not implemented")
 def test_gsi_describe(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     assert 'Table' in desc
@@ -194,7 +190,6 @@ def test_table_gsi_1_hash_only(dynamodb):
     yield table
     table.delete()
 
-@pytest.mark.xfail(reason="GSI not supported; only base key")
 def test_gsi_key_not_in_index(test_table_gsi_1_hash_only):
     # Test with items with different 'c' values:
     items = [{'p': random_string(), 'c': random_string(), 'x': random_string()} for i in range(10)]
@@ -664,7 +659,6 @@ def create_gsi(dynamodb, index_name):
 # Note that Scylla is actually more limited in the length of the index
 # names, because both table name and index name, together, have to fit in
 # 221 characters. But we don't verify here this specific limitation.
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_unsupported_names(dynamodb):
     # Unfortunately, the boto library tests for names shorter than the
     # minimum length (3 characters) immediately, and failure results in
@@ -682,7 +676,7 @@ def test_gsi_unsupported_names(dynamodb):
 
 # On the other hand, names following the above rules should be accepted. Even
 # names which the Scylla rules forbid, such as a name starting with .
-@pytest.mark.xfail(reason="GSI not supported")
+@pytest.mark.xfail(reason="GSI support in describe_table")
 def test_gsi_non_scylla_name(dynamodb):
     create_gsi(dynamodb, '.alternator_test')
 
@@ -690,7 +684,7 @@ def test_gsi_non_scylla_name(dynamodb):
 # limit is different - the sum of both table and index length cannot
 # exceed 211 characters. So we test a much shorter limit.
 # (compare test_create_and_delete_table_very_long_name()).
-@pytest.mark.xfail(reason="GSI not supported")
+@pytest.mark.xfail(reason="GSI support in describe_table")
 def test_gsi_very_long_name(dynamodb):
     #create_gsi(dynamodb, 'n' * 255)   # works on DynamoDB, but not on Scylla
     create_gsi(dynamodb, 'n' * 190)
@@ -727,7 +721,6 @@ def test_table_gsi_random_name(dynamodb):
     yield [table, index_name]
     table.delete()
 
-@pytest.mark.xfail(reason="GSI not supported; only base key")
 def test_gsi_list_tables(dynamodb, test_table_gsi_random_name):
     table, index_name = test_table_gsi_random_name
     # Check that the random "index_name" isn't a substring of any table name:
