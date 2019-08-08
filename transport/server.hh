@@ -37,6 +37,7 @@
 #include <seastar/net/tls.hh>
 #include <seastar/core/metrics_registration.hh>
 #include "utils/fragmented_temporary_buffer.hh"
+#include "service_permit.hh"
 
 namespace scollectd {
 
@@ -220,7 +221,7 @@ private:
         std::unique_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
 
-        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, semaphore_units<> permit = semaphore_units<>(), cql_compression compression = cql_compression::none);
+        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
 
         void init_cql_serialization_format();
 

@@ -585,7 +585,7 @@ future<> cql_server::connection::process_request() {
         }
 
         return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
-          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (fragmented_temporary_buffer buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._requests_served;
             ++_server._requests_serving;
@@ -1223,7 +1223,7 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
-void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, semaphore_units<> permit, cql_compression compression)
+void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit, cql_compression compression)
 {
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response), permit = std::move(permit)] () mutable {
         auto message = response->make_message(_version, compression);
