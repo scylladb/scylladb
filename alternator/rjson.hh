@@ -10,6 +10,20 @@
 
 #pragma once
 
+/*
+ * rjson is a wrapper over rapidjson library, providing fast JSON parsing and generation.
+ *
+ * rapidjson has strict copy elision policies, which, among other things, involves
+ * using provided char arrays without copying them and allows copying objects only explicitly.
+ * As such, one should be careful when passing strings with limited liveness
+ * (e.g. data underneath local std::strings) to rjson functions, because created JSON objects
+ * may end up relying on dangling char pointers. All rjson functions that create JSONs from strings
+ * by rjson have both APIs for string_ref_type (more optimal, used when the string is known to live
+ * at least as long as the object, e.g. a static char array) and for std::strings. The more optimal
+ * variants should be used *only* if the liveness of the string is guaranteed, otherwise it will
+ * result in undefined behaviour.
+ */
+
 #include <string>
 #include <stdexcept>
 
@@ -24,8 +38,10 @@ public:
 };
 }
 
+// rapidjson configuration macros
 #define RAPIDJSON_HAS_STDSTRING 1
 #define RAPIDJSON_ASSERT(x) do { if (!(x)) throw rjson::error(std::string("JSON error: condition not met: ") + #x); } while (0)
+
 #include <rapidjson/document.h>
 #include <rapidjson/writer.h>
 #include <rapidjson/stringbuffer.h>
@@ -44,38 +60,65 @@ using string_buffer = rapidjson::GenericStringBuffer<encoding>;
 using writer = rapidjson::Writer<string_buffer, encoding>;
 using type = rapidjson::Type;
 
+// Returns an object representing JSON's null
 inline rjson::value null_value() {
     return rjson::value(rapidjson::kNullType);
 }
 
+// Returns an empty JSON object - {}
 inline rjson::value empty_object() {
     return rjson::value(rapidjson::kObjectType);
 }
 
+// Returns an empty JSON array - []
 inline rjson::value empty_array() {
     return rjson::value(rapidjson::kArrayType);
 }
 
+// Returns an empty JSON string - ""
 inline rjson::value empty_string() {
     return rjson::value(rapidjson::kStringType);
 }
 
+// Converts JSON value to string
 std::string print(const rjson::value& value);
+
+// Copies given JSON value - involves allocation
 rjson::value copy(const rjson::value& value);
+
+// Parses a JSON value from given string or raw character array
 rjson::value parse(const std::string& str);
 rjson::value parse_raw(const char* c_str, size_t size);
+
+// Creates a JSON string out of internal string representations
 rjson::value from_string(const std::string& str);
 rjson::value from_string(const sstring& str);
+
+// Returns a pointer to JSON member if it exists, nullptr otherwise
 rjson::value* find(rjson::value& value, rjson::string_ref_type name);
 const rjson::value* find(const rjson::value& value, rjson::string_ref_type name);
+
+// Returns a reference to JSON member if it exists, throws otherwise
 rjson::value& get(rjson::value& value, rjson::string_ref_type name);
 const rjson::value& get(const rjson::value& value, rjson::string_ref_type name);
+
+// Sets a member in given JSON object by moving the member - allocates the name
 void set_with_string_name(rjson::value& base, const std::string& name, rjson::value&& member);
+
+// Sets a string member in given JSON object by assigning its reference - allocates the name
+// NOTICE: member liveness must be ensured to be at least as long as base's
 void set_with_string_name(rjson::value& base, const std::string& name, rjson::string_ref_type member);
 
+// Sets a member in given JSON object by moving the member
+// NOTICE: name liveness must be ensured to b at least as long as base's
 void set(rjson::value& base, rjson::string_ref_type name, rjson::value&& member);
+
+// Sets a string member in given JSON object by assigning its reference
+// NOTICE: name liveness must be ensured to b at least as long as base's
+// NOTICE: member liveness must be ensured to be at least as long as base's
 void set(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type member);
 
+// Adds a value to a JSON list by moving the item to its end
 void push_back(rjson::value& base_array, rjson::value&& item);
 
 } // end namespace rjson
