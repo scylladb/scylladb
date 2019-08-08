@@ -1063,11 +1063,17 @@ int main(int ac, char** av) {
             }
 
             if (cfg->alternator_port()) {
+                net::inet_address addr;
+                try {
+                    addr = net::dns::get_host_by_name(cfg->alternator_address(), family).get0().addr_list.front();
+                } catch (...) {
+                    std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve alternator_address {}", cfg->alternator_address())));
+                }
                 static sharded<alternator::executor> alternator_executor;
                 alternator_executor.start(std::ref(proxy), std::ref(mm)).get();
                 static alternator::server alternator_server(alternator_executor);
-                alternator_server.init(cfg->alternator_port()).get();
-                startlog.info("Alternator server listening on {}", cfg->alternator_port());
+                alternator_server.init(addr, cfg->alternator_port()).get();
+                startlog.info("Alternator server listening on {} port {}", addr, cfg->alternator_port());
             }
 
             if (cfg->defragment_memory_on_idle()) {
