@@ -673,8 +673,6 @@ static big_decimal unwrap_number(const rjson::value& v) {
     if (!it->value.IsString()) {
         throw api_error("ValidationException", "UpdateExpression: improperly formatted number constant");
     }
-    // FIXME: to not lose precision, we really need to do something like:
-    // return decimal_type->from_string(it->value.GetString());
     return big_decimal(it->value.GetString());
 }
 
