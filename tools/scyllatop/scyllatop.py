@@ -113,6 +113,7 @@ if __name__ == '__main__':
         pprint.pprint([m.symbol + m.help for m in metric.Metric.discover_with_help(metric_source)])
         quit()
 
+    logging.debug('arguments={} isatty={}'.format(arguments, sys.stdout.isatty()))
     try:
         if not sys.stdout.isatty() or arguments.batch:
             dumptostdout.dumpToStdout(arguments.metricPattern, arguments.interval, metric_source, arguments.iterations)

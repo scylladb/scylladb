@@ -8,7 +8,7 @@ import defaults
 
 class LiveData(object):
     def __init__(self, metricPatterns, interval, metric_source):
-        logging.info('will query metric_source every {0} seconds'.format(interval))
+        logging.info('will query metric_source {} every {} seconds'.format(metric_source, interval))
         self._startedAt = time.time()
         self._measurements = []
         self._interval = interval
@@ -18,6 +18,7 @@ class LiveData(object):
         self._stop = False
 
     def addView(self, view):
+        logging.debug('addView {}'.format(view))
         self._views.append(view)
 
     @property
@@ -29,6 +30,7 @@ class LiveData(object):
             self._setupUserSpecifiedMetrics(metricPatterns)
         else:
             self._setupUserSpecifiedMetrics(defaults.DEFAULT_METRIC_PATTERNS)
+        logging.debug('_initializeMetrics: {} measurements'.format(len(self._measurements)))
 
     def _setupUserSpecifiedMetrics(self, metricPatterns):
         availableSymbols = [m.symbol for m in metric.Metric.discover(self._metric_source)]
@@ -48,10 +50,14 @@ class LiveData(object):
         while not self._stop:
             for metric_obj in self._measurements:
                 self._update(metric_obj)
+            logging.debug('go: updated {} measurements'.format(len(self._measurements)))
 
             for view in self._views:
+                logging.debug('go: updating view {}'.format(view))
                 view.update(self)
+            logging.debug('go: sleeping for {} seconds'.format(self._interval))
             time.sleep(self._interval)
+            logging.debug('go: drawing screen...')
             mainLoop.draw_screen()
 
     def _update(self, metric_obj):
