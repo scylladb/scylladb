@@ -135,19 +135,19 @@ void server::set_routes(routes& r) {
     r.add(operation_type::POST, url("/"), handler);
 }
 
-future<> server::init(uint16_t port) {
+future<> server::init(net::inet_address addr, uint16_t port) {
     return _executor.invoke_on_all([] (executor& e) {
         return e.start();
     }).then([this] {
         return _control.start();
     }).then([this] {
         return _control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1));
-    }).then([this, port] {
-        return _control.listen(port);
-    }).then([port] {
-        slogger.info("Alternator HTTP server listening on port {}", port);
-    }).handle_exception([port] (std::exception_ptr e) {
-        slogger.warn("Failed to set up Alternator HTTP server on port {}: {}", port, e);
+    }).then([this, addr, port] {
+        return _control.listen(socket_address{addr, port});
+    }).then([addr, port] {
+        slogger.info("Alternator HTTP server listening on {} port {}", addr, port);
+    }).handle_exception([addr, port] (std::exception_ptr e) {
+        slogger.warn("Failed to set up Alternator HTTP server on {} port {}: {}", addr, port, e);
     });
 }
 
