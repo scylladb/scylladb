@@ -31,6 +31,7 @@ Options:
   --prefix /prefix         directory prefix (default /usr)
   --python3 /opt/python3   path of the python3 interpreter relative to install root (default /opt/scylladb/python3/bin/python3)
   --housekeeping           enable housekeeping service
+  --nonroot                install Scylla without required root priviledge
   --pkg package            specify build package (server/conf/kernel-conf)
   --sysconfdir /etc/sysconfig   specify sysconfig directory name
   --help                   this helpful message
@@ -39,10 +40,10 @@ EOF
 }
 
 root=/
-prefix=/opt/scylladb
 housekeeping=false
 python3=/opt/scylladb/python3/bin/python3
 sysconfdir=/etc/sysconfig
+nonroot=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -65,6 +66,10 @@ while [ $# -gt 0 ]; do
         "--pkg")
             pkg="$2"
             shift 2
+            ;;
+        "--nonroot")
+            nonroot=true
+            shift 1
             ;;
         "--sysconfdir")
             sysconfdir="$2"
@@ -107,11 +112,34 @@ EOF
     chmod +x "$root/$prefix/bin/$bin"
 }
 
-rprefix="$root/$prefix"
-retc="$root/etc"
-rusr="$root/usr"
-rdoc="$rprefix/share/doc"
-rsysconfdir="$root/$sysconfdir"
+if [ -z "$prefix" ]; then
+    if $nonroot; then
+        prefix=~/scylladb
+    else
+        prefix=/opt/scylladb
+    fi
+fi
+
+rprefix=$(realpath -m "$root/$prefix")
+if [ -z "$python3" ]; then
+    python3=$prefix/python3/bin/python3
+fi
+rpython3=$(realpath -m "$root/$python3")
+if ! $nonroot; then
+    retc="$root/etc"
+    rsysconfdir="$root/$sysconfdir"
+    rusr="$root/usr"
+    rsystemd="$rusr/lib/systemd/system"
+    rdoc="$rprefix/share/doc"
+    rdata="$root/var/lib/scylla"
+    rhkdata="$root/var/lib/scylla-housekeeping"
+else
+    retc="$rprefix/etc"
+    rsysconfdir="$rprefix/$sysconfdir"
+    rsystemd="$retc/systemd"
+    rdoc="$rprefix/share/doc"
+    rdata="$rprefix"
+fi
 
 if [ -z "$pkg" ] || [ "$pkg" = "conf" ]; then
     install -d -m755 "$retc"/scylla
@@ -123,21 +151,22 @@ if [ -z "$pkg" ] || [ "$pkg" = "conf" ]; then
     fi
 fi
 if [ -z "$pkg" ] || [ "$pkg" = "kernel-conf" ]; then
-    install -m755 -d "$rusr/lib/sysctl.d"
-    install -m644 dist/common/sysctl.d/*.conf -Dt "$rusr"/lib/sysctl.d
+    if ! $nonroot; then
+        install -m755 -d "$rusr/lib/sysctl.d"
+        install -m644 dist/common/sysctl.d/*.conf -Dt "$rusr"/lib/sysctl.d
+    fi
 fi
 if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
     install -m755 -d "$rsysconfdir"
-    install -m755 -d "$retc/security/limits.d"
     install -m755 -d "$retc/scylla.d"
     install -m644 dist/common/sysconfig/* -Dt "$rsysconfdir"
     install -m644 dist/common/limits.d/scylla.conf -Dt "$retc"/security/limits.d
     install -m644 dist/common/scylla.d/*.conf -Dt "$retc"/scylla.d
 
-    install -d -m755 "$retc"/scylla "$rusr/lib/systemd/system" "$rusr/bin" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts"
-    install -m644 dist/common/systemd/*.service -Dt "$rusr"/lib/systemd/system
-    install -m644 dist/common/systemd/*.slice -Dt "$rusr"/lib/systemd/system
-    install -m644 dist/common/systemd/*.timer -Dt "$rusr"/lib/systemd/system
+    install -d -m755 "$retc"/scylla "$rsystemd" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts" "$rprefix/bin"
+    install -m644 dist/common/systemd/*.service -Dt "$rsystemd"
+    install -m644 dist/common/systemd/*.slice -Dt "$rsystemd"
+    install -m644 dist/common/systemd/*.timer -Dt "$rsystemd"
     install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
     install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/scripts
     install -m755 libreloc/* -Dt "$rprefix/libreloc"
@@ -147,8 +176,6 @@ if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
     for bin in libexec/*; do
 	adjust_bin "${bin#libexec/}"
     done
-    ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
-    ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
 
     install -d -m755 "$rdoc"/scylla
     install -m644 README.md -Dt "$rdoc"/scylla/
@@ -157,13 +184,12 @@ if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
     install -m644 ORIGIN -Dt "$rdoc"/scylla/
     install -d -m755 -d "$rdoc"/scylla/licenses/
     install -m644 licenses/* -Dt "$rdoc"/scylla/licenses/
-    install -m755 -d "$root"/var/lib/scylla/
-    install -m755 -d "$root"/var/lib/scylla/data
-    install -m755 -d "$root"/var/lib/scylla/commitlog
-    install -m755 -d "$root"/var/lib/scylla/hints
-    install -m755 -d "$root"/var/lib/scylla/view_hints
-    install -m755 -d "$root"/var/lib/scylla/coredump
-    install -m755 -d "$root"/var/lib/scylla-housekeeping
+    install -m755 -d "$rdata"
+    install -m755 -d "$rdata"/data
+    install -m755 -d "$rdata"/commitlog
+    install -m755 -d "$rdata"/hints
+    install -m755 -d "$rdata"/view_hints
+    install -m755 -d "$rdata"/coredump
     install -m755 -d "$rprefix"/swagger-ui
     cp -r swagger-ui/dist "$rprefix"/swagger-ui
     install -d -m755 -d "$rprefix"/api
@@ -172,16 +198,14 @@ if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
     cp -r tools/scyllatop/* "$rprefix"/scyllatop
     install -d -m755 -d "$rprefix"/scripts
     cp -r dist/common/scripts/* "$rprefix"/scripts
-    ln -srf "$rprefix/scyllatop/scyllatop.py" "$rusr/bin/scyllatop"
+    ln -srf "$rprefix/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
 
     SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_exporter_install node_health_check scylla_ec2_check scylla_kernel_check)
-    install -d "$rusr"/sbin
-    for i in $SBINFILES; do
-        ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
-    done
-    if [ "$sysconfdir" != "/etc/sysconfig" ]; then
+    if ! $nonroot; then
         install -d -m755 "$retc"/systemd/system/scylla-server.service.d
-        cat << EOS > "$retc"/systemd/system/scylla-server.service.d/sysconfdir.conf
+        install -m644 dist/common/systemd/scylla-server.service.d/dependencies.conf -Dt "$retc"/systemd/system/scylla-server.service.d
+        if [ "$sysconfdir" != "/etc/sysconfig" ]; then
+            cat << EOS > "$retc"/systemd/system/scylla-server.service.d/sysconfdir.conf
 [Service]
 EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-server
@@ -195,6 +219,41 @@ EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-housekeeping
 EOS
         done
+        fi
+        install -m755 -d "$retc/security/limits.d"
+        install -m755 -d "$rusr/bin"
+        install -m755 -d "$rhkdata"
+        install -m644 dist/common/limits.d/scylla.conf -Dt "$retc"/security/limits.d
+        ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
+        ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
+        ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
+        install -d "$rusr"/sbin
+        for i in $SBINFILES; do
+            ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
+        done
+    else
+        install -m755 -d "$rdata"/saved_caches
+        install -d -m755 "$retc"/systemd/system/scylla-server.service.d
+        cat << EOS > "$retc"/systemd/system/scylla-server.service.d/nonroot.conf
+[Service]
+EnvironmentFile=
+EnvironmentFile=$rsysconfdir/scylla-server
+EnvironmentFile=$retc/scylla.d/*.conf
+ExecStartPre=
+ExecStart=
+ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
+ExecStopPost=
+User=
+EOS
+        install -d "$rprefix"/sbin
+        for i in $SBINFILES; do
+            ln -srf "$rprefix/scripts/$i" "$rprefix/sbin/$i"
+        done
+        if [ ! -d ~/.config/systemd/user/scylla-server.service.d ]; then
+            mkdir -p ~/.config/systemd/user/scylla-server.service.d
+        fi
+        ln -srf $rsystemd/scylla-server.service ~/.config/systemd/user/
+        ln -srf "$retc"/systemd/system/scylla-server.service.d/nonroot.conf ~/.config/systemd/user/scylla-server.service.d
     fi
 
     install -m755 scylla-gdb.py -Dt "$rprefix"/scripts/
@@ -202,13 +261,25 @@ EOS
     PYSCRIPTS=$(find dist/common/scripts/ -maxdepth 1 -type f -exec grep -Pls '\A#!/usr/bin/env python3' {} +)
     for i in $PYSCRIPTS; do
         ./relocate_python_scripts.py \
-                --installroot $rprefix/scripts/ --with-python3 "$root/$python3" $i
+                --installroot $rprefix/scripts/ --with-python3 "$rpython3" $i
     done
     ./relocate_python_scripts.py \
-                --installroot $rprefix/scripts/ --with-python3 "$root/$python3" \
+                --installroot $rprefix/scripts/ --with-python3 "$rpython3" \
                 seastar/scripts/perftune.py seastar/scripts/seastar-addr2line seastar/scripts/perftune.py
 
     ./relocate_python_scripts.py \
-                --installroot $rprefix/scyllatop/ --with-python3 "$root/$python3" \
+                --installroot $rprefix/scyllatop/ --with-python3 "$rpython3" \
                 tools/scyllatop/scyllatop.py
+fi
+
+if $nonroot; then
+    sed -i -e "s#/var/lib/scylla#$rprefix#g" $retc/scylla/scylla.yaml
+    sed -i -e "s/^# hints_directory/hints_directory/" $retc/scylla/scylla.yaml
+    sed -i -e "s/^# view_hints_directory/view_hints_directory/" $retc/scylla/scylla.yaml
+    sed -i -e "s/^# saved_caches_directory/saved_caches_directory/" $retc/scylla/scylla.yaml
+    sed -i -e "s#/var/lib/scylla#$rprefix#g" $rsysconfdir/scylla-server
+    sed -i -e "s#/etc/scylla#$retc/scylla#g" $rsysconfdir/scylla-server
+    touch $rprefix/SCYLLA-NONROOT-FILE
+    systemctl --user daemon-reload
+    echo "Scylla non-root install completed."
 fi
