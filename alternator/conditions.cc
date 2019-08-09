@@ -49,6 +49,12 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::contains> mak
     return make_shared<cql3::restrictions::single_column_restriction::contains>(cdef, std::move(key_value), std::move(entry_value));
 }
 
+static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_eq_restriction(const column_definition& cdef, const rjson::value& value) {
+    bytes raw_value = get_key_from_typed_value(value, cdef, type_to_string(cdef.type));
+    auto restriction_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_value)));
+    return make_shared<cql3::restrictions::single_column_restriction::EQ>(cdef, std::move(restriction_value));
+}
+
 ::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const rjson::value& query_filter) {
     clogger.trace("Getting filtering restrictions for: {}", rjson::print(query_filter));
     auto filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(schema, true);
@@ -60,18 +66,20 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::contains> mak
         const rjson::value& attr_list = rjson::get(condition, "AttributeValueList");
         comparison_operator_type op = get_comparison_operator(comp_definition);
 
-        if (schema->get_column_definition(to_bytes(column_name))) {
-            //TODO(sarna): Implement filtering for keys
-            throw api_error("ValidationException", "Filtering on key values is not implemented yet");
-        }
         if (op != comparison_operator_type::EQ) {
             throw api_error("ValidationException", "Filtering is currently implemented for EQ operator only");
         }
         if (attr_list.Size() != 1) {
             throw api_error("ValidationException", format("EQ restriction needs exactly 1 attribute value: {}", rjson::print(attr_list)));
         }
+        if (const column_definition* cdef = schema->get_column_definition(to_bytes(column_name))) {
+            // Primary key restriction
+            filtering_restrictions->add_restriction(make_key_eq_restriction(*cdef, attr_list[0]), false, true);
+        } else {
+            // Regular column restriction
+            filtering_restrictions->add_restriction(make_map_element_restriction(attrs_col, column_name, attr_list[0]), false, true);
+        }
 
-        filtering_restrictions->add_restriction(make_map_element_restriction(attrs_col, column_name, attr_list[0]), false, true);
     }
     return filtering_restrictions;
 }
