@@ -70,7 +70,7 @@ bytes serialize_item(const rjson::value& item) {
     } else if (type_info.dtype == boolean_type) {
         serialized = type_info.dtype->from_json_object(Json::Value(it->value.GetBool()), cql_serialization_format::internal());
     } else {
-    	 //FIXME(sarna): Once we have type visitors, this double conversion hack should be replaced with parsing straight from rapidjson
+    	//FIXME(sarna): Once we have type visitors, this double conversion hack should be replaced with parsing straight from rapidjson
         serialized = type_info.dtype->from_json_object(Json::Value(rjson::print(it->value)), cql_serialization_format::internal());
     }
 
