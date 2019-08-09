@@ -1,3 +1,0 @@
-bin/* opt/scylladb/python3/bin
-lib64/* opt/scylladb/python3/lib64
-libexec/* opt/scylladb/python3/libexec
