@@ -68,6 +68,9 @@ void process_char(wchar_t c, wstring& re, bool& escaping) {
 
 /// Returns a regex string matching the given LIKE pattern.
 wstring regex_from_pattern(bytes_view pattern) {
+    if (pattern.empty()) {
+        return L"^$"; // Like SQL, empty pattern matches only empty text.
+    }
     using namespace boost::locale::conv;
     wstring wpattern = utf_to_utf<wchar_t>(pattern.begin(), pattern.end(), stop);
     if (wpattern.back() == L'\\') {
