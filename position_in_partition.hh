@@ -274,6 +274,10 @@ public:
         return {clustering_row_tag_t(), std::move(ck)};
     }
 
+    static position_in_partition for_partition_start() {
+        return position_in_partition{partition_start_tag_t()};
+    }
+
     static position_in_partition for_static_row() {
         return position_in_partition{static_row_tag_t()};
     }
