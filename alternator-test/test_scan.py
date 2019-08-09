@@ -103,3 +103,58 @@ def test_scan_with_attribute_equality_filtering(dynamodb, filled_test_table):
     got_items = full_scan(table, ScanFilter=scan_filter)
     expected_items = [item for item in items if "attribute" in item.keys() and item["attribute"] == "xxxxx" and item["another"] == "y" ]
     assert multiset(expected_items) == multiset(got_items)
+
+def test_scan_with_key_equality_filtering(dynamodb, filled_test_table):
+    table, items = filled_test_table
+    scan_filter_p = {
+        "p" : {
+            "AttributeValueList" : [ "7" ],
+            "ComparisonOperator": "EQ"
+        }
+    }
+    scan_filter_c = {
+        "c" : {
+            "AttributeValueList" : [ "9" ],
+            "ComparisonOperator": "EQ"
+        }
+    }
+    scan_filter_p_and_attribute = {
+        "p" : {
+            "AttributeValueList" : [ "7" ],
+            "ComparisonOperator": "EQ"
+        },
+        "attribute" : {
+            "AttributeValueList" : [ "x"*7 ],
+            "ComparisonOperator": "EQ"
+        }
+    }
+    scan_filter_c_and_another = {
+        "c" : {
+            "AttributeValueList" : [ "9" ],
+            "ComparisonOperator": "EQ"
+        },
+        "another" : {
+            "AttributeValueList" : [ "y"*16 ],
+            "ComparisonOperator": "EQ"
+        }
+    }
+
+    # Filtering on the hash key
+    got_items = full_scan(table, ScanFilter=scan_filter_p)
+    expected_items = [item for item in items if "p" in item.keys() and item["p"] == "7" ]
+    assert multiset(expected_items) == multiset(got_items)
+
+    # Filtering on the sort key
+    got_items = full_scan(table, ScanFilter=scan_filter_c)
+    expected_items = [item for item in items if "c" in item.keys() and item["c"] == "9"]
+    assert multiset(expected_items) == multiset(got_items)
+
+    # Filtering on the hash key and an attribute
+    got_items = full_scan(table, ScanFilter=scan_filter_p_and_attribute)
+    expected_items = [item for item in items if "p" in item.keys() and "another" in item.keys() and item["p"] == "7" and item["another"] == "y"*16]
+    assert multiset(expected_items) == multiset(got_items)
+
+    # Filtering on the sort key and an attribute
+    got_items = full_scan(table, ScanFilter=scan_filter_c_and_another)
+    expected_items = [item for item in items if "c" in item.keys() and "another" in item.keys() and item["c"] == "9" and item["another"] == "y"*16]
+    assert multiset(expected_items) == multiset(got_items)
