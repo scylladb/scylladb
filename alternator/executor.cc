@@ -1530,7 +1530,8 @@ static future<json::json_return_type> do_query(schema_ptr schema,
         std::unordered_set<std::string>&& attrs_to_get,
         uint32_t limit,
         db::consistency_level cl,
-        ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions) {
+        ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions,
+        cql3::cql_stats& cql_stats) {
     ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
 
     if (exclusive_start_key) {
@@ -1548,14 +1549,13 @@ static future<json::json_return_type> do_query(schema_ptr schema,
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
 
     //FIXME(sarna): This context will need to be provided once we start gathering statistics, authenticating, etc. Right now these are just stubs.
-    static thread_local cql3::cql_stats dummy_stats;
     static thread_local service::client_state dummy_client_state{service::client_state::internal_tag()};
     static thread_local service::query_state dummy_query_state(dummy_client_state, empty_service_permit());
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
-    auto p = service::pager::query_pagers::pager(schema, selection, dummy_query_state, *query_options, command, std::move(partition_ranges), dummy_stats, filtering_restrictions);
+    auto p = service::pager::query_pagers::pager(schema, selection, dummy_query_state, *query_options, command, std::move(partition_ranges), cql_stats, filtering_restrictions);
 
     return p->fetch_page(limit, gc_clock::now(), db::no_timeout).then(
             [p, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), query_options = std::move(query_options)](std::unique_ptr<cql3::result_set> rs) mutable {
@@ -1604,7 +1604,7 @@ future<json::json_return_type> executor::scan(std::string content) {
     if (scan_filter) {
     	filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *scan_filter);
     }
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions));
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), _stats.cql_stats);
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, comparison_operator_type op, const rjson::value& attrs) {
@@ -1755,7 +1755,7 @@ future<json::json_return_type> executor::query(std::string content) {
     if (query_filter) {
     	filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *query_filter);
     }
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions));
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), _stats.cql_stats);
 }
 
 static void validate_limit(int limit) {

@@ -13,6 +13,7 @@
 #include <cstdint>
 
 #include <seastar/core/metrics_registration.hh>
+#include "cql3/stats.hh"
 
 namespace alternator {
 
@@ -65,6 +66,8 @@ public:
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;
     uint64_t reads_before_write = 0;
+    // CQL-derived stats
+    cql3::cql_stats cql_stats;
 private:
     // The metric_groups object holds this stat object's metrics registered
     // as long as the stats object is alive.
