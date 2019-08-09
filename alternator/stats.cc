@@ -65,6 +65,12 @@ stats::stats() : api_operations{} {
                     seastar::metrics::description("number of total operations via Alternator API")),
             seastar::metrics::make_total_operations("reads_before_write", reads_before_write,
                     seastar::metrics::description("number of performed read-before-write operations")),
+            seastar::metrics::make_total_operations("filtered_rows_read_total", cql_stats.filtered_rows_read_total,
+                    seastar::metrics::description("number of rows read during filtering operations")),
+            seastar::metrics::make_total_operations("filtered_rows_matched_total", cql_stats.filtered_rows_matched_total,
+                    seastar::metrics::description("number of rows read and matched during filtering operations")),
+            seastar::metrics::make_total_operations("filtered_rows_dropped_total", [this] { return cql_stats.filtered_rows_read_total - cql_stats.filtered_rows_matched_total; },
+                    seastar::metrics::description("number of rows read and dropped during filtering operations")),
     });
 }
 
