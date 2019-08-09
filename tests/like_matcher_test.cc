@@ -40,6 +40,13 @@ BOOST_AUTO_TEST_CASE(test_literal) {
     BOOST_TEST(!matches(m, u8" abc"));
 }
 
+BOOST_AUTO_TEST_CASE(test_empty) {
+    auto m = matcher(u8"");
+    BOOST_TEST(matches(m, u8""));
+    BOOST_TEST(!matches(m, u8" "));
+    BOOST_TEST(!matches(m, u8"abcd"));
+}
+
 BOOST_AUTO_TEST_CASE(test_underscore_start) {
     auto m = matcher(u8"_a");
     BOOST_TEST(matches(m, u8"aa"));
