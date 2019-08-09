@@ -61,7 +61,7 @@ public:
         uint64_t update_table = 0;
         uint64_t update_time_to_live = 0;
     } api_operations;
-    // Miscellenous event counters
+    // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;
     uint64_t reads_before_write = 0;
