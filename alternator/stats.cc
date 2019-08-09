@@ -63,6 +63,8 @@ stats::stats() : api_operations{} {
                     seastar::metrics::description("number of unsupported operations via Alternator API")),
             seastar::metrics::make_total_operations("total_operations", total_operations,
                     seastar::metrics::description("number of total operations via Alternator API")),
+            seastar::metrics::make_total_operations("reads_before_write", reads_before_write,
+                    seastar::metrics::description("number of performed read-before-write operations")),
     });
 }
 
