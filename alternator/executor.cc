@@ -1599,7 +1599,6 @@ future<json::json_return_type> executor::scan(std::string content) {
         throw api_error("ValidationException", "Limit must be greater than 0");
     }
 
-
     auto attrs_to_get = calculate_attrs_to_get(request_info);
 
     dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
@@ -1607,7 +1606,10 @@ future<json::json_return_type> executor::scan(std::string content) {
 
     ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions;
     if (scan_filter) {
+        const cql3::query_options query_options = cql3::query_options(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
     	filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *scan_filter);
+        partition_ranges = filtering_restrictions->get_partition_key_ranges(query_options);
+        ck_bounds = filtering_restrictions->get_clustering_bounds(query_options);
     }
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), _stats.cql_stats);
 }
