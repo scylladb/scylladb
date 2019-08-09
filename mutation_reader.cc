@@ -1096,24 +1096,22 @@ flat_mutation_reader shard_reader::remote_reader::recreate_reader() {
     if (_last_pkey) {
         bool partition_range_is_inclusive = true;
 
-        {
-            switch (_next_position_in_partition.region()) {
-            case partition_region::partition_start:
-                partition_range_is_inclusive = false;
-                break;
-            case partition_region::static_row:
-                _drop_partition_start = true;
-                break;
-            case partition_region::clustered:
-                _drop_partition_start = true;
-                _drop_static_row = true;
-                adjust_partition_slice();
-                slice = &*_slice_override;
-                break;
-            case partition_region::partition_end:
-                partition_range_is_inclusive = false;
-                break;
-            }
+        switch (_next_position_in_partition.region()) {
+        case partition_region::partition_start:
+            partition_range_is_inclusive = false;
+            break;
+        case partition_region::static_row:
+            _drop_partition_start = true;
+            break;
+        case partition_region::clustered:
+            _drop_partition_start = true;
+            _drop_static_row = true;
+            adjust_partition_slice();
+            slice = &*_slice_override;
+            break;
+        case partition_region::partition_end:
+            partition_range_is_inclusive = false;
+            break;
         }
 
         // The original range contained a single partition and we've read it
