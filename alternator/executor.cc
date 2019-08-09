@@ -1761,6 +1761,14 @@ future<json::json_return_type> executor::query(std::string content) {
     ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions;
     if (query_filter) {
     	filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *query_filter);
+        auto pk_defs = filtering_restrictions->get_partition_key_restrictions()->get_column_defs();
+        auto ck_defs = filtering_restrictions->get_clustering_columns_restrictions()->get_column_defs();
+        if (!pk_defs.empty()) {
+            throw api_error("ValidationException", format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", pk_defs.front()->name_as_text()));
+        }
+        if (!ck_defs.empty()) {
+            throw api_error("ValidationException", format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", ck_defs.front()->name_as_text()));
+        }
     }
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), _stats.cql_stats);
 }
