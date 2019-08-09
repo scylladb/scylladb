@@ -41,7 +41,7 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
     return it->second;
 }
 
-::shared_ptr<cql3::restrictions::single_column_restriction::contains> make_map_element_restriction(const column_definition& cdef, const std::string& key, const rjson::value& value) {
+static ::shared_ptr<cql3::restrictions::single_column_restriction::contains> make_map_element_restriction(const column_definition& cdef, const std::string& key, const rjson::value& value) {
     bytes raw_key = utf8_type->from_string(sstring(key));
     auto key_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_key)));
     bytes raw_value = serialize_item(value);

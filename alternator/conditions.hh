@@ -31,7 +31,6 @@ enum class comparison_operator_type {
 
 comparison_operator_type get_comparison_operator(const rjson::value& comparison_operator);
 
-::shared_ptr<cql3::restrictions::single_column_restriction::contains> make_map_element_restriction(const column_definition& cdef, const std::string& key, const rjson::value& value);
 ::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const rjson::value& query_filter);
 
 }
