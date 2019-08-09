@@ -637,9 +637,9 @@ static std::string resolve_update_path(const parsed::path& p,
 static void verify_all_are_used(const rjson::value& req, const char* field,
         const std::unordered_set<std::string>& used, const char* operation) {
     const rjson::value* attribute_names = rjson::find(req, rjson::string_ref_type(field));
-	if (!attribute_names) {
-		return;
-	}
+    if (!attribute_names) {
+        return;
+    }
     for (auto it = attribute_names->MemberBegin(); it != attribute_names->MemberEnd(); ++it) {
         if (!used.count(it->name.GetString())) {
             throw api_error("ValidationException",
@@ -936,9 +936,9 @@ static std::string resolve_projection_path(const parsed::path& p,
     }
     auto column_name = p.root();
     if (column_name.size() > 0 && column_name[0] == '#') {
-    	if (!expression_attribute_names) {
-    		throw api_error("ValidationException", "ExpressionAttributeNames parameter not found");
-    	}
+        if (!expression_attribute_names) {
+            throw api_error("ValidationException", "ExpressionAttributeNames parameter not found");
+        }
         const rjson::value& value = rjson::get(*expression_attribute_names, rjson::string_ref_type(column_name.c_str()));
         if (!value.IsString()) {
             throw api_error("ValidationException",
@@ -1607,7 +1607,7 @@ future<json::json_return_type> executor::scan(std::string content) {
     ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions;
     if (scan_filter) {
         const cql3::query_options query_options = cql3::query_options(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
-    	filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *scan_filter);
+        filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *scan_filter);
         partition_ranges = filtering_restrictions->get_partition_key_ranges(query_options);
         ck_bounds = filtering_restrictions->get_clustering_bounds(query_options);
     }
@@ -1760,7 +1760,7 @@ future<json::json_return_type> executor::query(std::string content) {
 
     ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions;
     if (query_filter) {
-    	filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *query_filter);
+        filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *query_filter);
         auto pk_defs = filtering_restrictions->get_partition_key_restrictions()->get_column_defs();
         auto ck_defs = filtering_restrictions->get_clustering_columns_restrictions()->get_column_defs();
         if (!pk_defs.empty()) {
