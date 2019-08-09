@@ -130,11 +130,15 @@ bytes get_key_column_value(const rjson::value& item, const column_definition& co
         throw api_error("ValidationException",
                 format("Missing or invalid value object for key column {}: {}", column_name, item));
     }
+    return get_key_from_typed_value(key_typed_value, column, expected_type);
+}
+
+bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column, const std::string& expected_type) {
     auto it = key_typed_value.MemberBegin();
     if (it->name.GetString() != expected_type) {
         throw api_error("ValidationException",
                 format("Expected type {} for key column {}, got type {}",
-                        expected_type, column_name, it->name.GetString()));
+                        expected_type, column.name_as_text(), it->name.GetString()));
     }
     if (column.type == bytes_type) {
         return base64_decode(it->value.GetString());
