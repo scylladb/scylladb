@@ -1558,11 +1558,16 @@ static future<json::json_return_type> do_query(schema_ptr schema,
     auto p = service::pager::query_pagers::pager(schema, selection, dummy_query_state, *query_options, command, std::move(partition_ranges), cql_stats, filtering_restrictions);
 
     return p->fetch_page(limit, gc_clock::now(), db::no_timeout).then(
-            [p, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), query_options = std::move(query_options)](std::unique_ptr<cql3::result_set> rs) mutable {
+            [p, schema, cql_stats, partition_slice = std::move(partition_slice),
+             selection = std::move(selection),
+             attrs_to_get = std::move(attrs_to_get),
+             query_options = std::move(query_options),
+             filtering_restrictions = std::move(filtering_restrictions)] (std::unique_ptr<cql3::result_set> rs) mutable {
         if (!p->is_exhausted()) {
             rs->get_metadata().set_paging_state(p->state());
         }
 
+        cql_stats.filtered_rows_matched_total += (filtering_restrictions ? rs->size() : 0);
         auto paging_state = rs->get_metadata().paging_state();
         auto items = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get));
         if (paging_state) {
