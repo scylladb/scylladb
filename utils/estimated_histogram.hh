@@ -73,12 +73,58 @@ struct estimated_histogram {
 
     int64_t _count = 0;
     int64_t _sample_sum = 0;
+    int64_t _min = 0;
+    int64_t _max = 0;
 
     estimated_histogram(int bucket_count = 90) {
 
         new_offsets(bucket_count);
         buckets.resize(bucket_offsets.size() + 1, 0);
     }
+
+    int64_t translate_bucket_limit(double a) const {
+        return a;
+    }
+
+    int64_t translate_bucket_limit(const duration& a) const {
+        return std::chrono::duration_cast<std::chrono::microseconds>(a).count();
+    }
+
+    /*!
+     * \brief return a subset of the histogram according to given buckets
+     *
+     * While it is useful to reduce the number of buckets, it's not always clear what
+     * is the best bucket list the caller wants.
+     *
+     * This function, gets a vector of buckets, buckets can be double or duration depends
+     * on the histogram usage and return a minimized histogram
+     */
+    template<class T>
+    seastar::metrics::histogram get_histogram(const std::vector<T>& buckets_limit) const {
+            seastar::metrics::histogram res;
+            res.buckets.resize(buckets_limit.size());
+
+            auto current_bucket = buckets_limit.begin();
+            uint64_t cummulative_count = 0;
+            size_t pos = 0;
+
+            res.sample_count = _count;
+            res.sample_sum = _sample_sum;
+
+            for (size_t i = 0; i < res.buckets.size(); i++) {
+                auto& v = res.buckets[i];
+                v.upper_bound = translate_bucket_limit(*current_bucket);
+
+                while (pos < bucket_offsets.size() && bucket_offsets[pos] <= translate_bucket_limit(*current_bucket)) {
+                    cummulative_count += buckets[pos];
+                    pos++;
+                }
+
+                v.count = cummulative_count;
+                ++current_bucket;
+            }
+            return res;
+        }
 
     seastar::metrics::histogram get_histogram(size_t lower_bucket = 1, size_t max_buckets = 16) const {
         seastar::metrics::histogram res;
@@ -174,6 +220,12 @@ public:
         if (new_count <= _count) {
             return;
         }
+        if (!_min || n < _min) {
+            _min = n;
+        }
+        if (!_max || n > _max) {
+            _max = n;
+        }
         auto pos = bucket_offsets.size();
         auto low = std::lower_bound(bucket_offsets.begin(), bucket_offsets.end(), n);
         if (low != bucket_offsets.end()) {
@@ -192,14 +244,7 @@ public:
      * @return the smallest value that could have been added to this histogram
      */
     int64_t min() const {
-        size_t i = 0;
-        for (auto b : buckets) {
-            if (b > 0) {
-                return i == 0 ? 0 : 1 + bucket_offsets[i - 1];
-            }
-            i++;
-        }
-        return 0;
+        return _min;
     }
 
     /**
@@ -207,16 +252,7 @@ public:
      * overflowed, returns INT64_MAX.
      */
     int64_t max() const {
-        int lastBucket = buckets.size() - 1;
-        if (buckets[lastBucket] > 0) {
-            return INT64_MAX;
-        }
-        for (int i = lastBucket - 1; i >= 0; i--) {
-            if (buckets[i] > 0) {
-                return bucket_offsets[i];
-            }
-        }
-        return 0;
+        return _max;
     }
 
     /**
@@ -352,6 +388,43 @@ public:
         return s;
     }
 
+    /*!
+     * \brief duration vector bucket
+     *
+     * As a default, it is more or less make sense.
+     */
+    static const std::vector<duration>& get_duration_vector() {
+        static std::vector<duration> res {
+            std::chrono::microseconds(16),
+            std::chrono::microseconds(32),
+            std::chrono::microseconds(64),
+            std::chrono::microseconds(128),
+            std::chrono::microseconds(256),
+            std::chrono::microseconds(750),
+            std::chrono::milliseconds(1),
+            std::chrono::milliseconds(2),
+            std::chrono::milliseconds(4),
+            std::chrono::milliseconds(8),
+            std::chrono::milliseconds(16),
+            std::chrono::milliseconds(32),
+            std::chrono::milliseconds(64),
+            std::chrono::milliseconds(128),
+            std::chrono::milliseconds(256),
+            std::chrono::milliseconds(512),
+            std::chrono::milliseconds(768),
+            std::chrono::milliseconds(1024),
+            std::chrono::milliseconds(1500),
+            std::chrono::milliseconds(2048),
+            std::chrono::milliseconds(3096),
+            std::chrono::milliseconds(4096),
+            std::chrono::seconds(6),
+            std::chrono::seconds(8),
+            std::chrono::seconds(12),
+            std::chrono::seconds(16),
+            std::chrono::seconds(24),
+            std::chrono::seconds(32),
+        };
+        return res;
     }
 };
 
