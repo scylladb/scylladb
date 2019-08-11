@@ -31,7 +31,7 @@ reconcilable_result::reconcilable_result()
     : _row_count(0)
 { }
 
-reconcilable_result::reconcilable_result(uint32_t row_count, std::vector<partition> p, query::short_read short_read,
+reconcilable_result::reconcilable_result(uint32_t row_count, utils::chunked_vector<partition> p, query::short_read short_read,
                                          query::result_memory_tracker memory_tracker)
     : _row_count(row_count)
     , _short_read(short_read)
@@ -39,11 +39,11 @@ reconcilable_result::reconcilable_result(uint32_t row_count, std::vector<partiti
     , _partitions(std::move(p))
 { }
 
-const std::vector<partition>& reconcilable_result::partitions() const {
+const utils::chunked_vector<partition>& reconcilable_result::partitions() const {
     return _partitions;
 }
 
-std::vector<partition>& reconcilable_result::partitions() {
+utils::chunked_vector<partition>& reconcilable_result::partitions() {
     return _partitions;
 }
 

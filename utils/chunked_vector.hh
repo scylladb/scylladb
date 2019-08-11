@@ -246,10 +246,18 @@ public:
 public:
     const T& front() const { return *cbegin(); }
     T& front() { return *begin(); }
-    iterator begin() const { return iterator(_chunks.data(), 0); }
-    iterator end() const { return iterator(_chunks.data(), _size); }
+    iterator begin() { return iterator(_chunks.data(), 0); }
+    iterator end() { return iterator(_chunks.data(), _size); }
+    const_iterator begin() const { return const_iterator(_chunks.data(), 0); }
+    const_iterator end() const { return const_iterator(_chunks.data(), _size); }
     const_iterator cbegin() const { return const_iterator(_chunks.data(), 0); }
     const_iterator cend() const { return const_iterator(_chunks.data(), _size); }
+    std::reverse_iterator<iterator> rbegin() { return std::reverse_iterator(end()); }
+    std::reverse_iterator<iterator> rend() { return std::reverse_iterator(begin()); }
+    std::reverse_iterator<const_iterator> rbegin() const { return std::reverse_iterator(end()); }
+    std::reverse_iterator<const_iterator> rend() const { return std::reverse_iterator(begin()); }
+    std::reverse_iterator<const_iterator> crbegin() const { return std::reverse_iterator(cend()); }
+    std::reverse_iterator<const_iterator> crend() const { return std::reverse_iterator(cbegin()); }
 public:
     bool operator==(const chunked_vector& x) const {
         return boost::equal(*this, x);
