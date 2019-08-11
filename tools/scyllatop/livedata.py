@@ -10,7 +10,7 @@ class LiveData(object):
     def __init__(self, metricPatterns, interval, metric_source):
         logging.info('will query metric_source {} every {} seconds'.format(metric_source, interval))
         self._startedAt = time.time()
-        self._measurements = []
+        self._results = {}
         self._interval = interval
         self._metric_source = metric_source
         if metricPatterns and len(metricPatterns) > 0:
@@ -26,15 +26,20 @@ class LiveData(object):
         self._views.append(view)
 
     @property
+    def results(self):
+        return self._results
+
+    @property
     def measurements(self):
-        return self._measurements
+        return self._results.values()
 
     def _initializeMetrics(self):
-        availableSymbols = [m.symbol for m in metric.Metric.discover(self._metric_source)]
-        symbols = [symbol for symbol in availableSymbols if self._matches(symbol, self._metricPatterns)]
-        for symbol in symbols:
-                logging.info('adding {0}'.format(symbol))
-                self._measurements.append(metric.Metric(symbol, self._metric_source, ""))
+        self._results = metric.Metric.discover(self._metric_source)
+        logging.debug('_initializeMetrics: {} results discovered'.format(len(self._results)))
+        for symbol in self._results:
+            if not self._matches(symbol, self._metricPatterns):
+                self._results.pop(symbol)
+        logging.debug('_initializeMetrics: {} results matched'.format(len(self._results)))
 
     def _matches(self, symbol, metricPatterns):
         for pattern in metricPatterns:
@@ -45,9 +50,9 @@ class LiveData(object):
 
     def go(self, mainLoop):
         while not self._stop:
-            for metric_obj in self._measurements:
+            for metric_obj in self.measurements:
                 self._update(metric_obj)
-            logging.debug('go: updated {} measurements'.format(len(self._measurements)))
+            logging.debug('go: updated {} measurements'.format(len(self.measurements)))
 
             for view in self._views:
                 logging.debug('go: updating view {}'.format(view))

@@ -43,11 +43,12 @@ class Metric(object):
             self._status[key] = 'not available'
 
     def add_to_results(self, results):
-        results.append(self)
-
+        if not isinstance(results, dict):
+            raise Exception("results must be a dictionary")
+        results[self._symbol] = self
     @classmethod
     def _discover(cls, metric_source, with_help = False):
-        results = []
+        results = {}
         logging.info('discovering metrics{}...'.format(" with help" if with_help else ""))
         response = metric_source.query_list()
         for line in response:

@@ -29,7 +29,7 @@ class FakeMetric(Metric):
 
     @classmethod
     def discover(self, unused):
-        results = []
+        results = {}
 
         def _add_metric(metric, results):
             m = FakeMetric(metric, None)

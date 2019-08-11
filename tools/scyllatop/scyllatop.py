@@ -110,7 +110,7 @@ if __name__ == '__main__':
         shell()
         quit()
     if arguments.list:
-        pprint.pprint([m.symbol + m.help for m in metric.Metric.discover_with_help(metric_source)])
+        pprint.pprint([m.symbol + m.help for m in metric.Metric.discover_with_help(metric_source).values()])
         quit()
 
     logging.debug('arguments={} isatty={}'.format(arguments, sys.stdout.isatty()))
