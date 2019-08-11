@@ -39,6 +39,9 @@ class Metric(object):
         for key in list(self._status.keys()):
             self._status[key] = 'not available'
 
+    def add_to_results(self, results):
+        results.append(self)
+
     @classmethod
     def _discover(cls, metric_source, with_help = False):
         results = []
@@ -52,9 +55,10 @@ class Metric(object):
             match = pattern.search(line)
             if match:
                 metric = match.groupdict()['metric']
-                logging.debug('discover list result: {0}'.format(metric))
                 hlp = match.groupdict()['help'] if with_help else ""
-                results.append(Metric(metric, metric_source, hlp))
+                m = Metric(metric, metric_source, hlp)
+                m.add_to_results(results)
+                logging.debug('discover: {}'.format(m))
 
         logging.info('found {} metrics'.format(len(results)))
         return results
