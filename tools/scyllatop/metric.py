@@ -60,6 +60,7 @@ class Metric(object):
                 metric = match.groupdict()['metric']
                 hlp = match.groupdict()['help'] if with_help else ""
                 m = Metric(metric, metric_source, hlp)
+                m.update_info(line)
                 m.add_to_results(results)
                 logging.debug('discover: {}'.format(m))
 
