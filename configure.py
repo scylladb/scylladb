@@ -1060,17 +1060,6 @@ scylla_release = file.read().strip()
 
 extra_cxxflags["release.cc"] = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
 
-seastar_flags = []
-if args.dpdk:
-    # fake dependencies on dpdk, so that it is built before anything else
-    seastar_flags += ['--enable-dpdk']
-if args.gcc6_concepts:
-    seastar_flags += ['--enable-gcc6-concepts']
-if args.alloc_failure_injector:
-    seastar_flags += ['--enable-alloc-failure-injector']
-if args.split_dwarf:
-    seastar_flags += ['--split-dwarf']
-
 # We never compress debug info in debug mode
 modes['debug']['cxxflags'] += ' -gz'
 # We compress it by default in release mode
@@ -1085,27 +1074,55 @@ seastar_cflags += ' -Wno-error'
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
-seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' % (seastar_ldflags),
-                  '--c++-dialect=gnu++17', '--use-std-optional-variant-stringview=1', '--optflags=%s' % (modes['release']['cxx_ld_flags']), ]
 
 libdeflate_cflags = seastar_cflags
 zstd_cflags = seastar_cflags + ' -Wno-implicit-fallthrough'
 
-status = subprocess.call([args.python, './configure.py'] + seastar_flags, cwd='seastar')
+MODE_TO_CMAKE_BUILD_TYPE = {'release' : 'RelWithDebInfo', 'debug' : 'Debug', 'dev' : 'Dev', 'sanitize' : 'Sanitize' }
 
-if status != 0:
-    print('Seastar configuration failed')
-    sys.exit(1)
+def configure_seastar(build_dir, mode):
+    seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
 
+    seastar_cmake_args = [
+        '-DCMAKE_BUILD_TYPE={}'.format(MODE_TO_CMAKE_BUILD_TYPE[mode]),
+        '-DCMAKE_C_COMPILER={}'.format(args.cc),
+        '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
+        '-DSeastar_CXX_FLAGS={}'.format((seastar_cflags + ' ' + modes['release']['cxx_ld_flags']).replace(' ', ';')),
+        '-DSeastar_LD_FLAGS={}'.format(seastar_ldflags),
+        '-DSeastar_CXX_DIALECT=gnu++17',
+        '-DSeastar_STD_OPTIONAL_VARIANT_STRINGVIEW=ON',
+    ]
+    if args.dpdk:
+        seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=wsm']
+    if args.gcc6_concepts:
+        seastar_cmake_args += ['-DSeastar_GCC6_CONCEPTS=ON']
+    if args.split_dwarf:
+        seastar_cmake_args += ['-DSeastar_SPLIT_DWARF=ON']
+    if args.alloc_failure_injector:
+        seastar_cmake_args += ['-DSeastar_ALLOC_FAILURE_INJECTION=ON']
 
-pc = {mode: 'build/{}/seastar.pc'.format(mode) for mode in build_modes}
+    seastar_cmd = ['cmake', '-G', 'Ninja', os.path.relpath('seastar', seastar_build_dir)] + seastar_cmake_args
+    cmake_dir = seastar_build_dir
+    if args.dpdk:
+        # need to cook first
+        cmake_dir = 'seastar' # required by cooking.sh
+        relative_seastar_build_dir = os.path.join('..', seastar_build_dir)  # relative to seastar/
+        seastar_cmd = ['./cooking.sh', '-i', 'dpdk', '-d', relative_seastar_build_dir, '--'] + seastar_cmd[4:]
+
+    print(seastar_cmd)
+    os.makedirs(seastar_build_dir, exist_ok=True)
+    subprocess.check_call(seastar_cmd, shell=False, cwd=cmake_dir)
+
+for mode in build_modes:
+    configure_seastar('build', mode)
+
+pc = {mode: 'build/{}/seastar/seastar.pc'.format(mode) for mode in build_modes}
 ninja = find_executable('ninja') or find_executable('ninja-build')
 if not ninja:
     print('Ninja executable (ninja or ninja-build) not found on PATH\n')
     sys.exit(1)
 
-def query_seastar_flags(seastar_pc_file, link_static_cxx=False):
-    pc_file = os.path.join('seastar', seastar_pc_file)
+def query_seastar_flags(pc_file, link_static_cxx=False):
     cflags = pkg_config(pc_file, '--cflags', '--static')
     libs = pkg_config(pc_file, '--libs', '--static')
 
@@ -1118,8 +1135,6 @@ for mode in build_modes:
     seastar_cflags, seastar_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
     modes[mode]['seastar_cflags'] = seastar_cflags
     modes[mode]['seastar_libs'] = seastar_libs
-
-MODE_TO_CMAKE_BUILD_TYPE = {'release' : 'RelWithDebInfo', 'debug' : 'Debug', 'dev' : 'Dev', 'sanitize' : 'Sanitize' }
 
 # We need to use experimental features of the zstd library (to use our own allocators for the (de)compression context),
 # which are available only when the library is linked statically.
@@ -1289,7 +1304,7 @@ with open(buildfile_tmp, 'w') as f:
         serializers = {}
         thrifts = set()
         antlr3_grammars = set()
-        seastar_dep = 'seastar/build/{}/libseastar.a'.format(mode)
+        seastar_dep = 'build/{}/seastar/libseastar.a'.format(mode)
         for binary in build_artifacts:
             if binary in other:
                 continue
@@ -1318,7 +1333,7 @@ with open(buildfile_tmp, 'w') as f:
                     if binary in pure_boost_tests:
                         local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                     if binary not in tests_not_using_seastar_test_framework:
-                        pc_path = os.path.join('seastar', pc[mode].replace('seastar.pc', 'seastar-testing.pc'))
+                        pc_path = pc[mode].replace('seastar.pc', 'seastar-testing.pc')
                         local_libs += ' ' + pkg_config(pc_path, '--libs', '--static')
                     if has_thrift:
                         local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
@@ -1406,18 +1421,18 @@ with open(buildfile_tmp, 'w') as f:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
 
-        f.write('build seastar/build/{mode}/libseastar.a: ninja | always\n'
+        f.write('build build/{mode}/seastar/libseastar.a: ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
-        f.write('  subdir = seastar/build/{mode}\n'.format(**locals()))
+        f.write('  subdir = build/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar seastar_testing\n'.format(**locals()))
-        f.write('build seastar/build/{mode}/apps/iotune/iotune: ninja\n'
+        f.write('build build/{mode}/seastar/apps/iotune/iotune: ninja\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
-        f.write('  subdir = seastar/build/{mode}\n'.format(**locals()))
+        f.write('  subdir = build/{mode}/seastar\n'.format(**locals()))
         f.write('  target = iotune\n'.format(**locals()))
         f.write(textwrap.dedent('''\
-            build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
+            build build/{mode}/iotune: copy build/{mode}/seastar/apps/iotune/iotune
             ''').format(**locals()))
         f.write('build build/{mode}/scylla-package.tar.gz: package build/{mode}/scylla build/{mode}/iotune build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE | always\n'.format(**locals()))
         f.write('  pool = submodule_pool\n')
@@ -1438,7 +1453,7 @@ with open(buildfile_tmp, 'w') as f:
         rule configure
           command = {python} configure.py $configure_args
           generator = 1
-        build build.ninja: configure | configure.py seastar/configure.py
+        build build.ninja: configure | configure.py
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
