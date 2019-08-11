@@ -111,6 +111,7 @@ public:
     named_value<sstring> cluster_name;
     named_value<sstring> listen_address;
     named_value<sstring> listen_interface;
+    named_value<bool> listen_interface_prefer_ipv6;
     named_value<sstring> commitlog_directory;
     named_value<string_list> data_file_directories;
     named_value<sstring> hints_directory;
@@ -121,6 +122,7 @@ public:
     named_value<sstring> endpoint_snitch;
     named_value<sstring> rpc_address;
     named_value<sstring> rpc_interface;
+    named_value<bool> rpc_interface_prefer_ipv6;
     named_value<seed_provider_type> seed_provider;
     named_value<uint32_t> compaction_throughput_mb_per_sec;
     named_value<uint32_t> compaction_large_partition_warning_threshold_mb;

@@ -68,7 +68,6 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/hints/manager.hh"
 #include <seastar/net/tls.hh>
-#include <seastar/net/dns.hh>
 #include "utils/exceptions.hh"
 #include "message/messaging_service.hh"
 #include "supervisor.hh"
@@ -2206,11 +2205,13 @@ future<> storage_service::start_rpc_server() {
         auto& cfg = ss._db.local().get_config();
         auto port = cfg.rpc_port();
         auto addr = cfg.rpc_address();
+        auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
+        auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
         auto keepalive = cfg.rpc_keepalive();
         thrift_server_config tsc;
         tsc.timeout_config = make_timeout_config(cfg);
         tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
-        return seastar::net::dns::resolve_name(addr).then([&ss, tserver, addr, port, keepalive, tsc] (seastar::net::inet_address ip) {
+        return gms::inet_address::lookup(addr, family, preferred).then([&ss, tserver, addr, port, keepalive, tsc] (gms::inet_address ip) {
             return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), tsc).then([tserver, port, addr, ip, keepalive] {
                 // #293 - do not stop anything
                 //engine().at_exit([tserver] {
@@ -2258,6 +2259,8 @@ future<> storage_service::start_native_transport() {
 
         auto& cfg = ss._db.local().get_config();
         auto addr = cfg.rpc_address();
+        auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
+        auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
         cql_transport::cql_server_config cql_server_config;
@@ -2265,7 +2268,7 @@ future<> storage_service::start_native_transport() {
         cql_server_config.max_request_size = ss._db.local().get_available_memory() / 10;
         cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
         cql_transport::cql_load_balance lb = cql_transport::parse_load_balance(cfg.load_balance());
-        return seastar::net::dns::resolve_name(addr).then([&ss, cserver, addr, &cfg, lb, keepalive, ceo = std::move(ceo), cql_server_config] (seastar::net::inet_address ip) {
+        return gms::inet_address::lookup(addr, family, preferred).then([&ss, cserver, addr, &cfg, lb, keepalive, ceo = std::move(ceo), cql_server_config] (seastar::net::inet_address ip) {
                 return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb, std::ref(ss._auth_service), cql_server_config).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
                 // #293 - do not stop anything
                 //engine().at_exit([cserver] {

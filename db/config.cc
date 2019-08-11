@@ -184,6 +184,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Never specify 0.0.0.0; it is always wrong.")
     , listen_interface(this, "listen_interface", value_status::Unused, "eth0",
         "The interface that Scylla binds to for connecting to other Scylla nodes. Interfaces must correspond to a single address, IP aliasing is not supported. See listen_address.")
+    , listen_interface_prefer_ipv6(this, "listen_interface_prefer_ipv6", value_status::Used, false,
+        "If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address\n"
+        "you can specify which should be chosen using listen_interface_prefer_ipv6. If false the first ipv4\n"
+        "address will be used. If true the first ipv6 address will be used. Defaults to false preferring\n"
+        "ipv4. If there is only one address it will be selected regardless of ipv4/ipv6."
+    )
     /* Default directories */
     /* If you have changed any of the default directories during installation, make sure you have root access and set these properties: */
     , commitlog_directory(this, "commitlog_directory", value_status::Used, "/var/lib/scylla/commitlog",
@@ -241,6 +247,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Related information: Network\n")
     , rpc_interface(this, "rpc_interface", value_status::Unused, "eth1",
         "The listen address for client connections. Interfaces must correspond to a single address, IP aliasing is not supported. See rpc_address.")
+    , rpc_interface_prefer_ipv6(this, "rpc_interface_prefer_ipv6", value_status::Used, false,
+        "If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address\n"
+        "you can specify which should be chosen using rpc_interface_prefer_ipv6. If false the first ipv4\n"
+        "address will be used. If true the first ipv6 address will be used. Defaults to false preferring\n"
+        "ipv4. If there is only one address it will be selected regardless of ipv4/ipv6"
+    )
     , seed_provider(this, "seed_provider", value_status::Used, seed_provider_type("org.apache.cassandra.locator.SimpleSeedProvider"),
         "The addresses of hosts deemed contact points. Scylla nodes use the -seeds list to find each other and learn the topology of the ring.\n"
         "\n"
@@ -672,9 +684,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_dangerous_direct_import_of_cassandra_counters(this, "enable_dangerous_direct_import_of_cassandra_counters", value_status::Used, false, "Only turn this option on if you want to import tables from Cassandra containing counters, and you are SURE that no counters in that table were created in a version earlier than Cassandra 2.1."
         " It is not enough to have ever since upgraded to newer versions of Cassandra. If you EVER used a version earlier than 2.1 in the cluster where these SSTables come from, DO NOT TURN ON THIS OPTION! You will corrupt your data. You have been warned.")
     , enable_shard_aware_drivers(this, "enable_shard_aware_drivers", value_status::Used, true, "Enable native transport drivers to use connection-per-shard for better performance")
-    , enable_ipv6_dns_lookup(this, "enable_ipv6_lookup", value_status::Used, false, "Use IPv6 address resolution")
+    , enable_ipv6_dns_lookup(this, "enable_ipv6_dns_lookup", value_status::Used, false, "Use IPv6 address resolution")
     , abort_on_internal_error(this, "abort_on_internal_error", liveness::LiveUpdate, value_status::Used, false, "Abort the server instead of throwing exception when internal invariants are violated")
-
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
