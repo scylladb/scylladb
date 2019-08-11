@@ -40,36 +40,32 @@ class Metric(object):
             self._status[key] = 'not available'
 
     @classmethod
-    def discover(cls, metric_source):
+    def _discover(cls, metric_source, with_help = False):
         results = []
-        logging.info('discovering metrics...')
+        logging.info('discovering metrics{}...'.format(" with help" if with_help else ""))
         response = metric_source.query_list()
         for line in response:
-            match = metric_source._METRIC_DISCOVER_PATTERN.search(line)
+            if with_help:
+                pattern = metric_source._METRIC_DISCOVER_PATTERN_WITH_HELP
+            else:
+                pattern = metric_source._METRIC_DISCOVER_PATTERN
+            match = pattern.search(line)
             if match:
                 metric = match.groupdict()['metric']
                 logging.debug('discover list result: {0}'.format(metric))
-                hlp = ""
+                hlp = match.groupdict()['help'] if with_help else ""
                 results.append(Metric(metric, metric_source, hlp))
 
-        logging.info('found {0} metrics'.format(len(results)))
+        logging.info('found {} metrics'.format(len(results)))
         return results
 
     @classmethod
-    def discover_with_help(cls, metric_source):
-        results = []
-        logging.info('discovering metrics...')
-        response = metric_source.query_list()
-        for line in response:
-            logging.debug('list result: {0}'.format(line))
-            match = metric_source._METRIC_DISCOVER_PATTERN_WITH_HELP.search(line)
-            if match:
-                metric = match.groupdict()['metric']
-                hlp = match.groupdict()['help']
-                results.append(Metric(metric, metric_source, hlp))
+    def discover(cls, metric_source):
+        return cls._discover(metric_source)
 
-        logging.info('found {0} metrics'.format(len(results)))
-        return results
+    @classmethod
+    def discover_with_help(cls, metric_source):
+        return cls._discover(metric_source, with_help=True)
 
     def __repr__(self):
         return '{0}:{1}'.format(self.symbol, self.status)
