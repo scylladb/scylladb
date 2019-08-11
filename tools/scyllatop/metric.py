@@ -21,18 +21,21 @@ class Metric(object):
     def status(self):
         return self._status
 
+    def update_info(self, line):
+        match = self._metric_source._METRIC_INFO_PATTERN.search(line)
+        if match is None:
+            raise parseexception.ParseException('could not parse metric pattern from line: {0}'.format(line))
+        key = match.groupdict()['key']
+        value = match.groupdict()['value']
+        self._status[key] = value
+
     def update(self):
         response = self._metric_source.query_val(self._symbol)
         if response is None:
             self.markAbsent()
             return
         for line in response:
-            match = self._metric_source._METRIC_INFO_PATTERN.search(line)
-            if match is None:
-                raise parseexception.ParseException('could not parse metric pattern from line: {0}'.format(line))
-            key = match.groupdict()['key']
-            value = match.groupdict()['value']
-            self._status[key] = value
+            self.update_info(line)
             logging.debug('update {}: {}'.format(self.symbol, line.strip()))
 
     def markAbsent(self):
