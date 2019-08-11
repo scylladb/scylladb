@@ -596,11 +596,11 @@ future<> cql_server::connection::process_request() {
             // Cause not understood.
             auto istream = buf.get_istream();
             (void)_process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested)
-                    .then_wrapped([this, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) {
+                    .then_wrapped([this, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) mutable {
                 try {
                     auto response = response_f.get0();
                     update_client_state(response);
-                    write_response(std::move(response.cql_response), _compression);
+                    write_response(std::move(response.cql_response), std::move(mem_permit), _compression);
                 } catch (...) {
                     clogger.error("request processing failed: {}", std::current_exception());
                 }
@@ -1223,9 +1223,9 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
-void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression)
+void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, semaphore_units<> permit, cql_compression compression)
 {
-    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
+    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response), permit = std::move(permit)] () mutable {
         auto message = response->make_message(_version, compression);
         message.on_delete([response = std::move(response)] { });
         return _write_buf.write(std::move(message)).then([this] {
