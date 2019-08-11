@@ -13,7 +13,11 @@ class LiveData(object):
         self._measurements = []
         self._interval = interval
         self._metric_source = metric_source
-        self._initializeMetrics(metricPatterns)
+        if metricPatterns and len(metricPatterns) > 0:
+            self._metricPatterns = metricPatterns
+        else:
+            self._metricPatterns = defaults.DEFAULT_METRIC_PATTERNS
+        self._initializeMetrics()
         self._views = []
         self._stop = False
 
@@ -25,16 +29,9 @@ class LiveData(object):
     def measurements(self):
         return self._measurements
 
-    def _initializeMetrics(self, metricPatterns):
-        if len(metricPatterns) > 0:
-            self._setupUserSpecifiedMetrics(metricPatterns)
-        else:
-            self._setupUserSpecifiedMetrics(defaults.DEFAULT_METRIC_PATTERNS)
-        logging.debug('_initializeMetrics: {} measurements'.format(len(self._measurements)))
-
-    def _setupUserSpecifiedMetrics(self, metricPatterns):
+    def _initializeMetrics(self):
         availableSymbols = [m.symbol for m in metric.Metric.discover(self._metric_source)]
-        symbols = [symbol for symbol in availableSymbols if self._matches(symbol, metricPatterns)]
+        symbols = [symbol for symbol in availableSymbols if self._matches(symbol, self._metricPatterns)]
         for symbol in symbols:
                 logging.info('adding {0}'.format(symbol))
                 self._measurements.append(metric.Metric(symbol, self._metric_source, ""))
