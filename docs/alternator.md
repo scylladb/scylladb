@@ -48,7 +48,9 @@ as the work progresses and compatibility continues to improve.
   25) or size of items (400 KB) or total request size (16 MB).
 ### Scans
 * Scan: As usual, projection expressions only support top-level attributes.
-  Filter expressions (to filter some of the items) partially supported.
+  Filter expressions (to filter some of the items) partially supported:
+  The ScanFilter syntax is supported but FilterExpression is not yet, and
+  only equality operator is supported so far.
   The "Select" options which allows to count items instead of returning them
   is not yet supported. Parallel scan is not yet supported.
 * Query: Same issues as Scan above. Additionally, missing support for
