@@ -378,7 +378,7 @@ public:
             return _state.contains(state::stopped);
         }
 
-        seastar::shared_mutex& file_update_mutex() {
+        seastar::shared_mutex& file_update_mutex() noexcept {
             return _file_update_mutex;
         }
 
