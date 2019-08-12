@@ -37,6 +37,7 @@
 #include "db/timeout_clock.hh"
 #include "service/priority_manager.hh"
 #include "database.hh"
+#include "service_permit.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -403,7 +404,7 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_m
             // unavailable exception.
             auto timeout = db::timeout_clock::now() + 1h;
             //FIXME: Add required frozen_mutation overloads
-            return _proxy.mutate({m.fm.unfreeze(m.s)}, consistency_level::ALL, timeout, nullptr);
+            return _proxy.mutate({m.fm.unfreeze(m.s)}, consistency_level::ALL, timeout, nullptr, empty_service_permit());
         }
     });
 }

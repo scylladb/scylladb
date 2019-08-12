@@ -144,18 +144,7 @@ event::event_type parse_event_type(const sstring& value)
     }
 }
 
-cql_load_balance parse_load_balance(sstring value)
-{
-    if (value == "none") {
-        return cql_load_balance::none;
-    } else if (value == "round-robin") {
-        return cql_load_balance::round_robin;
-    } else {
-        throw std::invalid_argument("Unknown load balancing algorithm: " + value);
-    }
-}
-
-cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service& auth_service,
+cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, auth::service& auth_service,
         cql_server_config config)
     : _proxy(proxy)
     , _query_processor(qp)
@@ -163,7 +152,6 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
     , _max_request_size(config.max_request_size)
     , _memory_available(_max_request_size)
     , _notifier(std::make_unique<event_notifier>())
-    , _lb(lb)
     , _auth_service(auth_service)
 {
     namespace sm = seastar::metrics;
@@ -189,6 +177,10 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
                         sm::description(
                             seastar::format("Holds an incrementing counter with the requests that ever blocked due to reaching the memory quota limit ({}B). "
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
+       sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
+                        sm::description(
+                            seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
+                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size))),
 
     });
 }
@@ -352,7 +344,7 @@ cql_server::connection::read_frame() {
 }
 
 future<cql_server::connection::processing_result>
-    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
+    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request, service_permit permit) {
     using auth_state = service::client_state::auth_state;
 
     auto cqlop = static_cast<cql_binary_opcode>(op);
@@ -375,7 +367,7 @@ future<cql_server::connection::processing_result>
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
-    return futurize_apply([this, cqlop, stream, &fbuf, client_state, linearization_buffer_ptr] () mutable {
+    return futurize_apply([this, cqlop, stream, &fbuf, client_state, linearization_buffer_ptr, permit = std::move(permit)] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -413,10 +405,10 @@ future<cql_server::connection::processing_result>
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(in), std::move(client_state));
         case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(in), std::move(client_state));
         case cql_binary_opcode::OPTIONS:       return process_options(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), std::move(client_state));
+        case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), std::move(client_state), std::move(permit));
         case cql_binary_opcode::PREPARE:       return process_prepare(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), std::move(client_state));
+        case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), std::move(client_state), std::move(permit));
+        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), std::move(client_state), std::move(permit));
         case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(in), std::move(client_state));
         default:                               throw exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop)));
         }
@@ -597,7 +589,7 @@ future<> cql_server::connection::process_request() {
         }
 
         return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
-          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (fragmented_temporary_buffer buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._requests_served;
             ++_server._requests_serving;
@@ -607,29 +599,16 @@ future<> cql_server::connection::process_request() {
             // Replacing the immediately-invoked lambda below with just its body costs 5-10 usec extra per invocation.
             // Cause not understood.
             auto istream = buf.get_istream();
-            [&] {
-                auto cpu = pick_request_cpu();
-                return [&] {
-                    if (cpu == engine().cpu_id()) {
-                        return _process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
-                    } else {
-                        // We should avoid sending non-trivial objects across shards.
-                        static_assert(std::is_trivially_destructible_v<fragmented_temporary_buffer::istream>);
-                        static_assert(std::is_trivially_copyable_v<fragmented_temporary_buffer::istream>);
-                        return smp::submit_to(cpu, [this, istream, op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
-                            return _process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
-                        });
-                    }
-                }().then_wrapped([this, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) {
-                  try {
+            (void)_process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested, mem_permit)
+                    .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<processing_result> response_f) mutable {
+                try {
                     auto response = response_f.get0();
                     update_client_state(response);
-                    write_response(std::move(response.cql_response), _compression);
-                  } catch (...) {
+                    write_response(std::move(response.cql_response), std::move(mem_permit), _compression);
+                } catch (...) {
                     clogger.error("request processing failed: {}", std::current_exception());
-                  }
-                });
-            }();
+                }
+            });
 
             return make_ready_future<>();
           });
@@ -713,14 +692,6 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
     return _buffer_reader.read_exactly(_read_buf, length);
 }
 
-unsigned cql_server::connection::pick_request_cpu()
-{
-    if (_server._lb == cql_load_balance::round_robin) {
-        return _request_cpu++ % smp::count;
-    }
-    return engine().cpu_id();
-}
-
 future<response_type> cql_server::connection::process_startup(uint16_t stream, request_reader in, service::client_state client_state)
 {
     auto options = in.read_string_map();
@@ -772,10 +743,10 @@ cql_server::connection::init_cql_serialization_format() {
     _cql_serialization_format = cql_serialization_format(_version);
 }
 
-future<response_type> cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state client_state)
+future<response_type> cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
 {
     auto query = in.read_long_string_view();
-    auto q_state = std::make_unique<cql_query_state>(client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
     auto& query_state = q_state->query_state;
     q_state->options = in.read_options(_version, _cql_serialization_format, this->timeout_config());
     auto& options = *q_state->options;
@@ -831,7 +802,7 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, r
     });
 }
 
-future<response_type> cql_server::connection::process_execute(uint16_t stream, request_reader in, service::client_state client_state)
+future<response_type> cql_server::connection::process_execute(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
 {
     cql3::prepared_cache_key_type cache_key(in.read_short_bytes());
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
@@ -849,7 +820,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, r
         throw exceptions::prepared_query_not_found_exception(id);
     }
 
-    auto q_state = std::make_unique<cql_query_state>(client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
     auto& query_state = q_state->query_state;
     if (_version == 1) {
         std::vector<cql3::raw_value_view> values;
@@ -893,7 +864,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, r
 }
 
 future<response_type>
-cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state client_state)
+cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
 {
     if (_version == 1) {
         throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
@@ -972,7 +943,7 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
         values.emplace_back(std::move(tmp));
     }
 
-    auto q_state = std::make_unique<cql_query_state>(client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
     auto& query_state = q_state->query_state;
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
     q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(_version < 3 ? 1 : _version, _cql_serialization_format, this->timeout_config())), std::move(values)));
@@ -1256,9 +1227,9 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
-void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression)
+void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit, cql_compression compression)
 {
-    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
+    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response), permit = std::move(permit)] () mutable {
         auto message = response->make_message(_version, compression);
         message.on_delete([response = std::move(response)] { });
         return _write_buf.write(std::move(message)).then([this] {

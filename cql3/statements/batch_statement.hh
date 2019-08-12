@@ -125,7 +125,8 @@ public:
 
     const std::vector<single_statement>& get_statements();
 private:
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& storage, const query_options& options, db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state);
+    future<std::vector<mutation>> get_mutations(service::storage_proxy& storage, const query_options& options, db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state,
+                                                service_permit permit);
 
 public:
     /**
@@ -148,7 +149,8 @@ private:
             std::vector<mutation> mutations,
             db::consistency_level cl,
             db::timeout_clock::time_point timeout,
-            tracing::trace_state_ptr tr_state);
+            tracing::trace_state_ptr tr_state,
+            service_permit permit);
 
     future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
             service::storage_proxy& storage,

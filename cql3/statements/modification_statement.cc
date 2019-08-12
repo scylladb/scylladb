@@ -162,11 +162,11 @@ future<> modification_statement::check_access(const service::client_state& state
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, tracing::trace_state_ptr trace_state) {
+modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, tracing::trace_state_ptr trace_state, service_permit permit) {
     auto json_cache = maybe_prepare_json_cache(options);
     auto keys = make_lw_shared(build_partition_keys(options, json_cache));
     auto ranges = make_lw_shared(create_clustering_ranges(options, json_cache));
-    return make_update_parameters(proxy, keys, ranges, options, timeout, local, now, std::move(trace_state)).then(
+    return make_update_parameters(proxy, keys, ranges, options, timeout, local, now, std::move(trace_state), std::move(permit)).then(
             [this, keys, ranges, now, json_cache = std::move(json_cache)] (auto params_ptr) {
                 std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
@@ -191,8 +191,9 @@ modification_statement::make_update_parameters(
         db::timeout_clock::time_point timeout,
         bool local,
         int64_t now,
-        tracing::trace_state_ptr trace_state) {
-    return read_required_rows(proxy, *keys, std::move(ranges), local, options, timeout, std::move(trace_state)).then(
+        tracing::trace_state_ptr trace_state,
+        service_permit permit) {
+    return read_required_rows(proxy, *keys, std::move(ranges), local, options, timeout, std::move(trace_state), std::move(permit)).then(
             [this, &options, now] (auto rows) {
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
@@ -279,7 +280,8 @@ modification_statement::read_required_rows(
         bool local,
         const query_options& options,
         db::timeout_clock::time_point timeout,
-        tracing::trace_state_ptr trace_state) {
+        tracing::trace_state_ptr trace_state,
+        service_permit permit) {
     if (!requires_read()) {
         return make_ready_future<update_parameters::prefetched_rows_type>(
                 update_parameters::prefetched_rows_type{});
@@ -311,7 +313,7 @@ modification_statement::read_required_rows(
     query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
     return proxy.query(s, make_lw_shared(std::move(cmd)), std::move(keys),
-            cl, {timeout, std::move(trace_state)}).then([this, ps] (auto qr) {
+            cl, {timeout, std::move(permit), std::move(trace_state)}).then([this, ps] (auto qr) {
         return query::result_view::do_with(*qr.query_result, [&] (query::result_view v) {
             auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
             v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
@@ -409,12 +411,12 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
     }
 
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs.get_trace_state()).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
+    return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs.get_trace_state(), qs.get_permit()).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
 
-        return proxy.mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), this->is_raw_counter_shard_write());
+        return proxy.mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
     });
 }
 
