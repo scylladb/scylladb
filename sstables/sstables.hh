@@ -33,6 +33,7 @@
 #include <seastar/core/distributed.hh>
 #include <unordered_set>
 #include <unordered_map>
+#include <variant>
 #include "types.hh"
 #include "clustering_key_filter.hh"
 #include <seastar/core/enum.hh>
@@ -542,8 +543,9 @@ private:
 
     sstables_stats _stats;
 
+public:
     const bool has_component(component_type f) const;
-
+private:
     future<file> open_file(component_type, open_flags, file_open_options = {});
 
     template <component_type Type, typename T>
@@ -795,6 +797,10 @@ public:
 
     double get_compression_ratio() const;
 
+    const sstables::compression& get_compression() const {
+        return _components->compression;
+    }
+
     future<> mutate_sstable_level(uint32_t);
 
     const summary& get_summary() const {
@@ -943,6 +949,15 @@ class file_io_extension {
 public:
     virtual ~file_io_extension() {}
     virtual future<file> wrap_file(sstable&, component_type, file, open_flags flags) = 0;
+    // optionally return a map of attributes for a given sstable,
+    // suitable for "describe".
+    // This would preferably be interesting info on what/why the extension did
+    // to this table.
+    using attr_value_type = std::variant<sstring, std::map<sstring, sstring>>;
+    using attr_value_map = std::map<sstring, attr_value_type>;
+    virtual attr_value_map get_attributes(const sstable&) const {
+        return {};
+    }
 };
 
 }
