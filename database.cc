@@ -4357,6 +4357,8 @@ future<int64_t>
 table::disable_sstable_write() {
     _sstable_writes_disabled_at = std::chrono::steady_clock::now();
     return _sstables_lock.write_lock().then([this] {
+      // _sstable_deletion_sem must be acquired after _sstables_lock.write_lock
+      return _sstable_deletion_sem.wait().then([this] {
         if (_sstables->all()->empty()) {
             return make_ready_future<int64_t>(0);
         }
@@ -4365,7 +4367,17 @@ table::disable_sstable_write() {
             max = std::max(max, s->generation());
         }
         return make_ready_future<int64_t>(max);
+      });
     });
+}
+
+std::chrono::steady_clock::duration table::enable_sstable_write(int64_t new_generation) {
+    if (new_generation != -1) {
+        update_sstables_known_generation(new_generation);
+    }
+    _sstable_deletion_sem.signal();
+    _sstables_lock.write_unlock();
+    return std::chrono::steady_clock::now() - _sstable_writes_disabled_at;
 }
 
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
