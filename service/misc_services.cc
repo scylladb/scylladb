@@ -162,13 +162,14 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         auto& g = gms::get_local_gossiper();
         auto& ss = get_local_storage_service();
         _slen = _gstate.size();
-        g.add_local_application_state(gms::application_state::CACHE_HITRATES, ss.value_factory.cache_hitrates(_gstate));
-        // if max difference during this round is big schedule next recalculate earlier
-        if (_diff < 0.01) {
-            return std::chrono::milliseconds(2000);
-        } else {
-            return std::chrono::milliseconds(500);
-        }
+        return g.add_local_application_state(gms::application_state::CACHE_HITRATES, ss.value_factory.cache_hitrates(_gstate)).then([this] {
+            // if max difference during this round is big schedule next recalculate earlier
+            if (_diff < 0.01) {
+                return std::chrono::milliseconds(2000);
+            } else {
+                return std::chrono::milliseconds(500);
+            }
+        });
     }).finally([this] {
         _gstate = std::string(); // free memory, do not trust clear() to do that for string
         _rates.clear();
