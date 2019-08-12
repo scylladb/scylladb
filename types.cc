@@ -1250,7 +1250,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
         if (!value) {
             return;
         }
-        // FIXME: support ipv6
         auto& ipv = from_value(value);
         if (ipv.empty()) {
             return;
@@ -1275,7 +1274,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
         if (!value) {
             return 0;
         }
-        // FIXME: support ipv6
         auto& ipv = from_value(value);
         if (ipv.empty()) {
             return 0;
