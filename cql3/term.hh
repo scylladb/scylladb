@@ -141,8 +141,7 @@ public:
         }
 
         friend std::ostream& operator<<(std::ostream& os, const raw& r) {
-            // FIXME: kill const_cast
-            return os << const_cast<raw&>(r).to_string();
+            return os << r.to_string();
         }
     };
 
