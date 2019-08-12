@@ -12,6 +12,7 @@ ExecStart=/opt/scylladb/scripts/scylla-housekeeping --uuid-file /var/lib/scylla-
 {{#redhat}}
 ExecStart=/opt/scylladb/scripts/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid -q -c /etc/scylla.d/housekeeping.cfg --repo-files '/etc/yum.repos.d/scylla*.repo' version --mode d
 {{/redhat}}
+Slice=scylla-helper.slice
 
 [Install]
 WantedBy=multi-user.target

@@ -13,6 +13,7 @@ conf/housekeeping.cfg etc/scylla.d
 dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system
 dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system
 dist/common/systemd/scylla-fstrim.timer /lib/systemd/system
+dist/common/systemd/*.slice /lib/systemd/system
 dist/debian/scripts/scylla_save_coredump opt/scylladb/scripts
 dist/debian/scripts/scylla_delay_fstrim opt/scylladb/scripts
 *.md NOTICE.txt ORIGIN licenses opt/scylladb/share/doc/scylla

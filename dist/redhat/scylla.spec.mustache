@@ -114,6 +114,7 @@ rm -rf $RPM_BUILD_ROOT
 /opt/scylladb/share/doc/scylla/licenses/
 %{_unitdir}/*.service
 %{_unitdir}/*.timer
+%{_unitdir}/*.slice
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
@@ -135,6 +136,8 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/view_hints
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/coredump
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla-housekeeping
+%ghost /etc/systemd/system/scylla-helper.slice.d/
+%ghost /etc/systemd/system/scylla-helper.slice.d/memory.conf
 %ghost /etc/systemd/system/scylla-server.service.d/
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
 %ghost /etc/systemd/system/scylla-server.service.d/mounts.conf
