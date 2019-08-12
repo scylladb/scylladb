@@ -2203,7 +2203,7 @@ private:
 
     size_t get_max_row_buf_size(row_level_diff_detect_algorithm algo) {
         // Max buffer size per repair round
-        return is_rpc_stream_supported(algo) ?  32 * 1024 * 1024 : 256 * 1024;
+        return is_rpc_stream_supported(algo) ?  tracker::max_repair_memory_per_range() : 256 * 1024;
     }
 
     // Step A: Negotiate sync boundary to use
@@ -2547,10 +2547,10 @@ class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subsc
     }
 };
 
-repair_service::repair_service(distributed<gms::gossiper>& gossiper)
+repair_service::repair_service(distributed<gms::gossiper>& gossiper, size_t max_repair_memory)
     : _gossiper(gossiper)
     , _gossip_helper(make_shared<row_level_repair_gossip_helper>())
-    , _tracker(smp::count) {
+    , _tracker(smp::count, max_repair_memory) {
     _gossiper.local().register_(_gossip_helper);
 }
 
