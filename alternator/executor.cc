@@ -466,6 +466,12 @@ static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) 
     return m;
 }
 
+// The DynamoDB API doesn't let the client control the server's timeout.
+// Let's pick something reasonable:
+static db::timeout_clock::time_point default_timeout() {
+    return db::timeout_clock::now() + 10s;
+}
+
 future<json::json_return_type> executor::put_item(std::string content) {
     _stats.api_operations.put_item++;
     rjson::value update_info = rjson::parse(content);
@@ -476,7 +482,7 @@ future<json::json_return_type> executor::put_item(std::string content) {
 
     mutation m = make_item_mutation(item, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, PutItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
@@ -512,7 +518,7 @@ future<json::json_return_type> executor::delete_item(std::string content) {
     mutation m = make_delete_item_mutation(key, schema);
     check_key(key, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, DeleteItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
@@ -585,7 +591,7 @@ future<json::json_return_type> executor::batch_write_item(std::string content) {
         }
     }
 
-    return _proxy.mutate(std::move(mutations), db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+    return _proxy.mutate(std::move(mutations), db::consistency_level::LOCAL_QUORUM, default_timeout(), tracing::trace_state_ptr()).then([] () {
         // Without special options on what to return, BatchWriteItem returns nothing,
         // unless there are UnprocessedItems - it's possible to just stop processing a batch
         // due to throttling. TODO(sarna): Consider UnprocessedItems when returning.
@@ -1117,7 +1123,7 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(service::st
 
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
-    return proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(db::no_timeout)).then(
+    return proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout())).then(
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
         auto previous_item = describe_item(schema, partition_slice, *selection, std::move(qr.query_result), {});
         return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(previous_item)));
@@ -1276,7 +1282,7 @@ future<json::json_return_type> executor::update_item(std::string content) {
         row.apply(row_marker(ts));
 
         elogger.trace("Applying mutation {}", m);
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, db::no_timeout, tracing::trace_state_ptr()).then([] () {
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), tracing::trace_state_ptr()).then([] () {
             // Without special options on what to return, UpdateItem returns nothing.
             return make_ready_future<json::json_return_type>(json_string(""));
         });
@@ -1334,7 +1340,7 @@ future<json::json_return_type> executor::get_item(std::string content) {
 
     auto attrs_to_get = calculate_attrs_to_get(table_info);
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(db::no_timeout)).then(
+    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout())).then(
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get)] (service::storage_proxy::coordinator_query_result qr) mutable {
         return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get))));
     });
@@ -1394,7 +1400,7 @@ future<json::json_return_type> executor::batch_get_item(std::string content) {
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
-            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(db::no_timeout)).then(
+            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(default_timeout())).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
                 std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get));
                 return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
@@ -1557,7 +1563,7 @@ static future<json::json_return_type> do_query(schema_ptr schema,
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
     auto p = service::pager::query_pagers::pager(schema, selection, dummy_query_state, *query_options, command, std::move(partition_ranges), cql_stats, filtering_restrictions);
 
-    return p->fetch_page(limit, gc_clock::now(), db::no_timeout).then(
+    return p->fetch_page(limit, gc_clock::now(), default_timeout()).then(
             [p, schema, cql_stats, partition_slice = std::move(partition_slice),
              selection = std::move(selection),
              attrs_to_get = std::move(attrs_to_get),
