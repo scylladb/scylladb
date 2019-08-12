@@ -55,6 +55,8 @@
 #include "tests/normalizing_reader.hh"
 #include "sstable_run_based_compaction_strategy_for_tests.hh"
 #include "compatible_ring_position.hh"
+#include "mutation_compactor.hh"
+#include "service/priority_manager.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -5122,5 +5124,149 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         cm->stop().get();
+    });
+}
+
+// Make sure that a custom tombstone-gced-only writer will be feeded with gc'able tombstone
+// from the regular compaction's input sstable.
+SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
+    BOOST_REQUIRE(smp::count == 1);
+    return test_env::do_with_async([] (test_env& env) {
+        storage_service_for_tests ssft;
+        cell_locker_stats cl_stats;
+
+        auto builder = schema_builder("tests", "purged_tombstone_consumer_sstable_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(0);
+        auto s = builder.build();
+
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, la, big);
+        };
+
+        class compacting_sstable_writer_test {
+            shared_sstable& _sst;
+            sstable_writer _writer;
+        public:
+            explicit compacting_sstable_writer_test(const schema_ptr& s, shared_sstable& sst)
+                : _sst(sst),
+                  _writer(sst->get_writer(*s, 1, sstable_writer_config{}, encoding_stats{}, service::get_local_compaction_priority())) {}
+
+            void consume_new_partition(const dht::decorated_key& dk) { _writer.consume_new_partition(dk); }
+            void consume(tombstone t) { _writer.consume(t); }
+            stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer.consume(std::move(sr)); }
+            stop_iteration consume(clustering_row&& cr, row_tombstone tomb, bool) { return _writer.consume(std::move(cr)); }
+            stop_iteration consume(range_tombstone&& rt) { return _writer.consume(std::move(rt)); }
+
+            stop_iteration consume_end_of_partition() { return _writer.consume_end_of_partition(); }
+            void consume_end_of_stream() { _writer.consume_end_of_stream(); _sst->open_data().get0(); }
+        };
+
+        std::optional<gc_clock::time_point> gc_before;
+        auto max_purgeable_ts = api::max_timestamp;
+        auto is_tombstone_purgeable = [&gc_before, max_purgeable_ts](const tombstone& t) {
+            bool can_gc = t.deletion_time < *gc_before;
+            return t && can_gc && t.timestamp < max_purgeable_ts;
+        };
+
+        auto compact = [&] (std::vector<shared_sstable> all) -> std::pair<shared_sstable, shared_sstable> {
+            auto max_purgeable_func = [max_purgeable_ts] (const dht::decorated_key& dk) {
+                return max_purgeable_ts;
+            };
+
+            auto non_purged = sst_gen();
+            auto purged_only = sst_gen();
+
+            auto cr = compacting_sstable_writer_test(s, non_purged);
+            auto purged_cr = compacting_sstable_writer_test(s, purged_only);
+
+            auto gc_now = gc_clock::now();
+            gc_before = gc_now - s->gc_grace_seconds();
+
+            auto cfc = make_stable_flattened_mutations_consumer<compact_for_compaction<compacting_sstable_writer_test, compacting_sstable_writer_test>>(
+                *s, gc_now, max_purgeable_func, std::move(cr), std::move(purged_cr));
+
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
+            auto compacting = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s));
+            for (auto&& sst : all) {
+                compacting->insert(std::move(sst));
+            }
+            auto reader = ::make_range_sstable_reader(s,
+                compacting,
+                query::full_partition_range,
+                s->full_slice(),
+                service::get_local_compaction_priority(),
+                no_resource_tracking(),
+                nullptr,
+                ::streamed_mutation::forwarding::no,
+                ::mutation_reader::forwarding::no);
+
+            auto r = std::move(reader);
+            r.consume_in_thread(std::move(cfc), db::no_timeout);
+
+            return {std::move(non_purged), std::move(purged_only)};
+        };
+
+        auto next_timestamp = [] {
+            static thread_local api::timestamp_type next = 1;
+            return next++;
+        };
+
+        auto make_insert = [&] (partition_key key) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), next_timestamp());
+            return m;
+        };
+
+        auto make_delete = [&] (partition_key key) -> std::pair<mutation, tombstone> {
+            mutation m(s, key);
+            tombstone tomb(next_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            return {m, tomb};
+        };
+
+        auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
+        auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
+
+        auto ttl = 5;
+
+        auto assert_that_produces_purged_tombstone = [&] (auto& sst, partition_key& key, tombstone tomb) {
+            auto reader = make_lw_shared(sstable_reader(sst, s));
+            read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s, &key, is_tombstone_purgeable, &tomb] (mutation_opt m) {
+                BOOST_REQUIRE(m);
+                BOOST_REQUIRE(m->key().equal(*s, key));
+                auto& rows = m->partition().clustered_rows();
+                BOOST_REQUIRE_EQUAL(rows.calculate_size(), 0);
+                BOOST_REQUIRE(is_tombstone_purgeable(m->partition().partition_tombstone()));
+                BOOST_REQUIRE(m->partition().partition_tombstone() == tomb);
+                return (*reader)(db::no_timeout);
+            }).then([reader, s] (mutation_fragment_opt m) {
+                BOOST_REQUIRE(!m);
+            }).get();
+        };
+
+        // gc'ed tombstone for alpha will go to gc-only consumer, whereas live data goes to regular consumer.
+        {
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_insert(beta);
+            auto [mut3, mut3_tombstone] = make_delete(alpha);
+
+            std::vector<shared_sstable> sstables = {
+                make_sstable_containing(sst_gen, {mut1, mut2}),
+                make_sstable_containing(sst_gen, {mut3})
+            };
+
+            forward_jump_clocks(std::chrono::seconds(ttl));
+
+            auto [non_purged, purged_only] = compact(std::move(sstables));
+
+            assert_that(sstable_reader(non_purged, s))
+                    .produces(mut2)
+                    .produces_end_of_stream();
+
+            assert_that_produces_purged_tombstone(purged_only, alpha, mut3_tombstone);
+        }
     });
 }
