@@ -31,6 +31,8 @@
 #include "tracing/tracing.hh"
 #include "utils/small_vector.hh"
 
+class position_in_partition_view;
+
 namespace query {
 
 using column_id_vector = utils::small_vector<column_id, 8>;
@@ -58,10 +60,20 @@ typedef std::vector<clustering_range> clustering_row_ranges;
 
 /// Trim the clustering ranges.
 ///
-/// Equivalent of intersecting each range with [key, +inf), or (-inf, key] if
+/// Equivalent of intersecting each clustering range with [pos, +inf) position
+/// in partition range, or (-inf, pos] position in partition range if
 /// reversed == true. Ranges that do not intersect are dropped. Ranges that
 /// partially overlap are trimmed.
-/// Result: each range will overlap fully with [key, +inf), or (-int, key] if
+/// Result: each range will overlap fully with [pos, +inf), or (-int, pos] if
+/// reversed is true.
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition_view pos, bool reversed = false);
+
+/// Trim the clustering ranges.
+///
+/// Equivalent of intersecting each clustering range with (key, +inf) clustering
+/// range, or (-inf, key) clustering range if reversed == true. Ranges that do
+/// not intersect are dropped. Ranges that partially overlap are trimmed.
+/// Result: each range will overlap fully with (key, +inf), or (-int, key) if
 /// reversed is true.
 void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed = false);
 

@@ -21,6 +21,7 @@
 
 
 #include <random>
+#include <experimental/source_location>
 
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
@@ -1455,6 +1456,279 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
     }).get();
 }
 
+SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
+    struct key {
+        int c0;
+        std::optional<int> c1;
+
+        key(int c0, std::optional<int> c1 = {}) : c0(c0), c1(c1) { }
+
+        clustering_key to_clustering_key(const schema& s) const {
+            std::vector<bytes> v;
+            v.push_back(int32_type->decompose(data_value(c0)));
+            if (c1) {
+                v.push_back(int32_type->decompose(data_value(*c1)));
+            }
+            return clustering_key::from_exploded(s, std::move(v));
+        }
+    };
+    struct incl {
+        key value;
+
+        incl(int c0, int c1) : value(c0, c1) { }
+        incl(int c0) : value(c0) { }
+    };
+    struct excl {
+        key value;
+
+        excl(int c0, int c1) : value(c0, c1) { }
+        excl(int c0) : value(c0) { }
+    };
+    struct bound {
+        key value;
+        bool inclusive;
+
+        bound(incl b) : value(b.value), inclusive(true) { }
+        bound(excl b) : value(b.value), inclusive(false) { }
+    };
+    struct inf {
+    };
+    struct range {
+        std::optional<bound> start;
+        std::optional<bound> end;
+        bool singular = false;
+
+        range(bound s, bound e) : start(s), end(e) { }
+        range(inf, bound e) : end(e) { }
+        range(bound s, inf) : start(s) { }
+        range(inf, inf) { }
+        range(bound b) : start(b), end(b), singular(true) { }
+
+        static std::optional<range_bound<clustering_key>> to_bound(const schema& s, std::optional<bound> b) {
+            if (b) {
+                return range_bound<clustering_key>(b->value.to_clustering_key(s), b->inclusive);
+            }
+            return {};
+        }
+        query::clustering_range to_clustering_range(const schema& s) const {
+            return query::clustering_range(to_bound(s, start), to_bound(s, end), singular);
+        }
+    };
+
+    const auto schema = schema_builder("ks", get_name())
+            .with_column("p0", int32_type, column_kind::partition_key)
+            .with_column("c0", int32_type, column_kind::clustering_key)
+            .with_column("c1", int32_type, column_kind::clustering_key)
+            .with_column("v1", int32_type, column_kind::regular_column)
+            .build();
+
+    const auto check = [&schema] (std::vector<range> ranges, key key, std::vector<range> output_ranges, bool reversed = false,
+            std::experimental::source_location sl = std::experimental::source_location::current()) {
+        auto actual_ranges = boost::copy_range<query::clustering_row_ranges>(ranges | boost::adaptors::transformed(
+                    [&] (const range& r) { return r.to_clustering_range(*schema); }));
+
+        query::trim_clustering_row_ranges_to(*schema, actual_ranges, key.to_clustering_key(*schema), reversed);
+
+        const auto expected_ranges = boost::copy_range<query::clustering_row_ranges>(output_ranges | boost::adaptors::transformed(
+                    [&] (const range& r) { return r.to_clustering_range(*schema); }));
+
+        if (!std::equal(actual_ranges.begin(), actual_ranges.end(), expected_ranges.begin(), expected_ranges.end(),
+                    [tri_cmp = clustering_key::tri_compare(*schema)] (const query::clustering_range& a, const query::clustering_range& b) {
+            return a.equal(b, tri_cmp);
+        })) {
+            BOOST_FAIL(fmt::format("Unexpected result\nexpected {}\ngot {}\ncalled from {}:{}", expected_ranges, actual_ranges, sl.file_name(), sl.line()));
+        }
+    };
+    const auto check_reversed = [&schema, &check] (std::vector<range> ranges, key key, std::vector<range> output_ranges, bool reversed = false,
+            std::experimental::source_location sl = std::experimental::source_location::current()) {
+        return check(std::move(ranges), std::move(key), std::move(output_ranges), true, sl);
+    };
+
+    // We want to check the following cases:
+    //  1) Before range
+    //  2) Equal to begin(range with incl begin)
+    //  3) Equal to begin(range with excl begin)
+    //  4) Intersect with range (excl end)
+    //  5) Intersect with range (incl end)
+    //  6) Intersect with range (inf end)
+    //  7) Equal to end(range with incl end)
+    //  8) Equal to end(range with excl end)
+    //  9) After range
+    // 10) Full range
+
+    // (1)
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {1, 0},
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
+
+    // (2)
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {1, 6},
+            { {excl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
+
+    // (2) - prefix
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {3, 6},
+            { {excl{3, 6}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
+
+    // (3)
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {2, 3},
+            { {excl{2, 3}, incl{2, 4}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
+
+    // (3) - prefix
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {excl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {3, 7},
+            { {excl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
+
+    // (4)
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {2, 0},
+            { {excl{2, 0}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
+
+    // (5)
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {90, 90},
+            { {excl{90, 90}, incl{999, 0}} });
+
+    // (6)
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, inf{}} },
+            {90, 90},
+            { {excl{90, 90}, inf{}} });
+
+    // (7)
+    check(
+            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {2, 3},
+            { {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} });
+
+    // (7) - prefix
+    check(
+            { {incl{1, 6}, incl{2, 3}}, {incl{3}, incl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {4, 39},
+            { {excl{4, 39}, incl{4}}, {incl{7, 9}, excl{999, 0}} });
+
+    // (8)
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {2, 3},
+            { {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} });
+
+    // (8) - prefix
+    check(
+            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {4, 11},
+            { {incl{7, 9}, excl{999, 0}} });
+
+    // (9)
+    check(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {2, 4},
+            { {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} });
+
+    // (10)
+    check(
+            { {inf{}, inf{}} },
+            {7, 9},
+            { {excl{7, 9}, inf{}} });
+
+    // In reversed now
+
+    // (1)
+    check_reversed(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {999, 1},
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
+
+    // (2)
+    check_reversed(
+            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {2, 4},
+            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, excl{2, 4}} });
+
+    // (2) - prefix
+    check_reversed(
+            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {incl{3}, incl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {4, 43453},
+            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {incl{3}, excl{4, 43453}} });
+
+    // (3)
+    check_reversed(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {2, 3},
+            { {incl{1, 6}, excl{2, 3}} });
+
+    // (3) - prefix
+    check_reversed(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {4, 3},
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}} });
+
+    // (4)
+    check_reversed(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {8, 0},
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{8, 0}} });
+
+    // (5)
+    check_reversed(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            {90, 90},
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{90, 90}} });
+
+    // (6)
+    check_reversed(
+            { {inf{}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, inf{}} },
+            {1, 90},
+            { {inf{}, excl{1, 90}} });
+
+    // (7)
+    check_reversed(
+            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {7, 9},
+            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}} });
+
+    // (7) - prefix
+    check_reversed(
+            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {3, 673},
+            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{3, 673}} });
+
+    // (8)
+    check_reversed(
+            { {excl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {1, 6},
+            { });
+
+    // (8) - prefix
+    check_reversed(
+            { {incl{1, 6}, incl{2, 3}}, {excl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {3, 673},
+            { {incl{1, 6}, incl{2, 3}} });
+
+    // (9)
+    check_reversed(
+            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            {0, 4},
+            {});
+
+    // (10)
+    check_reversed(
+            { {inf{}, inf{}} },
+            {7, 9},
+            { {inf{}, excl{7, 9}} });
+
+    return make_ready_future<>();
+}
+
 // Shards tokens such that tokens are owned by shards in a round-robin manner.
 class dummy_partitioner : public dht::i_partitioner {
     dht::i_partitioner& _partitioner;
@@ -1591,27 +1865,28 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     }
 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
-        auto make_populate = [] (bool evict_paused_readers) {
-            return [evict_paused_readers] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
+        auto make_populate = [] (bool evict_paused_readers, bool single_fragment_buffer) {
+            return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
                 // We need to group mutations that have the same token so they land on the same shard.
-                std::map<dht::token, std::vector<mutation>> mutations_by_token;
+                std::map<dht::token, std::vector<frozen_mutation>> mutations_by_token;
 
                 for (const auto& mut : mutations) {
-                    mutations_by_token[mut.token()].push_back(mut);
+                    mutations_by_token[mut.token()].push_back(freeze(mut));
                 }
 
                 auto partitioner = make_lw_shared<dummy_partitioner>(dht::global_partitioner(), mutations_by_token);
 
-                auto merged_mutations = boost::copy_range<std::vector<std::vector<mutation>>>(mutations_by_token | boost::adaptors::map_values);
+                auto merged_mutations = boost::copy_range<std::vector<std::vector<frozen_mutation>>>(mutations_by_token | boost::adaptors::map_values);
 
                 auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<memtable>>>>();
                 for (unsigned shard = 0; shard < partitioner->shard_count(); ++shard) {
-                    auto remote_mt = smp::submit_to(shard, [shard, s = global_schema_ptr(s), &merged_mutations, partitioner = *partitioner] {
-                        auto mt = make_lw_shared<memtable>(s.get());
+                    auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &merged_mutations, partitioner = *partitioner] {
+                        auto s = gs.get();
+                        auto mt = make_lw_shared<memtable>(s);
 
                         for (unsigned i = shard; i < merged_mutations.size(); i += partitioner.shard_count()) {
                             for (auto& mut : merged_mutations[i]) {
-                                mt->apply(mut);
+                                mt->apply(mut.unfreeze(s));
                             }
                         }
 
@@ -1620,22 +1895,26 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     remote_memtables->emplace_back(std::move(remote_mt));
                 }
 
-                return mutation_source([partitioner, remote_memtables, evict_paused_readers] (schema_ptr s,
+                return mutation_source([partitioner, remote_memtables, evict_paused_readers, single_fragment_buffer] (schema_ptr s,
                         const dht::partition_range& range,
                         const query::partition_slice& slice,
                         const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd_sm,
                         mutation_reader::forwarding fwd_mr) mutable {
-                    auto factory = [remote_memtables] (
+                    auto factory = [remote_memtables, single_fragment_buffer] (
                             schema_ptr s,
                             const dht::partition_range& range,
                             const query::partition_slice& slice,
                             const io_priority_class& pc,
                             tracing::trace_state_ptr trace_state,
                             mutation_reader::forwarding fwd_mr) {
-                            return remote_memtables->at(engine().cpu_id())->make_flat_reader(s, range, slice, pc, std::move(trace_state),
+                            auto reader = remote_memtables->at(engine().cpu_id())->make_flat_reader(s, range, slice, pc, std::move(trace_state),
                                     streamed_mutation::forwarding::no, fwd_mr);
+                            if (single_fragment_buffer) {
+                                reader.set_max_buffer_size(1);
+                            }
+                            return reader;
                     };
 
                     auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
@@ -1648,11 +1927,14 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
             };
         };
 
-        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=false)");
-        run_mutation_source_tests(make_populate(false));
+        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=false, single_fragment_buffer=false)");
+        run_mutation_source_tests(make_populate(false, false));
 
-        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=true)");
-        run_mutation_source_tests(make_populate(true));
+        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=true, single_fragment_buffer=false)");
+        run_mutation_source_tests(make_populate(true, false));
+
+        BOOST_TEST_MESSAGE("run_mutation_source_tests(evict_readers=true, single_fragment_buffer=true)");
+        run_mutation_source_tests(make_populate(true, true));
 
         return make_ready_future<>();
     }).get();

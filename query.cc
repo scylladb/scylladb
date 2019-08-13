@@ -71,32 +71,36 @@ std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
     return out << "{" << s._pk << " : " << join(", ", s._ranges) << "}";
 }
 
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed) {
-    auto cmp = [reversed, bv_cmp = bound_view::compare(s)] (const auto& a, const auto& b) {
-        return reversed ? bv_cmp(b, a) : bv_cmp(a, b);
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition_view pos, bool reversed) {
+    auto cmp = [reversed, cmp = position_in_partition::composite_tri_compare(s)] (const auto& a, const auto& b) {
+        return reversed ? cmp(b, a) : cmp(a, b);
     };
-    auto start_bound = [reversed] (const auto& range) -> const bound_view& {
-        return reversed ? range.second : range.first;
+    auto start_bound = [reversed] (const auto& range) -> position_in_partition_view {
+        return reversed ? position_in_partition_view::for_range_end(range) : position_in_partition_view::for_range_start(range);
     };
-    auto end_bound = [reversed] (const auto& range) -> const bound_view& {
-        return reversed ? range.first : range.second;
+    auto end_bound = [reversed] (const auto& range) -> position_in_partition_view {
+        return reversed ? position_in_partition_view::for_range_start(range) : position_in_partition_view::for_range_end(range);
     };
-    clustering_key_prefix::equality eq(s);
 
     auto it = ranges.begin();
     while (it != ranges.end()) {
-        auto range = bound_view::from_range(*it);
-        if (cmp(end_bound(range), key) || eq(end_bound(range).prefix(), key)) {
+        if (cmp(end_bound(*it), pos) <= 0) {
             it = ranges.erase(it);
             continue;
-        } else if (cmp(start_bound(range), key)) {
-            assert(cmp(key, end_bound(range)));
-            auto r = reversed ? clustering_range(it->start(), clustering_range::bound { key, false })
-                : clustering_range(clustering_range::bound { key, false }, it->end());
+        } else if (cmp(start_bound(*it), pos) <= 0) {
+            assert(cmp(pos, end_bound(*it)) < 0);
+            auto r = reversed ?
+                clustering_range(it->start(), clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::before_all_prefixed)) :
+                clustering_range(clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::after_all_prefixed), it->end());
             *it = std::move(r);
         }
         ++it;
     }
+}
+
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed) {
+    return trim_clustering_row_ranges_to(s, ranges,
+            position_in_partition_view(key, reversed ? bound_weight::before_all_prefixed : bound_weight::after_all_prefixed), reversed);
 }
 
 partition_slice::partition_slice(clustering_row_ranges row_ranges,
