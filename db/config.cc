@@ -678,6 +678,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_keyspace_column_family_metrics(this, "enable_keyspace_column_family_metrics", value_status::Used, false, "Enable per keyspace and per column family metrics reporting")
     , enable_sstable_data_integrity_check(this, "enable_sstable_data_integrity_check", value_status::Used, false, "Enable interposer which checks for integrity of every sstable write."
         " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.")
+    , enable_sstable_key_validation(this, "enable_sstable_key_validation", value_status::Used, false, "Enable validation of partition and clustering keys monotonicity"
+        " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.")
     , cpu_scheduler(this, "cpu_scheduler", value_status::Used, true, "Enable cpu scheduling")
     , view_building(this, "view_building", value_status::Used, true, "Enable view building; should only be set to false when the node is experience issues due to view building")
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Used, true, "Enable SSTables 'mc' format to be used as the default file format")
