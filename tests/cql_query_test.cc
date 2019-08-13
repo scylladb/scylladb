@@ -3963,6 +3963,14 @@ SEASTAR_TEST_CASE(test_like_operator_varchar) {
     });
 }
 
+SEASTAR_TEST_CASE(test_alter_type_on_compact_storage_with_no_regular_columns_does_not_crash) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TYPE my_udf (first text);");
+        cquery_nofail(e, "create table z (pk int, ck frozen<my_udf>, primary key(pk, ck)) with compact storage;");
+        cquery_nofail(e, "alter type my_udf add test_int int;");
+    });
+}
+
 SEASTAR_TEST_CASE(test_like_operator_on_nonstring) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "create table t (k int primary key, s text)");
