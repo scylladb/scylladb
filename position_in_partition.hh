@@ -161,6 +161,7 @@ public:
     }
 
     partition_region region() const { return _type; }
+    bound_weight get_bound_weight() const { return _bound_weight; }
     bool is_partition_start() const { return _type == partition_region::partition_start; }
     bool is_partition_end() const { return _type == partition_region::partition_end; }
     bool is_static_row() const { return _type == partition_region::static_row; }
