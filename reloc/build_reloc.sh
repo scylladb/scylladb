@@ -2,18 +2,24 @@
 
 . /etc/os-release
 
+DEFAULT_FLAGS="--enable-dpdk"
+DEFAULT_MODE="release"
+
 print_usage() {
-    echo "build_reloc.sh --jobs 2"
-    echo "  --mode  specify build mode (default: 'release')"
-    echo "  --jobs  specify number of jobs"
-    echo "  --clean clean build directory"
-    echo "  --compiler  C++ compiler path"
-    echo "  --c-compiler C compiler path"
-    echo "  --nodeps    skip installing dependencies"
+    echo "Usage: build_reloc.sh [OPTION]..."
+    echo ""
+    echo "  --configure-flags FLAGS specify build flags passed to 'configure.py' (default: '$DEFAULT_FLAGS')"
+    echo "  --mode MODE             specify build mode (default: '$DEFAULT_MODE')"
+    echo "  --jobs JOBS             specify number of jobs"
+    echo "  --clean                 clean build directory"
+    echo "  --compiler PATH         C++ compiler path"
+    echo "  --c-compiler PATH       C compiler path"
+    echo "  --nodeps                skip installing dependencies"
     exit 1
 }
 
-MODE=release
+FLAGS="$DEFAULT_FLAGS"
+MODE="$DEFAULT_MODE"
 JOBS=
 CLEAN=
 COMPILER=
@@ -21,6 +27,10 @@ CCOMPILER=
 NODEPS=
 while [ $# -gt 0 ]; do
     case "$1" in
+        "--configure-flags")
+            FLAGS=$2
+            shift 2
+            ;;
         "--mode")
             MODE=$2
             shift 2
@@ -85,13 +95,14 @@ if [ -z "$NINJA" ]; then
     exit 1
 fi
 
-FLAGS="--enable-dpdk --mode=$MODE"
+FLAGS="$FLAGS --mode=$MODE"
 if [ -n "$COMPILER" ]; then
     FLAGS="$FLAGS --compiler $COMPILER"
 fi
 if [ -n "$CCOMPILER" ]; then
     FLAGS="$FLAGS --c-compiler $CCOMPILER"
 fi
+echo "Configuring with flags: '$FLAGS' ..."
 ./configure.py $FLAGS
 python3 -m compileall ./dist/common/scripts/ ./seastar/scripts/perftune.py ./tools/scyllatop
 $NINJA $JOBS build/$MODE/scylla-package.tar.gz
