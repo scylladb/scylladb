@@ -121,7 +121,8 @@ void stream_result_future::maybe_complete() {
         }
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - _start_time).count();
         auto stats = make_lw_shared<sstring>("");
-        sm.get_progress_on_all_shards(plan_id).then([plan_id, duration, stats] (auto sbytes) {
+        //FIXME: discarded future.
+        (void)sm.get_progress_on_all_shards(plan_id).then([plan_id, duration, stats] (auto sbytes) {
             auto tx_bw = sstring("0");
             auto rx_bw = sstring("0");
             if (std::fabs(duration) > FLT_EPSILON) {

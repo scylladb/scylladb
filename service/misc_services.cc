@@ -201,7 +201,8 @@ future<> view_update_backlog_broker::start() {
                 auto backlog = _sp.local().get_view_update_backlog();
                 auto now = api::timestamp_type(std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count());
-                _gossiper.add_local_application_state(
+                //FIXME: discarded future.
+                (void)_gossiper.add_local_application_state(
                         gms::application_state::VIEW_BACKLOG,
                         gms::versioned_value(seastar::format("{}:{}:{}", backlog.current, backlog.max, now)));
                 sleep_abortable(gms::gossiper::INTERVAL, _as).get();

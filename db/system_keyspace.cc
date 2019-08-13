@@ -1348,7 +1348,8 @@ future<> migrate_truncation_records() {
             need_legacy_truncation_records = !ss.cluster_supports_truncation_table();
 
             if (need_legacy_truncation_records || !tmp.empty()) {
-                ss.cluster_supports_truncation_table().when_enabled().then([] {
+                //FIXME: discarded future.
+                (void)ss.cluster_supports_truncation_table().when_enabled().then([] {
                     // this potentially races with a truncation, i.e. someone could be inserting into
                     // the legacy column while we delete it. But this is ok, it will just mean we have
                     // some unneeded data and will do a merge again next boot, but eventually we

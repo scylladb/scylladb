@@ -384,7 +384,8 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
     // refresh (triggers resharding) is issued by user while resharding is going on).
     static semaphore sem(1);
 
-    with_semaphore(sem, 1, [&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] () mutable {
+    // FIXME: discarded future.
+    (void)with_semaphore(sem, 1, [&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] () mutable {
         return seastar::async([&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] () mutable {
             global_column_family_ptr cf(db, ks_name, cf_name);
 
@@ -506,7 +507,8 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, distri
                         abort();
                     }
                     if (sst->requires_view_building()) {
-                        view_update_generator.local().register_staging_sstable(sst, cf.shared_from_this());
+                        // FIXME: discarded future.
+                        (void)view_update_generator.local().register_staging_sstable(sst, cf.shared_from_this());
                     }
                 }
                 cf._sstables_opened_but_not_loaded.clear();

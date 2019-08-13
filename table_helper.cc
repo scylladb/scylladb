@@ -69,7 +69,8 @@ future<> table_helper::cache_table_info(service::query_state& qs) {
         _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
     }).handle_exception([this] (auto eptr) {
         // One of the possible causes for an error here could be the table that doesn't exist.
-        this->setup_table().discard_result();
+        //FIXME: discarded future.
+        (void)this->setup_table().discard_result();
 
         // We throw the bad_column_family exception because the caller
         // expects and accounts this type of errors.

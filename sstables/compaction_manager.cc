@@ -493,7 +493,8 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
     } catch (storage_io_error& e) {
         cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
         retry = false;
-        stop();
+        // FIXME discarded future.
+        (void)stop();
     } catch (...) {
         cmlog.error("compaction failed: {}: {}", std::current_exception(), retry_msg);
         retry = true;

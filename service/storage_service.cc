@@ -190,9 +190,11 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         _sstables_format = sstables::sstable_version_types::mc;
     }
 
-    _unbounded_range_tombstones_feature.when_enabled().then([&db] () mutable {
+    //FIXME: discarded future.
+    (void)_unbounded_range_tombstones_feature.when_enabled().then([&db] () mutable {
         slogger.debug("Enabling infinite bound range deletions");
-        db.invoke_on_all([] (database& local_db) mutable {
+        //FIXME: discarded future.
+        (void)db.invoke_on_all([] (database& local_db) mutable {
             local_db.enable_infinite_bound_range_deletions();
         });
     });
@@ -1113,7 +1115,8 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
 }
 
 void storage_service::update_pending_ranges_nowait(inet_address endpoint) {
-    update_pending_ranges().handle_exception([endpoint] (std::exception_ptr ep) {
+    //FIXME: discarded future.
+    (void)update_pending_ranges().handle_exception([endpoint] (std::exception_ptr ep) {
         slogger.info("Failed to update_pending_ranges for node {}: {}", endpoint, ep);
     });
 }
@@ -1190,7 +1193,8 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             // will be removed from _replicating_nodes on the
             // removal_coordinator.
             auto notify_endpoint = ep.value();
-            restore_replica_count(endpoint, notify_endpoint).handle_exception([endpoint, notify_endpoint] (auto ep) {
+            //FIXME: discarded future.
+            (void)restore_replica_count(endpoint, notify_endpoint).handle_exception([endpoint, notify_endpoint] (auto ep) {
                 slogger.info("Failed to restore_replica_count for node {}, notify_endpoint={} : {}", endpoint, notify_endpoint, ep);
             });
         }
@@ -1207,14 +1211,16 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
     for (const auto& e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
-    get_local_migration_manager().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
+    //FIXME: discarded future.
+    (void)get_local_migration_manager().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
         slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_alive", endpoint);
-    get_local_migration_manager().schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
+    //FIXME: discarded future.
+    (void)get_local_migration_manager().schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
         slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
     if (_token_metadata.is_member(endpoint)) {
@@ -1267,7 +1273,8 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         if (get_token_metadata().is_member(endpoint)) {
             do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::SCHEMA) {
-                get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
+                //FIXME: discarded future.
+                (void)get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
                     slogger.warn("Failed to pull schema from {}: {}", endpoint, ep);
                 });
             } else if (state == application_state::RPC_READY) {
@@ -2489,7 +2496,8 @@ future<> storage_service::removenode(sstring host_id_string) {
             // No need to wait for restore_replica_count to complete, since
             // when it completes, the node will be removed from _replicating_nodes,
             // and we wait for _replicating_nodes to become empty below
-            ss.restore_replica_count(endpoint, my_address).handle_exception([endpoint, my_address] (auto ep) {
+            //FIXME: discarded future.
+            (void)ss.restore_replica_count(endpoint, my_address).handle_exception([endpoint, my_address] (auto ep) {
                 slogger.info("Failed to restore_replica_count for node {} on node {}", endpoint, my_address);
             });
 
@@ -3234,7 +3242,8 @@ void storage_service::do_isolate_on_error(disk_error type)
         slogger.warn("Shutting down communications due to I/O errors until operator intervention");
         slogger.warn("{} error: {}", type == disk_error::commit ? "Commitlog" : "Disk", std::current_exception());
         // isolated protect us against multiple stops
-        service::get_local_storage_service().stop_transport();
+        //FIXME: discarded future.
+        (void)service::get_local_storage_service().stop_transport();
     }
 }
 
@@ -3426,7 +3435,8 @@ void feature_enabled_listener::on_enabled() {
         return;
     }
     _started = true;
-    with_semaphore(_sem, 1, [this] {
+    //FIXME: discarded future.
+    (void)with_semaphore(_sem, 1, [this] {
         if (!sstables::is_later(_format, _s._sstables_format)) {
             return make_ready_future<bool>(false);
         }

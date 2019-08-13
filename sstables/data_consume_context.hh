@@ -127,7 +127,7 @@ public:
     ~data_consume_context() {
         if (_ctx) {
             auto f = _ctx->close();
-            // Can't wait on the future in the destructor.
+            //FIXME: discarded future.
             (void)f.handle_exception([ctx = std::move(_ctx), sst = std::move(_sst)](auto) {});
         }
     }
