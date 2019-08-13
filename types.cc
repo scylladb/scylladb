@@ -1988,8 +1988,7 @@ struct empty_type_impl : abstract_type {
         return false;
     }
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
-        // Can't happen
-        abort();
+        return std::experimental::nullopt;
     }
 };
 
