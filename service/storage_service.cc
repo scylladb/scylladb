@@ -2269,10 +2269,6 @@ future<> storage_service::start_native_transport() {
         cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
         return gms::inet_address::lookup(addr, family, preferred).then([&ss, cserver, addr, &cfg, keepalive, ceo = std::move(ceo), cql_server_config] (seastar::net::inet_address ip) {
                 return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), cql_server_config).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
-                // #293 - do not stop anything
-                //engine().at_exit([cserver] {
-                //    return cserver->stop();
-                //});
 
                 auto f = make_ready_future();
 
