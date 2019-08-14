@@ -137,12 +137,14 @@ int get_generation_number() {
 }
 
 storage_service::storage_service(distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, bool for_testing, std::set<sstring> disabled_features)
+        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, bool for_testing, std::set<sstring> disabled_features)
         : _feature_service(feature_service)
         , _db(db)
         , _gossiper(gossiper)
         , _auth_service(auth_service)
         , _disabled_features(std::move(disabled_features))
+        , _service_memory_total(config.available_memory / 10)
+        , _service_memory_limiter(_service_memory_total)
         , _range_tombstones_feature(_feature_service, RANGE_TOMBSTONES_FEATURE)
         , _large_partitions_feature(_feature_service, LARGE_PARTITIONS_FEATURE)
         , _materialized_views_feature(_feature_service, MATERIALIZED_VIEWS_FEATURE)
@@ -1675,6 +1677,8 @@ future<> storage_service::gossip_snitch_info() {
 future<> storage_service::stop() {
     return with_semaphore(_feature_listeners_sem, 1, [this] {
         uninit_messaging_service();
+    }).then([this] {
+        return _service_memory_limiter.wait(_service_memory_total); // make sure nobody uses the semaphore
     });
 }
 
@@ -2265,7 +2269,8 @@ future<> storage_service::start_native_transport() {
         auto keepalive = cfg.rpc_keepalive();
         cql_transport::cql_server_config cql_server_config;
         cql_server_config.timeout_config = make_timeout_config(cfg);
-        cql_server_config.max_request_size = ss._db.local().get_available_memory() / 10;
+        cql_server_config.max_request_size = ss._service_memory_total;
+        cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
         cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
         return gms::inet_address::lookup(addr, family, preferred).then([&ss, cserver, addr, &cfg, keepalive, ceo = std::move(ceo), cql_server_config] (seastar::net::inet_address ip) {
                 return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), cql_server_config).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
@@ -3403,8 +3408,8 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
 }
 
 future<> init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service) {
-    return service::get_storage_service().start(std::ref(db), std::ref(gossiper), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service));
+        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service, storage_service_config config) {
+    return service::get_storage_service().start(std::ref(db), std::ref(gossiper), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config);
 }
 
 future<> deinit_storage_service() {

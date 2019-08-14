@@ -63,7 +63,9 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         gms::get_gossiper().start(std::ref(feature_service), std::ref(cfg)).get();
         auto stop_gossiper = defer([&] { gms::get_gossiper().stop().get(); });
 
-        service::get_storage_service().start(std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), true).get();
+        service::storage_service_config sscfg;
+        sscfg.available_memory =  memory::stats().total_memory();
+        service::get_storage_service().start(std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
         db.start(std::ref(cfg), dbcfg).get();

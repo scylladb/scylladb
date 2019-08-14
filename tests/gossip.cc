@@ -78,7 +78,9 @@ int main(int ac, char ** av) {
             feature_service.start().get();
             sharded<db::system_distributed_keyspace> sys_dist_ks;
             sharded<db::view::view_update_generator> view_update_generator;
-            service::init_storage_service(db, gms::get_gossiper(), auth_service, sys_dist_ks, view_update_generator, feature_service).get();
+            service::storage_service_config sscfg;
+            sscfg.available_memory = memory::stats().total_memory();
+            service::init_storage_service(db, gms::get_gossiper(), auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg).get();
             netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();

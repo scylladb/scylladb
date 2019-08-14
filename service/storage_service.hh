@@ -112,6 +112,10 @@ public:
     void on_enabled() override;
 };
 
+struct storage_service_config {
+    size_t available_memory;
+};
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -162,8 +166,10 @@ private:
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
     std::set<sstring> _disabled_features;
+    size_t _service_memory_total;
+    semaphore _service_memory_limiter;
 public:
-    storage_service(distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, /* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
+    storage_service(distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, /* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -2371,7 +2377,7 @@ private:
 };
 
 future<> init_storage_service(distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service);
+        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service, storage_service_config config);
 future<> deinit_storage_service();
 
 future<> read_sstables_format(distributed<storage_service>& ss);

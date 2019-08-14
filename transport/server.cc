@@ -150,7 +150,7 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
     , _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
-    , _memory_available(_max_request_size)
+    , _memory_available(config.get_service_memory_limiter_semaphore())
     , _notifier(std::make_unique<event_notifier>())
     , _auth_service(auth_service)
 {
