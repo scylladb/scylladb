@@ -642,7 +642,8 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     const std::vector<sstring>& cfs_,
     int id_,
     const std::vector<sstring>& data_centers_,
-    const std::vector<sstring>& hosts_)
+    const std::vector<sstring>& hosts_,
+    int ranges_parallelism_)
     : db(db_)
     , keyspace(keyspace_)
     , ranges(ranges_)
@@ -651,6 +652,8 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     , shard(engine().cpu_id())
     , data_centers(data_centers_)
     , hosts(hosts_)
+    , ranges_parallelism(ranges_parallelism_)
+    , ranges_parallelism_semaphore(ranges_parallelism == -1 ? std::nullopt : std::optional<semaphore>(ranges_parallelism))
     , _row_level_repair(service::get_local_storage_service().cluster_supports_row_level_repair()) {
 }
 
@@ -1112,6 +1115,8 @@ struct repair_options {
     // repair to a data center other than the named one returns an error.
     std::vector<sstring> data_centers;
 
+    int ranges_parallelism = -1;
+
     repair_options(std::unordered_map<sstring, sstring> options) {
         bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
         ranges_opt(ranges, options, RANGES_KEY);
@@ -1145,6 +1150,7 @@ struct repair_options {
         // Consume, ignore.
         int job_threads;
         int_opt(job_threads, options, JOB_THREADS_KEY);
+        int_opt(ranges_parallelism, options, RANGES_PARALLELISM_KEY);
 
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
@@ -1165,6 +1171,7 @@ struct repair_options {
     static constexpr const char* TRACE_KEY = "trace";
     static constexpr const char* START_TOKEN = "startToken";
     static constexpr const char* END_TOKEN = "endToken";
+    static constexpr const char* RANGES_PARALLELISM_KEY = "ranges_parallelism";
 
     // Settings of "parallelism" option. Numbers must match Cassandra's
     // RepairParallelism enum, which is used by the caller.
@@ -1261,7 +1268,11 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     if (ri->row_level_repair()) {
         // repair all the ranges in limited parallelism
         return parallel_for_each(ri->ranges, [ri] (auto&& range) {
-            return with_semaphore(repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
+            // If user specified the ranges to repair in parallel respect it.
+            semaphore& sem = ri->ranges_parallelism_semaphore
+                    ? *ri->ranges_parallelism_semaphore
+                    : repair_tracker().range_parallelism_semaphore();
+            return with_semaphore(sem, 1, [ri, &range] {
                 check_in_shutdown();
                 ri->check_in_abort();
                 ri->ranges_index++;
@@ -1414,10 +1425,10 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         repair_results.reserve(smp::count);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges,
-                    data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
+                    data_centers = options.data_centers, hosts = options.hosts, ranges_parallelism = options.ranges_parallelism] (database& localdb) mutable {
                 auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
                         std::move(keyspace), std::move(ranges), std::move(cfs),
-                        id, std::move(data_centers), std::move(hosts));
+                        id, std::move(data_centers), std::move(hosts), ranges_parallelism);
                 return repair_ranges(ri);
             });
             repair_results.push_back(std::move(f));

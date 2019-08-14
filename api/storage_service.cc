@@ -376,7 +376,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
         static std::vector<sstring> options = {"primaryRange", "parallelism", "incremental",
                 "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "trace",
-                "startToken", "endToken" };
+                "startToken", "endToken", "ranges_parallelism" };
         std::unordered_map<sstring, sstring> options_map;
         for (auto o : options) {
             auto s = req->get_query_param(o);

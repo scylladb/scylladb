@@ -159,6 +159,8 @@ public:
     shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
+    int ranges_parallelism;
+    std::optional<semaphore> ranges_parallelism_semaphore;
     size_t nr_failed_ranges = 0;
     bool aborted = false;
     // Map of peer -> <cf, ranges>
@@ -188,7 +190,8 @@ public:
             const std::vector<sstring>& cfs_,
             int id_,
             const std::vector<sstring>& data_centers_,
-            const std::vector<sstring>& hosts_);
+            const std::vector<sstring>& hosts_,
+            int ranges_parallelism);
     future<> do_streaming();
     void check_failed_ranges();
     future<> request_transfer_ranges(const sstring& cf,
