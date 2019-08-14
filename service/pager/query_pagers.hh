@@ -66,7 +66,6 @@ public:
             const cql3::query_options&,
             lw_shared_ptr<query::read_command>,
             dht::partition_range_vector,
-            cql3::cql_stats& stats,
             ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr);
 };
 

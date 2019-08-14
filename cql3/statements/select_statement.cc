@@ -335,7 +335,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = options.get_timeout_config().*get_timeout_config_selector();
     auto p = service::pager::query_pagers::pager(_schema, _selection,
-            state, options, command, std::move(key_ranges), _stats, restrictions_need_filtering ? _restrictions : nullptr);
+            state, options, command, std::move(key_ranges), restrictions_need_filtering ? _restrictions : nullptr);
 
     if (aggregate || nonpaged_filtering) {
         return do_with(
@@ -347,9 +347,10 @@ select_statement::do_execute(service::storage_proxy& proxy,
                                 auto timeout = db::timeout_clock::now() + timeout_duration;
                                 return p->fetch_page(builder, page_size, now, timeout);
                             }
-                    ).then([this, &builder, restrictions_need_filtering] {
+                    ).then([this, p, &builder, restrictions_need_filtering] {
                                 auto rs = builder.build();
                                 if (restrictions_need_filtering) {
+                                    _stats.filtered_rows_read_total += p->stats().rows_read_total;
                                     _stats.filtered_rows_matched_total += rs->size();
                                 }
                                 update_stats_rows_read(rs->size());
@@ -392,6 +393,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                 }
 
                 if (restrictions_need_filtering) {
+                    _stats.filtered_rows_read_total += p->stats().rows_read_total;
                     _stats.filtered_rows_matched_total += rs->size();
                 }
                 update_stats_rows_read(rs->size());
@@ -1100,7 +1102,7 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
     }
 
     auto p = service::pager::query_pagers::pager(_view_schema, selection,
-            state, options, cmd, std::move(partition_ranges), _stats, nullptr);
+            state, options, cmd, std::move(partition_ranges), nullptr);
     return p->fetch_page(options.get_page_size(), now, timeout).then([p, &options, limit, now] (std::unique_ptr<cql3::result_set> rs) {
         rs->get_metadata().set_paging_state(p->state());
         return ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
