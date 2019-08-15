@@ -61,6 +61,7 @@ args = ap.parse_args()
 
 executables = ['build/{}/scylla'.format(args.mode),
                'build/{}/iotune'.format(args.mode),
+               '/usr/bin/patchelf',
                '/usr/bin/lscpu',
                '/usr/bin/gawk',
                '/usr/bin/gzip',
@@ -96,56 +97,9 @@ ar = tarfile.open(fileobj=gzip_process.stdin, mode='w|')
 pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
 ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
 
-# This thunk is a shell script that arranges for the executable to be invoked,
-# under the following conditions:
-#
-#  - the same argument vector is passed to the executable, including argv[0]
-#  - the executable name (/proc/pid/comm, shown in top(1)) is the same
-#  - the dynamic linker is taken from this package rather than the executable's
-#    default (which is hardcoded to point to /lib64/ld-linux-x86_64.so or similar)
-#  - LD_LIBRARY_PATH points to the lib/ directory so shared library dependencies
-#    are satisified from there rather than the system default (e.g. /lib64)
-
-# To do that, the dynamic linker is invoked using a symbolic link named after the
-# executable, not its standard name. We use "bash -a" to set argv[0].
-
-# The full tangled web looks like:
-#
-# foobar/bin/scylla               a shell script invoking everything
-# foobar/libexec/scylla.bin       the real binary
-# foobar/libexec/scylla           a symlink to ../lib/ld.so
-# foobar/libreloc/ld.so                the dynamic linker
-# foobar/libreloc/lib...               all the other libraries
-
-# the transformations (done by the thunk and symlinks) are:
-#
-#    bin/scylla args -> libexec/scylla libexec/scylla.bin args -> lib/ld.so libexec/scylla.bin args
-
-thunk = b'''\
-#!/bin/bash
-
-x="$(readlink -f "$0")"
-b="$(basename "$x")"
-d="$(dirname "$x")/.."
-ldso="$d/libexec/$b"
-realexe="$d/libexec/$b.bin"
-export GNUTLS_SYSTEM_PRIORITY_FILE="${GNUTLS_SYSTEM_PRIORITY_FILE-$d/libreloc/gnutls.config}"
-LD_LIBRARY_PATH="$d/libreloc" exec -a "$0" "$ldso" "$realexe" "$@"
-'''
-
 for exe in executables:
     basename = os.path.basename(exe)
-    ar.add(exe, arcname='libexec/' + basename + '.bin')
-    ti = tarfile.TarInfo(name='bin/' + basename)
-    ti.size = len(thunk)
-    ti.mode = 0o755
-    ti.mtime = os.stat(exe).st_mtime
-    ar.addfile(ti, fileobj=io.BytesIO(thunk))
-    ti = tarfile.TarInfo(name='libexec/' + basename)
-    ti.type = tarfile.SYMTYPE
-    ti.linkname = '../libreloc/ld.so'
-    ti.mtime = os.stat(exe).st_mtime
-    ar.addfile(ti)
+    ar.add(exe, arcname='libexec/' + basename)
 for lib, libfile in libs.items():
     ar.add(libfile, arcname='libreloc/' + lib)
 if have_gnutls:
