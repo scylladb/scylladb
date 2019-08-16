@@ -535,31 +535,31 @@ void manager::drain_for(gms::inet_address endpoint) {
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
     with_gate(_draining_eps_gate, [this, endpoint] {
-      return with_semaphore(drain_lock(), 1, [this, endpoint] {
-        return futurize_apply([this, endpoint] () {
-            if (utils::fb_utilities::is_me(endpoint)) {
-                return parallel_for_each(_ep_managers, [] (auto& pair) {
-                    return pair.second.stop(drain::yes).finally([&pair] {
-                        return remove_file(pair.second.hints_dir().c_str());
+        return with_semaphore(drain_lock(), 1, [this, endpoint] {
+            return futurize_apply([this, endpoint] () {
+                if (utils::fb_utilities::is_me(endpoint)) {
+                    return parallel_for_each(_ep_managers, [] (auto& pair) {
+                        return pair.second.stop(drain::yes).finally([&pair] {
+                            return remove_file(pair.second.hints_dir().c_str());
+                        });
+                    }).finally([this] {
+                        _ep_managers.clear();
                     });
-                }).finally([this] {
-                    _ep_managers.clear();
-                });
-            } else {
-                ep_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
-                if (ep_manager_it != ep_managers_end()) {
-                    return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, hints_dir = ep_manager_it->second.hints_dir()] {
-                        _ep_managers.erase(endpoint);
-                        return remove_file(hints_dir.c_str());
-                    });
-                }
+                } else {
+                    ep_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
+                    if (ep_manager_it != ep_managers_end()) {
+                        return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, hints_dir = ep_manager_it->second.hints_dir()] {
+                            _ep_managers.erase(endpoint);
+                            return remove_file(hints_dir.c_str());
+                        });
+                    }
 
-                return make_ready_future<>();
-            }
-        }).handle_exception([endpoint] (auto eptr) {
-            manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
+                    return make_ready_future<>();
+                }
+            }).handle_exception([endpoint] (auto eptr) {
+                manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
+            });
         });
-      });
     });
 }
 
