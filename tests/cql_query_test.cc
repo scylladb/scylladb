@@ -3970,14 +3970,6 @@ SEASTAR_TEST_CASE(test_like_operator_on_nonstring) {
                 e.execute_cql("select * from t where k like 123 allow filtering").get(),
                 exceptions::invalid_request_exception,
                 exception_predicate::message_contains("only on string types"));
-#if 0 // TODO: Enable when query::result_set::consume() is fixed.
-        BOOST_REQUIRE_EXCEPTION(
-                e.execute_prepared(
-                        e.prepare("select s from t where s like ? allow filtering").get0(),
-                        {cql3::raw_value::make_value(I(1))}).get(),
-                exceptions::invalid_request_exception,
-                exception_predicate::message_contains("only on string types"));
-#endif
     });
 }
 
