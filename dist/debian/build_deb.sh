@@ -140,7 +140,7 @@ ln -fv dist/common/sysconfig/scylla-server debian/$PRODUCT-server.default
 REVISION="1"
 MUSTACHE_DIST="\"debian\": true, \"product\": \"$PRODUCT\", \"$PRODUCT\": true"
 pystache dist/debian/changelog.mustache "{ $MUSTACHE_DIST, \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"revision\": \"$REVISION\", \"codename\": \"$TARGET\" }" > debian/changelog
-pystache dist/debian/rules.mustache "{ $MUSTACHE_DIST }" > debian/rules
+pystache dist/debian/rules.mustache "{ $MUSTACHE_DIST, \"housekeeping\": $DIST }" > debian/rules
 pystache dist/debian/control.mustache "{ $MUSTACHE_DIST }" > debian/control
 pystache dist/debian/scylla-conf.preinst.mustache "{ \"version\": \"$SCYLLA_VERSION\" }" > debian/$PRODUCT-conf.preinst
 chmod a+rx debian/rules
