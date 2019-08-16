@@ -535,6 +535,7 @@ void manager::drain_for(gms::inet_address endpoint) {
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
     with_gate(_draining_eps_gate, [this, endpoint] {
+      return with_semaphore(drain_lock(), 1, [this, endpoint] {
         return futurize_apply([this, endpoint] () {
             if (utils::fb_utilities::is_me(endpoint)) {
                 return parallel_for_each(_ep_managers, [] (auto& pair) {
@@ -558,6 +559,7 @@ void manager::drain_for(gms::inet_address endpoint) {
         }).handle_exception([endpoint] (auto eptr) {
             manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
         });
+      });
     });
 }
 
