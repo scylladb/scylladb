@@ -101,8 +101,8 @@ static future<std::optional<record>> find_record(cql3::query_processor& qp, std:
         return std::make_optional(
                 record{
                         row.get_as<sstring>(sstring(meta::roles_table::role_col_name)),
-                        row.get_as<bool>("is_superuser"),
-                        row.get_as<bool>("can_login"),
+                        row.get_or<bool>("is_superuser", false),
+                        row.get_or<bool>("can_login", false),
                         (row.has("member_of")
                                  ? row.get_set<sstring>("member_of")
                                  : role_set())});
@@ -203,7 +203,7 @@ future<> standard_role_manager::migrate_legacy_metadata() const {
             internal_distributed_timeout_config()).then([this](::shared_ptr<cql3::untyped_result_set> results) {
         return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
             role_config config;
-            config.is_superuser = row.get_as<bool>("super");
+            config.is_superuser = row.get_or<bool>("super", false);
             config.can_login = true;
 
             return do_with(
