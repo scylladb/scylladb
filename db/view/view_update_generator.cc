@@ -24,7 +24,9 @@
 namespace db::view {
 
 future<> view_update_generator::start() {
-    _started = seastar::async([this]() mutable {
+    thread_attributes attr;
+    attr.sched_group = _db.get_streaming_scheduling_group();
+    _started = seastar::async(std::move(attr), [this]() mutable {
         while (!_as.abort_requested()) {
             if (_sstables_with_tables.empty()) {
                 _pending_sstables.wait().get();
