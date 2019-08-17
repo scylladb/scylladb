@@ -544,7 +544,9 @@ void manager::drain_for(gms::inet_address endpoint) {
                 if (utils::fb_utilities::is_me(endpoint)) {
                     return parallel_for_each(_ep_managers, [] (auto& pair) {
                         return pair.second.stop(drain::yes).finally([&pair] {
-                            return remove_file(pair.second.hints_dir().c_str());
+                            return with_file_update_mutex(pair.second, [&pair] {
+                                return remove_file(pair.second.hints_dir().c_str());
+                            });
                         });
                     }).finally([this] {
                         _ep_managers.clear();
@@ -552,9 +554,12 @@ void manager::drain_for(gms::inet_address endpoint) {
                 } else {
                     ep_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
                     if (ep_manager_it != ep_managers_end()) {
-                        return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, hints_dir = ep_manager_it->second.hints_dir()] {
-                            _ep_managers.erase(endpoint);
-                            return remove_file(hints_dir.c_str());
+                        return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
+                            return with_file_update_mutex(ep_man, [&ep_man] {
+                                return remove_file(ep_man.hints_dir().c_str());
+                            }).finally([this, endpoint] {
+                                _ep_managers.erase(endpoint);
+                            });
                         });
                     }
 
