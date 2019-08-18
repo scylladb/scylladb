@@ -9,11 +9,42 @@ an HTTP or HTTPS transport. It is described in detail on Amazon's site:
 Our goal is that any application written to use Amazon DynamoDB could
 be run, unmodified, against Scylla with Alternator enabled. However, at this
 stage the Alternator implementation is incomplete, and some of DynamoDB's
-API features are not yet supported. The following section documents the
-extent of Alternator's compatibility with DynamoDB, and will be updated
-as the work progresses and compatibility continues to improve.
+API features are not yet supported. The extent of Alternator's compatibility
+with DynamoDB is described in the "current compatibility" section below.
+
+## Running Alternator
+By default, Scylla does not listen for DynamoDB API requests. To enable
+such requests, you must set the `alternator-port` configuration option
+(via command line or YAML) to the port on which you wish to listen for
+DynamoDB API requests.
+
+For example., "`--alternator-port=8000`" on the command line will run
+Alternator on port 8000 - the traditional port used by DynamoDB.
+
+By default, Scylla listens on this port on all network interfaces.
+To listen only on a specific interface, pass also an "`alternator-address`"
+option.
+
+DynamoDB clients usually specify a single "endpoint" address, e.g.,
+`dynamodb.us-east-1.amazonaws.com`, and a DNS server hosted on that address
+distributes the connections to many different backend nodes. Alternator
+does not yet provide such a DNS server, so you should either supply your
+own (having it return one of the live Scylla nodes at random, with a TTL
+of a few seconds), or you should use a different mechanism to distribute
+different DynamoDB requests to different Scylla nodes, to balance the load.
+
+Alternator tables are stored as Scylla tables in the "alternator" keyspace.
+This keyspace is initialized when Alternator first boots, with replication
+factor hard-coded to 1 (FIXME: this will need to change).
 
 ## Current compatibility with DynamoDB
+
+Our goal is that any application written to use Amazon DynamoDB could
+be run, unmodified, against Scylla with Alternator enabled. However, at this
+stage the Alternator implementation is incomplete, and some of DynamoDB's
+API features are not yet supported. This section documents the extent of
+Alternator's compatibility with DynamoDB, and will be updated as the work
+progresses and compatibility continues to improve.
 
 ### API Server
 * Transport: HTTP mostly supported, but small features like CRC header and
@@ -101,3 +132,64 @@ as the work progresses and compatibility continues to improve.
 ### Metrics
 * Several metrics are available internally but need more and make them
   more similar to what AWS users are used to.
+
+## Alternator design and implementation
+
+This section provides only a very brief introduction to Alternator's
+design. A much more detailed document should be eventually written.
+
+Almost all of Alternator's source code (except some initialization code)
+can be found in the alternator/ subdirectory of Scylla's source code.
+Extensive functional tests can be found in the alternator-test/
+subdirectory. These tests are written in Python, and can be run against
+both Alternator and Amazon's DynamoDB; This allows verifying that
+Alternator's behavior matches the one observed on DynamoDB.
+See alternator-test/README.md for more information about the tests and
+how to run them.
+
+With Alternator enabled on port 8000 (for example), every Scylla node
+listens for DynamoDB API requests on this port. These requests, in
+JSON format over HTTP, are parsed and result in calls to internal Scylla
+C++ functions - there is no CQL generation or parsing involved.
+In Scylla terminology, the node receiving the request acts as the the
+*coordinator*, and often passes the request on to one or more other nodes -
+*replicas* which hold copies of the requested data.
+
+DynamoDB supports two consistency levels for reads, "eventual consistency"
+and "strong consistency". These two modes are implemented using Scylla's CL
+(consistency level) feature: All writes are done using the LOCAL_QUORUM
+consistency level, then strongly-consistent reads are done with
+LOCAL_QUORUM, while eventually-consistent reads are with just LOCAL_ONE.
+
+Each table in Alternator is stored as a Scylla table in the "alternator"
+keyspace. The DynamoDB key columns (hash and sort key) have known types,
+and become partition and clustering key columns of the Scylla table.
+All other attributes may be different for each row, so are stored in one
+map column in Scylla, and not as separate columns.
+
+In Scylla (and its inspiration, Cassandra), high write performance is
+achieved by ensuring that writes do not require reads from disk.
+The DynamoDB API, however, provides many types of requests that need a read
+before the write (a.k.a. RMW requests - read-modify-write). For example,
+a request may copy an existing attribute, increment an attribute,
+be conditional on some expression involving existing values of attribute,
+or request that the previous values of attributes be returned.
+Alternator currently implements all these RMW operations naively - it simply
+performs a read before the write. This naive approach is **not safe** when
+there are concurrent operations on the same attributes, so it will be revised
+in the future. We will probably use lightweight transactions - a feature
+which already exists in Cassandra and is planned to soon reach Scylla.
+
+DynamoDB allows attributes to be **nested** - a top-level attribute may
+be a list or a map, and each of its elements may further be lists or
+maps, etc. Alternator currently stores the entire content of a top-level
+attribute as one JSON object. This is good enough for most needs, except
+one DynamoDB feature which we cannot support safely: we cannot modify
+a non-top-level attribute (e.g., a.b[3].c) directly without RMW. We plan
+to fix this in a future version by rethinking the data model we use for
+attributes, or rethinking our implementation of RMW (as explained above).
+
+For reasons explained above, the data model used by Alternator to store
+data on disk is still in a state of flux, and may change in future versions.
+Therefore, in this early stage it is not recommended to store important
+production data using Alternator.
