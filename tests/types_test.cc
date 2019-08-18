@@ -140,6 +140,10 @@ BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
     BOOST_REQUIRE_EQUAL(int32_type->to_string(bytes()), "");
 }
 
+BOOST_AUTO_TEST_CASE(test_long_type_string_conversions) {
+    BOOST_REQUIRE_EQUAL(long_type->to_string(long_type->decompose(int64_t(42))), "42");
+}
+
 BOOST_AUTO_TEST_CASE(test_timeuuid_type_string_conversions) {
     auto now = utils::UUID_gen::get_time_UUID();
     BOOST_REQUIRE(timeuuid_type->equal(timeuuid_type->from_string(now.to_sstring()), timeuuid_type->decompose(now)));
@@ -340,6 +344,17 @@ void test_floating_type_compare(data_type t)
 BOOST_AUTO_TEST_CASE(test_floating_types_compare) {
     test_floating_type_compare<float>(float_type);
     test_floating_type_compare<double>(double_type);
+}
+
+template<typename T>
+void test_float_type_to_string(data_type t) {
+    auto v = t->decompose(T(42.1));
+    BOOST_REQUIRE_EQUAL(t->to_string(v), "42.1");
+}
+
+BOOST_AUTO_TEST_CASE(test_float_types_to_string) {
+    test_float_type_to_string<float>(float_type);
+    test_float_type_to_string<double>(double_type);
 }
 
 BOOST_AUTO_TEST_CASE(test_duration_type_compare) {
@@ -691,6 +706,12 @@ BOOST_AUTO_TEST_CASE(test_create_reversed_type) {
     auto straight_comp = bytes_type->compare(bytes_view(val_lt), bytes_view(val_gt));
     auto reverse_comp = ri->compare(bytes_view(val_lt), bytes_view(val_gt));
     BOOST_REQUIRE(straight_comp == -reverse_comp);
+}
+
+BOOST_AUTO_TEST_CASE(test_reversed_type_to_string) {
+    auto ri = reversed_type_impl::get_instance(int32_type);
+    auto v = ri->decompose(42);
+    BOOST_REQUIRE_EQUAL(ri->to_string(v), "42");
 }
 
 BOOST_AUTO_TEST_CASE(test_create_reverse_collection_type) {

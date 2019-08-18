@@ -65,7 +65,7 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
         throw invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
     }
 
-    if (&rtype->_kind == &collection_type_impl::kind::list) {
+    if (rtype->get_kind() == abstract_type::kind::list) {
         auto&& lval = _value->prepare(db, keyspace, lists::value_spec_of(receiver.column_specification));
         if (_by_uuid) {
             auto&& idx = _selector->prepare(db, keyspace, lists::uuid_index_spec_of(receiver.column_specification));
@@ -74,9 +74,9 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
             auto&& idx = _selector->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
             return make_shared<lists::setter_by_index>(receiver, idx, lval);
         }
-    } else if (&rtype->_kind == &collection_type_impl::kind::set) {
+    } else if (rtype->get_kind() == abstract_type::kind::set) {
         throw invalid_request_exception(format("Invalid operation ({}) for set column {}", to_string(receiver), receiver.name()));
-    } else if (&rtype->_kind == &collection_type_impl::kind::map) {
+    } else if (rtype->get_kind() == abstract_type::kind::map) {
         auto key = _selector->prepare(db, keyspace, maps::key_spec_of(*receiver.column_specification));
         auto mval = _value->prepare(db, keyspace, maps::value_spec_of(*receiver.column_specification));
         return make_shared<maps::setter_by_key>(receiver, key, mval);
@@ -110,11 +110,11 @@ operation::addition::prepare(database& db, const sstring& keyspace, const column
         throw exceptions::invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
     }
 
-    if (&ctype->_kind == &collection_type_impl::kind::list) {
+    if (ctype->get_kind() == abstract_type::kind::list) {
         return make_shared<lists::appender>(receiver, v);
-    } else if (&ctype->_kind == &collection_type_impl::kind::set) {
+    } else if (ctype->get_kind() == abstract_type::kind::set) {
         return make_shared<sets::adder>(receiver, v);
-    } else if (&ctype->_kind == &collection_type_impl::kind::map) {
+    } else if (ctype->get_kind() == abstract_type::kind::map) {
         return make_shared<maps::putter>(receiver, v);
     } else {
         abort();
@@ -146,11 +146,11 @@ operation::subtraction::prepare(database& db, const sstring& keyspace, const col
                 format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
     }
 
-    if (&ctype->_kind == &collection_type_impl::kind::list) {
+    if (ctype->get_kind() == abstract_type::kind::list) {
         return make_shared<lists::discarder>(receiver, _value->prepare(db, keyspace, receiver.column_specification));
-    } else if (&ctype->_kind == &collection_type_impl::kind::set) {
+    } else if (ctype->get_kind() == abstract_type::kind::set) {
         return make_shared<sets::discarder>(receiver, _value->prepare(db, keyspace, receiver.column_specification));
-    } else if (&ctype->_kind == &collection_type_impl::kind::map) {
+    } else if (ctype->get_kind() == abstract_type::kind::map) {
         auto&& mtype = dynamic_pointer_cast<const map_type_impl>(ctype);
         // The value for a map subtraction is actually a set
         auto&& vr = make_shared<column_specification>(
@@ -204,12 +204,12 @@ operation::set_value::prepare(database& db, const sstring& keyspace, const colum
         return ::make_shared<constants::setter>(receiver, v);
     }
 
-    auto& k = static_pointer_cast<const collection_type_impl>(receiver.type)->_kind;
-    if (&k == &collection_type_impl::kind::list) {
+    auto k = static_pointer_cast<const collection_type_impl>(receiver.type)->get_kind();
+    if (k == abstract_type::kind::list) {
         return make_shared<lists::setter>(receiver, v);
-    } else if (&k == &collection_type_impl::kind::set) {
+    } else if (k == abstract_type::kind::set) {
         return make_shared<sets::setter>(receiver, v);
-    } else if (&k == &collection_type_impl::kind::map) {
+    } else if (k == abstract_type::kind::map) {
         return make_shared<maps::setter>(receiver, v);
     } else {
         abort();
@@ -308,13 +308,13 @@ operation::element_deletion::prepare(database& db, const sstring& keyspace, cons
         throw exceptions::invalid_request_exception(format("Invalid deletion operation for frozen collection column {}", receiver.name()));
     }
     auto ctype = static_pointer_cast<const collection_type_impl>(receiver.type);
-    if (&ctype->_kind == &collection_type_impl::kind::list) {
+    if (ctype->get_kind() == abstract_type::kind::list) {
         auto&& idx = _element->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
         return make_shared<lists::discarder_by_index>(receiver, std::move(idx));
-    } else if (&ctype->_kind == &collection_type_impl::kind::set) {
+    } else if (ctype->get_kind() == abstract_type::kind::set) {
         auto&& elt = _element->prepare(db, keyspace, sets::value_spec_of(receiver.column_specification));
         return make_shared<sets::element_discarder>(receiver, std::move(elt));
-    } else if (&ctype->_kind == &collection_type_impl::kind::map) {
+    } else if (ctype->get_kind() == abstract_type::kind::map) {
         auto&& key = _element->prepare(db, keyspace, maps::key_spec_of(*receiver.column_specification));
         return make_shared<maps::discarder_by_key>(receiver, std::move(key));
     }

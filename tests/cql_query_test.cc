@@ -1663,6 +1663,11 @@ SEASTAR_TEST_CASE(test_duration_restrictions) {
                         "create table my_table (tuple_key tuple<int, duration, int> PRIMARY KEY);",
                         "duration type is not supported for PRIMARY KEY part tuple_key");
             }).then([&] {
+                return validate_request_failure(
+                        env,
+                        "create table my_table (a int, b duration, PRIMARY KEY ((a), b)) WITH CLUSTERING ORDER BY (b DESC);",
+                        "duration type is not supported for PRIMARY KEY part b");
+            }).then([&] {
                 return env.execute_cql("create table my_table0 (key int PRIMARY KEY, name text, span duration);")
                         .discard_result().then([&] {
                             return validate_request_failure(

@@ -36,22 +36,10 @@ class collection_type_impl : public abstract_type {
 public:
     static constexpr size_t max_elements = 65535;
 
-    class kind {
-        std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> _impl;
-    public:
-        kind(std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> impl)
-            : _impl(std::move(impl)) {}
-        shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;
-        static const kind map;
-        static const kind set;
-        static const kind list;
-    };
-
-    const kind& _kind;
-
 protected:
-    explicit collection_type_impl(sstring name, const kind& k)
-            : abstract_type(std::move(name), {}, data::type_info::make_collection()), _kind(k) {}
+    bool _is_multi_cell;
+    explicit collection_type_impl(kind k, sstring name, bool is_multi_cell)
+            : abstract_type(k, std::move(name), {}, data::type_info::make_collection()), _is_multi_cell(is_multi_cell) {}
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
     struct mutation {
@@ -67,21 +55,15 @@ public:
         utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
         mutation materialize(const collection_type_impl&) const;
     };
+    bool is_multi_cell() const { return _is_multi_cell; }
     virtual data_type name_comparator() const = 0;
     virtual data_type value_comparator() const = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;
-    virtual bool is_collection() const override { return true; }
-    bool is_map() const { return &_kind == &kind::map; }
-    bool is_set() const { return &_kind == &kind::set; }
-    bool is_list() const { return &_kind == &kind::list; }
     std::vector<atomic_cell> enforce_limit(std::vector<atomic_cell>, int version) const;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const = 0;
     bytes serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) const;
-    virtual bool is_compatible_with(const abstract_type& previous) const override;
-    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
-    virtual bool is_native() const override { return false; }
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
     // requires linearized collection_mutation_view, lifetime
@@ -114,6 +96,15 @@ public:
         return deserialize(v, sf);
     }
     bytes_opt reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const;
+};
+
+// a list or a set
+class listlike_collection_type_impl : public collection_type_impl {
+protected:
+    data_type _elements;
+    explicit listlike_collection_type_impl(kind k, sstring name, data_type elements,bool is_multi_cell);
+public:
+    data_type get_elements_type() const { return _elements; }
 };
 
 template <typename BytesViewIterator>

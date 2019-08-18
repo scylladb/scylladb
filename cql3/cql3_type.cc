@@ -79,16 +79,16 @@ public:
     }
 
     virtual bool is_duration() const override {
-        return _type.get_type()->equals(duration_type);
+        return _type.get_type() == duration_type;
     }
 };
 
 class cql3_type::raw_collection : public raw {
-    const collection_type_impl::kind* _kind;
+    const abstract_type::kind _kind;
     shared_ptr<raw> _keys;
     shared_ptr<raw> _values;
 public:
-    raw_collection(const collection_type_impl::kind* kind, shared_ptr<raw> keys, shared_ptr<raw> values)
+    raw_collection(const abstract_type::kind kind, shared_ptr<raw> keys, shared_ptr<raw> values)
             : _kind(kind), _keys(std::move(keys)), _values(std::move(values)) {
     }
 
@@ -126,14 +126,14 @@ public:
             }
         }
 
-        if (_kind == &collection_type_impl::kind::list) {
+        if (_kind == abstract_type::kind::list) {
             return cql3_type(list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !_frozen));
-        } else if (_kind == &collection_type_impl::kind::set) {
+        } else if (_kind == abstract_type::kind::set) {
             if (_values->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed inside sets: {}", *this));
             }
             return cql3_type(set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !_frozen));
-        } else if (_kind == &collection_type_impl::kind::map) {
+        } else if (_kind == abstract_type::kind::map) {
             assert(_keys); // "Got null keys type for a collection";
             if (_keys->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed as map keys: {}", *this));
@@ -154,11 +154,11 @@ public:
     virtual sstring to_string() const override {
         sstring start = _frozen ? "frozen<" : "";
         sstring end = _frozen ? ">" : "";
-        if (_kind == &collection_type_impl::kind::list) {
+        if (_kind == abstract_type::kind::list) {
             return format("{}list<{}>{}", start, _values, end);
-        } else if (_kind == &collection_type_impl::kind::set) {
+        } else if (_kind == abstract_type::kind::set) {
             return format("{}set<{}>{}", start, _values, end);
-        } else if (_kind == &collection_type_impl::kind::map) {
+        } else if (_kind == abstract_type::kind::map) {
             return format("{}map<{}, {}>{}", start, _keys, _values, end);
         }
         abort();
@@ -297,17 +297,17 @@ cql3_type::raw::user_type(ut_name name) {
 
 shared_ptr<cql3_type::raw>
 cql3_type::raw::map(shared_ptr<raw> t1, shared_ptr<raw> t2) {
-    return make_shared(raw_collection(&collection_type_impl::kind::map, std::move(t1), std::move(t2)));
+    return make_shared(raw_collection(abstract_type::kind::map, std::move(t1), std::move(t2)));
 }
 
 shared_ptr<cql3_type::raw>
 cql3_type::raw::list(shared_ptr<raw> t) {
-    return make_shared(raw_collection(&collection_type_impl::kind::list, {}, std::move(t)));
+    return make_shared(raw_collection(abstract_type::kind::list, {}, std::move(t)));
 }
 
 shared_ptr<cql3_type::raw>
 cql3_type::raw::set(shared_ptr<raw> t) {
-    return make_shared(raw_collection(&collection_type_impl::kind::set, {}, std::move(t)));
+    return make_shared(raw_collection(abstract_type::kind::set, {}, std::move(t)));
 }
 
 shared_ptr<cql3_type::raw>

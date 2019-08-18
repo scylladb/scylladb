@@ -35,7 +35,7 @@ private:
 public:
     using native_type = std::vector<data_value>;
     user_type_impl(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types)
-            : tuple_type_impl(make_name(keyspace, name, field_names, field_types, false /* frozen */), field_types)
+            : tuple_type_impl(kind::user, make_name(keyspace, name, field_names, field_types, false /* frozen */), field_types)
             , _keyspace(keyspace)
             , _name(name)
             , _field_names(field_names) {
@@ -52,15 +52,7 @@ public:
     sstring field_name_as_string(size_t i) const { return _string_field_names[i]; }
     const std::vector<bytes>& field_names() const { return _field_names; }
     sstring get_name_as_string() const;
-    virtual sstring cql3_type_name_impl() const override;
-    virtual bool is_native() const override { return false; }
-    virtual bool equals(const abstract_type& other) const override;
-    virtual bool is_user_type() const override { return true; }
-    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
-    virtual std::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 
-    virtual sstring to_json_string(bytes_view bv) const override;
-    virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override;
 private:
     static sstring make_name(sstring keyspace,
                              bytes name,
