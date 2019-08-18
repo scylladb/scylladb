@@ -419,6 +419,18 @@ future<json::json_return_type> executor::create_table(std::string content) {
             view_builders.emplace_back(std::move(view_builder));
         }
     }
+
+    if (rjson::find(table_info, "LocalSecondaryIndexes")) {
+        throw api_error("ValidationException", "LocalSecondaryIndexes: not yet supported.");
+    }
+    if (rjson::find(table_info, "SSESpecification")) {
+        throw api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported.");
+    }
+    if (rjson::find(table_info, "StreamSpecification")) {
+        throw api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported.");
+    }
+    // FIXME: we should read the Tags property, and save them somewhere.
+
     return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
         return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
             return service::get_local_migration_manager().announce_new_view(view_ptr(builder.build()));
