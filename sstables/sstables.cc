@@ -3194,7 +3194,7 @@ delete_atomically(std::vector<shared_sstable> ssts) {
             dir_f.close().get();
             sstlog.debug("{} written successfully.", pending_delete_log);
         } catch (...) {
-            sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log), std::current_exception();
+            sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
         }
 
         parallel_for_each(ssts, [] (shared_sstable sst) {
