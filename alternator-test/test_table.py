@@ -2,15 +2,15 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from util import list_tables
+from util import list_tables, test_table_name
 
 # Utility function for create a table with a given name and some valid
 # schema.. This function initiates the table's creation, but doesn't
 # wait for the table to actually become ready.
-def create_table(dynamodb, name):
+def create_table(dynamodb, name, BillingMode='PAY_PER_REQUEST', **kwargs):
     return dynamodb.create_table(
         TableName=name,
-        BillingMode='PAY_PER_REQUEST',
+        BillingMode=BillingMode,
         KeySchema=[
             {
                 'AttributeName': 'p',
@@ -31,6 +31,7 @@ def create_table(dynamodb, name):
                 'AttributeType': 'S'
             },
         ],
+        **kwargs
     )
 
 # Utility function for creating a table with a given name, and then deleting
@@ -39,8 +40,8 @@ def create_table(dynamodb, name):
 # and DeleteTable to work correctly.
 # Note that in DynamoDB, table deletion takes a very long time, so tests
 # successfully using this function are very slow.
-def create_and_delete_table(dynamodb, name):
-    table = create_table(dynamodb, name)
+def create_and_delete_table(dynamodb, name, **kwargs):
+    table = create_table(dynamodb, name, **kwargs)
     table.meta.client.get_waiter('table_exists').wait(TableName=name)
     table.delete()
     table.meta.client.get_waiter('table_not_exists').wait(TableName=name)
@@ -179,6 +180,27 @@ def test_create_table_invalid_schema(dynamodb):
 def test_create_table_already_exists(dynamodb, test_table):
     with pytest.raises(ClientError, match='ResourceInUseException'):
         create_table(dynamodb, test_table.name)
+
+# Test that BillingMode error path works as expected - only the values
+# PROVISIONED or PAY_PER_REQUEST are allowed. The former requires
+# ProvisionedThroughput to be set, the latter forbids it.
+def test_create_table_billing_mode_errors(dynamodb, test_table):
+    with pytest.raises(ClientError, match='ValidationException'):
+        create_table(dynamodb, test_table_name(), BillingMode='unknown')
+    # billing mode is case-sensitive
+    with pytest.raises(ClientError, match='ValidationException'):
+        create_table(dynamodb, test_table_name(), BillingMode='pay_per_request')
+    # PAY_PER_REQUEST cannot come with a ProvisionedThroughput:
+    with pytest.raises(ClientError, match='ValidationException'):
+        create_table(dynamodb, test_table_name(),
+            BillingMode='PAY_PER_REQUEST', ProvisionedThroughput={'ReadCapacityUnits': 10, 'WriteCapacityUnits': 10})
+    # On the other hand, PROVISIONED requires ProvisionedThroughput:
+    # By the way, ProvisionedThroughput not only needs to appear, it must
+    # have both ReadCapacityUnits and WriteCapacityUnits - but we can't test
+    # this with boto3, because boto3 has its own verification that if
+    # ProvisionedThroughput is given, it must have the correct form.
+    with pytest.raises(ClientError, match='ValidationException'):
+        create_table(dynamodb, test_table_name(), BillingMode='PROVISIONED')
 
 # Test that all tables we create are listed, and pagination works properly.
 # Note that the DyanamoDB setup we run this against may have hundreds of
