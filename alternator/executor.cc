@@ -199,6 +199,21 @@ static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::
     }
 }
 
+// Convenience function for getting the value of a string attribute, or a
+// default value if it is missing. If the attribute exists, but is not a
+// string, a descriptive api_error is thrown.
+static std::string get_string_attribute(const rjson::value& value, rjson::string_ref_type attribute_name, const char* default_return) {
+    const rjson::value* attribute_value = rjson::find(value, attribute_name);
+    if (!attribute_value)
+        return default_return;
+    if (!attribute_value->IsString()) {
+        throw api_error("ValidationException", format("Expected string value for attribute {}, got: {}",
+                attribute_name, value));
+    }
+    return attribute_value->GetString();
+
+}
+
 future<json::json_return_type> executor::describe_table(std::string content) {
     _stats.api_operations.describe_table++;
     rjson::value request = rjson::parse(content);
@@ -336,6 +351,21 @@ future<json::json_return_type> executor::create_table(std::string content) {
     }
     builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
     schema_ptr schema = builder.build();
+
+    // Alternator does not yet support billing or throughput limitations, but
+    // let's verify that BillingMode is at least legal.
+    std::string billing_mode = get_string_attribute(table_info, "BillingMode", "PAY_PER_REQUEST");
+    if (billing_mode == "PAY_PER_REQUEST") {
+        if (rjson::find(table_info, "ProvisionedThroughput")) {
+            throw api_error("ValidationException", "When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified.");
+        }
+    } else if (billing_mode == "PROVISIONED") {
+        if (!rjson::find(table_info, "ProvisionedThroughput")) {
+            throw api_error("ValidationException", "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified.");
+        }
+    } else {
+        throw api_error("ValidationException", "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
+    }
 
     // Parse GlobalSecondaryIndexes parameters before creating the base
     // table, so if we have a parse errors we can fail without creating
