@@ -51,6 +51,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
 future<> decommission_with_repair(seastar::sharded<database>& db, locator::token_metadata tm);
 future<> removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node);
 future<> rebuild_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring source_dc);
+future<> replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm);
 
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
