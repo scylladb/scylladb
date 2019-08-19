@@ -1870,3 +1870,48 @@ future<> decommission_with_repair(seastar::sharded<database>& db, locator::token
 future<> removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node) {
     return do_decommission_removenode_with_repair(db, std::move(tm), std::move(leaving_node));
 }
+
+future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring op, sstring source_dc) {
+    return seastar::async([&db, tm = std::move(tm), source_dc = std::move(source_dc), op = std::move(op)] () mutable {
+        auto keyspaces = db.local().get_non_system_keyspaces();
+        rlogger.info("{}: started with keyspaces={}, source_dc={}", op, keyspaces, source_dc);
+        auto myip = utils::fb_utilities::get_broadcast_address();
+        for (auto& keyspace_name : keyspaces) {
+            if (!db.local().has_keyspace(keyspace_name)) {
+                rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
+                continue;
+            }
+            auto& ks = db.local().find_keyspace(keyspace_name);
+            auto& strat = ks.get_replication_strategy();
+            dht::token_range_vector ranges = strat.get_ranges(myip);
+            std::unordered_map<dht::token_range, repair_neighbors> range_sources;
+            rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, ranges.size());
+            for (auto it = ranges.begin(); it != ranges.end();) {
+                auto& r = *it;
+                seastar::thread::maybe_yield();
+                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
+                auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, tm) |
+                    boost::adaptors::filtered([myip, &source_dc, &snitch_ptr] (const gms::inet_address& node) {
+                        if (node == myip) {
+                            return false;
+                        }
+                        return source_dc.empty() ? true : snitch_ptr->get_datacenter(node) == source_dc;
+                    })
+                );
+                rlogger.debug("{}: keyspace={}, range={}, neighbors={}", op, keyspace_name, r, neighbors);
+                if (!neighbors.empty()) {
+                    range_sources[r] = repair_neighbors(std::move(neighbors));
+                    ++it;
+                } else {
+                    // Skip the range with zero neighbors
+                    it = ranges.erase(it);
+                }
+            }
+            auto nr_ranges = ranges.size();
+            sync_data_using_repair(db, keyspace_name, std::move(ranges), std::move(range_sources)).get();
+            rlogger.info("{}: finished with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, nr_ranges);
+        }
+        rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, keyspaces, source_dc);
+    });
+}
