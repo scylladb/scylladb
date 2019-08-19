@@ -1915,3 +1915,11 @@ future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, locator:
         rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, keyspaces, source_dc);
     });
 }
+
+future<> rebuild_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring source_dc) {
+    auto op = sstring("rebuild_with_repair");
+    if (source_dc.empty()) {
+        source_dc = get_local_dc();
+    }
+    return do_rebuild_replace_with_repair(db, std::move(tm), std::move(op), std::move(source_dc));
+}
