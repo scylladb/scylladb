@@ -1862,3 +1862,7 @@ future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, 
         rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, keyspaces, leaving_node);
     });
 }
+
+future<> decommission_with_repair(seastar::sharded<database>& db, locator::token_metadata tm) {
+    return do_decommission_removenode_with_repair(db, std::move(tm), utils::fb_utilities::get_broadcast_address());
+}
