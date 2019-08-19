@@ -78,6 +78,7 @@
 #include "distributed_loader.hh"
 #include "database.hh"
 #include <seastar/core/metrics.hh>
+#include "repair/repair.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -624,7 +625,8 @@ void storage_service::join_token_ring(int delay) {
         slogger.info("This node will not auto bootstrap because it is configured to be a seed node.");
     }
     if (should_bootstrap()) {
-        if (db::system_keyspace::bootstrap_in_progress()) {
+        bool resume_bootstrap = db::system_keyspace::bootstrap_in_progress();
+        if (resume_bootstrap) {
             slogger.warn("Detected previous bootstrap failure; retrying");
         } else {
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
@@ -677,7 +679,18 @@ void storage_service::join_token_ring(int delay) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
             set_mode(mode::JOINING, "getting bootstrap token", true);
-            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+            if (resume_bootstrap) {
+                _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
+                if (!_bootstrap_tokens.empty()) {
+                    slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
+                } else {
+                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+                    slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+                }
+            } else {
+                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+                slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+            }
         } else {
             auto replace_addr = db().local().get_replace_address();
             if (replace_addr && *replace_addr != get_broadcast_address()) {
@@ -856,8 +869,16 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     _gossiper.check_seen_seeds();
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
+    if (!db().local().is_replacing()) {
+        bootstrap_with_repair(_db, _token_metadata, tokens).get();
+    } else {
+        replace_with_repair(_db, _token_metadata).get();
+    }
+    finish_bootstrapping();
+#if 0
     dht::boot_strapper bs(_db, get_broadcast_address(), tokens, _token_metadata);
     bs.bootstrap().get(); // handles token update
+#endif
     slogger.info("Bootstrap completed! for the tokens {}", tokens);
 }
 
@@ -2641,6 +2662,8 @@ future<std::map<sstring, double>> storage_service::get_load_map() {
 future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+        return rebuild_with_repair(ss._db, ss._token_metadata, std::move(source_dc));
+#if 0
         auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
         if (source_dc != "") {
@@ -2658,6 +2681,7 @@ future<> storage_service::rebuild(sstring source_dc) {
                 return make_exception_future<>(std::move(ep));
             });
         });
+#endif
     });
 }
 
@@ -2742,6 +2766,10 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 
 // Runs inside seastar::async context
 void storage_service::unbootstrap() {
+    db::get_local_batchlog_manager().do_batch_log_replay().get();
+    decommission_with_repair(_db, _token_metadata).get();
+    leave_ring();
+#if 0
     std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
@@ -2777,9 +2805,14 @@ void storage_service::unbootstrap() {
     }
     slogger.debug("stream acks all received.");
     leave_ring();
+#endif
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
+    return removenode_with_repair(_db, _token_metadata, endpoint).finally([this, notify_endpoint] () {
+        return send_replication_notification(notify_endpoint);
+    });
+#if 0
     auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
@@ -2809,6 +2842,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
         return make_ready_future<>();
     });
+#endif
 }
 
 // Runs inside seastar::async context
