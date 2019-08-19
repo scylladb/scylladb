@@ -1703,7 +1703,7 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         }
         // NOTICE(sarna): A range starting with given prefix and ending (non-inclusively) with a string "incremented" by a single
         // character at the end. Throws for NUMBER instances.
-        if (!ck_cdef.type->is_byte_order_comparable()) {
+        if (!ck_cdef.type->is_compatible_with(*utf8_type)) {
             throw api_error("ValidationException", format("BEGINS_WITH operator cannot be applied to type {}", type_to_string(ck_cdef.type)));
         }
         std::string raw_upper_limit_str = attrs[0][type_to_string(ck_cdef.type)].GetString();
