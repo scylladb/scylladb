@@ -810,11 +810,19 @@ future<> foreign_reader::ensure_buffer_contains_all_fragments_for_last_pos(flat_
         if (reader.is_buffer_empty()) {
             return reader.is_end_of_stream();
         }
-        const auto& next_pos = reader.peek_buffer().position();
-        if (next_pos.region() != partition_region::clustered) {
+        if (!buffer.back().is_range_tombstone()) {
             return true;
         }
-        return !next_pos.key().equal(*reader.schema(), buffer.back().position().key());
+        const auto next_pos = reader.peek_buffer().position();
+        const auto& last_key = buffer.back().key();
+
+        // Ending the buffer on a non-full prefix key position is
+        // problematic because when recreating the reader we continue
+        // from *after* the last key we saw. If this is a prefix this
+        // would exclude all clustering positions that fall into the
+        // prefix. Fixing this is non-trivial and has little gain over
+        // just making sure we don't end the buffer on a prefix.
+        return last_key.is_full(*reader.schema()) && !next_pos.key().equal(*reader.schema(), last_key);
     };
 
     return do_until(stop, [&reader, &buffer] {

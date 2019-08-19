@@ -1874,6 +1874,168 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
     }).get();
 }
 
+// Test the multishard reader correctly handling non-full prefix keys
+//
+// Check that the presence of non-full prefix keys in the mutation
+// stream will not cause shard reader recreation skipping clustering rows
+// that fall into the prefix.
+//
+// Theory of operation:
+// 1) Prepare a bunch of partitions, each with a bunch of clustering
+//    rows with full clustering keys.
+// 2) Use as the shard reader a special reader, which, if the last mutation
+//    fragment in the buffer is a clustering row, injects a range tombstone
+//    which starts with a non-full prefix covering the next clustering row.
+// 4) Create range tombstones such that they don't shadow any of the rows
+//    and they are already expired, hence can be filtered out by compaction.
+// 3) Read back all the mutations and check that no clustering row is missing.
+//
+// Note that the multishard reader recreates shard readers based on the last
+// fragment seen by that shard reader. In this test we check that recreating
+// the reader doesn't skip any rows if that last seen fragment is a range
+// tombstone with a non-full prefix position.
+//
+// Has to be run with smp >= 3
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_full_prefix_keys) {
+    class reader : public flat_mutation_reader::impl {
+        flat_mutation_reader _reader;
+    public:
+        reader(schema_ptr schema, const dht::partition_range& range, const query::partition_slice& slice, std::vector<mutation> mutations)
+            : impl(std::move(schema)), _reader(flat_mutation_reader_from_mutations(std::move(mutations), range, slice)) {
+        }
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            return _reader.fill_buffer(timeout).then([this] {
+                _reader.move_buffer_content_to(*this);
+                if (is_buffer_empty()) {
+                    _end_of_stream = _reader.is_end_of_stream();
+                    return;
+                }
+
+                const auto& mf = buffer().back();
+                if (!mf.is_clustering_row()) {
+                    return;
+                }
+
+                const auto& ck = mf.key();
+                auto ck_val = value_cast<int32_t>(int32_type->deserialize_value(ck.explode().front()));
+
+                // The last fragment is a cr with pos {ck_val, ck_val}.
+                // The next (if any) will be {ck_val + 1, ck_val + 1}.
+                // We want to cover: [{ck_val + 1}, {ck_val + 2, 0}), so that
+                // the prefix covers the next row, but not the one after it.
+                auto start = clustering_key_prefix::from_exploded(*_schema, {int32_type->decompose(data_value(++ck_val))});
+                auto end = clustering_key_prefix::from_exploded(*_schema, {int32_type->decompose(data_value(++ck_val)), int32_type->decompose(data_value(0))});
+
+                // We want all the range tombstones to be gc-able.
+                const auto deletion_time = gc_clock::now() - _schema->gc_grace_seconds() - std::chrono::hours(8);
+
+                // Make expired tombstones so we can just compact them away
+                // when comparing the read data to the original ones. We are
+                // only interested in the rows anyway.
+                auto rt = range_tombstone(start, bound_kind::incl_start, end, bound_kind::excl_end, tombstone(-100, deletion_time));
+                push_mutation_fragment(std::move(rt));
+            });
+        }
+        virtual void next_partition() override { }
+        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
+        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
+    };
+
+    struct mutation_less_comparator {
+        dht::decorated_key::less_comparator _cmp;
+        explicit mutation_less_comparator(schema_ptr s) : _cmp(s) { }
+        bool operator()(const mutation& a, const mutation& b) const {
+            return _cmp(a.decorated_key(), b.decorated_key());
+        }
+    };
+
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        auto schema = schema_builder("ks", "cf")
+            .with_column(to_bytes("pk"), int32_type, column_kind::partition_key)
+            .with_column(to_bytes(format("ck{}", 0)), int32_type, column_kind::clustering_key)
+            .with_column(to_bytes(format("ck{}", 1)), int32_type, column_kind::clustering_key)
+            .with_column(to_bytes("v"), int32_type, column_kind::regular_column)
+            .build();
+
+        auto expected_mutations = std::set<mutation, mutation_less_comparator>{mutation_less_comparator{schema}};
+        std::unordered_map<shard_id, std::vector<frozen_mutation>> shard_mutations;
+        auto& partitioner = dht::global_partitioner();
+        auto val_cdef = schema->regular_column_at(0);
+        api::timestamp_type ts = 0;
+
+        for (auto pk = 0; pk < 10 * static_cast<int>(smp::count); ++pk) {
+            auto dkey = partitioner.decorate_key(*schema, partition_key::from_single_value(*schema, int32_type->decompose(data_value(pk))));
+            auto mut = mutation(schema, dkey);
+
+            for (auto ck = 0; ck < 100; ++ck) {
+                auto ck_val = int32_type->decompose(data_value(ck));
+                auto ckey = clustering_key::from_exploded(*schema, {ck_val, ck_val});
+                mut.set_clustered_cell(ckey, val_cdef, atomic_cell::make_live(*val_cdef.type, ts++, int32_type->decompose(data_value(0))));
+            }
+
+            expected_mutations.emplace(std::move(mut));
+        }
+
+        for (const auto& mut : expected_mutations) {
+            shard_mutations[partitioner.shard_of(mut.token())].emplace_back(freeze(mut));
+        }
+
+        auto factory = [&shard_mutations] (
+                shard_id shard,
+                schema_ptr schema,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                mutation_reader::forwarding fwd_mr) {
+            auto& frozen_muts = shard_mutations[shard];
+            return smp::submit_to(shard, [gs = global_schema_ptr(schema), &range, &slice, &frozen_muts] () mutable {
+                auto schema = gs.get();
+                auto rd = make_flat_mutation_reader<reader>(schema, range, slice, boost::copy_range<std::vector<mutation>>(
+                        frozen_muts | boost::adaptors::transformed([schema] (const frozen_mutation& fm) { return fm.unfreeze(schema); })));
+
+                using foreign_reader_ptr = foreign_ptr<std::unique_ptr<flat_mutation_reader>>;
+                return make_ready_future<foreign_reader_ptr>(make_foreign(std::make_unique<flat_mutation_reader>(std::move(rd))));
+            });
+        };
+
+        std::vector<mutation> actual_mutations;
+        {
+            auto reader = make_multishard_combining_reader(
+                    seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), test_reader_lifecycle_policy::no_delay, true),
+                    partitioner,
+                    schema,
+                    query::full_partition_range,
+                    schema->full_slice(),
+                    service::get_local_sstable_query_read_priority());
+
+            const auto now = gc_clock::now();
+            while (auto mut_opt = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0()) {
+                // We expect the range tombstones to be purged.
+                mut_opt->partition().compact_for_query(*schema, now, {query::clustering_range::make_open_ended_both_sides()}, false,
+                        std::numeric_limits<uint32_t>::max());
+                actual_mutations.emplace_back(std::move(*mut_opt));
+            }
+        }
+
+        BOOST_REQUIRE_EQUAL(actual_mutations.size(), expected_mutations.size());
+
+
+        auto ita = actual_mutations.begin();
+        auto ite = expected_mutations.begin();
+        for (;ita != actual_mutations.end(), ite != expected_mutations.end(); ++ita, ++ite) {
+            assert_that(*ita).is_equal_to(*ite);
+        }
+
+        return make_ready_future<>();
+    }).get();
+}
+
 // A reader that can controlled by it's "creator" after it's created.
 //
 // It can execute one of a set of actions on it's fill_buffer() call:
