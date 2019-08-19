@@ -89,29 +89,6 @@ if [ -n "$pkg" ] && [ "$pkg" != "server" -a "$pkg" != "conf" -a "$pkg" != "kerne
     exit 1
 fi
 
-patchelf() {
-    # patchelf comes from the build system, so it needs the build system's ld.so and
-    # shared libraries. We can't use patchelf on patchelf itself, so invoke it via
-    # ld.so.
-    LD_LIBRARY_PATH="$PWD/libreloc" libreloc/ld.so libexec/patchelf "$@"
-}
-
-adjust_bin() {
-    local bin="$1"
-    # We could add --set-rpath too, but then debugedit (called by rpmbuild) barfs
-    # on the result. So use LD_LIBRARY_PATH in the thunk, below.
-    patchelf \
-	--set-interpreter "$prefix/libreloc/ld.so" \
-	"$root/$prefix/libexec/$bin"
-    cat > "$root/$prefix/bin/$bin" <<EOF
-#!/bin/bash -e
-export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
-export LD_LIBRARY_PATH="$prefix/libreloc"
-exec -a "\$0" "$prefix/libexec/$bin" "\$@"
-EOF
-    chmod +x "$root/$prefix/bin/$bin"
-}
-
 rprefix="$root/$prefix"
 retc="$root/etc"
 rusr="$root/usr"
@@ -168,13 +145,16 @@ if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
     install -m644 dist/common/systemd/*.timer -Dt "$rusr"/lib/systemd/system
     install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
     install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/scripts
-    install -m755 libreloc/* -Dt "$rprefix/libreloc"
+    install -m755 bin/* -Dt "$rprefix/bin"
     # some files in libexec are symlinks, which "install" dereferences
     # use cp -P for the symlinks instead.
-    install -m755 libexec/* -Dt "$rprefix/libexec"
-    for bin in libexec/*; do
-	adjust_bin "${bin#libexec/}"
+    install -m755 libexec/*.bin -Dt "$rprefix/libexec"
+    for f in libexec/*; do
+        if [[ "$f" != *.bin ]]; then
+            cp -P "$f" "$rprefix/libexec"
+        fi
     done
+    install -m755 libreloc/* -Dt "$rprefix/libreloc"
     ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
 
