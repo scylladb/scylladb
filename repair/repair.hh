@@ -149,6 +149,20 @@ public:
     sstring get_stats();
 };
 
+class repair_neighbors {
+public:
+    std::vector<gms::inet_address> all;
+    std::vector<gms::inet_address> mandatory;
+    repair_neighbors() = default;
+    explicit repair_neighbors(std::vector<gms::inet_address> a)
+        : all(std::move(a)) {
+    }
+    repair_neighbors(std::vector<gms::inet_address> a, std::vector<gms::inet_address> m)
+        : all(std::move(a))
+        , mandatory(std::move(m)) {
+    }
+};
+
 class repair_info {
 public:
     seastar::sharded<database>& db;
@@ -159,6 +173,7 @@ public:
     shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
+    std::unordered_map<dht::token_range, repair_neighbors> neighbors;
     size_t nr_failed_ranges = 0;
     bool aborted = false;
     // Map of peer -> <cf, ranges>
@@ -197,6 +212,7 @@ public:
         const std::vector<gms::inet_address>& neighbors_out);
     void abort();
     void check_in_abort();
+    repair_neighbors get_repair_neighbors(const dht::token_range& range);
     void update_statistics(const repair_stats& stats) {
         _stats.add(stats);
     }

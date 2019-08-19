@@ -749,6 +749,12 @@ void repair_info::check_in_abort() {
     }
 }
 
+repair_neighbors repair_info::get_repair_neighbors(const dht::token_range& range) {
+    return neighbors.empty() ?
+        repair_neighbors(get_neighbors(db.local(), keyspace, range, data_centers, hosts)) :
+        neighbors[range];
+}
+
 // Repair a single cf in a single local range.
 // Comparable to RepairJob in Origin.
 static future<> repair_cf_range(repair_info& ri,
@@ -959,9 +965,22 @@ static future<> repair_cf_range(repair_info& ri,
 // Comparable to RepairSession in Origin
 static future<> repair_range(repair_info& ri, const dht::token_range& range) {
     auto id = utils::UUID_gen::get_time_UUID();
-    return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (std::vector<gms::inet_address>& neighbors) {
+    repair_neighbors neighbors = ri.get_repair_neighbors(range);
+    return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [&ri, range, id] (auto& neighbors, auto& mandatory_neighbors) {
       auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
                     boost::adaptors::filtered([] (const gms::inet_address& node) { return gms::get_local_gossiper().is_alive(node); }));
+      for (auto& node : mandatory_neighbors) {
+           auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
+           if (it == live_neighbors.end()) {
+                ri.nr_failed_ranges++;
+                auto status = format("failed: mandatory neighbor={} is not alive", node);
+                rlogger.error("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                    ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.cfs, range, neighbors, live_neighbors, status);
+                ri.abort();
+                return make_exception_future<>(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
+                    node, ri.keyspace, mandatory_neighbors)));
+           }
+      }
       if (live_neighbors.size() != neighbors.size()) {
             ri.nr_failed_ranges++;
             auto status = live_neighbors.empty() ? "skipped" : "partial";
@@ -1476,5 +1495,54 @@ future<> repair_shutdown(seastar::sharded<database>& db) {
 future<> repair_abort_all(seastar::sharded<database>& db) {
     return db.invoke_on_all([] (database& localdb) {
         repair_tracker().abort_all_repairs();
+    });
+}
+
+future<> sync_data_using_repair(seastar::sharded<database>& db,
+        sstring keyspace,
+        dht::token_range_vector ranges,
+        std::unordered_map<dht::token_range, repair_neighbors> neighbors) {
+    if (ranges.empty()) {
+        return make_ready_future<>();
+    }
+    return smp::submit_to(0, [&db, keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors)] () mutable {
+        int id = repair_tracker().next_repair_command();
+        rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
+        return repair_tracker().run(id, [id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors)] () mutable {
+            auto cfs = list_column_families(db.local(), keyspace);
+            std::vector<future<>> repair_results;
+            repair_results.reserve(smp::count);
+            for (auto shard : boost::irange(unsigned(0), smp::count)) {
+                auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges, neighbors] (database& localdb) mutable {
+                    auto data_centers = std::vector<sstring>();
+                    auto hosts = std::vector<sstring>();
+                    auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
+                            std::move(keyspace), std::move(ranges), std::move(cfs),
+                            id, std::move(data_centers), std::move(hosts));
+                    ri->neighbors = std::move(neighbors);
+                    return repair_ranges(ri);
+                });
+                repair_results.push_back(std::move(f));
+            }
+            return when_all(repair_results.begin(), repair_results.end()).then([id, keyspace] (std::vector<future<>> results) mutable {
+                std::vector<sstring> errors;
+                for (unsigned shard = 0; shard < results.size(); shard++) {
+                    auto& f = results[shard];
+                    if (f.failed()) {
+                        auto ep = f.get_exception();
+                        errors.push_back(format("shard {}: {}", shard, ep));
+                    }
+                }
+                if (!errors.empty()) {
+                    return make_exception_future<>(std::runtime_error(format("{}", errors)));
+                }
+                return make_ready_future<>();
+            });
+        }).then([id, keyspace] {
+            rlogger.info("repair id {} to sync data for keyspace={}, status=succeeded", id, keyspace);
+        }).handle_exception([id, keyspace] (std::exception_ptr ep) {
+            rlogger.info("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
+            return make_exception_future<>(ep);
+        });
     });
 }
