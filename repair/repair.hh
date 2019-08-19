@@ -48,6 +48,7 @@ public:
 
 // The tokens are the tokens assigned to the bootstrap node.
 future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> bootstrap_tokens);
+future<> decommission_with_repair(seastar::sharded<database>& db, locator::token_metadata tm);
 
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
