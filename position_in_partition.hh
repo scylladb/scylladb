@@ -160,6 +160,10 @@ public:
         return {partition_region::clustered, bound_weight::after_all_prefixed, &ck};
     }
 
+    static position_in_partition_view before_key(const clustering_key& ck) {
+        return {partition_region::clustered, bound_weight::before_all_prefixed, &ck};
+    }
+
     partition_region region() const { return _type; }
     bound_weight get_bound_weight() const { return _bound_weight; }
     bool is_partition_start() const { return _type == partition_region::partition_start; }
