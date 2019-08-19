@@ -1600,3 +1600,92 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
         rlogger.info("bootstrap_with_repair: finished with keyspaces={}", keyspaces);
     });
 }
+
+future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node) {
+    using inet_address = gms::inet_address;
+    return seastar::async([&db, tm = std::move(tm), leaving_node = std::move(leaving_node)] () mutable {
+        auto myip = utils::fb_utilities::get_broadcast_address();
+        auto keyspaces = db.local().get_non_system_keyspaces();
+        bool is_decommission = myip == leaving_node;
+        auto op = is_decommission ? "decommission_with_repair" : "removenode_with_repair";
+        rlogger.info("{}: started with keyspaces={}, leaving_node={}", op, keyspaces, leaving_node);
+        for (auto& keyspace_name : keyspaces) {
+            if (!db.local().has_keyspace(keyspace_name)) {
+                rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
+                continue;
+            }
+            auto& ks = db.local().find_keyspace(keyspace_name);
+            auto& strat = ks.get_replication_strategy();
+            // First get all ranges the leaving node is responsible for
+            dht::token_range_vector ranges = strat.get_ranges(leaving_node);
+            rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size());
+            std::unordered_map<dht::token_range, std::vector<inet_address>> current_replica_endpoints;
+            // Find (for each range) all nodes that store replicas for these ranges as well
+            for (auto& r : ranges) {
+                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
+                auto eps = strat.calculate_natural_endpoints(end_token, tm);
+                current_replica_endpoints.emplace(r, std::move(eps));
+            }
+            auto temp = tm.clone_after_all_left();
+            // leaving_node might or might not be 'leaving'. If it was not leaving (that is, removenode
+            // command was used), it is still present in temp and must be removed.
+            if (temp.is_member(leaving_node)) {
+                temp.remove_endpoint(leaving_node);
+            }
+            std::unordered_map<dht::token_range, repair_neighbors> range_sources;
+            for (auto it = ranges.begin(); it != ranges.end();) {
+                auto& r = *it;
+                if (need_preempt()) {
+                    seastar::thread::yield();
+                }
+                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
+                const std::vector<inet_address> new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp);
+                const std::vector<inet_address>& current_eps = current_replica_endpoints[r];
+                std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
+                bool skip_this_range = false;
+                // For decommission operation, the decommission node will
+                // repair all the ranges the leaving node is responsible for.
+                if (!is_decommission) {
+                    // For removenode operation, the new owner of the range
+                    // will repair the data. Nodes that are not the new owner
+                    // of a range will ignore the range. There can be only one
+                    // new owner for each of the ranges.
+                    auto new_owner = neighbors_set;
+                    for (const auto& node : current_eps) {
+                        new_owner.erase(node);
+                    }
+                    if (new_owner.size() != 1) {
+                        rlogger.warn("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}",
+                            op, keyspace_name, r, current_eps, new_eps);
+                        throw std::runtime_error("Can not find new owner node!");
+                    }
+                    skip_this_range = *new_owner.begin() != myip;
+                }
+                // Calculate the neighbors
+                for (const auto& node : current_eps) {
+                    neighbors_set.insert(node);
+                }
+                neighbors_set.erase(myip);
+                neighbors_set.erase(leaving_node);
+                std::vector<inet_address> neighbors(neighbors_set.begin(), neighbors_set.end());
+
+                if (skip_this_range) {
+                    // Let the new owner node to fix this range, other nodes skip this range
+                    rlogger.debug("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}, skipped",
+                        op, keyspace_name, r, current_eps, new_eps, neighbors);
+                    it = ranges.erase(it);
+                } else {
+                    // The decommission node will fix the range
+                    rlogger.debug("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}",
+                        op, keyspace_name, r, current_eps, new_eps, neighbors);
+                    range_sources[r] = repair_neighbors(std::move(neighbors));
+                    it++;
+                }
+            }
+            auto nr_ranges = ranges.size();
+            sync_data_with_repair(db, keyspace_name, std::move(ranges), std::move(range_sources)).get();
+            rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, nr_ranges);
+        }
+        rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, keyspaces, leaving_node);
+    });
+}
