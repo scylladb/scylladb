@@ -1749,3 +1749,9 @@ future<> rebuild_with_repair(seastar::sharded<database>& db, locator::token_meta
     auto op = sstring("rebuild_with_repair");
     return do_rebuild_replace_with_repair(db, std::move(tm), std::move(op), std::move(source_dc));
 }
+
+future<> replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm) {
+    auto op = sstring("replace_with_repair");
+    auto source_dc = sstring("");
+    return do_rebuild_replace_with_repair(db, std::move(tm), std::move(op), std::move(source_dc));
+}
