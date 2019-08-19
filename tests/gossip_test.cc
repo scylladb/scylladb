@@ -33,6 +33,7 @@
 #include <seastar/core/reactor.hh>
 #include "service/storage_service.hh"
 #include <seastar/core/distributed.hh>
+#include <seastar/core/abort_source.hh>
 #include "database.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/config.hh"
@@ -46,11 +47,16 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         distributed<database> db;
         database_config dbcfg;
         db::config cfg;
+        sharded<abort_source> abort_sources;
         sharded<auth::service> auth_service;
         sharded<db::system_distributed_keyspace> sys_dist_ks;
         sharded<db::view::view_update_generator> view_update_generator;
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
         sharded<gms::feature_service> feature_service;
+
+        abort_sources.start().get();
+        auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
+
         feature_service.start().get();
         auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
@@ -65,7 +71,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
 
         service::storage_service_config sscfg;
         sscfg.available_memory =  memory::stats().total_memory();
-        service::get_storage_service().start(std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, true).get();
+        service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
         db.start(std::ref(cfg), dbcfg).get();

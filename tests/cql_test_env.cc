@@ -30,6 +30,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/statements/batch_statement.hh"
 #include <seastar/core/distributed.hh>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
@@ -334,6 +335,9 @@ public:
 
             auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
 
+            sharded<abort_source> abort_sources;
+            abort_sources.start().get();
+            auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             auto db = ::make_shared<distributed<database>>();
             auto cfg = cfg_in.db_config;
             tmpdir data_dir;
@@ -387,7 +391,7 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, true, cfg_in.disabled_features).get();
+            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, true, cfg_in.disabled_features).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;

@@ -33,6 +33,7 @@
 
 
 class storage_service_for_tests::impl {
+    sharded<abort_source> _abort_source;
     sharded<gms::feature_service> _feature_service;
     sharded<gms::gossiper> _gossiper;
     distributed<database> _db;
@@ -47,12 +48,13 @@ public:
         _cfg.broadcast_to_all_shards().get();
         utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
         utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+        _abort_source.start().get();
         _feature_service.start().get();
         _gossiper.start(std::ref(_feature_service), std::ref(_cfg)).get();
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false).get();
         service::storage_service_config sscfg;
         sscfg.available_memory = memory::stats().total_memory();
-        service::get_storage_service().start(std::ref(_db), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, true).get();
+        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, true).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
@@ -63,6 +65,7 @@ public:
         _db.stop().get();
         _gossiper.stop().get();
         _feature_service.stop().get();
+        _abort_source.stop().get();
     }
 };
 
