@@ -46,6 +46,8 @@ public:
     repair_stopped_exception() : repair_exception("Repair stopped") { }
 };
 
+future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> tokens);
+
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
 // repair_start() starts the requested repair on this node. It returns an

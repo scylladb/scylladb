@@ -1526,3 +1526,77 @@ future<> sync_data_with_repair(seastar::sharded<database>& db,
         });
     });
 }
+
+future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> tokens) {
+    using inet_address = gms::inet_address;
+    return seastar::async([&db, tm = std::move(tm), tokens = std::move(tokens)] () mutable {
+        auto keyspaces = db.local().get_non_system_keyspaces();
+        rlogger.info("bootstrap_with_repair: started with keyspaces={}", keyspaces);
+        auto myip = utils::fb_utilities::get_broadcast_address();
+        for (auto& keyspace_name : keyspaces) {
+            if (!db.local().has_keyspace(keyspace_name)) {
+                rlogger.info("bootstrap_with_repair: keyspace={} does not exist any more, ignoring it", keyspace_name);
+                continue;
+            }
+            auto& ks = db.local().find_keyspace(keyspace_name);
+            auto& strat = ks.get_replication_strategy();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tm, tokens, myip);
+
+            //Active ranges
+            auto metadata_clone = tm.clone_only_token_map();
+            auto range_addresses = strat.get_range_addresses(metadata_clone);
+
+            //Pending ranges
+            metadata_clone.update_normal_tokens(tokens, myip);
+            auto pending_range_addresses = strat.get_range_addresses(metadata_clone);
+
+            //Collects the source that will have its range moved to the new node
+            std::unordered_map<dht::token_range, repair_neighbors> range_sources;
+
+            rlogger.info("bootstrap_with_repair: started with keyspace={}, nr_ranges={}", keyspace_name, desired_ranges.size());
+            for (auto& desired_range : desired_ranges) {
+                for (auto& x : range_addresses) {
+                    const range<dht::token>& src_range = x.first;
+                    if (need_preempt()) {
+                        seastar::thread::yield();
+                    }
+                    if (src_range.contains(desired_range, dht::tri_compare)) {
+                        std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
+                        auto it = pending_range_addresses.find(desired_range);
+                        if (it == pending_range_addresses.end()) {
+                            throw std::runtime_error(format("Can not find desired_range = {} in pending_range_addresses", desired_range));
+                        }
+
+                        std::unordered_set<inet_address> new_endpoints(it->second.begin(), it->second.end());
+                        rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, old_endpoints={}, new_endpoints={}",
+                                keyspace_name, desired_range, old_endpoints, new_endpoints);
+                        // Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
+                        // So we need to be careful to only be strict when endpoints == RF
+                        std::vector<gms::inet_address> mandatory_neighbors;
+                        if (old_endpoints.size() == strat.get_replication_factor()) {
+                            // Remove the new nodes from the old nodes list, so
+                            // that it contains only the node that will lose
+                            // the ownership of the range.
+                            mandatory_neighbors = boost::copy_range<std::vector<gms::inet_address>>(old_endpoints |
+                                    boost::adaptors::filtered([&new_endpoints] (const gms::inet_address& node) { return !new_endpoints.count(node); }));
+                            if (mandatory_neighbors.size() != 1) {
+                                throw std::runtime_error(format("Expected 1 mandatory neighbor but found {:d}", mandatory_neighbors.size()));
+                            }
+                        }
+                        for (auto& node : old_endpoints) {
+                            new_endpoints.insert(node);
+                        }
+                        new_endpoints.erase(myip);
+                        std::vector<inet_address> neighbors(new_endpoints.begin(), new_endpoints.end());
+                        rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, neighbors={}, mandatory_neighbors={}",
+                                keyspace_name, desired_range, neighbors, mandatory_neighbors);
+                        range_sources[desired_range] = repair_neighbors(std::move(neighbors), std::move(mandatory_neighbors));
+                    }
+                }
+            }
+            sync_data_with_repair(db, keyspace_name, std::move(desired_ranges), std::move(range_sources)).get();
+            rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}", keyspace_name, desired_ranges.size());
+        }
+        rlogger.info("bootstrap_with_repair: finished with keyspaces={}", keyspaces);
+    });
+}
