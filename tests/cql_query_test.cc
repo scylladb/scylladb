@@ -3968,31 +3968,39 @@ SEASTAR_TEST_CASE(test_like_operator_varchar) {
     });
 }
 
-SEASTAR_TEST_CASE(test_alter_type_on_compact_storage_with_no_regular_columns_does_not_crash) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TYPE my_udf (first text);");
-        cquery_nofail(e, "create table z (pk int, ck frozen<my_udf>, primary key(pk, ck)) with compact storage;");
-        cquery_nofail(e, "alter type my_udf add test_int int;");
-    });
-}
+namespace {
 
-SEASTAR_TEST_CASE(test_like_operator_on_nonstring) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table t (k int primary key, s text)");
+/// Asserts that a column of type \p type cannot be LHS of the LIKE operator.
+auto assert_like_doesnt_accept(const char* type) {
+    return do_with_cql_env_thread([type] (cql_test_env& e) {
+        cquery_nofail(e, format("create table t (k {}, p int primary key)", type).c_str());
         BOOST_REQUIRE_EXCEPTION(
                 e.execute_cql("select * from t where k like 123 allow filtering").get(),
                 exceptions::invalid_request_exception,
                 exception_predicate::message_contains("only on string types"));
-#if 0 // TODO: Enable when query::result_set::consume() is fixed.
-        BOOST_REQUIRE_EXCEPTION(
-                e.execute_prepared(
-                        e.prepare("select s from t where s like ? allow filtering").get0(),
-                        {cql3::raw_value::make_value(I(1))}).get(),
-                exceptions::invalid_request_exception,
-                exception_predicate::message_contains("only on string types"));
-#endif
     });
 }
+
+} // anonymous namespace
+
+SEASTAR_TEST_CASE(test_like_operator_fails_on_bigint)    { return assert_like_doesnt_accept("bigint");    }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_blob)      { return assert_like_doesnt_accept("blob");      }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_boolean)   { return assert_like_doesnt_accept("boolean");   }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_counter)   { return assert_like_doesnt_accept("counter");   }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_decimal)   { return assert_like_doesnt_accept("decimal");   }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_double)    { return assert_like_doesnt_accept("double");    }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_duration)  { return assert_like_doesnt_accept("duration");  }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_float)     { return assert_like_doesnt_accept("float");     }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_inet)      { return assert_like_doesnt_accept("inet");      }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_int)       { return assert_like_doesnt_accept("int");       }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_smallint)  { return assert_like_doesnt_accept("smallint");  }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_timestamp) { return assert_like_doesnt_accept("timestamp"); }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_tinyint)   { return assert_like_doesnt_accept("tinyint");   }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_uuid)      { return assert_like_doesnt_accept("uuid");      }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_varint)    { return assert_like_doesnt_accept("varint");    }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_timeuuid)  { return assert_like_doesnt_accept("timeuuid");  }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_date)      { return assert_like_doesnt_accept("date");      }
+SEASTAR_TEST_CASE(test_like_operator_fails_on_time)      { return assert_like_doesnt_accept("time");      }
 
 SEASTAR_TEST_CASE(test_like_operator_on_token) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
@@ -4001,5 +4009,13 @@ SEASTAR_TEST_CASE(test_like_operator_on_token) {
                 e.execute_cql("select * from t where token(s) like 'abc' allow filtering").get(),
                 exceptions::invalid_request_exception,
                 exception_predicate::message_contains("token function"));
+    });
+}
+
+SEASTAR_TEST_CASE(test_alter_type_on_compact_storage_with_no_regular_columns_does_not_crash) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TYPE my_udf (first text);");
+        cquery_nofail(e, "create table z (pk int, ck frozen<my_udf>, primary key(pk, ck)) with compact storage;");
+        cquery_nofail(e, "alter type my_udf add test_int int;");
     });
 }
