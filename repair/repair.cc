@@ -1710,3 +1710,155 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
         rlogger.info("bootstrap_with_repair: finished with keyspaces={}", keyspaces);
     });
 }
+
+future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node) {
+    using inet_address = gms::inet_address;
+    return seastar::async([&db, tm = std::move(tm), leaving_node = std::move(leaving_node)] () mutable {
+        auto myip = utils::fb_utilities::get_broadcast_address();
+        auto keyspaces = db.local().get_non_system_keyspaces();
+        bool is_removenode = myip != leaving_node;
+        auto op = is_removenode ? "removenode_with_repair" : "decommission_with_repair";
+        rlogger.info("{}: started with keyspaces={}, leaving_node={}", op, keyspaces, leaving_node);
+        for (auto& keyspace_name : keyspaces) {
+            if (!db.local().has_keyspace(keyspace_name)) {
+                rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
+                continue;
+            }
+            auto& ks = db.local().find_keyspace(keyspace_name);
+            auto& strat = ks.get_replication_strategy();
+            // First get all ranges the leaving node is responsible for
+            dht::token_range_vector ranges = strat.get_ranges(leaving_node);
+            rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size());
+            size_t nr_ranges_total = ranges.size();
+            size_t nr_ranges_skipped = 0;
+            std::unordered_map<dht::token_range, std::vector<inet_address>> current_replica_endpoints;
+            // Find (for each range) all nodes that store replicas for these ranges as well
+            for (auto& r : ranges) {
+                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
+                auto eps = strat.calculate_natural_endpoints(end_token, tm);
+                current_replica_endpoints.emplace(r, std::move(eps));
+            }
+            auto temp = tm.clone_after_all_left();
+            // leaving_node might or might not be 'leaving'. If it was not leaving (that is, removenode
+            // command was used), it is still present in temp and must be removed.
+            if (temp.is_member(leaving_node)) {
+                temp.remove_endpoint(leaving_node);
+            }
+            std::unordered_map<dht::token_range, repair_neighbors> range_sources;
+            dht::token_range_vector ranges_for_removenode;
+            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+            auto local_dc = get_local_dc();
+            for (auto&r : ranges) {
+                seastar::thread::maybe_yield();
+                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
+                const std::vector<inet_address> new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp);
+                const std::vector<inet_address>& current_eps = current_replica_endpoints[r];
+                std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
+                bool skip_this_range = false;
+                auto new_owner = neighbors_set;
+                for (const auto& node : current_eps) {
+                    new_owner.erase(node);
+                }
+                if (new_eps.size() == 0) {
+                    throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, zero replica after the removal",
+                            op, keyspace_name, r, current_eps, new_eps));
+                }
+                if (new_owner.size() == 1) {
+                    // For example, with RF = 3 and 4 nodes n1, n2, n3, n4 in
+                    // the cluster, n3 is removed, old_replicas = {n1, n2, n3},
+                    // new_replicas = {n1, n2, n4}.
+                    if (is_removenode) {
+                        // For removenode operation, use new owner node to
+                        // repair the data in case there is new owner node
+                        // available. Nodes that are not the new owner of a
+                        // range will ignore the range. There can be at most
+                        // one new owner for each of the ranges. Note: The new
+                        // owner is the node that does not own the range before
+                        // but owns the range after the remove operation. It
+                        // does not have to be the primary replica of the
+                        // range.
+                        // Choose the new owner node n4 to run repair to sync
+                        // with all replicas.
+                        skip_this_range = *new_owner.begin() != myip;
+                        neighbors_set.insert(current_eps.begin(), current_eps.end());
+                    } else {
+                        // For decommission operation, the decommission node
+                        // will repair all the ranges the leaving node is
+                        // responsible for.
+                        // Choose the decommission node n3 to run repair to
+                        // sync with the new owner node n4.
+                        for (auto& node : new_owner) {
+                            if (snitch_ptr->get_datacenter(node) == local_dc) {
+                                neighbors_set = std::unordered_set<inet_address>{node};
+                                break;
+                            }
+                            throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, can not find new node in local dc={}",
+                                    op, keyspace_name, r, current_eps, new_eps, local_dc));
+                        }
+                    }
+                } else if (new_owner.size() == 0) {
+                    // For example, with RF = 3 and 3 nodes n1, n2, n3 in the
+                    // cluster, n3 is removed, old_replicas = {n1, n2, n3},
+                    // new_replicas = {n1, n2}.
+                    if (is_removenode) {
+                        // For removenode operation, use the primary replica
+                        // node to repair the data in case there is no new
+                        // owner node available.
+                        // Choose the primary replica node n1 to run repair to
+                        // sync with all replicas.
+                        skip_this_range = new_eps.front() != myip;
+                        neighbors_set.insert(current_eps.begin(), current_eps.end());
+                    } else {
+                        // For decommission operation, the decommission node
+                        // will repair all the ranges the leaving node is
+                        // responsible for. We are losing data on n3, we have
+                        // to sync with at least one of {n1, n2}, otherwise we
+                        // might lose the only new replica on n3.
+                        // Choose the decommission node n3 to run repair to
+                        // sync with one of the replica nodes, e.g., n1, in the
+                        // local DC.
+                        for (auto& node : new_eps) {
+                            if (snitch_ptr->get_datacenter(node) == local_dc) {
+                                neighbors_set = std::unordered_set<inet_address>{node};
+                                break;
+                            }
+                            throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, can not find new node in local dc={}",
+                                    op, keyspace_name, r, current_eps, new_eps, local_dc));
+                        }
+                    }
+                } else {
+                    throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong nubmer of new owner node={}",
+                            op, keyspace_name, r, current_eps, new_eps, new_owner));
+                }
+                neighbors_set.erase(myip);
+                neighbors_set.erase(leaving_node);
+                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors_set |
+                    boost::adaptors::filtered([&local_dc, &snitch_ptr] (const gms::inet_address& node) {
+                        return snitch_ptr->get_datacenter(node) == local_dc;
+                    })
+                );
+
+                if (skip_this_range) {
+                    nr_ranges_skipped++;
+                    rlogger.debug("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}, skipped",
+                        op, keyspace_name, r, current_eps, new_eps, neighbors);
+                } else {
+                    rlogger.debug("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}",
+                        op, keyspace_name, r, current_eps, new_eps, neighbors);
+                    range_sources[r] = repair_neighbors(std::move(neighbors));
+                    if (is_removenode) {
+                        ranges_for_removenode.push_back(r);
+                    }
+                }
+            }
+            if (is_removenode) {
+                ranges.swap(ranges_for_removenode);
+            }
+            auto nr_ranges_synced = ranges.size();
+            sync_data_using_repair(db, keyspace_name, std::move(ranges), std::move(range_sources)).get();
+            rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
+                op, keyspace_name, leaving_node, nr_ranges_total, nr_ranges_synced, nr_ranges_skipped);
+        }
+        rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, keyspaces, leaving_node);
+    });
+}
