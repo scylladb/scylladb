@@ -1,0 +1,30 @@
+#!/bin/bash -ex
+
+root="$1"
+bin="$2"
+prefix="/opt/scylladb"
+
+[ "$bin" = patchelf ] && exit 0
+
+patchelf() {
+    # patchelf comes from the build system, so it needs the build system's ld.so and
+    # shared libraries. We can't use patchelf on patchelf itself, so invoke it via
+    # ld.so.
+    LD_LIBRARY_PATH="$root/$prefix/bin/libreloc" "$root/$prefix"/libreloc/ld.so "$root/$prefix"/libexec/patchelf "$@"
+}
+
+# We could add --set-rpath too, but then debugedit (called by rpmbuild) barfs
+# on the result. So use LD_LIBRARY_PATH in the thunk, below.
+patchelf \
+    --set-interpreter "$prefix/libreloc/ld.so" \
+    "$root/$prefix/libexec/$bin"
+mkdir -p "$root/$prefix/bin"
+cat > "$root/$prefix/bin/$bin" <<EOF
+#!/bin/bash -e
+export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
+export LD_LIBRARY_PATH="$prefix/libreloc"
+exec -a "\$0" "$prefix/libexec/$bin" "\$@"
+EOF
+
+chmod +x "$root/$prefix/bin/$bin"
+

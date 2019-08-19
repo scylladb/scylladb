@@ -9,9 +9,10 @@ override_dh_auto_build:
 
 override_dh_auto_clean:
 
-override_dh_auto_install:
-	dh_auto_install
+override_dh_install:
+	dh_install
 	install -d $(CURDIR)/debian/scylla-server/usr/bin
+	for bin in debian/scylla-server/opt/scylladb/libexec/*; do debian/adjust_bin $(CURDIR)/debian/scylla-server "$${bin#*libexec/}"; done
 	ln -sf /opt/scylladb/bin/scylla $(CURDIR)/debian/scylla-server/usr/bin/scylla
 	ln -sf /opt/scylladb/bin/iotune $(CURDIR)/debian/scylla-server/usr/bin/iotune
 	ln -sf /usr/lib/scylla/scyllatop/scyllatop.py $(CURDIR)/debian/scylla-server/usr/bin/scyllatop
@@ -37,7 +38,9 @@ override_dh_installinit:
 	dh_installinit --no-start --name node-exporter
 
 override_dh_strip:
-	dh_strip -Xlibprotobuf.so.15 -Xld.so --dbg-package={{product}}-server-dbg
+	# The binaries (ethtool...patchelf) don't pass dh_strip after going through patchelf. Since they are
+	# already stripped, nothing is lost if we exclude them, so that's what we do.
+	dh_strip -Xlibprotobuf.so.15 -Xld.so -Xethtool -Xgawk -Xgzip -Xhwloc-calc -Xhwloc-distrib -Xifconfig -Xlscpu -Xnetstat -Xpatchelf --dbg-package={{product}}-server-dbg
 
 override_dh_makeshlibs:
 

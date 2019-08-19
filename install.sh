@@ -75,6 +75,29 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+patchelf() {
+    # patchelf comes from the build system, so it needs the build system's ld.so and
+    # shared libraries. We can't use patchelf on patchelf itself, so invoke it via
+    # ld.so.
+    LD_LIBRARY_PATH="$PWD/libreloc" libreloc/ld.so libexec/patchelf "$@"
+}
+
+adjust_bin() {
+    local bin="$1"
+    # We could add --set-rpath too, but then debugedit (called by rpmbuild) barfs
+    # on the result. So use LD_LIBRARY_PATH in the thunk, below.
+    patchelf \
+	--set-interpreter "/opt/scylladb/libreloc/ld.so" \
+	"$root/opt/scylladb/libexec/$bin"
+    cat > "$root/opt/scylladb/bin/$bin" <<EOF
+#!/bin/bash -e
+export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-/opt/scylladb/libreloc/gnutls.config}"
+export LD_LIBRARY_PATH="/opt/scylladb/libreloc"
+exec -a "\$0" "/opt/scylladb/libexec/$bin" "\$@"
+EOF
+    chmod +x "$root/opt/scylladb/bin/$bin"
+}
+
 rprefix="$root/$prefix"
 retc="$root/etc"
 rdoc="$rprefix/share/doc"
@@ -105,16 +128,13 @@ install -m644 dist/common/systemd/*.service -Dt "$rprefix"/lib/systemd/system
 install -m644 dist/common/systemd/*.timer -Dt "$rprefix"/lib/systemd/system
 install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/lib/scylla/
 install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/lib/scylla/
-install -m755 bin/* -Dt "$root/opt/scylladb/bin"
+install -m755 libreloc/* -Dt "$root/opt/scylladb/libreloc"
 # some files in libexec are symlinks, which "install" dereferences
 # use cp -P for the symlinks instead.
-install -m755 libexec/*.bin -Dt "$root/opt/scylladb/libexec"
-for f in libexec/*; do
-    if [[ "$f" != *.bin ]]; then
-        cp -P "$f" "$root/opt/scylladb/libexec"
-    fi
+install -m755 libexec/* -Dt "$root/opt/scylladb/libexec"
+for bin in libexec/*; do
+    adjust_bin "${bin#libexec/}"
 done
-install -m755 libreloc/* -Dt "$root/opt/scylladb/libreloc"
 ln -srf "$root/opt/scylladb/bin/scylla" "$rprefix/bin/scylla"
 ln -srf "$root/opt/scylladb/bin/iotune" "$rprefix/bin/iotune"
 ln -srf "$rprefix/lib/scylla/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
