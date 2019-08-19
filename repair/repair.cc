@@ -35,6 +35,7 @@
 #include "sstables/sstables.hh"
 #include "database.hh"
 #include "hashers.hh"
+#include "locator/network_topology_strategy.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -1562,5 +1563,150 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
             rlogger.info("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
             return make_exception_future<>(ep);
         });
+    });
+}
+
+future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> bootstrap_tokens) {
+    using inet_address = gms::inet_address;
+    return seastar::async([&db, tm = std::move(tm), tokens = std::move(bootstrap_tokens)] () mutable {
+        auto keyspaces = db.local().get_non_system_keyspaces();
+        rlogger.info("bootstrap_with_repair: started with keyspaces={}", keyspaces);
+        auto myip = utils::fb_utilities::get_broadcast_address();
+        for (auto& keyspace_name : keyspaces) {
+            if (!db.local().has_keyspace(keyspace_name)) {
+                rlogger.info("bootstrap_with_repair: keyspace={} does not exist any more, ignoring it", keyspace_name);
+                continue;
+            }
+            auto& ks = db.local().find_keyspace(keyspace_name);
+            auto& strat = ks.get_replication_strategy();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tm, tokens, myip);
+
+            //Active ranges
+            auto metadata_clone = tm.clone_only_token_map();
+            auto range_addresses = strat.get_range_addresses(metadata_clone);
+
+            //Pending ranges
+            metadata_clone.update_normal_tokens(tokens, myip);
+            auto pending_range_addresses = strat.get_range_addresses(metadata_clone);
+
+            //Collects the source that will have its range moved to the new node
+            std::unordered_map<dht::token_range, repair_neighbors> range_sources;
+
+            rlogger.info("bootstrap_with_repair: started with keyspace={}, nr_ranges={}", keyspace_name, desired_ranges.size());
+            for (auto& desired_range : desired_ranges) {
+                for (auto& x : range_addresses) {
+                    const range<dht::token>& src_range = x.first;
+                    seastar::thread::maybe_yield();
+                    if (src_range.contains(desired_range, dht::tri_compare)) {
+                        std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
+                        auto it = pending_range_addresses.find(desired_range);
+                        if (it == pending_range_addresses.end()) {
+                            throw std::runtime_error(format("Can not find desired_range = {} in pending_range_addresses", desired_range));
+                        }
+
+                        std::unordered_set<inet_address> new_endpoints(it->second.begin(), it->second.end());
+                        rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, old_endpoints={}, new_endpoints={}",
+                                keyspace_name, desired_range, old_endpoints, new_endpoints);
+                        // Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
+                        // So we need to be careful to only be strict when endpoints == RF
+                        // That is we can only have RF >= old_endpoints.size().
+                        // 1) If RF > old_endpoints.size(), it means no node is
+                        // going to lose the ownership of the range, so there
+                        // is no need to choose a mandatory neighbor to sync
+                        // data from.
+                        // 2) If RF = old_endpoints.size(), it means one node is
+                        // going to lose the ownership of the range, we need to
+                        // choose it as the mandatory neighbor to sync data
+                        // from.
+                        std::vector<gms::inet_address> mandatory_neighbors;
+                        // All neighbors
+                        std::vector<inet_address> neighbors;
+                        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+                        auto local_dc = get_local_dc();
+                        auto get_node_losing_the_ranges = [&] (const std::vector<gms::inet_address>& old_nodes, const std::unordered_set<gms::inet_address>& new_nodes) {
+                            // Remove the new nodes from the old nodes list, so
+                            // that it contains only the node that will lose
+                            // the ownership of the range.
+                            auto nodes = boost::copy_range<std::vector<gms::inet_address>>(old_nodes |
+                                    boost::adaptors::filtered([&] (const gms::inet_address& node) { return !new_nodes.count(node); }));
+                            if (nodes.size() != 1) {
+                                throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, expected 1 node losing range but found more nodes={}",
+                                        keyspace_name, desired_range, nodes));
+                            }
+                            return nodes;
+                        };
+                        auto get_rf_in_local_dc = [&] () {
+                            size_t rf_in_local_dc = strat.get_replication_factor();
+                            if (strat.get_type() == locator::replication_strategy_type::network_topology) {
+                                auto nts = dynamic_cast<locator::network_topology_strategy*>(&strat);
+                                if (!nts) {
+                                    throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, failed to cast to network_topology_strategy",
+                                            keyspace_name, desired_range));
+                                }
+                                rf_in_local_dc = nts->get_replication_factor(local_dc);
+                            }
+                            return rf_in_local_dc;
+                        };
+                        auto get_old_endpoints_in_local_dc = [&] () {
+                            return boost::copy_range<std::vector<gms::inet_address>>(old_endpoints |
+                                boost::adaptors::filtered([&] (const gms::inet_address& node) {
+                                    return snitch_ptr->get_datacenter(node) == local_dc;
+                                })
+                            );
+                        };
+                        auto old_endpoints_in_local_dc = get_old_endpoints_in_local_dc();
+                        auto rf_in_local_dc = get_rf_in_local_dc();
+                        if (old_endpoints.size() == strat.get_replication_factor()) {
+                            // For example, with RF = 3 and 3 nodes n1, n2, n3
+                            // in the cluster, n4 is bootstrapped, old_replicas
+                            // = {n1, n2, n3}, new_replicas = {n1, n2, n4}, n3
+                            // is losing the range. Choose the bootstrapping
+                            // node n4 to run repair to sync with the node
+                            // losing the range n3
+                            mandatory_neighbors = get_node_losing_the_ranges(old_endpoints, new_endpoints);
+                            neighbors = mandatory_neighbors;
+                        } else if (old_endpoints.size() < strat.get_replication_factor()) {
+                            if (old_endpoints_in_local_dc.size() == rf_in_local_dc) {
+                                // Local DC has enough replica nodes.
+                                mandatory_neighbors = get_node_losing_the_ranges(old_endpoints_in_local_dc, new_endpoints);
+                                neighbors = mandatory_neighbors;
+                            } else if (old_endpoints_in_local_dc.size() == 0) {
+                                // Local DC has zero replica node.
+                                // Reject the operation
+                                throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, no existing node in local dc",
+                                        keyspace_name, desired_range));
+                            } else if (old_endpoints_in_local_dc.size() < rf_in_local_dc) {
+                                // Local DC does not have enough replica nodes.
+                                // For example, with RF = 3, 2 nodes n1, n2 in the
+                                // cluster, n3 is bootstrapped, old_replicas={n1, n2},
+                                // new_replicas={n1, n2, n3}. No node is losing
+                                // ranges. The bootstrapping node n3 has to sync
+                                // with n1 and n2, otherwise n3 might get the old
+                                // replica and make the total old replica be 2,
+                                // which makes the quorum read incorrect.
+                                // Choose the bootstrapping node n3 to reun repair
+                                // to sync with n1 and n2.
+                                size_t nr_nodes_to_sync_with = std::min<size_t>(rf_in_local_dc / 2 + 1, old_endpoints_in_local_dc.size());
+                                neighbors = old_endpoints_in_local_dc;
+                                neighbors.resize(nr_nodes_to_sync_with);
+                            } else {
+                                throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, wrong number of old_endpoints_in_local_dc={}, rf_in_local_dc={}",
+                                        keyspace_name, desired_range, old_endpoints_in_local_dc.size(), rf_in_local_dc));
+                            }
+                        } else {
+                            throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, wrong number of old_endpoints={}, rf={}",
+                                        keyspace_name, desired_range, old_endpoints, strat.get_replication_factor()));
+                        }
+                        rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, neighbors={}, mandatory_neighbors={}",
+                                keyspace_name, desired_range, neighbors, mandatory_neighbors);
+                        range_sources[desired_range] = repair_neighbors(std::move(neighbors), std::move(mandatory_neighbors));
+                    }
+                }
+            }
+            auto nr_ranges = desired_ranges.size();
+            sync_data_using_repair(db, keyspace_name, std::move(desired_ranges), std::move(range_sources)).get();
+            rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}", keyspace_name, nr_ranges);
+        }
+        rlogger.info("bootstrap_with_repair: finished with keyspaces={}", keyspaces);
     });
 }
