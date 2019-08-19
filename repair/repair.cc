@@ -1866,3 +1866,7 @@ future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, 
 future<> decommission_with_repair(seastar::sharded<database>& db, locator::token_metadata tm) {
     return do_decommission_removenode_with_repair(db, std::move(tm), utils::fb_utilities::get_broadcast_address());
 }
+
+future<> removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node) {
+    return do_decommission_removenode_with_repair(db, std::move(tm), std::move(leaving_node));
+}
