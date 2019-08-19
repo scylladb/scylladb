@@ -186,7 +186,7 @@ def alarm_handler(signum, frame):
 
 
 if __name__ == "__main__":
-    all_modes = ['debug', 'release', 'dev', 'sanitize']
+    all_modes = ['debug', 'release', 'dev', 'sanitize', 'python']
 
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     testmem = 2e9
@@ -228,6 +228,9 @@ if __name__ == "__main__":
     test_to_run = []
     modes_to_run =  ['debug', 'release', 'dev'] if not args.modes else args.modes
     for mode in modes_to_run:
+        # python has its own 'run_python_test' function, skip it
+        if mode == "python":
+            continue
         prefix = os.path.join('build', mode, 'tests')
         standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
         seastar_args = '-c2 -m2G'.split()
@@ -304,6 +307,49 @@ if __name__ == "__main__":
             report_error(e, e, report_subcause=report_subcause)
         return (path, boost_args + exec_args, type, success, file.getvalue())
 
+    def run_python_test(path, cmd, *exec_args):
+        file = io.StringIO()
+
+        def report_error(exc, out, report_subcause):
+            report_subcause(exc)
+            if out:
+                print("=== stdout START ===", file=file)
+                print(out, file=file)
+                print("=== stdout END ===", file=file)
+
+        success = False
+        try:
+            subprocess.check_output(
+                [cmd, *exec_args],
+                stderr=subprocess.STDOUT,
+                timeout=args.timeout,
+                preexec_fn=os.setsid,
+            )
+            success = True
+        except subprocess.TimeoutExpired as e:
+
+            def report_subcause(e):
+                print("  timed out", file=file)
+
+            report_error(
+                e, e.output.decode(encoding="UTF-8"), report_subcause=report_subcause
+            )
+        except subprocess.CalledProcessError as e:
+
+            def report_subcause(e):
+                print("  with error code {code}\n".format(code=e.returncode), file=file)
+
+            report_error(
+                e, e.output.decode(encoding="UTF-8"), report_subcause=report_subcause
+            )
+        except Exception as e:
+
+            def report_subcause(e):
+                print("  with error {e}\n".format(e=e), file=file)
+
+            report_error(e, e, report_subcause=report_subcause)
+        return (path, exec_args, cmd, success, file.getvalue())
+
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
     futures = []
     for n, test in enumerate(test_to_run):
@@ -312,6 +358,9 @@ if __name__ == "__main__":
         exec_args = test[2] if len(test) >= 3 else []
         for _ in range(args.repeat):
             futures.append(executor.submit(run_test, path, test_type, exec_args))
+
+    if "python" in modes_to_run:
+        futures.append(executor.submit(run_python_test, "", "tox", "-c", "tox.ini"))
 
     results = []
     cookie = len(futures)
