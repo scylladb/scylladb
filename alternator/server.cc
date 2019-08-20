@@ -99,7 +99,7 @@ protected:
 void server::set_routes(routes& r) {
     using alternator_callback = std::function<future<json::json_return_type>(executor&, std::unique_ptr<request>)>;
     std::unordered_map<std::string, alternator_callback> routes{
-        {"CreateTable", [] (executor& e, std::unique_ptr<request> req) { return e.create_table(req->content); }},
+        {"CreateTable", [] (executor& e, std::unique_ptr<request> req) { return e.maybe_create_keyspace().then([&e, req = std::move(req)] { return e.create_table(req->content); }); }},
         {"DescribeTable", [] (executor& e, std::unique_ptr<request> req) { return e.describe_table(req->content); }},
         {"DeleteTable", [] (executor& e, std::unique_ptr<request> req) { return e.delete_table(req->content); }},
         {"PutItem", [] (executor& e, std::unique_ptr<request> req) { return e.put_item(req->content); }},
