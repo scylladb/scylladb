@@ -108,6 +108,15 @@ def test_begins_with(dynamodb, test_table):
     print(got_items)
     assert sorted([d['c'] for d in got_items]) == sorted([d['c'] for d in items if d['c'].startswith(u'cÿbÿ')])
 
+def test_begins_with_wrong_type(dynamodb, test_table_sn):
+    paginator = dynamodb.meta.client.get_paginator('query')
+    with pytest.raises(ClientError, match='ValidationException'):
+        for page in paginator.paginate(TableName=test_table_sn.name, KeyConditions={
+                'p' : {'AttributeValueList': ['unorthodox_chars'], 'ComparisonOperator': 'EQ'},
+                'c' : {'AttributeValueList': [17], 'ComparisonOperator': 'BEGINS_WITH'}
+                }):
+            pass
+
 # Items returned by Query should be sorted by the sort key. The following
 # tests verify that this is indeed the case, for the three allowed key types:
 # strings, binary, and numbers. These tests test not just the Query operation,
