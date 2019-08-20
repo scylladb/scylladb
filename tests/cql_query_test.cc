@@ -3722,6 +3722,20 @@ void require_rows(cql_test_env& e,
     }
 }
 
+/// Asserts that e.execute_prepared(id, values) contains expected rows, in any order.
+void require_rows(cql_test_env& e,
+                  cql3::prepared_cache_key_type id,
+                  const std::vector<cql3::raw_value>& values,
+                  const std::vector<std::vector<bytes_opt>>& expected,
+                  const source_location& loc = source_location::current()) {
+    try {
+        assert_that(e.execute_prepared(id, values).get0()).is_rows().with_rows_ignore_order(expected);
+    } catch (const std::exception& e) {
+        BOOST_FAIL(format("execute_prepared failed: {}\n{}:{}: originally from here",
+                          e.what(), loc.file_name(), loc.line()));
+    }
+}
+
 auto I(int32_t x) { return int32_type->decompose(x); }
 
 auto L(int64_t x) { return long_type->decompose(x); }
@@ -3930,15 +3944,10 @@ SEASTAR_TEST_CASE(test_like_operator_bind_marker) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "create table t (s text primary key, )");
         cquery_nofail(e, "insert into t (s) values ('abc')");
-        try {
-            auto result = e.execute_prepared(
-                    e.prepare("select s from t where s like ? allow filtering").get0(),
-                    {cql3::raw_value::make_value(T("_b_"))}).get0();
-            assert_that(result).is_rows().with_rows_ignore_order({{T("abc")}});
-        }
-        catch (const std::exception& e) {
-            BOOST_FAIL(e.what());
-        }
+        auto stmt = e.prepare("select s from t where s like ? allow filtering").get0();
+        require_rows(e, stmt, {cql3::raw_value::make_value(T("_b_"))}, {{T("abc")}});
+        require_rows(e, stmt, {cql3::raw_value::make_value(T("%g"))}, {});
+        require_rows(e, stmt, {cql3::raw_value::make_value(T("%c"))}, {{T("abc")}});
     });
 }
 

@@ -35,7 +35,6 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
-#include "utils/like_matcher.hh"
 
 namespace cql3 {
 namespace restrictions {
@@ -916,6 +915,18 @@ bool token_restriction::slice::is_satisfied_by(const schema& schema,
     return satisfied;
 }
 
+bool single_column_restriction::LIKE::init_matcher(const query_options& options) const {
+    auto pattern = to_bytes_opt(_value->bind_and_get(options));
+    if (!pattern) {
+        return false;
+    }
+    if (!_matcher || pattern != _last_pattern) {
+        _matcher.emplace(*pattern);
+        _last_pattern = std::move(pattern);
+    }
+    return true;
+}
+
 bool single_column_restriction::LIKE::is_satisfied_by(const schema& schema,
         const partition_key& key,
         const clustering_key_prefix& ckey,
@@ -926,19 +937,25 @@ bool single_column_restriction::LIKE::is_satisfied_by(const schema& schema,
         throw exceptions::invalid_request_exception("LIKE is allowed only on string types");
     }
     auto cell_value = get_value(schema, key, ckey, cells, now);
-    return !cell_value ? false :
-            cell_value->with_linearized([&] (bytes_view data) {
-                 auto pattern = to_bytes_opt(_value->bind_and_get(options));
-                 return pattern ? like_matcher(*pattern)(data) : false;
-            });
+    if (!cell_value) {
+        return false;
+    }
+    if (!init_matcher(options)) {
+        return false;
+    }
+    return cell_value->with_linearized([&] (bytes_view data) {
+        return (*_matcher)(data);
+    });
 }
 
 bool single_column_restriction::LIKE::is_satisfied_by(bytes_view data, const query_options& options) const {
     if (!_column_def.type->is_string()) {
         throw exceptions::invalid_request_exception("LIKE is allowed only on string types");
     }
-    auto pattern = to_bytes_opt(_value->bind_and_get(options));
-    return pattern ? like_matcher(*pattern)(data) : false;
+    if (!init_matcher(options)) {
+        return false;
+    }
+    return (*_matcher)(data);
 }
 
 }

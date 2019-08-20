@@ -41,6 +41,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "cql3/restrictions/restriction.hh"
 #include "cql3/restrictions/term_slice.hh"
 #include "cql3/term.hh"
@@ -51,6 +53,7 @@
 #include "exceptions/exceptions.hh"
 #include "keys.hh"
 #include "mutation_partition.hh"
+#include "utils/like_matcher.hh"
 
 namespace cql3 {
 
@@ -384,6 +387,11 @@ public:
 class single_column_restriction::LIKE final : public single_column_restriction {
 private:
     ::shared_ptr<term> _value;
+    /// Matches cell value against LIKE pattern.  Optional because it cannot be initialized in the
+    /// constructor when the pattern is a bind marker.  Mutable because it is initialized on demand
+    /// in is_satisfied_by().
+    mutable std::optional<like_matcher> _matcher;
+    mutable bytes_opt _last_pattern; ///< Pattern from which _matcher was last initialized.
 public:
     LIKE(const column_definition& column_def, ::shared_ptr<term> value)
         : single_column_restriction(op::LIKE, column_def)
@@ -424,6 +432,14 @@ public:
     virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
         return ::make_shared<LIKE>(cdef, _value);
     }
+
+  private:
+    /// If necessary, reinitializes _matcher and _last_pattern.
+    ///
+    /// Invoked from is_satisfied_by(), so must be const.
+    ///
+    /// @return true iff _value was successfully translated to LIKE pattern (regardless of initialization)
+    bool init_matcher(const query_options& options) const;
 };
 
 // This holds CONTAINS, CONTAINS_KEY, and map[key] = value restrictions because we might want to have any combination of them.
