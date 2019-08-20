@@ -1885,21 +1885,40 @@ future<json::json_return_type> executor::describe_endpoints(std::string content,
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
-future<> executor::start() {
-    if (engine().cpu_id() != 0) {
+// Create the keyspace in which we put all Alternator tables, if it doesn't
+// already exist.
+// Currently, we automatically configure the keyspace based on the number
+// of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
+// A smaller cluster (presumably, a test only), gets RF=1. The user may
+// manually create the keyspace to override this predefined behavior.
+future<> executor::maybe_create_keyspace() {
+    if (_proxy.get_db().local().has_keyspace(KEYSPACE_NAME)) {
         return make_ready_future<>();
     }
+    return gms::get_up_endpoint_count().then([this] (int up_endpoint_count) {
+        int rf = 3;
+        if (up_endpoint_count < rf) {
+            rf = 1;
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} live nodes.",
+                    KEYSPACE_NAME, rf, up_endpoint_count);
+        } else {
+            elogger.info("Creating keyspace '{}' for Alternator with RF={}.", KEYSPACE_NAME, rf);
+        }
+        auto ksm = keyspace_metadata::new_keyspace(KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", std::to_string(rf)}}, true);
+        try {
+            return _mm.announce_new_keyspace(ksm, api::min_timestamp, false);
+        } catch (exceptions::already_exists_exception& ignored) {
+            return make_ready_future<>();
+        } catch (...) {
+            return make_exception_future(std::current_exception());
+        }
+    });
+}
 
-    // FIXME: the RF of this keyspace should be configurable: RF=1 makes
-    // sense on test setups, but not on real clusters.
-    auto ksm = keyspace_metadata::new_keyspace(KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", "1"}}, true);
-    try {
-        return _mm.announce_new_keyspace(ksm, api::min_timestamp, false);
-    } catch(exceptions::already_exists_exception& ignored) {
-        return make_ready_future<>();
-    } catch(...) {
-        return make_exception_future(std::current_exception());
-    }
+future<> executor::start() {
+    // Currently, nothing to do on initialization. We delay the keyspace
+    // creation (maybe_create_keyspace()) until a table is actually created.
+    return make_ready_future<>();
 }
 
 }

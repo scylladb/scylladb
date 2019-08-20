@@ -48,6 +48,8 @@ public:
 
     future<> start();
     future<> stop() { return make_ready_future<>(); }
+
+    future<> maybe_create_keyspace();
 };
 
 }
