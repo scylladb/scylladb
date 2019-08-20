@@ -2,6 +2,22 @@
 
 This section describes layouts and usage of system.* tables.
 
+## The system.large\_* tables
+
+Scylla performs better if partitions, rows, or cells are not too
+large. To help diagnose cases where these grow too large, scylla keeps
+3 tables that record large partitions, rows, and cells, respectively.
+
+The meaning of an entry in each of these tables is similar. It means
+that there is a particular sstable with a large partition, row, or
+cell. In particular, this implies that:
+
+* There is no entry until compaction aggregates enough data in a
+  single sstable.
+* The entry stays around until the sstable is deleted.
+
+In addition, the entries also have a TTL of 30 days.
+
 ## system.large\_partitions
 
 Large partition table can be used to trace largest partitions in a cluster.
@@ -33,7 +49,9 @@ SELECT * FROM system.large_partitions WHERE keyspace_name = 'ks1' and table_name
 
 ## system.large\_rows
 
-Large row table can be used to trace large rows in a cluster.
+Large row table can be used to trace large clustering and static rows in a cluster.
+
+This table is currently only used with the MC format (issue #4868).
 
 Schema:
 ~~~
@@ -65,6 +83,8 @@ SELECT * FROM system.large_rows WHERE keyspace_name = 'ks1' and table_name = 'st
 
 Large cell table can be used to trace large cells in a cluster.
 
+This table is currently only used with the MC format (issue #4868).
+
 Schema:
 ~~~
 CREATE TABLE system.large_cells (
@@ -79,6 +99,9 @@ CREATE TABLE system.large_cells (
     PRIMARY KEY ((keyspace_name, table_name), sstable_name, cell_size, partition_key, clustering_key, column_name)
 ) WITH CLUSTERING ORDER BY (sstable_name ASC, cell_size DESC, partition_key ASC, clustering_key ASC, column_name ASC)
 ~~~
+
+Note that a collection is just one cell. There is no information about
+the size of each collection element.
 
 ### Example usage
 
