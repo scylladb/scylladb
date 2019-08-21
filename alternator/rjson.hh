@@ -107,6 +107,7 @@ rjson::value parse_raw(const char* c_str, size_t size);
 // The string value is copied, so str's liveness does not need to be persisted.
 rjson::value from_string(const std::string& str);
 rjson::value from_string(const sstring& str);
+rjson::value from_string(const char* str, size_t size);
 
 // Returns a pointer to JSON member if it exists, nullptr otherwise
 rjson::value* find(rjson::value& value, rjson::string_ref_type name);
