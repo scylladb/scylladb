@@ -69,6 +69,7 @@
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
+#include "cql3/cql_config.hh"
 
 namespace fs = std::filesystem;
 
@@ -426,6 +427,25 @@ void print_starting_message(int ac, char** av, const bpo::parsed_options& opts) 
     fmt::print("parsed command line options: {}\n", format_parsed_options(opts.options));
 }
 
+// Glue logic between db::config and cql3::cql_config
+class cql_config_updater {
+    cql3::cql_config& _cql_config;
+    const db::config& _cfg;
+    std::vector<std::any> _observers;
+private:
+    template <typename T>
+    void tie(T& dest, const db::config::named_value<T>& src) {
+        dest = src();
+        _observers.emplace_back(make_lw_shared<utils::observer<T>>(src.observe([&dest] (const T& value) { dest = value; })));
+    }
+public:
+    cql_config_updater(cql3::cql_config& cql_config, const db::config& cfg)
+            : _cql_config(cql_config), _cfg(cfg) {
+        tie(_cql_config.restrictions.partition_key_restrictions_max_cartesian_product_size, _cfg.max_partition_key_restrictions_per_query);
+        tie(_cql_config.restrictions.clustering_key_restrictions_max_cartesian_product_size, _cfg.max_clustering_key_restrictions_per_query);
+    }
+};
+
 int main(int ac, char** av) {
   int return_value = 0;
   try {
@@ -676,6 +696,11 @@ int main(int ac, char** av) {
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
+            static sharded<cql3::cql_config> cql_config;
+            static sharded<::cql_config_updater> cql_config_updater;
+            cql_config.start().get();
+            cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
+            auto stop_cql_config_updater = defer([&] { cql_config_updater.stop().get(); });
             auto& gossiper = gms::get_gossiper();
             gossiper.start(std::ref(feature_service), std::ref(*cfg)).get();
             // #293 - do not stop anything
@@ -683,7 +708,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg);
+            init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg);
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.

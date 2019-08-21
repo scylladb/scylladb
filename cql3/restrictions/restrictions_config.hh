@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 ScyllaDB
+ * Copyright (C) 2019 ScyllaDB
  */
 
 /*
@@ -19,25 +19,17 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef APPS_SEASTAR_THRIFT_HANDLER_HH_
-#define APPS_SEASTAR_THRIFT_HANDLER_HH_
 
-#include "Cassandra.h"
-#include "auth/service.hh"
-#include "database_fwd.hh"
-#include <seastar/core/distributed.hh>
-#include "cql3/query_processor.hh"
-#include <memory>
 
-struct timeout_config;
+#pragma once
 
-namespace cql3 {
+#include <cstdint>
 
-class cql_config;
+namespace cql3::restrictions {
+
+struct restrictions_config {
+    uint32_t partition_key_restrictions_max_cartesian_product_size = 100;
+    uint32_t clustering_key_restrictions_max_cartesian_product_size = 100;
+};
 
 }
-
-std::unique_ptr<::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&,
-        const cql3::cql_config& cql_config, timeout_config);
-
-#endif /* APPS_SEASTAR_THRIFT_HANDLER_HH_ */
