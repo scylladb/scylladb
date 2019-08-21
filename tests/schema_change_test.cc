@@ -36,6 +36,7 @@
 #include "types/user.hh"
 #include "db/config.hh"
 #include "tmpdir.hh"
+#include "exception_utils.hh"
 
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
@@ -485,6 +486,27 @@ SEASTAR_TEST_CASE(test_notifications) {
 
             BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 3);
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_drop_user_type_in_use) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create type simple_type (user_number int);").get();
+        e.execute_cql("create table simple_table (key int primary key, val frozen<simple_type>);").get();
+        e.execute_cql("insert into simple_table (key, val) values (42, {user_number: 1});").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("drop type simple_type;").get(), exceptions::invalid_request_exception,
+                exception_predicate::message_equals("Cannot drop user type ks.simple_type as it is still used by table ks.simple_table"));
+    });
+}
+
+SEASTAR_TEST_CASE(test_drop_nested_user_type_in_use) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create type simple_type (user_number int);").get();
+        e.execute_cql("create table nested_table (key int primary key, val tuple<int, frozen<simple_type>>);").get();
+        e.execute_cql("insert into nested_table (key, val) values (42, (41, {user_number: 1}));").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("drop type simple_type;").get(), exceptions::invalid_request_exception,
+                exception_predicate::message_equals(
+                        "Cannot drop user type ks.simple_type as it is still used by table ks.nested_table"));
     });
 }
 

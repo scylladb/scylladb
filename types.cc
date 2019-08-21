@@ -741,7 +741,7 @@ bool abstract_type::references_user_type(const sstring& keyspace, const bytes& n
         bool operator()(const abstract_type&) { return false; }
         bool operator()(const user_type_impl& u) { return u._keyspace == keyspace && u._name == name; }
     };
-    return find(*this, visitor{keyspace, name});
+    return find(*this, [&](const abstract_type& t) { return visit(t, visitor{keyspace, name}); });
 }
 
 namespace {
