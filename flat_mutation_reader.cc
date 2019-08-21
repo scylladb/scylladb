@@ -922,11 +922,15 @@ bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk
     return true;
 }
 
-mutation_fragment_stream_validator::mutation_fragment_stream_validator(const schema& s)
+mutation_fragment_stream_validator::mutation_fragment_stream_validator(const schema& s, bool compare_keys)
     : _schema(s)
     , _prev_kind(mutation_fragment::kind::partition_end)
     , _prev_pos(position_in_partition::end_of_partition_tag_t{})
-{ }
+    , _prev_region(partition_region::partition_end)
+    , _compare_keys(compare_keys)
+{
+    fmr_logger.debug("[validator {}] Will validate {} monotonicity.", static_cast<void*>(this), compare_keys ? "keys" : "only partition regions");
+}
 
 mutation_fragment_stream_validator::~mutation_fragment_stream_validator() {
     if (_prev_kind != mutation_fragment::kind::partition_end) {
@@ -937,26 +941,39 @@ mutation_fragment_stream_validator::~mutation_fragment_stream_validator() {
 bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv) {
     auto kind = mv.mutation_fragment_kind();
     auto pos = mv.position();
+    auto region = pos.region();
     bool valid = false;
 
     fmr_logger.debug("[validator {}] {}:{}", static_cast<void*>(this), kind, pos);
 
     if (mv.is_partition_start()) {
         valid = (_prev_kind == mutation_fragment::kind::partition_end);
-    } else {
+    } else if (_compare_keys) {
         auto less = position_in_partition::less_compare(_schema);
         if (_prev_kind != mutation_fragment::kind::range_tombstone) {
             valid = less(_prev_pos, pos);
         } else {
             valid = !less(pos, _prev_pos);
         }
+    } else if (region != partition_region::clustered) {
+        valid = (_prev_region < region);
+    } else {
+        valid = (_prev_region <= region);
     }
 
     if (__builtin_expect(!valid, false)) {
-        on_internal_error(fmr_logger, format("[validator {}] Unexpected mutation fragment: previous {}:{}, current {}:{}", static_cast<void*>(this), _prev_kind, _prev_pos, kind, pos));
+        auto fmt = "[validator {}] Unexpected mutation fragment: previous {}:{}, current {}:{}";
+        sstring msg = _compare_keys ?
+                format(fmt, static_cast<void*>(this), _prev_kind, _prev_pos, kind, pos) :
+                format(fmt, static_cast<void*>(this), _prev_kind, _prev_region, kind, pos);
+        on_internal_error(fmr_logger, msg);
     }
 
     _prev_kind = mv.mutation_fragment_kind();
-    _prev_pos = pos;
+    if (_compare_keys) {
+        _prev_pos = pos;
+    } else {
+        _prev_region = region;
+    }
     return true;
 }
