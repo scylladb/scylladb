@@ -67,6 +67,10 @@ rjson::value from_string(const sstring& str) {
     return rjson::value(str.c_str(), str.size(), the_allocator);
 }
 
+rjson::value from_string(const char* str, size_t size) {
+    return rjson::value(str, size, the_allocator);
+}
+
 const rjson::value* find(const rjson::value& value, string_ref_type name) {
     auto member_it = value.FindMember(name);
     return member_it != value.MemberEnd() ? &member_it->value : nullptr;
