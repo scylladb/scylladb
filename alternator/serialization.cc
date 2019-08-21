@@ -13,6 +13,7 @@
 #include "serialization.hh"
 #include "error.hh"
 #include "rapidjson/writer.h"
+#include "concrete_types.hh"
 
 static logging::logger slogger("alternator-serialization");
 
@@ -46,6 +47,30 @@ type_representation represent_type(alternator_type atype) {
     return it->second;
 }
 
+struct from_json_visitor {
+    const rjson::value& v;
+    bytes_ostream& bo;
+
+    void operator()(const reversed_type_impl& t) const { visit(*t.underlying_type(), from_json_visitor{v, bo}); };
+    void operator()(const string_type_impl& t) {
+        bo.write(t.from_string(v.GetString()));
+    }
+    void operator()(const bytes_type_impl& t) const {
+        std::string raw_value = v.GetString();
+        bo.write(base64_decode(std::string_view(raw_value)));
+    }
+    void operator()(const boolean_type_impl& t) const {
+        bo.write(boolean_type->decompose(v.GetBool()));
+    }
+    void operator()(const decimal_type_impl& t) const {
+        bo.write(t.from_string(v.GetString()));
+    }
+    // default
+    void operator()(const abstract_type& t) const {
+        bo.write(t.from_json_object(Json::Value(rjson::print(v)), cql_serialization_format::internal()));
+    }
+};
+
 bytes serialize_item(const rjson::value& item) {
     if (item.IsNull() || item.MemberCount() != 1) {
         throw api_error("ValidationException", format("An item can contain only one attribute definition: {}", item));
@@ -58,26 +83,36 @@ bytes serialize_item(const rjson::value& item) {
         return bytes{int8_t(type_info.atype)} + to_bytes(rjson::print(item));
     }
 
-    bytes serialized;
-    // Alternator bytes representation does not start with "0x" followed by hex digits as Scylla-JSON does,
-    // but instead uses base64.
+    bytes_ostream bo;
+    bo.write(bytes{int8_t(type_info.atype)});
+    visit(*type_info.dtype, from_json_visitor{it->value, bo});
 
-    if (type_info.dtype == bytes_type) {
-        std::string raw_value = it->value.GetString();
-        serialized = base64_decode(std::string_view(raw_value));
-    } else if (type_info.dtype == decimal_type) {
-        serialized = type_info.dtype->from_string(it->value.GetString());
-    } else if (type_info.dtype == boolean_type) {
-        serialized = type_info.dtype->from_json_object(Json::Value(it->value.GetBool()), cql_serialization_format::internal());
-    } else {
-    	//FIXME(sarna): Once we have type visitors, this double conversion hack should be replaced with parsing straight from rapidjson
-        serialized = type_info.dtype->from_json_object(Json::Value(rjson::print(it->value)), cql_serialization_format::internal());
-    }
-
-    //NOTICE: redundant copy here, from_json_object should accept bytes' output iterator too.
-    // Or, we could append type info to the end, but that's unorthodox.
-    return bytes{int8_t(type_info.atype)} + std::move(serialized);
+    return bytes(bo.linearize());
 }
+
+struct to_json_visitor {
+    rjson::value& deserialized;
+    const std::string& type_ident;
+    bytes_view bv;
+
+    void operator()(const reversed_type_impl& t) const { visit(*t.underlying_type(), to_json_visitor{deserialized, type_ident, bv}); };
+    void operator()(const decimal_type_impl& t) const {
+        auto s = decimal_type->to_json_string(bytes(bv));
+        //FIXME(sarna): unnecessary copy
+        rjson::set_with_string_name(deserialized, type_ident, rjson::from_string(s));
+    }
+    void operator()(const string_type_impl& t) {
+        rjson::set_with_string_name(deserialized, type_ident, rjson::from_string(reinterpret_cast<const char *>(bv.data()), bv.size()));
+    }
+    void operator()(const bytes_type_impl& t) const {
+        std::string b64 = base64_encode(bv);
+        rjson::set_with_string_name(deserialized, type_ident, rjson::from_string(b64));
+    }
+    // default
+    void operator()(const abstract_type& t) const {
+        rjson::set_with_string_name(deserialized, type_ident, rjson::parse(t.to_string(bytes(bv))));
+    }
+};
 
 rjson::value deserialize_item(bytes_view bv) {
     rjson::value deserialized(rapidjson::kObjectType);
@@ -92,17 +127,8 @@ rjson::value deserialize_item(bytes_view bv) {
         slogger.trace("Non-optimal deserialization of alternator type {}", int8_t(atype));
         return rjson::parse_raw(reinterpret_cast<const char *>(bv.data()), bv.size());
     }
-
     type_representation type_representation = represent_type(atype);
-    if (type_representation.dtype == bytes_type) {
-        std::string b64 = base64_encode(bv);
-        rjson::set_with_string_name(deserialized, type_representation.ident, rjson::from_string(b64));
-    } else if (type_representation.dtype == decimal_type) {
-        auto s = decimal_type->to_json_string(bytes(bv)); //FIXME(sarna): unnecessary copy
-        rjson::set_with_string_name(deserialized, type_representation.ident, rjson::from_string(s));
-    } else {
-        rjson::set_with_string_name(deserialized, type_representation.ident, rjson::parse(type_representation.dtype->to_string(bytes(bv))));
-    }
+    visit(*type_representation.dtype, to_json_visitor{deserialized, type_representation.ident, bv});
 
     return deserialized;
 }
