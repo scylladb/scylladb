@@ -815,7 +815,7 @@ class reversed_type_impl : public abstract_type {
         , _underlying_type(t)
     {}
 public:
-    shared_ptr<const abstract_type> underlying_type() const {
+    const data_type& underlying_type() const {
         return _underlying_type;
     }
 

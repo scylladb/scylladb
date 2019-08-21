@@ -45,8 +45,8 @@ class map_type_impl final : public concrete_type<std::vector<std::pair<data_valu
 public:
     static shared_ptr<const map_type_impl> get_instance(data_type keys, data_type values, bool is_multi_cell);
     map_type_impl(data_type keys, data_type values, bool is_multi_cell);
-    data_type get_keys_type() const { return _keys; }
-    data_type get_values_type() const { return _values; }
+    const data_type& get_keys_type() const { return _keys; }
+    const data_type& get_values_type() const { return _values; }
     virtual data_type name_comparator() const override { return _keys; }
     virtual data_type value_comparator() const override { return _values; }
     virtual data_type freeze() const override;
