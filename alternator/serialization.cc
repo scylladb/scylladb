@@ -53,17 +53,16 @@ struct from_json_visitor {
 
     void operator()(const reversed_type_impl& t) const { visit(*t.underlying_type(), from_json_visitor{v, bo}); };
     void operator()(const string_type_impl& t) {
-        bo.write(t.from_string(v.GetString()));
+        bo.write(t.from_string(sstring_view(v.GetString(), v.GetStringLength())));
     }
     void operator()(const bytes_type_impl& t) const {
-        std::string raw_value = v.GetString();
-        bo.write(base64_decode(std::string_view(raw_value)));
+        bo.write(base64_decode(std::string_view(v.GetString(), v.GetStringLength())));
     }
     void operator()(const boolean_type_impl& t) const {
         bo.write(boolean_type->decompose(v.GetBool()));
     }
     void operator()(const decimal_type_impl& t) const {
-        bo.write(t.from_string(v.GetString()));
+        bo.write(t.from_string(sstring_view(v.GetString(), v.GetStringLength())));
     }
     // default
     void operator()(const abstract_type& t) const {
