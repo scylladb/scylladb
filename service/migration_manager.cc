@@ -278,6 +278,26 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     return i->second.trigger();
 }
 
+future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<canonical_mutation>& canonical_mutations) {
+    mlogger.debug("Applying schema mutations from {}", src);
+    auto& proxy = service::get_storage_proxy();
+    const auto& db = proxy.local().get_db().local();
+
+    std::vector<mutation> mutations;
+    mutations.reserve(canonical_mutations.size());
+    try {
+        for (const auto& cm : canonical_mutations) {
+            auto& tbl = db.find_column_family(cm.column_family_id());
+            mutations.emplace_back(cm.to_mutation(tbl.schema()));
+        }
+    } catch (no_such_column_family& e) {
+        mlogger.error("Error while applying schema mutations from {}: {}", src, e);
+        return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
+                    std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
+    }
+    return db::schema_tables::merge_schema(service::get_local_storage_service(), proxy, std::move(mutations));
+}
+
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
 {
     mlogger.debug("Applying schema mutations from {}", src);
