@@ -642,19 +642,19 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
     });
 }
 
-future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
+future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
 {
     auto map = [&proxy] (sstring table) {
         return db::system_keyspace::query_mutations(proxy, NAME, table).then([&proxy, table] (auto rs) {
             auto s = proxy.local().get_db().local().find_schema(NAME, table);
-            std::vector<frozen_mutation> results;
+            std::vector<canonical_mutation> results;
             for (auto&& p : rs->partitions()) {
                 auto mut = p.mut().unfreeze(s);
                 auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
                 if (is_system_keyspace(partition_key)) {
                     continue;
                 }
-                results.emplace_back(std::move(p.mut()));
+                results.emplace_back(mut);
             }
             return results;
         });
@@ -663,7 +663,7 @@ future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<ser
         std::move(mutations.begin(), mutations.end(), std::back_inserter(result));
         return std::move(result);
     };
-    return map_reduce(all_table_names(features), map, std::vector<frozen_mutation>{}, reduce);
+    return map_reduce(all_table_names(features), map, std::vector<canonical_mutation>{}, reduce);
 }
 
 future<schema_result>

@@ -116,7 +116,13 @@ void migration_manager::init_messaging_service()
             return make_ready_future<std::vector<frozen_mutation>>(std::vector<frozen_mutation>());
         }
         auto features = get_local_storage_service().cluster_schema_features();
-        return db::schema_tables::convert_schema_to_mutations(get_storage_proxy(), features).finally([p = get_local_shared_storage_proxy()] {
+        auto& proxy = get_storage_proxy();
+        return db::schema_tables::convert_schema_to_mutations(proxy, features).then([&proxy] (std::vector<canonical_mutation>&& schema_mutations) {
+            const auto& db = proxy.local().get_db().local();
+            return boost::copy_range<std::vector<frozen_mutation>>(schema_mutations | boost::adaptors::transformed([&db] (const canonical_mutation& cm) {
+                return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
+            }));
+        }).finally([p = get_local_shared_storage_proxy()] {
             // keep local proxy alive
         });
     });
