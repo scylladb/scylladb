@@ -97,21 +97,23 @@ protected:
 };
 
 void server::set_routes(routes& r) {
-    using alternator_callback = std::function<future<json::json_return_type>(executor&, std::unique_ptr<request>)>;
+    using alternator_callback = std::function<future<json::json_return_type>(executor&, executor::client_state&, std::unique_ptr<request>)>;
     std::unordered_map<std::string, alternator_callback> routes{
-        {"CreateTable", [] (executor& e, std::unique_ptr<request> req) { return e.maybe_create_keyspace().then([&e, req = std::move(req)] { return e.create_table(req->content); }); }},
-        {"DescribeTable", [] (executor& e, std::unique_ptr<request> req) { return e.describe_table(req->content); }},
-        {"DeleteTable", [] (executor& e, std::unique_ptr<request> req) { return e.delete_table(req->content); }},
-        {"PutItem", [] (executor& e, std::unique_ptr<request> req) { return e.put_item(req->content); }},
-        {"UpdateItem", [] (executor& e, std::unique_ptr<request> req) { return e.update_item(req->content); }},
-        {"GetItem", [] (executor& e, std::unique_ptr<request> req) { return e.get_item(req->content); }},
-        {"DeleteItem", [] (executor& e, std::unique_ptr<request> req) { return e.delete_item(req->content); }},
-        {"ListTables", [] (executor& e, std::unique_ptr<request> req) { return e.list_tables(req->content); }},
-        {"Scan", [] (executor& e, std::unique_ptr<request> req) { return e.scan(req->content); }},
-        {"DescribeEndpoints", [] (executor& e, std::unique_ptr<request> req) { return e.describe_endpoints(req->content, req->get_header("Host")); }},
-        {"BatchWriteItem", [] (executor& e, std::unique_ptr<request> req) { return e.batch_write_item(req->content); }},
-        {"BatchGetItem", [] (executor& e, std::unique_ptr<request> req) { return e.batch_get_item(req->content); }},
-        {"Query", [] (executor& e, std::unique_ptr<request> req) { return e.query(req->content); }},
+        {"CreateTable", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) {
+            return e.maybe_create_keyspace().then([&e, &client_state, req = std::move(req)] { return e.create_table(client_state, req->content); }); }
+        },
+        {"DescribeTable", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.describe_table(client_state, req->content); }},
+        {"DeleteTable", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.delete_table(client_state, req->content); }},
+        {"PutItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.put_item(client_state, req->content); }},
+        {"UpdateItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.update_item(client_state, req->content); }},
+        {"GetItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.get_item(client_state, req->content); }},
+        {"DeleteItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.delete_item(client_state, req->content); }},
+        {"ListTables", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.list_tables(client_state, req->content); }},
+        {"Scan", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.scan(client_state, req->content); }},
+        {"DescribeEndpoints", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.describe_endpoints(client_state, req->content, req->get_header("Host")); }},
+        {"BatchWriteItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.batch_write_item(client_state, req->content); }},
+        {"BatchGetItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.batch_get_item(client_state, req->content); }},
+        {"Query", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.query(client_state, req->content); }},
     };
 
     api_handler* handler = new api_handler([this, routes = std::move(routes)](std::unique_ptr<request> req) -> future<json::json_return_type> {
@@ -129,7 +131,12 @@ void server::set_routes(routes& r) {
             throw api_error("UnknownOperationException",
                     format("Unsupported operation {}", op));
         }
-        return callback_it->second(_executor.local(), std::move(req));
+        //FIXME: Client state can provide more context, e.g. client's endpoint address
+        // We use unique_ptr because client_state cannot be moved or copied
+        return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()), [this, callback_it = std::move(callback_it), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
+            client_state->set_raw_keyspace(executor::KEYSPACE_NAME);
+            return callback_it->second(_executor.local(), *client_state, std::move(req));
+        });
     });
 
     r.add(operation_type::POST, url("/"), handler);
