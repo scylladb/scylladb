@@ -53,6 +53,8 @@ public:
     future<> stop() { return make_ready_future<>(); }
 
     future<> maybe_create_keyspace();
+
+    static void maybe_trace_query(client_state& client_state, sstring_view op, sstring_view query);
 };
 
 }

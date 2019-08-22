@@ -132,8 +132,9 @@ void server::set_routes(routes& r) {
                     format("Unsupported operation {}", op));
         }
         //FIXME: Client state can provide more context, e.g. client's endpoint address
-        return do_with(executor::client_state::for_internal_calls(), [this, callback_it = std::move(callback_it), req = std::move(req)] (executor::client_state& client_state) mutable {
+        return do_with(executor::client_state::for_internal_calls(), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (executor::client_state& client_state) mutable {
             client_state.set_raw_keyspace(executor::KEYSPACE_NAME);
+            executor::maybe_trace_query(client_state, op, req->content);
             return callback_it->second(_executor.local(), client_state, std::move(req));
         });
     });
