@@ -553,6 +553,7 @@ inline position_in_partition_view partition_end::position() const
     return position_in_partition_view(position_in_partition_view::end_of_partition_tag_t());
 }
 
+std::ostream& operator<<(std::ostream&, partition_region);
 std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
 
 using mutation_fragment_opt = optimized_optional<mutation_fragment>;
