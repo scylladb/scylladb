@@ -221,6 +221,8 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
 
     schema_ptr schema = get_table(_proxy, request);
 
+    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+
     rjson::value table_description = rjson::empty_object();
     rjson::set(table_description, "TableName", rjson::from_string(schema->cf_name()));
     // FIXME: take the tables creation time, not the current time!
@@ -248,6 +250,8 @@ future<json::json_return_type> executor::delete_table(client_state& client_state
     elogger.trace("Deleting table {}", request);
 
     std::string table_name = get_table_name(request);
+    tracing::add_table_name(client_state.get_trace_state(), KEYSPACE_NAME, table_name);
+
     if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
         throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
@@ -342,6 +346,8 @@ future<json::json_return_type> executor::create_table(client_state& client_state
     elogger.trace("Creating table {}", table_info);
     std::string table_name = get_table_name(table_info);
     const rjson::value& attribute_definitions = table_info["AttributeDefinitions"];
+
+    tracing::add_table_name(client_state.get_trace_state(), KEYSPACE_NAME, table_name);
 
     schema_builder builder(KEYSPACE_NAME, table_name);
     auto [hash_key, range_key] = parse_key_schema(table_info);
@@ -520,11 +526,13 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
     elogger.trace("Updating value {}", update_info);
 
     schema_ptr schema = get_table(_proxy, update_info);
+    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+
     const rjson::value& item = update_info["Item"];
 
     mutation m = make_item_mutation(item, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), tracing::trace_state_ptr(), empty_service_permit()).then([] () {
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
         // Without special options on what to return, PutItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
@@ -555,12 +563,14 @@ future<json::json_return_type> executor::delete_item(client_state& client_state,
     rjson::value update_info = rjson::parse(content);
 
     schema_ptr schema = get_table(_proxy, update_info);
+    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+
     const rjson::value& key = update_info["Key"];
 
     mutation m = make_delete_item_mutation(key, schema);
     check_key(key, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), tracing::trace_state_ptr(), empty_service_permit()).then([] () {
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
         // Without special options on what to return, DeleteItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
@@ -601,6 +611,7 @@ future<json::json_return_type> executor::batch_write_item(client_state& client_s
 
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
+        tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
             if (!request.IsObject() || request.MemberCount() != 1) {
@@ -633,7 +644,7 @@ future<json::json_return_type> executor::batch_write_item(client_state& client_s
         }
     }
 
-    return _proxy.mutate(std::move(mutations), db::consistency_level::LOCAL_QUORUM, default_timeout(), tracing::trace_state_ptr(), empty_service_permit()).then([] () {
+    return _proxy.mutate(std::move(mutations), db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
         // Without special options on what to return, BatchWriteItem returns nothing,
         // unless there are UnprocessedItems - it's possible to just stop processing a batch
         // due to throttling. TODO(sarna): Consider UnprocessedItems when returning.
@@ -1177,6 +1188,8 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
     rjson::value update_info = rjson::parse(content);
     elogger.trace("update_item {}", update_info);
     schema_ptr schema = get_table(_proxy, update_info);
+    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+
     if (!update_info.HasMember("Key")) {
         throw api_error("ValidationException", "UpdateItem requires a Key parameter");
     }
@@ -1216,7 +1229,8 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
 
     return maybe_get_previous_item(_proxy, schema, pk, ck, has_update_expression, expression, _stats).then(
             [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck),
-             update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector), attribute_updates = rjson::copy(attribute_updates), ts] (std::unique_ptr<rjson::value> previous_item) mutable {
+             update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector),
+             attribute_updates = rjson::copy(attribute_updates), ts, &client_state] (std::unique_ptr<rjson::value> previous_item) mutable {
         if (has_update_expression) {
             std::unordered_set<std::string> seen_column_names;
             std::unordered_set<std::string> used_attribute_values;
@@ -1324,7 +1338,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
         row.apply(row_marker(ts));
 
         elogger.trace("Applying mutation {}", m);
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), tracing::trace_state_ptr(), empty_service_permit()).then([] () {
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
             // Without special options on what to return, UpdateItem returns nothing.
             return make_ready_future<json::json_return_type>(json_string(""));
         });
@@ -1356,6 +1370,8 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
     elogger.trace("Getting item {}", table_info);
 
     schema_ptr schema = get_table(_proxy, table_info);
+
+    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
 
     rjson::value& query_key = table_info["Key"];
     db::consistency_level cl = get_read_consistency(table_info);
@@ -1416,6 +1432,7 @@ future<json::json_return_type> executor::batch_get_item(client_state& client_sta
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs;
         rs.schema = get_table_from_batch_request(_proxy, it);
+        tracing::add_table_name(client_state.get_trace_state(), KEYSPACE_NAME, rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         rs.attrs_to_get = calculate_attrs_to_get(it->value);
         auto& keys = (it->value)["Keys"];
@@ -1582,6 +1599,8 @@ static future<json::json_return_type> do_query(schema_ptr schema,
         service::client_state& client_state,
         cql3::cql_stats& cql_stats) {
     ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
+
+    tracing::trace(client_state.get_trace_state(), "Performing a database query");
 
     if (exclusive_start_key) {
         partition_key pk = pk_from_json(*exclusive_start_key, schema);
@@ -1787,6 +1806,8 @@ future<json::json_return_type> executor::query(client_state& client_state, std::
     elogger.trace("Querying {}", request_info);
 
     schema_ptr schema = get_table_or_view(_proxy, request_info);
+
+    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
 
     rjson::value* exclusive_start_key = rjson::find(request_info, "ExclusiveStartKey");
     db::consistency_level cl = get_read_consistency(request_info);
