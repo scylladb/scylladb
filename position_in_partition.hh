@@ -251,6 +251,17 @@ public:
             }
         }
 
+    position_in_partition& operator=(position_in_partition_view view) {
+        _type = view._type;
+        _bound_weight = view._bound_weight;
+        if (view._ck) {
+            _ck = *view._ck;
+        } else {
+            _ck.reset();
+        }
+        return *this;
+    }
+
     static position_in_partition before_all_clustered_rows() {
         return {position_in_partition::range_tag_t(), bound_view::bottom()};
     }
