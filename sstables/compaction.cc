@@ -461,7 +461,7 @@ private:
         };
     }
 
-    virtual flat_mutation_reader::filter filter_func() const {
+    virtual flat_mutation_reader::filter make_partition_filter() const {
         return [] (const dht::decorated_key&) {
             return true;
         };
@@ -585,7 +585,7 @@ public:
         };
     }
 
-    virtual flat_mutation_reader::filter filter_func() const override {
+    virtual flat_mutation_reader::filter make_partition_filter() const override {
         return [] (const dht::decorated_key& dk){
             return dht::shard_of(dk.token()) == engine().cpu_id();
         };
@@ -724,7 +724,7 @@ public:
         clogger.info("Cleaned {}", formatted_msg);
     }
 
-    flat_mutation_reader::filter filter_func() const override {
+    flat_mutation_reader::filter make_partition_filter() const override {
         dht::token_range_vector owned_ranges = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
 
         return [this, owned_ranges = std::move(owned_ranges)] (const dht::decorated_key& dk) {
@@ -876,7 +876,7 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c) {
             // leave this block either successfully or exceptionally with the reader object
             // destroyed.
             auto r = std::move(reader);
-            r.consume_in_thread(std::move(cfc), c->filter_func(), db::no_timeout);
+            r.consume_in_thread(std::move(cfc), c->make_partition_filter(), db::no_timeout);
         } catch (...) {
             c->delete_sstables_for_interrupted_compaction();
             c = nullptr; // make sure writers are stopped while running in thread context
