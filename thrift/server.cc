@@ -302,18 +302,21 @@ thrift_server::requests_served() const {
     return _requests_served;
 }
 
+static const metrics::label class_label("protocol");
+
 thrift_stats::thrift_stats(thrift_server& server) {
     namespace sm = seastar::metrics;
+    auto proto_label_instance = class_label("thrift");
 
-    _metrics.add_group("thrift", {
-        sm::make_derive("thrift-connections", [&server] { return server.total_connections(); },
-                        sm::description("Rate of creation of new Thrift connections.")),
+    _metrics.add_group("transport", {
+        sm::make_derive("connections", [&server] { return server.total_connections(); },
+                        sm::description("Rate of creation of new Thrift connections."), {proto_label_instance}),
 
         sm::make_gauge("current_connections", [&server] { return server.current_connections(); },
-                        sm::description("Holds a current number of opened Thrift connections.")),
+                        sm::description("Holds a current number of opened Thrift connections."), {proto_label_instance}),
 
-        sm::make_derive("served", [&server] { return server.requests_served(); },
-                        sm::description("Rate of serving Thrift requests.")),
+        sm::make_derive("requests_served", [&server] { return server.requests_served(); },
+                        sm::description("Rate of serving Thrift requests."), {proto_label_instance}),
     });
 }
 

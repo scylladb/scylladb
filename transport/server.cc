@@ -144,6 +144,8 @@ event::event_type parse_event_type(const sstring& value)
     }
 }
 
+static const metrics::label class_label("protocol");
+
 cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, auth::service& auth_service,
         const cql3::cql_config& cql_config, cql_server_config config)
     : _proxy(proxy)
@@ -157,31 +159,34 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
 {
     namespace sm = seastar::metrics;
 
+    auto proto_label_instance = class_label("cql3");
+
+
     _metrics.add_group("transport", {
-        sm::make_derive("cql-connections", _connects,
-                        sm::description("Counts a number of client connections.")),
+        sm::make_derive("connections", _connects,
+                        sm::description("Counts a number of client connections."), {proto_label_instance}),
 
         sm::make_gauge("current_connections", _connections,
-                        sm::description("Holds a current number of client connections.")),
+                        sm::description("Holds a current number of client connections."), {proto_label_instance}),
 
         sm::make_derive("requests_served", _requests_served,
-                        sm::description("Counts a number of served requests.")),
+                        sm::description("Counts a number of served requests."), {proto_label_instance}),
 
         sm::make_gauge("requests_serving", _requests_serving,
-                        sm::description("Holds a number of requests that are being processed right now.")),
+                        sm::description("Holds a number of requests that are being processed right now."), {proto_label_instance}),
 
         sm::make_gauge("requests_blocked_memory_current", [this] { return _memory_available.waiters(); },
                         sm::description(
                             seastar::format("Holds the number of requests that are currently blocked due to reaching the memory quota limit ({}B). "
-                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size))),
+                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size)), {proto_label_instance}),
         sm::make_derive("requests_blocked_memory", _requests_blocked_memory,
                         sm::description(
                             seastar::format("Holds an incrementing counter with the requests that ever blocked due to reaching the memory quota limit ({}B). "
-                                            "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
+                                            "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size)), {proto_label_instance}),
        sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
-                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size))),
+                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size)), {proto_label_instance}),
 
     });
 }
