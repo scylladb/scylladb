@@ -262,7 +262,7 @@ flat_mutation_reader read_context::create_reader(
         schema_ptr schema,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class&,
+        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding) {
     const auto shard = engine().cpu_id();
@@ -290,8 +290,6 @@ flat_mutation_reader read_context::create_reader(
         rm.rparts = make_foreign(std::make_unique<reader_meta::remote_parts>(table.read_concurrency_semaphore()));
     }
 
-    //TODO need a way to transport io_priority_calls across shards
-    auto& pc = service::get_local_sstable_query_read_priority();
     rm.rparts->range = std::make_unique<const dht::partition_range>(pr);
     rm.rparts->slice = std::make_unique<const query::partition_slice>(ps);
     rm.rparts->read_operation = table.read_in_progress();
