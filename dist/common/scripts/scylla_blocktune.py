@@ -85,7 +85,6 @@ def tune_dev(path, nomerges):
 
 
 # tunes a filesystem
-# FIXME: btrfs
 def tune_fs(path, nomerges):
     dev = os.stat(path).st_dev
     devfile = '/sys/dev/block/{}:{}'.format(dev // 256, dev % 256)
