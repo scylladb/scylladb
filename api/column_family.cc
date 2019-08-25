@@ -26,7 +26,7 @@
 #include "sstables/sstables.hh"
 #include "utils/estimated_histogram.hh"
 #include <algorithm>
-
+#include "db/system_keyspace_view_types.hh"
 #include "db/data_listeners.hh"
 
 extern logging::logger apilog;
@@ -53,13 +53,17 @@ std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
     return std::make_tuple(name.substr(0, pos), name.substr(end));
 }
 
-const utils::UUID& get_uuid(const sstring& name, const database& db) {
-    auto [ks, cf] = parse_fully_qualified_cf_name(name);
+const utils::UUID& get_uuid(const sstring& ks, const sstring& cf, const database& db) {
     try {
         return db.find_uuid(ks, cf);
     } catch (std::out_of_range& e) {
         throw bad_param_exception(format("Column family '{}:{}' not found", ks, cf));
     }
+}
+
+const utils::UUID& get_uuid(const sstring& name, const database& db) {
+    auto [ks, cf] = parse_fully_qualified_cf_name(name);
+    return get_uuid(ks, cf, db);
 }
 
 future<> foreach_column_family(http_context& ctx, const sstring& name, function<void(column_family&)> f) {
@@ -250,12 +254,11 @@ class sum_ratio {
     uint64_t _n = 0;
     T _total = 0;
 public:
-    future<> operator()(T value) {
+    void operator()(T value) {
         if (value > 0) {
             _total += value;
             _n++;
         }
-        return make_ready_future<>();
     }
     // Returns average value of all registered ratios.
     T get() && {
@@ -843,12 +846,27 @@ void set_column_family(http_context& ctx, routes& r) {
         return true;
     });
 
-    cf::get_built_indexes.set(r, [](const_req) {
-        // FIXME
-        // Currently there are no index support
-        return std::vector<sstring>();
+    cf::get_built_indexes.set(r, [&ctx](std::unique_ptr<request> req) {
+        auto [ks, cf_name] = parse_fully_qualified_cf_name(req->param["name"]);
+        return db::system_keyspace::load_view_build_progress().then([ks, cf_name, &ctx](const std::vector<db::system_keyspace::view_build_progress>& vb) mutable {
+            std::set<sstring> vp;
+            for (auto b : vb) {
+                if (b.view.first == ks) {
+                    vp.insert(b.view.second);
+                }
+            }
+            std::vector<sstring> res;
+            auto uuid = get_uuid(ks, cf_name, ctx.db.local());
+            column_family& cf = ctx.db.local().find_column_family(uuid);
+            res.reserve(cf.get_index_manager().list_indexes().size());
+            for (auto&& i : cf.get_index_manager().list_indexes()) {
+                if (vp.find(secondary_index::index_table_name(i.metadata().name())) == vp.end()) {
+                    res.emplace_back(i.metadata().name());
+                }
+            }
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
-
 
     cf::get_compression_metadata_off_heap_memory_used.set(r, [](const_req) {
         // FIXME
