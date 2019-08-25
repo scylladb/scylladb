@@ -26,7 +26,6 @@
 #include "sstables/sstables.hh"
 #include "utils/estimated_histogram.hh"
 #include <algorithm>
-
 #include "db/system_keyspace_view_types.hh"
 #include "db/data_listeners.hh"
 
@@ -255,12 +254,11 @@ class sum_ratio {
     uint64_t _n = 0;
     T _total = 0;
 public:
-    future<> operator()(T value) {
+    void operator()(T value) {
         if (value > 0) {
             _total += value;
             _n++;
         }
-        return make_ready_future<>();
     }
     // Returns average value of all registered ratios.
     T get() && {
