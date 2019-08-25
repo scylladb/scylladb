@@ -34,8 +34,12 @@ of a few seconds), or you should use a different mechanism to distribute
 different DynamoDB requests to different Scylla nodes, to balance the load.
 
 Alternator tables are stored as Scylla tables in the "alternator" keyspace.
-This keyspace is initialized when Alternator first boots, with replication
-factor hard-coded to 1 (FIXME: this will need to change).
+This keyspace is initialized when the first Alternator table is created
+(with a CreateTable request). The replication factor (RF) for this keyspace
+and all Alternator tables is chosen at that point, depending on the size of
+the cluster: RF=3 is used on clusters with three or more live nodes, and
+RF=1 is used for smaller clusters. Such smaller clusters are, of course,
+only recommended for tests because of the risk of data loss.
 
 ## Current compatibility with DynamoDB
 
