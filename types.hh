@@ -424,6 +424,8 @@ public:
     friend data_value make_list_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_map_value(data_type, maybe_empty<std::vector<std::pair<data_value, data_value>>>);
     friend data_value make_user_value(data_type, std::vector<data_value>);
+    template <typename Func>
+    friend inline auto visit(const data_value& v, Func&& f);
 };
 
 class serialized_compare;

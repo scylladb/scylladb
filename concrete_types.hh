@@ -262,3 +262,7 @@ template <typename Func> struct data_value_visitor {
 template <typename Func> inline auto visit(const abstract_type& t, const void* v, Func&& f) {
     return ::visit(t, data_value_visitor<Func>{v, f});
 }
+
+template <typename Func> inline auto visit(const data_value& v, Func&& f) {
+    return ::visit(*v.type(), v._value, f);
+}
