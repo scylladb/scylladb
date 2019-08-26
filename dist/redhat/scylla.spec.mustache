@@ -79,20 +79,8 @@ if [ -d /usr/lib/scylla ]; then
     mv /usr/lib/scylla /usr/lib/scylla.old
 fi
 
-# Install capabilities.conf when AmbientCapabilities supported
-SYSTEMD_VER=`rpm -q systemd --qf %%{version}`
-SYSTEMD_REL=`rpm -q systemd --qf %%{release}|sed -n "s/\([0-9]*\).*/\1/p"`
-AMB_SUPPORT=`grep -c ^CapAmb: /proc/self/status`
-# AmbientCapabilities supported from v229 but it backported to v219-33 on RHEL7
-if [ $SYSTEMD_VER -ge 229 ] || [ $SYSTEMD_VER -eq 219 ] && [ $SYSTEMD_REL -ge 33 ]; then
-    if [ $AMB_SUPPORT -eq 1 ]; then
-        mkdir -p /etc/systemd/system/scylla-server.service.d/
-        cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
-[Service]
-AmbientCapabilities=CAP_SYS_NICE
-EOS
-    fi
-fi
+/opt/scylladb/scripts/scylla_post_install.sh
+
 %systemd_post scylla-server.service
 
 %preun server
@@ -126,6 +114,7 @@ rm -rf $RPM_BUILD_ROOT
 /opt/scylladb/share/doc/scylla/licenses/
 %{_unitdir}/*.service
 %{_unitdir}/*.timer
+%{_unitdir}/*.slice
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
@@ -147,6 +136,8 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/view_hints
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/coredump
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla-housekeeping
+%ghost /etc/systemd/system/scylla-helper.slice.d/
+%ghost /etc/systemd/system/scylla-helper.slice.d/memory.conf
 %ghost /etc/systemd/system/scylla-server.service.d/
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
 %ghost /etc/systemd/system/scylla-server.service.d/mounts.conf

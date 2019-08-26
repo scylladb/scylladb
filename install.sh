@@ -165,6 +165,7 @@ if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
     install -d -m755 "$retc"/scylla "$rusr/lib/systemd/system" "$rusr/bin" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts"
     install -m644 build/*.service -Dt "$rusr"/lib/systemd/system
     install -m644 dist/common/systemd/*.service -Dt "$rusr"/lib/systemd/system
+    install -m644 dist/common/systemd/*.slice -Dt "$rusr"/lib/systemd/system
     install -m644 dist/common/systemd/*.timer -Dt "$rusr"/lib/systemd/system
     install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
     install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/scripts
