@@ -495,29 +495,6 @@ static std::tuple<common_counter_type, common_counter_type, common_counter_type>
 empty_type_impl::empty_type_impl()
     : abstract_type(kind::empty, empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
 
-namespace {
-template <typename Func> struct data_value_visitor {
-    const void* v;
-    Func& f;
-    auto operator()(const empty_type_impl& t) { return f(t, v); }
-    auto operator()(const counter_type_impl& t) { return f(t, v); }
-    auto operator()(const reversed_type_impl& t) { return f(t, v); }
-    template <typename T> auto operator()(const T& t) {
-        return f(t, reinterpret_cast<const typename T::native_type*>(v));
-    }
-};
-}
-
-// Given an abstract_type and a void pointer to an object of that
-// type, call f with the runtime type of t and v casted to the
-// corresponding native type.
-// This takes an abstract_type and a void pointer instead of a
-// data_value to support reversed_type_impl without requiring that
-// each visitor create a new data_value just to recurse.
-template <typename Func> static auto visit(const abstract_type& t, const void* v, Func&& f) {
-    return ::visit(t, data_value_visitor<Func>{v, f});
-}
-
 logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
 
