@@ -84,7 +84,8 @@ void migration_manager::init_messaging_service()
     auto& ss = service::get_local_storage_service();
 
     auto update_schema = [this, &ss] {
-        with_gate(_background_tasks, [this, &ss] {
+        //FIXME: future discarded.
+        (void)with_gate(_background_tasks, [this, &ss] {
             mlogger.debug("features changed, recalculating schema version");
             return update_schema_version_and_announce(get_storage_proxy(), ss.cluster_schema_features());
         });
@@ -96,7 +97,8 @@ void migration_manager::init_messaging_service()
     auto& ms = netw::get_local_messaging_service();
     ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> m) {
         auto src = netw::messaging_service::get_source(cinfo);
-        do_with(std::move(m), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+        // Start a new fiber.
+        (void)do_with(std::move(m), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
             return service::get_local_migration_manager().merge_schema_from(src, mutations);
         }).then_wrapped([src] (auto&& f) {
             if (f.failed()) {

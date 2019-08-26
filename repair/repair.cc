@@ -776,7 +776,8 @@ static future<> repair_cf_range(repair_info& ri,
                 completion.enter();
                 auto leave = defer([&completion] { completion.leave(); });
 
-                when_all(checksums.begin(), checksums.end()).then(
+                // Do it in the background.
+                (void)when_all(checksums.begin(), checksums.end()).then(
                         [&ri, &cf, range, &neighbors, &success]
                         (std::vector<future<partition_checksum>> checksums) {
                     // If only some of the replicas of this range are alive,
@@ -1412,7 +1413,8 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         repair_results.push_back(std::move(f));
     }
 
-    when_all(repair_results.begin(), repair_results.end()).then([id, fail = std::move(fail)] (std::vector<future<>> results) mutable {
+    // Do it in the background.
+    (void)when_all(repair_results.begin(), repair_results.end()).then([id, fail = std::move(fail)] (std::vector<future<>> results) mutable {
         if (std::any_of(results.begin(), results.end(), [] (auto&& f) { return f.failed(); })) {
             rlogger.info("repair {} failed", id);
         } else {

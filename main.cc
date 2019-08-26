@@ -600,7 +600,8 @@ int main(int ac, char** av) {
                     startlog.info("stopping prometheus API server");
                     prometheus_server.stop().get();
                 }));
-                prometheus::start(prometheus_server, pctx);
+                //FIXME discarded future
+                (void)prometheus::start(prometheus_server, pctx);
                 with_scheduling_group(maintenance_scheduling_group, [&] {
                   return prometheus_server.listen(socket_address{prom_addr, pport}).handle_exception([pport, &cfg] (auto ep) {
                     startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
@@ -699,7 +700,8 @@ int main(int ac, char** av) {
             static sharded<cql3::cql_config> cql_config;
             static sharded<::cql_config_updater> cql_config_updater;
             cql_config.start().get();
-            cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
+            //FIXME: discarded future
+            (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
             auto stop_cql_config_updater = defer([&] { cql_config_updater.stop().get(); });
             auto& gossiper = gms::get_gossiper();
             gossiper.start(std::ref(feature_service), std::ref(*cfg)).get();
@@ -708,7 +710,8 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg);
+            //FIXME: discarded future
+            (void)init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg);
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
@@ -888,7 +891,8 @@ int main(int ac, char** av) {
                     table& t = *(x.second);
                     for (sstables::shared_sstable sst : *t.get_sstables()) {
                         if (sst->requires_view_building()) {
-                            view_update_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());
+                            // FIXME: discarded future.
+                            (void)view_update_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());
                         }
                     }
                 }
@@ -913,7 +917,8 @@ int main(int ac, char** av) {
                         return db.flush_all_memtables();
                     }).get();
                     supervisor::notify("replaying commit log - removing old commitlog segments");
-                    cl->delete_segments(std::move(paths));
+                    //FIXME: discarded future
+                    (void)cl->delete_segments(std::move(paths));
                 }
             }
 
@@ -943,7 +948,8 @@ int main(int ac, char** av) {
             api::set_server_storage_proxy(ctx).get();
             api::set_server_load_sstable(ctx).get();
             static seastar::sharded<memory_threshold_guard> mtg;
-            mtg.start(cfg->large_memory_allocation_warning_threshold());
+            //FIXME: discarded future
+            (void)mtg.start(cfg->large_memory_allocation_warning_threshold());
             supervisor::notify("initializing migration manager RPC verbs");
             service::get_migration_manager().invoke_on_all([] (auto& mm) {
                 mm.init_messaging_service();
@@ -966,7 +972,8 @@ int main(int ac, char** av) {
             proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
                 auto& ss = service::get_local_storage_service();
                 ss.register_subscriber(&local_proxy);
-                local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), ss.shared_from_this());
+                //FIXME: discarded future
+                (void)local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), ss.shared_from_this());
             }).get();
 
             supervisor::notify("starting messaging service");
@@ -1020,7 +1027,8 @@ int main(int ac, char** av) {
                 view_backlog_broker.stop().get();
             });
 
-            api::set_server_cache(ctx);
+            //FIXME: discarded future
+            (void)api::set_server_cache(ctx);
             startlog.info("Waiting for gossip to settle before accepting client requests...");
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();

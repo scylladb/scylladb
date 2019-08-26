@@ -592,7 +592,7 @@ SEASTAR_TEST_CASE(testCalculateEndpoints) {
         for (size_t run = 0; run < RUNS; ++run) {
             token_metadata tm;
             // not doing anything sharded. We can just play fast and loose with the snitch.
-            snitch.stop();
+            (void)snitch.stop();
             snitch = generate_snitch(datacenters, nodes);
 
             for (auto& node : nodes) {

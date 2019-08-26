@@ -812,7 +812,7 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_moving_restrict
 
         // Verifying (1)
         // Can't quiesce because we don't want to wait on the futures.
-        sleep(10ms);
+        sleep(10ms).get();
         BOOST_REQUIRE_EQUAL(fut.available(), false);
 
         // Verifying (2)
@@ -871,7 +871,7 @@ SEASTAR_TEST_CASE(test_region_groups_tree_hierarchy_throttling_leaf_alloc) {
         // Total memory is still 2 * segment_size, can't proceed
         first_leaf.reset();
         // Can't quiesce because we don't want to wait on the futures.
-        sleep(10ms);
+        sleep(10ms).get();
 
         BOOST_REQUIRE_EQUAL(fut_1.available() || fut_2.available() || fut_3.available(), false);
 
@@ -935,7 +935,8 @@ class test_reclaimer: public region_group_reclaimer {
     promise<> _unleashed;
 public:
     virtual void start_reclaiming() noexcept override {
-        with_gate(_reclaimers_done, [this] {
+        // Future is waited on indirectly in `~test_reclaimer()` (via `_reclaimers_done`).
+        (void)with_gate(_reclaimers_done, [this] {
             return _unleash_reclaimer.get_shared_future().then([this] {
                 _unleashed.set_value();
                 while (this->under_pressure()) {
@@ -963,7 +964,8 @@ public:
     test_reclaimer(test_reclaimer& parent, size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(&parent), _rg(&parent._rg, *this) {}
 
     future<> unleash(future<> after) {
-        after.then([this] { _unleash_reclaimer.set_value(); });
+        // Result indirectly forwarded to _unleashed (returned below).
+        (void)after.then([this] { _unleash_reclaimer.set_value(); });
         return _unleashed.get_future();
     }
 };
@@ -973,7 +975,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_simple_active_reclaim) {
         // allocate a single region to exhaustion, and make sure active reclaim is activated.
         test_reclaimer simple(logalloc::segment_size);
         test_async_reclaim_region simple_region(simple.rg(), logalloc::segment_size);
-        simple.unleash(make_ready_future<>());
+        // FIXME: discarded future.
+        (void)simple.unleash(make_ready_future<>());
 
         // Can't run this function until we have reclaimed something
         auto fut = simple.rg().run_when_memory_available([] {});
@@ -998,7 +1001,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_worst_offen
         test_async_reclaim_region small_region(simple.rg(), logalloc::segment_size);
         test_async_reclaim_region medium_region(simple.rg(), 2 * logalloc::segment_size);
         test_async_reclaim_region big_region(simple.rg(), 3 * logalloc::segment_size);
-        simple.unleash(make_ready_future<>());
+        // FIXME: discarded future.
+        (void)simple.unleash(make_ready_future<>());
 
         // Can't run this function until we have reclaimed
         auto fut = simple.rg().run_when_memory_available([&simple] {
@@ -1030,7 +1034,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_leaf_offend
         test_async_reclaim_region big_region(large_leaf.rg(), 3 * logalloc::segment_size);
         auto fr = root.unleash(make_ready_future<>());
         auto flf = large_leaf.unleash(std::move(fr));
-        small_leaf.unleash(std::move(flf));
+        // FIXME: discarded future.
+        (void)small_leaf.unleash(std::move(flf));
 
         // Can't run this function until we have reclaimed. Try at the root, and we'll make sure
         // that the leaves are forced correctly.
@@ -1058,7 +1063,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_ancestor_bl
 
         test_async_reclaim_region root_region(root.rg(), logalloc::segment_size);
         auto f = root.unleash(make_ready_future<>());
-        leaf.unleash(std::move(f));
+        // FIXME: discarded future.
+        (void)leaf.unleash(std::move(f));
 
         // Can't run this function until we have reclaimed. Try at the leaf, and we'll make sure
         // that the root reclaims
@@ -1085,7 +1091,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_big_region_
         test_async_reclaim_region big_leaf_region(leaf.rg(), 3 * logalloc::segment_size);
         test_async_reclaim_region small_leaf_region(leaf.rg(), 2 * logalloc::segment_size);
         auto f = root.unleash(make_ready_future<>());
-        leaf.unleash(std::move(f));
+        // FIXME: discarded future.
+        (void)leaf.unleash(std::move(f));
 
         auto fut = root.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 3);
@@ -1113,7 +1120,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_no_double_r
 
         test_async_reclaim_region leaf_region(leaf.rg(), logalloc::segment_size);
         auto f = root.unleash(make_ready_future<>());
-        leaf.unleash(std::move(f));
+        // FIXME: discarded future.
+        (void)leaf.unleash(std::move(f));
 
         auto fut_root = root.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);

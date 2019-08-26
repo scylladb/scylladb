@@ -224,7 +224,8 @@ public:
         auto close = [this] (std::unique_ptr<index_reader>& ptr) {
             if (ptr) {
                 auto f = ptr->close();
-                f.handle_exception([index = std::move(ptr)] (auto&&) { });
+                // FIXME: discarded future.
+                (void)f.handle_exception([index = std::move(ptr)] (auto&&) { });
             }
         };
         close(_index_reader);

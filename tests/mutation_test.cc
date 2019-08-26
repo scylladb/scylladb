@@ -488,7 +488,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
             for (unsigned j = 0; j < 100; ++j) {
                 insert_row(pk_distribution(random_engine), ck_distribution(random_engine), r_distribution(random_engine));
             }
-            cf.flush();
+            // In the background, cf.stop() will wait for this.
+            (void)cf.flush();
         }
 
         return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {

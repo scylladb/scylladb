@@ -106,7 +106,8 @@ void cache_hitrate_calculator::recalculate_timer() {
 
 void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
     if (!_stopped) {
-        _me.invoke_on(master, [d] (cache_hitrate_calculator& local) {
+        // Do it in the background.
+        (void)_me.invoke_on(master, [d] (cache_hitrate_calculator& local) {
             local._timer.arm(d);
         }).handle_exception_type([] (seastar::no_sharded_instance_exception&) { /* ignore */ });
     }
@@ -200,7 +201,8 @@ future<> view_update_backlog_broker::start() {
                 auto backlog = _sp.local().get_view_update_backlog();
                 auto now = api::timestamp_type(std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count());
-                _gossiper.add_local_application_state(
+                //FIXME: discarded future.
+                (void)_gossiper.add_local_application_state(
                         gms::application_state::VIEW_BACKLOG,
                         gms::versioned_value(seastar::format("{}:{}:{}", backlog.current, backlog.max, now)));
                 sleep_abortable(gms::gossiper::INTERVAL, _as).get();

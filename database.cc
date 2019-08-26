@@ -621,7 +621,8 @@ database::init_commitlog() {
                 _commitlog->discard_completed_segments(id);
                 return;
             }
-            _column_families[id]->flush();
+            // Initiate a background flush. Waited upon in `stop()`.
+            (void)_column_families[id]->flush();
         }).release(); // we have longer life time than CL. Ignore reg anchor
     });
 }
@@ -1377,7 +1378,7 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                this->flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
+                (void)this->flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
                 return make_ready_future<>();
             });
         });
@@ -1948,10 +1949,13 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             return cf.make_streaming_reader(std::move(schema), *_contexts[shard].range, slice, fwd_mr);
         }
         virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
-            reader_fut.then([this, zis = shared_from_this(), shard] (stopped_reader&& reader) mutable {
+            // Move to the background.
+            (void)reader_fut.then([this, zis = shared_from_this(), shard] (stopped_reader&& reader) mutable {
                 return smp::submit_to(shard, [ctx = std::move(_contexts[shard]), handle = std::move(reader.handle)] () mutable {
                     ctx.semaphore->unregister_inactive_read(std::move(*handle));
                 });
+            }).handle_exception([shard] (std::exception_ptr e) {
+                dblog.warn("Failed to destroy shard reader of streaming multishard reader on shard {}: {}", shard, e);
             });
         }
         virtual reader_concurrency_semaphore& semaphore() override {

@@ -1196,7 +1196,7 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
     rebuild_statistics();
 
     // This is done in the background, so we can consider this compaction completed.
-    seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
+    (void)seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
        return with_semaphore(_sstable_deletion_sem, 1, [this, sstables_to_remove = std::move(sstables_to_remove)] {
         return sstables::delete_atomically(sstables_to_remove).then_wrapped([this, sstables_to_remove] (future<> f) {
             std::exception_ptr eptr;
@@ -2083,7 +2083,8 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             flat_mutation_reader_from_mutations({std::move(m)}),
             std::move(existings)).then([this, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
-        db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(units)).handle_exception([] (auto ignored) { });
+        //FIXME: discarded future.
+        (void)db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(units)).handle_exception([] (auto ignored) { });
     });
 }
 

@@ -113,7 +113,7 @@ void stream_manager::remove_stream(UUID plan_id) {
     _initiated_streams.erase(plan_id);
     _receiving_streams.erase(plan_id);
     // FIXME: Do not ignore the future
-    remove_progress_on_all_shards(plan_id).handle_exception([plan_id] (auto ep) {
+    (void)remove_progress_on_all_shards(plan_id).handle_exception([plan_id] (auto ep) {
         sslog.info("stream_manager: Fail to remove progress for plan_id={}: {}", plan_id, ep);
     });
 }
@@ -274,7 +274,8 @@ void stream_manager::fail_all_sessions() {
 void stream_manager::on_remove(inet_address endpoint) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
-        get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        //FIXME: discarded future.
+        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
@@ -285,7 +286,8 @@ void stream_manager::on_remove(inet_address endpoint) {
 void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
-        get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        //FIXME: discarded future.
+        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
@@ -296,7 +298,8 @@ void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) 
 void stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_dead", endpoint);
-        get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        //FIXME: discarded future.
+        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_dead", endpoint);

@@ -339,7 +339,8 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
     _ms_registered = true;
     ms().register_gossip_digest_syn([] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
         auto from = netw::messaging_service::get_source(cinfo);
-        smp::submit_to(0, [from, syn_msg = std::move(syn_msg)] () mutable {
+        // In a new fiber.
+        (void)smp::submit_to(0, [from, syn_msg = std::move(syn_msg)] () mutable {
             auto& gossiper = gms::get_local_gossiper();
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
         }).handle_exception([] (auto ep) {
@@ -349,7 +350,8 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
     });
     ms().register_gossip_digest_ack([] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
         auto from = netw::messaging_service::get_source(cinfo);
-        smp::submit_to(0, [from, msg = std::move(msg)] () mutable {
+        // In a new fiber.
+        (void)smp::submit_to(0, [from, msg = std::move(msg)] () mutable {
             auto& gossiper = gms::get_local_gossiper();
             return gossiper.handle_ack_msg(from, std::move(msg));
         }).handle_exception([] (auto ep) {
@@ -358,7 +360,8 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         return messaging_service::no_wait();
     });
     ms().register_gossip_digest_ack2([] (gossip_digest_ack2 msg) {
-        smp::submit_to(0, [msg = std::move(msg)] () mutable {
+        // In a new fiber.
+        (void)smp::submit_to(0, [msg = std::move(msg)] () mutable {
             return gms::get_local_gossiper().handle_ack2_msg(std::move(msg));
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_DIGEST_ACK2: {}", ep);
@@ -371,7 +374,8 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
     });
     ms().register_gossip_shutdown([] (inet_address from) {
-        smp::submit_to(0, [from] {
+        // In a new fiber.
+        (void)smp::submit_to(0, [from] {
             return gms::get_local_gossiper().handle_shutdown_msg(from);
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
@@ -525,7 +529,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
     // We can not run on_remove callbacks here becasue on_remove in
     // storage_service might take the gossiper::timer_callback_lock
-    seastar::async([this, endpoint] {
+    (void)seastar::async([this, endpoint] {
         _subscribers.for_each([endpoint] (auto& subscriber) {
             subscriber->on_remove(endpoint);
         });
@@ -606,7 +610,8 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep) {
 // - failure_detector
 // - on_remove callbacks, e.g, storage_service -> access token_metadata
 void gossiper::run() {
-    timer_callback_lock().then([this, g = this->shared_from_this()] {
+    // Run it in the background.
+    (void)timer_callback_lock().then([this, g = this->shared_from_this()] {
         return seastar::async([this, g] {
             logger.trace("=== Gossip round START");
 
@@ -653,13 +658,15 @@ void gossiper::run() {
                 }
                 logger.debug("Talk to {} live nodes: {}", nr_live_nodes, live_nodes);
                 for (auto& ep: live_nodes) {
-                    do_gossip_to_live_member(message, ep).handle_exception([] (auto ep) {
+                    // Do it in the background.
+                    (void)do_gossip_to_live_member(message, ep).handle_exception([] (auto ep) {
                         logger.trace("Failed to do_gossip_to_live_member: {}", ep);
                     });
                 }
 
                 /* Gossip to some unreachable member with some probability to check if he is back up */
-                do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
+                // Do it in the background.
+                (void)do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
                     logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
                 });
 
@@ -682,7 +689,8 @@ void gossiper::run() {
                 logger.trace("gossiped_to_seed={}, _live_endpoints.size={}, _seeds.size={}",
                              _gossiped_to_seed, _live_endpoints.size(), _seeds.size());
                 if (!_gossiped_to_seed || _live_endpoints.size() < _seeds.size()) {
-                    do_gossip_to_seed(message).handle_exception([] (auto ep) {
+                    // Do it in the background.
+                    (void)do_gossip_to_seed(message).handle_exception([] (auto ep) {
                         logger.trace("Faill to do_gossip_to_seed: {}", ep);
                     });
                 }
@@ -1294,7 +1302,8 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
     logger.trace("Sending a EchoMessage to {}", id);
-    ms().send_gossip_echo(id).then([this, addr] {
+    // Do it in the background.
+    (void)ms().send_gossip_echo(id).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
         set_last_processed_message_at();
         return seastar::async([this, addr] {
@@ -1656,7 +1665,8 @@ future<> gossiper::do_shadow_round() {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
                 auto id = get_msg_addr(seed);
                 logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
-                ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
+                // Do it in the background.
+                (void)ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
                     logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
                 });
             }

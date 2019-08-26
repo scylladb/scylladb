@@ -721,7 +721,8 @@ static future<> test_digest_and_checksum(sstable_version_types version) {
                     assert(size > 0 && size < 4096);
                     const char* buf = bufptr.get();
                     uint32_t checksum = ChecksumType::checksum(buf, size);
-                    f.close().finally([f]{});
+                    // Move to the background.
+                    (void)f.close().finally([f]{});
 
                     auto fname = sstable::filename(tmpdir_path, "ks", "cf", version, 10, big, component_type::CRC);
                     return open_file_dma(fname, open_flags::ro).then([checksum] (file f) {

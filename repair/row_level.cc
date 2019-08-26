@@ -1995,7 +1995,8 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(),
                     [&ms, src_cpu_id, from, repair_meta_id, source] () mutable {
                 auto sink = ms.make_sink_for_repair_get_row_diff_with_rpc_stream(source);
-                repair_get_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+                // Start a new fiber.
+                (void)repair_get_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                         [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
                     rlogger.info("Failed to process get_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
                 });
@@ -2008,7 +2009,8 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(),
                     [&ms, src_cpu_id, from, repair_meta_id, source] () mutable {
                 auto sink = ms.make_sink_for_repair_put_row_diff_with_rpc_stream(source);
-                repair_put_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+                // Start a new fiber.
+                (void)repair_put_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                         [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
                     rlogger.info("Failed to process put_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
                 });
@@ -2021,7 +2023,8 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(),
                     [&ms, src_cpu_id, from, repair_meta_id, source] () mutable {
                 auto sink = ms.make_sink_for_repair_get_full_row_hashes_with_rpc_stream(source);
-                repair_get_full_row_hashes_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+                // Start a new fiber.
+                (void)repair_get_full_row_hashes_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                         [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
                     rlogger.info("Failed to process get_full_row_hashes_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
                 });

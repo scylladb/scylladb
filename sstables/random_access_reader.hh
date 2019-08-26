@@ -46,7 +46,9 @@ public:
 
     void seek(uint64_t pos) {
         if (_in) {
-            seastar::with_gate(_close_gate, [in = std::move(_in)]() mutable {
+            // Future is waited on indirectly in `close()` (via `_close_gate`).
+            // FIXME: error handling
+            (void)seastar::with_gate(_close_gate, [in = std::move(_in)]() mutable {
                 auto fut = in->close();
                 return fut.then([in = std::move(in)] {});
             });

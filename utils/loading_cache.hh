@@ -580,7 +580,9 @@ private:
         }
 
         // Reload all those which value needs to be reloaded.
-        with_gate(_timer_reads_gate, [this] {
+        // Future is waited on indirectly in `stop()` (via `_timer_reads_gate`).
+        // FIXME: error handling
+        (void)with_gate(_timer_reads_gate, [this] {
             auto to_reload = boost::copy_range<utils::chunked_vector<timestamped_val_ptr>>(_lru_list
                     | boost::adaptors::filtered([this] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value().loaded() + _refresh < loading_cache_clock_type::now();

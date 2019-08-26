@@ -1150,7 +1150,8 @@ future<> view_builder::start() {
         calculate_shard_build_step(std::move(built), std::move(in_progress)).get();
         _mm.register_listener(this);
         _current_step = _base_to_build_step.begin();
-        _build_step.trigger();
+        // Waited on indirectly in stop().
+        (void)_build_step.trigger();
     });
     return make_ready_future<>();
 }
@@ -1339,7 +1340,8 @@ future<> view_builder::calculate_shard_build_step(
             if (built_views.find(view->id()) != built_views.end()) {
                 if (engine().cpu_id() == 0) {
                     auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([view = std::move(view)] {
-                        system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
+                        //FIXME: discarded future.
+                        (void)system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
                     });
                     bookkeeping_ops->push_back(std::move(f));
                 }
@@ -1427,7 +1429,8 @@ static future<> flush_base(lw_shared_ptr<column_family> base, abort_source& as) 
 }
 
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
-    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+    // Do it in the background, serialized.
+    (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
         auto& step = get_or_create_build_step(view->view_info()->base_id());
         return when_all(step.base->await_pending_writes(), step.base->await_pending_streams()).discard_result().then([this, &step] {
@@ -1442,14 +1445,16 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
                 if (f.failed()) {
                     vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), f.get_exception());
                 }
-                _build_step.trigger();
+                // Waited on indirectly in stop().
+                (void)_build_step.trigger();
             });
         });
     }).handle_exception_type([] (no_such_column_family&) { });
 }
 
 void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
-    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+    // Do it in the background, serialized.
+    (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
         auto step_it = _base_to_build_step.find(view->view_info()->base_id());
         if (step_it == _base_to_build_step.end()) {
@@ -1466,7 +1471,8 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
 
 void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
     vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
-    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+    // Do it in the background, serialized.
+    (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         // The view is absent from the database at this point, so find it by brute force.
         ([&, this] {
             for (auto& [_, step] : _base_to_build_step) {

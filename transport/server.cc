@@ -243,7 +243,8 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
             auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
             ++_connects;
             ++_connections;
-            conn->process().then_wrapped([this, conn] (future<> f) {
+            // Move connection to the background, monitor for lifetime and errors.
+            (void)conn->process().then_wrapped([this, conn] (future<> f) {
                 --_connections;
                 try {
                     f.get();
