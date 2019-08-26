@@ -86,7 +86,7 @@ void migration_manager::init_messaging_service()
     auto update_schema = [this, &ss] {
         with_gate(_background_tasks, [this, &ss] {
             mlogger.debug("features changed, recalculating schema version");
-            return update_schema_version(get_storage_proxy(), ss.cluster_schema_features());
+            return update_schema_version_and_announce(get_storage_proxy(), ss.cluster_schema_features());
         });
     };
 
