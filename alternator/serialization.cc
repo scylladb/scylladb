@@ -173,7 +173,7 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
     auto it = key_typed_value.MemberBegin();
     if (it->name.GetString() != expected_type) {
         throw api_error("ValidationException",
-                format("Expected type {} for key column {}, got type {}",
+                format("Type mismatch: expected type {} for key column {}, got type {}",
                         expected_type, column.name_as_text(), it->name.GetString()));
     }
     if (column.type == bytes_type) {
