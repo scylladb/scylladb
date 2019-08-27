@@ -367,7 +367,6 @@ future<json::json_return_type> executor::create_table(client_state& client_state
         add_column(builder, range_key, attribute_definitions, column_kind::clustering_key);
     }
     builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
-    schema_ptr schema = builder.build();
 
     // Alternator does not yet support billing or throughput limitations, but
     // let's verify that BillingMode is at least legal.
@@ -384,11 +383,14 @@ future<json::json_return_type> executor::create_table(client_state& client_state
         throw api_error("ValidationException", "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
     }
 
+    schema_ptr partial_schema = builder.build();
+
     // Parse GlobalSecondaryIndexes parameters before creating the base
     // table, so if we have a parse errors we can fail without creating
     // any table.
     const rjson::value* gsi = rjson::find(table_info, "GlobalSecondaryIndexes");
     std::vector<schema_builder> view_builders;
+    std::vector<sstring> where_clauses;
     if (gsi) {
         if (!gsi->IsArray()) {
             throw api_error("ValidationException", "GlobalSecondaryIndexes must be an array.");
@@ -404,13 +406,22 @@ future<json::json_return_type> executor::create_table(client_state& client_state
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(KEYSPACE_NAME, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(g);
-            if (view_hash_key != hash_key && view_hash_key != range_key) {
-                throw api_error("ValidationException", "FIXME: indexing non-key attributes not yet implemented!");
+            if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
+                // A column that exists in a global secondary index is upgraded from being a map entry
+                // to having a regular column definition in the base schema
+                add_column(builder, view_hash_key, attribute_definitions, column_kind::regular_column);
             }
             add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
             if (!view_range_key.empty()) {
-                if (view_range_key != hash_key && view_range_key != range_key) {
-                    throw api_error("ValidationException", "FIXME: indexing non-key attributes not yet implemented!");
+                if (partial_schema->get_column_definition(to_bytes(view_range_key)) == nullptr) {
+                    // A column that exists in a global secondary index is upgraded from being a map entry
+                    // to having a regular column definition in the base schema
+                    if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
+                        // FIXME: this is alternator limitation only, because Scylla's materialized views
+                        // we use underneath do not allow more than 1 base regular column to be part of the MV key
+                        throw api_error("ValidationException", "Only 1 regular column from the base table can be used in GSI key");
+                    }
+                    add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
                 }
                 add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
             }
@@ -423,16 +434,11 @@ future<json::json_return_type> executor::create_table(client_state& client_state
             if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
                 add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
             }
-            view_builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
-            // Note above we do didn't need to add virtual columns, as all
-            // base columns were copied to view. TODO: reconsider the need
-            // for virtual columns when we support Projection.
             sstring where_clause = "\"" + view_hash_key + "\" IS NOT NULL";
             if (!view_range_key.empty()) {
                 where_clause = where_clause + " AND \"" + view_hash_key + "\" IS NOT NULL";
             }
-            const bool include_all_columns = true;
-            view_builder.with_view_info(*schema, include_all_columns, where_clause);
+            where_clauses.push_back(std::move(where_clause));
             view_builders.emplace_back(std::move(view_builder));
         }
     }
@@ -447,6 +453,25 @@ future<json::json_return_type> executor::create_table(client_state& client_state
         throw api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported.");
     }
     // FIXME: we should read the Tags property, and save them somewhere.
+
+    schema_ptr schema = builder.build();
+    auto where_clause_it = where_clauses.begin();
+    for (auto& view_builder : view_builders) {
+        // Note below we don't need to add virtual columns, as all
+        // base columns were copied to view. TODO: reconsider the need
+        // for virtual columns when we support Projection.
+        for (const column_definition& regular_cdef : schema->regular_columns()) {
+            try {
+                //TODO: add a non-throwing API for finding a column in a schema builder
+                view_builder.find_column(*cql3::to_identifier(regular_cdef));
+            } catch (std::invalid_argument&) {
+                view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+            }
+        }
+        const bool include_all_columns = true;
+        view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
+        ++where_clause_it;
+    }
 
     return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
         return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
