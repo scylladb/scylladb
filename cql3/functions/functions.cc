@@ -115,9 +115,9 @@ functions::init() {
     declare(aggregate_fcts::make_max_function<simple_date_native_type>());
     declare(aggregate_fcts::make_min_function<simple_date_native_type>());
 
-    declare(aggregate_fcts::make_count_function<timestamp_native_type>());
-    declare(aggregate_fcts::make_max_function<timestamp_native_type>());
-    declare(aggregate_fcts::make_min_function<timestamp_native_type>());
+    declare(aggregate_fcts::make_count_function<db_clock::time_point>());
+    declare(aggregate_fcts::make_max_function<db_clock::time_point>());
+    declare(aggregate_fcts::make_min_function<db_clock::time_point>());
 
     declare(aggregate_fcts::make_count_function<timeuuid_native_type>());
     declare(aggregate_fcts::make_max_function<timeuuid_native_type>());
