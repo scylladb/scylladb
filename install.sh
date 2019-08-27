@@ -245,6 +245,14 @@ ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
 ExecStopPost=
 User=
 EOS
+         install -d -m755 "$retc"/systemd/system/node-exporter.service.d
+         cat << EOS > "$retc"/systemd/system/node-exporter.service.d/nonroot.conf
+[Service]
+ExecStart=
+ExecStart=$rprefix/bin/node_exporter  --collector.interrupts
+User=
+Group=
+EOS
         install -d "$rprefix"/sbin
         for i in $SBINFILES; do
             ln -srf "$rprefix/scripts/$i" "$rprefix/sbin/$i"
@@ -254,6 +262,11 @@ EOS
         fi
         ln -srf $rsystemd/scylla-server.service ~/.config/systemd/user/
         ln -srf "$retc"/systemd/system/scylla-server.service.d/nonroot.conf ~/.config/systemd/user/scylla-server.service.d
+        if [ ! -d ~/.config/systemd/user/node-exporter.service.d ]; then
+            mkdir -p ~/.config/systemd/user/node-exporter.service.d
+        fi
+        ln -srf $rsystemd/node-exporter.service ~/.config/systemd/user/
+        ln -srf "$retc"/systemd/system/node-exporter.service.d/nonroot.conf ~/.config/systemd/user/node-exporter.service.d
     fi
 
     install -m755 scylla-gdb.py -Dt "$rprefix"/scripts/

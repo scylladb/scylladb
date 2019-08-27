@@ -26,7 +26,7 @@ import argparse
 from scylla_util import *
 
 if __name__ == '__main__':
-    if os.getuid() > 0:
+    if not is_nonroot() and os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
     parser = argparse.ArgumentParser(description='Modify Scylla running mode.')
@@ -35,9 +35,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.developer_mode == 0:
-        with open('/etc/scylla.d/dev-mode.conf', 'w') as f:
+        with open(etcdir()+'/scylla.d/dev-mode.conf', 'w') as f:
             f.close()
     else:
-        cfg = sysconfig_parser('/etc/scylla.d/dev-mode.conf')
+        cfg = sysconfig_parser(etcdir()+'/scylla.d/dev-mode.conf')
         cfg.set('DEV_MODE', '--developer-mode=1')
         cfg.commit()

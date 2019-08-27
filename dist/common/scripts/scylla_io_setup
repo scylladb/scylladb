@@ -22,7 +22,7 @@
 
 import os
 import re
-import scylla_util
+from scylla_util import *
 import subprocess
 import argparse
 import yaml
@@ -36,13 +36,13 @@ if __name__ == "__main__":
                         help='configure AWS AMI')
     args = parser.parse_args()
 
-    cpudata = scylla_util.scylla_cpuinfo()
-    if not scylla_util.is_developer_mode():
+    cpudata = scylla_cpuinfo()
+    if not is_developer_mode():
         if args.ami:
-            idata = scylla_util.aws_instance()
+            idata = aws_instance()
 
             disk_properties = {}
-            disk_properties["mountpoint"] = "/var/lib/scylla"
+            disk_properties["mountpoint"] = datadir()
             nr_disks = len(idata.ephemeral_disks())
             ## both i3 and i2 can run with 1 I/O Queue per shard
             if idata.instance() == "i3.large":
@@ -81,22 +81,22 @@ if __name__ == "__main__":
                 disk_properties["read_bandwidth"] = 507338935 * nr_disks
                 disk_properties["write_iops"] = 57100 * nr_disks
                 disk_properties["write_bandwidth"] = 483141731 * nr_disks
-            properties_file = open("/etc/scylla.d/io_properties.yaml", "w")
+            properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
             yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
-            ioconf = open("/etc/scylla.d/io.conf", "w")
+            ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
             ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
         else:
             if "SCYLLA_CONF" in os.environ:
                 conf_dir = os.environ["SCYLLA_CONF"]
             else:
-                conf_dir = "/etc/scylla"
+                conf_dir = etcdir() + "/scylla"
             cfg = yaml.safe_load(open(os.path.join(conf_dir, "scylla.yaml")))
             if not "data_file_directories" in cfg:
                 logging.error("No data directories found. Please check the configuration and run scylla_io_setup again.\n")
                 sys.exit(1)
             data_dirs = cfg["data_file_directories"]
 
-            default_path = '/var/lib/scylla/'
+            default_path = datadir()
             for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
                 key = "%s_directory" % t
                 if key in cfg:
@@ -127,15 +127,15 @@ if __name__ == "__main__":
                 iotune_args += [ "--smp", str(cpudata.smp()) ]
 
             try:
-                subprocess.check_call(["iotune",
+                subprocess.check_call([bindir() + "/iotune",
                                        "--format", "envfile",
-                                       "--options-file", "/etc/scylla.d/io.conf",
-                                       "--properties-file", "/etc/scylla.d/io_properties.yaml"] + iotune_args)
+                                       "--options-file", etcdir() + "/scylla.d/io.conf",
+                                       "--properties-file", etcdir() + "/scylla.d/io_properties.yaml"] + iotune_args)
             except Exception:
                 logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
                               "This is a non-supported setup, and performance is expected to be very bad.\n"
                               "For better performance, placing your data on XFS-formatted directories is required.\n"
                               "To override this error, enable developer mode as follow:\n"
-                              "sudo /opt/scylladb/scripts/scylla_dev_mode_setup --developer-mode 1", data_dirs)
+                              "sudo %s/scylla_dev_mode_setup --developer-mode 1", data_dirs, scriptsdir())
                 sys.exit(1)
 
