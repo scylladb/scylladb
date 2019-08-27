@@ -1091,6 +1091,7 @@ def configure_seastar(build_dir, mode):
         '-DSeastar_LD_FLAGS={}'.format(seastar_ldflags),
         '-DSeastar_CXX_DIALECT=gnu++17',
         '-DSeastar_STD_OPTIONAL_VARIANT_STRINGVIEW=ON',
+        '-DSeastar_UNUSED_RESULT_ERROR=ON',
     ]
     if args.dpdk:
         seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=wsm']
