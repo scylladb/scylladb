@@ -73,7 +73,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         service::storage_service_config sscfg;
         sscfg.available_memory =  memory::stats().total_memory();
         sharded<cql3::cql_config> cql_config;
-        cql_config.start();
+        cql_config.start().get();
         auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
         service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, true).get();
