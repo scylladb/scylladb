@@ -1185,7 +1185,8 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(service::st
         bounds.push_back(query::clustering_range::make_singular(ck));
     }
 
-    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto regular_columns = boost::copy_range<query::column_id_vector>(
+            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto selection = cql3::selection::selection::wildcard(schema);
 
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
@@ -1409,7 +1410,8 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
     check_key(query_key, schema);
 
     //TODO(sarna): It would be better to fetch only some attributes of the map, not all
-    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto regular_columns = boost::copy_range<query::column_id_vector>(
+            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
 
     auto selection = cql3::selection::selection::wildcard(schema);
 
@@ -1475,7 +1477,8 @@ future<json::json_return_type> executor::batch_get_item(client_state& client_sta
             } else {
                 bounds.push_back(query::clustering_range::make_singular(std::move(r.ck)));
             }
-            query::column_id_vector regular_columns{attrs_column(*rs.schema).id};
+            auto regular_columns = boost::copy_range<query::column_id_vector>(
+                    rs.schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
@@ -1631,7 +1634,8 @@ static future<json::json_return_type> do_query(schema_ptr schema,
         paging_state = ::make_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
-    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto regular_columns = boost::copy_range<query::column_id_vector>(
+            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto selection = cql3::selection::selection::wildcard(schema);
     auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
