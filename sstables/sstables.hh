@@ -299,11 +299,11 @@ public:
     // guaranteed that all of its on-disk files will be deleted as soon as
     // the in-memory object is destroyed.
     void mark_for_deletion() {
-        _marked_for_deletion = true;
+        _marked_for_deletion = mark_for_deletion::marked;
     }
 
     bool marked_for_deletion() const {
-        return _marked_for_deletion;
+        return _marked_for_deletion == mark_for_deletion::marked;
     }
 
     void add_ancestor(int64_t generation) {
@@ -532,7 +532,11 @@ private:
 
     filter_tracker _filter_tracker;
 
-    bool _marked_for_deletion = false;
+    enum class mark_for_deletion {
+        implicit = -1,
+        none = 0,
+        marked = 1
+    } _marked_for_deletion = mark_for_deletion::none;
 
     gc_clock::time_point _now;
 

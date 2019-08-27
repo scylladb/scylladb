@@ -973,6 +973,9 @@ future<> sstable::seal_sstable() {
             }).then([this, dir_f] () mutable {
                 return sstable_write_io_check([&] { return dir_f.close(); });
             }).then([this, dir_f] {
+                if (_marked_for_deletion == mark_for_deletion::implicit) {
+                    _marked_for_deletion = mark_for_deletion::none;
+                }
                 // If this point was reached, sstable should be safe in disk.
                 sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
             });
@@ -2377,6 +2380,8 @@ future<> sstable::seal_sstable(bool backup)
 sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, const io_priority_class& pc, shard_id shard)
 {
+    // Mark sstable for implicit deletion if destructed before it is sealed.
+    _marked_for_deletion = mark_for_deletion::implicit;
     return sstable_writer(*this, s, estimated_partitions, cfg, enc_stats, pc, shard);
 }
 
@@ -2861,13 +2866,14 @@ sstable::~sstable() {
         });
     }
 
-    if (_marked_for_deletion) {
+    if (_marked_for_deletion != mark_for_deletion::none) {
         // We need to delete the on-disk files for this table. Since this is a
         // destructor, we can't wait for this to finish, or return any errors,
         // but just need to do our best. If a deletion fails for some reason we
         // log and ignore this failure, because on startup we'll again try to
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
+        sstlog.debug("Deleting sstable that is {}marked for deletion", _marked_for_deletion == mark_for_deletion::implicit ? "implicitly " : "");
         try {
             // FIXME:
             // - Longer term fix is to hand off deletion of sstables to a manager that can
