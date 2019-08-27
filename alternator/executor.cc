@@ -508,9 +508,13 @@ static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) 
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(it->name.GetString());
         const column_definition* cdef = schema->get_column_definition(column_name);
-        if (!cdef || !cdef->is_primary_key()) {
+        if (!cdef) {
             bytes value = serialize_item(it->value);
             attrs_collector.put(std::move(column_name), std::move(value), ts);
+        } else if (!cdef->is_primary_key()) {
+            // Explicitly defined regular columns can appear as a result of creating a global secondary index
+            bytes column_value = get_key_from_typed_value(it->value, *cdef, type_to_string(cdef->type));
+            row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
         }
     }
 
@@ -1251,6 +1255,32 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
              attribute_updates = rjson::copy(attribute_updates), ts, &client_state] (std::unique_ptr<rjson::value> previous_item) mutable {
 
         auto& row = m.partition().clustered_row(*schema, ck);
+        auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
+            const column_definition* cdef = schema->get_column_definition(column_name);
+            if (cdef) {
+                if (cdef->is_primary_key()) {
+                    throw api_error("ValidationException",
+                            format("UpdateItem cannot update key column {}", cdef->name_as_text()));
+                }
+                bytes column_value = get_key_from_typed_value(json_value, *cdef, type_to_string(cdef->type));
+                row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
+            } else {
+                attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);
+            }
+        };
+        auto do_delete = [&] (bytes&& column_name) {
+            const column_definition* cdef = schema->get_column_definition(column_name);
+            if (cdef) {
+                if (cdef->is_primary_key()) {
+                    throw api_error("ValidationException",
+                            format("UpdateItem cannot delete key column {}", cdef->name_as_text()));
+                }
+                row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
+            } else {
+                attrs_collector.del(std::move(column_name), ts);
+            }
+        };
+
         if (has_update_expression) {
             std::unordered_set<std::string> seen_column_names;
             std::unordered_set<std::string> used_attribute_values;
@@ -1273,10 +1303,10 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                 std::visit(overloaded {
                     [&] (const parsed::update_expression::action::set& a) {
                         auto value = calculate_value(a._rhs, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                        attrs_collector.put(to_bytes(column_name), serialize_item(value), ts);
+                        do_update(to_bytes(column_name), value);
                     },
                     [&] (const parsed::update_expression::action::remove& a) {
-                        attrs_collector.del(to_bytes(column_name), ts);
+                        do_delete(to_bytes(column_name));
                     },
                     [&] (const parsed::update_expression::action::add& a) {
                         parsed::value base;
@@ -1300,7 +1330,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                         } else {
                             throw api_error("ValidationException", format("An operand in the update expression has an incorrect data type: {}", v1));
                         }
-                        attrs_collector.put(to_bytes(column_name), serialize_item(result), ts);
+                        do_update(to_bytes(column_name), result);
                     },
                     [&] (const parsed::update_expression::action::del& a) {
                         parsed::value base;
@@ -1310,7 +1340,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                         rjson::value v1 = calculate_value(base, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                         rjson::value v2 = calculate_value(subset, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                         rjson::value result  = set_diff(v1, v2);
-                        attrs_collector.put(to_bytes(column_name), serialize_item(result), ts);
+                        do_update(to_bytes(column_name), result);
                     }
                 }, action._action);
             }
@@ -1335,14 +1365,14 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                     throw api_error("ValidationException",
                             format("UpdateItem DELETE with checking old value not yet supported"));
                 }
-                attrs_collector.del(std::move(column_name), ts);
+                do_delete(std::move(column_name));
             } else if (action == "PUT") {
                 const rjson::value& value = (it->value)["Value"];
                 if (value.MemberCount() != 1) {
                     throw api_error("ValidationException",
                             format("Value field in AttributeUpdates must have just one item", it->name.GetString()));
                 }
-                attrs_collector.put(std::move(column_name), serialize_item(value), ts);
+                do_update(std::move(column_name), value);
             } else {
                 // FIXME: need to support "ADD" as well.
                 throw api_error("ValidationException",
