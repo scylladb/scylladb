@@ -50,7 +50,6 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 #include <seastar/core/future-util.hh>
-#include <seastar/core/pipe.hh>
 #include <seastar/core/scheduling.hh>
 
 #include "sstables.hh"
