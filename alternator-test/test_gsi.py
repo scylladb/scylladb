@@ -147,7 +147,7 @@ def test_gsi_strong_consistency(test_table_gsi_1):
         full_scan(test_table_gsi_1, IndexName='hello', ConsistentRead=True)
 
 # Verify that a GSI is correctly listed in describe_table
-@pytest.mark.xfail(reason="GSI describe_table not implemented")
+@pytest.mark.xfail(reason="DescribeTable provides index names only, no size or item count")
 def test_gsi_describe(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     assert 'Table' in desc
@@ -166,7 +166,6 @@ def test_gsi_describe(test_table_gsi_1):
 
 # When a GSI's key includes an attribute not in the base table's key, we
 # need to remember to add its type to AttributeDefinitions.
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_missing_attribute_definition(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*AttributeDefinitions'):
         create_test_table(dynamodb,
@@ -251,7 +250,6 @@ def test_table_gsi_2(dynamodb):
     yield table
     table.delete()
 
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_2(test_table_gsi_2):
     items1 = [{'p': random_string(), 'x': random_string()} for i in range(10)]
     x1 = items1[0]['x']
@@ -270,7 +268,6 @@ def test_gsi_2(test_table_gsi_2):
 
 # Test that when a table has a GSI, if the indexed attribute is missing, the
 # item is added to the base table but not the index.
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_missing_attribute(test_table_gsi_2):
     p1 = random_string()
     x1 = random_string()
@@ -300,7 +297,6 @@ def test_gsi_missing_attribute(test_table_gsi_2):
 # the item is added to the base table but not index.
 # The following three tests test_gsi_wrong_type_attribute_{put,update,batch}
 # test updates using PutItem, UpdateItem, and BatchWriteItem respectively.
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_wrong_type_attribute_put(test_table_gsi_2):
     # PutItem with wrong type for 'x' is rejected, item isn't created even
     # in the base table.
@@ -309,7 +305,6 @@ def test_gsi_wrong_type_attribute_put(test_table_gsi_2):
         test_table_gsi_2.put_item(Item={'p':  p, 'x': 3})
     assert not 'Item' in test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)
 
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_wrong_type_attribute_update(test_table_gsi_2):
     # An UpdateItem with wrong type for 'x' is also rejected, but naturally
     # if the item already existed, it remains as it was.
@@ -320,7 +315,6 @@ def test_gsi_wrong_type_attribute_update(test_table_gsi_2):
         test_table_gsi_2.update_item(Key={'p':  p}, AttributeUpdates={'x': {'Value': 3, 'Action': 'PUT'}})
     assert test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': x}
 
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_wrong_type_attribute_batch(test_table_gsi_2):
     # In a BatchWriteItem, if any update is forbidden, the entire batch is
     # rejected, and none of the updates happen at all.
@@ -401,7 +395,6 @@ def test_table_gsi_4(dynamodb):
     table.delete()
 
 # Test that a base table with two GSIs updates both as expected.
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_4(test_table_gsi_4):
     items = [{'p': random_string(), 'a': random_string(), 'b': random_string()} for i in range(10)]
     with test_table_gsi_4.batch_writer() as batch:
@@ -413,7 +406,6 @@ def test_gsi_4(test_table_gsi_4):
         KeyConditions={'b': {'AttributeValueList': [items[3]['b']], 'ComparisonOperator': 'EQ'}})
 
 # Verify that describe_table lists the two GSIs.
-@pytest.mark.xfail(reason="GSI not supported")
 def test_gsi_4_describe(test_table_gsi_4):
     desc = test_table_gsi_4.meta.client.describe_table(TableName=test_table_gsi_4.name)
     assert 'Table' in desc
@@ -693,7 +685,6 @@ def test_gsi_unsupported_names(dynamodb):
 
 # On the other hand, names following the above rules should be accepted. Even
 # names which the Scylla rules forbid, such as a name starting with .
-@pytest.mark.xfail(reason="GSI support in describe_table")
 def test_gsi_non_scylla_name(dynamodb):
     create_gsi(dynamodb, '.alternator_test')
 
@@ -701,7 +692,6 @@ def test_gsi_non_scylla_name(dynamodb):
 # limit is different - the sum of both table and index length cannot
 # exceed 211 characters. So we test a much shorter limit.
 # (compare test_create_and_delete_table_very_long_name()).
-@pytest.mark.xfail(reason="GSI support in describe_table")
 def test_gsi_very_long_name(dynamodb):
     #create_gsi(dynamodb, 'n' * 255)   # works on DynamoDB, but not on Scylla
     create_gsi(dynamodb, 'n' * 190)
