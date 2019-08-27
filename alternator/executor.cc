@@ -246,6 +246,24 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
     // The other states (CREATING, UPDATING, DELETING) are not currently
     // returned.
     rjson::set(table_description, "TableStatus", "ACTIVE");
+    table& t = _proxy.get_db().local().find_column_family(schema);
+    if (!t.views().empty()) {
+        rjson::value views_array = rjson::empty_array();
+        for (const view_ptr& vptr : t.views()) {
+            rjson::value view_entry = rjson::empty_object();
+            const sstring& cf_name = vptr->cf_name();
+            size_t delim_it = cf_name.find(':');
+            if (delim_it == sstring::npos) {
+                elogger.error("Invalid internal index table name: {}", cf_name);
+                continue;
+            }
+            sstring index_name = cf_name.substr(delim_it + 1);
+            rjson::set(view_entry, "IndexName", rjson::from_string(index_name));
+            rjson::push_back(views_array, std::move(view_entry));
+        }
+        rjson::set(table_description, "GlobalSecondaryIndexes", std::move(views_array));
+    }
+
     // FIXME: more attributes! Check https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableDescription.html#DDB-Type-TableDescription-TableStatus but also run a test to see what DyanmoDB really fills
     // maybe for TableId or TableArn use  schema.id().to_sstring().c_str();
     // Of course, the whole schema is missing!
