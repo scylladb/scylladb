@@ -489,6 +489,9 @@ public:
         }
         return ret;
     }
+    bool empty() const {
+        return collected.empty();
+    }
 };
 
 static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) {
@@ -500,6 +503,8 @@ static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) 
 
     auto ts = api::new_timestamp();
 
+    auto& row = m.partition().clustered_row(*schema, ck);
+
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(it->name.GetString());
         const column_definition* cdef = schema->get_column_definition(column_name);
@@ -509,9 +514,10 @@ static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) 
         }
     }
 
-    auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
-    auto& row = m.partition().clustered_row(*schema, ck);
-    row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+    if (!attrs_collector.empty()) {
+        auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
+        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+    }
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
     // PutItem is supposed to completely replace the old item, so we need to
@@ -1242,6 +1248,8 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
             [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck),
              update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector),
              attribute_updates = rjson::copy(attribute_updates), ts, &client_state] (std::unique_ptr<rjson::value> previous_item) mutable {
+
+        auto& row = m.partition().clustered_row(*schema, ck);
         if (has_update_expression) {
             std::unordered_set<std::string> seen_column_names;
             std::unordered_set<std::string> used_attribute_values;
@@ -1340,9 +1348,10 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                     format("Unknown Action value '{}' in AttributeUpdates", action));
             }
         }
-        auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
-        auto& row = m.partition().clustered_row(*schema, ck);
-        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        if (!attrs_collector.empty()) {
+            auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
+            row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        }
         // To allow creation of an item with no attributes, we need a row marker.
         // Note that unlike Scylla, even an "update" operation needs to add a row
         // marker. TODO: a row marker isn't really needed for a DELETE operation.
