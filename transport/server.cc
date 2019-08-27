@@ -1526,11 +1526,6 @@ public:
     static void encode(cql_server::response& r, data_type type) {
         type = type->underlying_type();
 
-        // For compatibility sake, we still return DateType as the timestamp type in resultSet metadata (#5723)
-        if (type == date_type) {
-            type = timestamp_type;
-        }
-
         auto i = type_id_to_type.right.find(type);
         if (i != type_id_to_type.right.end()) {
             r.write_short(static_cast<std::underlying_type<type_id>::type>(i->second));

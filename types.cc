@@ -106,7 +106,6 @@ static const char* bytes_type_name     = "org.apache.cassandra.db.marshal.BytesT
 static const char* boolean_type_name   = "org.apache.cassandra.db.marshal.BooleanType";
 static const char* timeuuid_type_name  = "org.apache.cassandra.db.marshal.TimeUUIDType";
 static const char* timestamp_type_name = "org.apache.cassandra.db.marshal.TimestampType";
-static const char* date_type_name      = "org.apache.cassandra.db.marshal.DateType";
 static const char* simple_date_type_name = "org.apache.cassandra.db.marshal.SimpleDateType";
 static const char* time_type_name      = "org.apache.cassandra.db.marshal.TimeType";
 static const char* uuid_type_name      = "org.apache.cassandra.db.marshal.UUIDType";
@@ -201,8 +200,6 @@ bytes_type_impl::bytes_type_impl()
     : concrete_type(kind::bytes, bytes_type_name, {}, data::type_info::make_variable_size()) {}
 
 boolean_type_impl::boolean_type_impl() : simple_type_impl<bool>(kind::boolean, boolean_type_name, 1) {}
-
-date_type_impl::date_type_impl() : concrete_type(kind::date, date_type_name, 8, data::type_info::make_fixed_size(sizeof(uint64_t))) {}
 
 timeuuid_type_impl::timeuuid_type_impl()
     : concrete_type<utils::UUID>(
@@ -752,7 +749,6 @@ struct is_byte_order_equal_visitor {
     bool operator()(const reversed_type_impl& t) { return t.underlying_type()->is_byte_order_equal(); }
     bool operator()(const string_type_impl&) { return true; }
     bool operator()(const bytes_type_impl&) { return true; }
-    bool operator()(const date_type_impl&) { return true; }
     bool operator()(const inet_addr_type_impl&) { return true; }
     bool operator()(const duration_type_impl&) { return true; }
     // FIXME: origin returns false for list.  Why?
@@ -786,33 +782,6 @@ bool abstract_type::is_compatible_with(const abstract_type& previous) const {
             // bytesType validate everything, so it is compatible with the former.
             return previous.is_string();
         }
-        bool operator()(const date_type_impl& t) {
-            if (previous.get_kind() == kind::timestamp) {
-                static logging::logger date_logger(date_type_name);
-                date_logger.warn("Changing from TimestampType to DateType is allowed, but be wary "
-                                 "that they sort differently for pre-unix-epoch timestamps "
-                                 "(negative timestamp values) and thus this change will corrupt "
-                                 "your data if you have such negative timestamp. There is no "
-                                 "reason to switch from DateType to TimestampType except if you "
-                                 "were using DateType in the first place and switched to "
-                                 "TimestampType by mistake.");
-                return true;
-            }
-            return false;
-        }
-        bool operator()(const timestamp_type_impl& t) {
-            if (previous.get_kind() == kind::date) {
-                static logging::logger timestamp_logger(timestamp_type_name);
-                timestamp_logger.warn("Changing from DateType to TimestampType is allowed, but be wary "
-                                      "that they sort differently for pre-unix-epoch timestamps "
-                                      "(negative timestamp values) and thus this change will corrupt "
-                                      "your data if you have such negative timestamp. So unless you "
-                                      "know that you don't have *any* pre-unix-epoch timestamp you "
-                                      "should change back to DateType");
-                return true;
-            }
-            return false;
-        }
         bool operator()(const tuple_type_impl& t) {
             return check_compatibility(t, previous, &abstract_type::is_compatible_with);
         }
@@ -830,7 +799,6 @@ abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
         cql3_kind operator()(const bytes_type_impl&) { return cql3_kind::BLOB; }
         cql3_kind operator()(const boolean_type_impl&) { return cql3_kind::BOOLEAN; }
         cql3_kind operator()(const counter_type_impl&) { return cql3_kind::COUNTER; }
-        cql3_kind operator()(const date_type_impl&) { return cql3_kind::TIMESTAMP; }
         cql3_kind operator()(const decimal_type_impl&) { return cql3_kind::DECIMAL; }
         cql3_kind operator()(const double_type_impl&) { return cql3_kind::DOUBLE; }
         cql3_kind operator()(const duration_type_impl&) { return cql3_kind::DURATION; }
@@ -874,7 +842,6 @@ static sstring cql3_type_name_impl(const abstract_type& t) {
         sstring operator()(const bytes_type_impl&) { return "blob"; }
         sstring operator()(const counter_type_impl&) { return "counter"; }
         sstring operator()(const timestamp_type_impl&) { return "timestamp"; }
-        sstring operator()(const date_type_impl&) { return "timestamp"; }
         sstring operator()(const decimal_type_impl&) { return "decimal"; }
         sstring operator()(const double_type_impl&) { return "double"; }
         sstring operator()(const duration_type_impl&) { return "duration"; }
@@ -1954,14 +1921,6 @@ struct serialize_visitor {
             *out++ = char(*v);
         }
     }
-    void operator()(const date_type_impl& t, const date_type_impl::native_type* v) {
-        if (v->empty()) {
-            return;
-        }
-        int64_t i = v->get().time_since_epoch().count();
-        i = net::hton(uint64_t(i));
-        out = std::copy_n(reinterpret_cast<const char*>(&i), sizeof(i), out);
-    }
     void operator()(const timeuuid_type_impl& t, const timeuuid_type_impl::native_type* uuid1) {
         if (uuid1->empty()) {
             return;
@@ -2181,11 +2140,6 @@ static int64_t deserialize_value(const time_type_impl&, bytes_view v) {
     return read_simple_exactly<int64_t>(v);
 }
 
-static db_clock::time_point deserialize_value(const date_type_impl&, bytes_view v) {
-    auto tmp = read_simple_exactly<uint64_t>(v);
-    return db_clock::time_point(db_clock::duration(tmp));
-}
-
 static bool deserialize_value(const boolean_type_impl&, bytes_view v) {
     if (v.size() != 1) {
         throw marshal_exception(format("cannot deserialize boolean, size mismatch ({:d})", v.size()));
@@ -2261,7 +2215,6 @@ struct compare_visitor {
     int32_t operator()(const bytes_type_impl&) { return compare_unsigned(v1, v2); }
     int32_t operator()(const duration_type_impl&) { return compare_unsigned(v1, v2); }
     int32_t operator()(const inet_addr_type_impl&) { return compare_unsigned(v1, v2); }
-    int32_t operator()(const date_type_impl&) { return compare_unsigned(v1, v2); }
     int32_t operator()(const timeuuid_type_impl&) {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
@@ -2484,7 +2437,7 @@ static size_t concrete_serialized_size(const long_type_impl::native_type&) { ret
 static size_t concrete_serialized_size(const float_type_impl::native_type&) { return sizeof(float); }
 static size_t concrete_serialized_size(const double_type_impl::native_type&) { return sizeof(double); }
 static size_t concrete_serialized_size(const boolean_type_impl::native_type&) { return 1; }
-static size_t concrete_serialized_size(const date_type_impl::native_type&) { return 8; }
+static size_t concrete_serialized_size(const timestamp_type_impl::native_type&) { return 8; }
 static size_t concrete_serialized_size(const timeuuid_type_impl::native_type&) { return 16; }
 static size_t concrete_serialized_size(const simple_date_type_impl::native_type&) { return 4; }
 static size_t concrete_serialized_size(const string_type_impl::native_type& v) { return v.size(); }
@@ -2600,9 +2553,6 @@ struct from_string_visitor {
             return bytes();
         }
         return serialize_value(t, days_from_string(s));
-    }
-    bytes operator()(const date_type_impl& t) {
-        return serialize_value(t, db_clock::time_point(db_clock::duration(timestamp_from_string(s))));
     }
     bytes operator()(const time_type_impl& t) {
         if (s.empty()) {
@@ -2755,9 +2705,6 @@ struct to_string_impl_visitor {
         return format_if_not_empty(b, v, boolean_to_string);
     }
     sstring operator()(const counter_type_impl& c, const void*) { fail(unimplemented::cause::COUNTERS); }
-    sstring operator()(const date_type_impl& d, const date_type_impl::native_type* v) {
-        return format_if_not_empty(d, v, [] (const db_clock::time_point& v) { return time_point_to_string(v); });
-    }
     sstring operator()(const decimal_type_impl& d, const decimal_type_impl::native_type* v) {
         return format_if_not_empty(d, v, [] (const big_decimal& v) { return v.to_string(); });
     }
@@ -2903,7 +2850,6 @@ struct to_json_string_visitor {
     sstring operator()(const string_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const bytes_type_impl& t) { return quote_json_string("0x" + t.to_string(bv)); }
     sstring operator()(const boolean_type_impl& t) { return t.to_string(bv); }
-    sstring operator()(const date_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const timeuuid_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const timestamp_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const map_type_impl& t) { return to_json_string_aux(t, bv); }
@@ -3006,15 +2952,6 @@ struct from_json_object_visitor {
         }
         return t.decompose(value.asBool());
     }
-    bytes operator()(const date_type_impl& t) {
-        if (!value.isString() && !value.isIntegral()) {
-            throw marshal_exception("date_type must be represented as string or integer");
-        }
-        if (value.isIntegral()) {
-            return long_type->decompose(json::to_int64_t(value));
-        }
-        return t.from_string(value.asString());
-    }
     bytes operator()(const timeuuid_type_impl& t) {
         if (!value.isString()) {
             throw marshal_exception(format("{} must be represented as string in JSON", value.toStyledString()));
@@ -3103,9 +3040,9 @@ check_compatibility(const tuple_type_impl &t, const abstract_type& previous, boo
     return c.second == x->all_types().end();  // this allowed to be longer
 }
 
-static bool is_date_long_or_timestamp(const abstract_type& t) {
+static bool is_long_or_timestamp(const abstract_type& t) {
     auto k = t.get_kind();
-    return k == abstract_type::kind::long_kind || k == abstract_type::kind::date || k == abstract_type::kind::timestamp;
+    return k == abstract_type::kind::long_kind || k == abstract_type::kind::timestamp;
 }
 
 // Needed to handle ReversedType in value-compatibility checks.
@@ -3113,9 +3050,8 @@ static bool is_value_compatible_with_internal(const abstract_type& t, const abst
     struct visitor {
         const abstract_type& other;
         bool operator()(const abstract_type& t) { return t.is_compatible_with(other); }
-        bool operator()(const long_type_impl& t) { return is_date_long_or_timestamp(other); }
-        bool operator()(const date_type_impl& t) { return is_date_long_or_timestamp(other); }
-        bool operator()(const timestamp_type_impl& t) { return is_date_long_or_timestamp(other); }
+        bool operator()(const long_type_impl& t) { return is_long_or_timestamp(other); }
+        bool operator()(const timestamp_type_impl& t) { return is_long_or_timestamp(other); }
         bool operator()(const uuid_type_impl&) {
             return other.get_kind() == abstract_type::kind::uuid || other.get_kind() == abstract_type::kind::timeuuid;
         }
@@ -3350,7 +3286,6 @@ thread_local const shared_ptr<const abstract_type> ascii_type(make_shared<ascii_
 thread_local const shared_ptr<const abstract_type> bytes_type(make_shared<bytes_type_impl>());
 thread_local const shared_ptr<const abstract_type> utf8_type(make_shared<utf8_type_impl>());
 thread_local const shared_ptr<const abstract_type> boolean_type(make_shared<boolean_type_impl>());
-thread_local const shared_ptr<const abstract_type> date_type(make_shared<date_type_impl>());
 thread_local const shared_ptr<const abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
 thread_local const shared_ptr<const abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
 thread_local const shared_ptr<const abstract_type> simple_date_type(make_shared<simple_date_type_impl>());
@@ -3376,7 +3311,6 @@ data_type abstract_type::parse_type(const sstring& name)
         { bytes_type_name,     bytes_type     },
         { utf8_type_name,      utf8_type      },
         { boolean_type_name,   boolean_type   },
-        { date_type_name,      date_type      },
         { timeuuid_type_name,  timeuuid_type  },
         { timestamp_type_name, timestamp_type },
         { simple_date_type_name, simple_date_type },

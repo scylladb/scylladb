@@ -436,7 +436,6 @@ public:
         byte,
         bytes,
         counter,
-        date,
         decimal,
         double_kind,
         duration,
@@ -877,7 +876,6 @@ extern thread_local const shared_ptr<const abstract_type> ascii_type;
 extern thread_local const shared_ptr<const abstract_type> bytes_type;
 extern thread_local const shared_ptr<const abstract_type> utf8_type;
 extern thread_local const shared_ptr<const abstract_type> boolean_type;
-extern thread_local const shared_ptr<const abstract_type> date_type;
 extern thread_local const shared_ptr<const abstract_type> timeuuid_type;
 extern thread_local const shared_ptr<const abstract_type> timestamp_type;
 extern thread_local const shared_ptr<const abstract_type> simple_date_type;

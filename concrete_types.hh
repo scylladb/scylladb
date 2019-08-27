@@ -118,13 +118,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     bytes_type_impl();
 };
 
-// This is the old version of timestamp_type_impl, but has been replaced as it
-// wasn't comparing pre-epoch timestamps correctly. This is kept for backward
-// compatibility but shouldn't be used in new code.
-struct date_type_impl final : public concrete_type<db_clock::time_point> {
-    date_type_impl();
-};
-
 struct timeuuid_type_impl final : public concrete_type<utils::UUID> {
     timeuuid_type_impl();
 };
@@ -150,7 +143,6 @@ template <typename Func> concept bool CanHandleAllTypes = requires(Func f) {
     { f(*static_cast<const byte_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
     { f(*static_cast<const bytes_type_impl*>(nullptr)) }       -> visit_ret_type<Func>;
     { f(*static_cast<const counter_type_impl*>(nullptr)) }     -> visit_ret_type<Func>;
-    { f(*static_cast<const date_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
     { f(*static_cast<const decimal_type_impl*>(nullptr)) }     -> visit_ret_type<Func>;
     { f(*static_cast<const double_type_impl*>(nullptr)) }      -> visit_ret_type<Func>;
     { f(*static_cast<const duration_type_impl*>(nullptr)) }    -> visit_ret_type<Func>;
@@ -190,8 +182,6 @@ static inline visit_ret_type<Func> visit(const abstract_type& t, Func&& f) {
         return f(*static_cast<const bytes_type_impl*>(&t));
     case abstract_type::kind::counter:
         return f(*static_cast<const counter_type_impl*>(&t));
-    case abstract_type::kind::date:
-        return f(*static_cast<const date_type_impl*>(&t));
     case abstract_type::kind::decimal:
         return f(*static_cast<const decimal_type_impl*>(&t));
     case abstract_type::kind::double_kind:

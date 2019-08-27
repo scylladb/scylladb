@@ -51,7 +51,6 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
         simple_type_generator{bytes_type},
         simple_type_generator{utf8_type},
         simple_type_generator{boolean_type},
-        simple_type_generator{date_type},
         simple_type_generator{timeuuid_type},
         simple_type_generator{timestamp_type},
         simple_type_generator{simple_date_type},
@@ -425,10 +424,6 @@ data_value generate_boolean_value(std::mt19937& engine, size_t) {
     return data_value(bool(dist(engine)));
 }
 
-data_value generate_date_value(std::mt19937& engine, size_t) {
-    return data_value(db_clock::time_point(db_clock::duration(random::get_int<std::make_unsigned_t<db_clock::rep>>(engine))));
-}
-
 data_value generate_timeuuid_value(std::mt19937&, size_t) {
     return data_value(timeuuid_native_type{utils::UUID_gen::get_time_UUID()});
 }
@@ -539,7 +534,6 @@ value_generator::value_generator()
             {bytes_type.get(), &generate_bytes_value},
             {utf8_type.get(), &generate_utf8_value},
             {boolean_type.get(), &generate_boolean_value},
-            {date_type.get(), &generate_date_value},
             {timeuuid_type.get(), &generate_timeuuid_value},
             {timestamp_type.get(), &generate_timestamp_value},
             {simple_date_type.get(), &generate_simple_date_value},

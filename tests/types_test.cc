@@ -304,10 +304,6 @@ BOOST_AUTO_TEST_CASE(test_timestamp_string_conversions) {
     test_timestamp_like_string_conversions(timestamp_type);
 }
 
-BOOST_AUTO_TEST_CASE(test_date_string_conversions) {
-    test_timestamp_like_string_conversions(date_type);
-}
-
 BOOST_AUTO_TEST_CASE(test_boolean_type_string_conversions) {
     BOOST_REQUIRE(boolean_type->equal(boolean_type->from_string(""), boolean_type->decompose(false)));
     BOOST_REQUIRE(boolean_type->equal(boolean_type->from_string("false"), boolean_type->decompose(false)));
@@ -893,8 +889,6 @@ SEASTAR_TEST_CASE(test_simple_type_compatibility) {
         { nc, utf8_type, bytes_type },
         { nc, ascii_type, bytes_type },
         { nc, ascii_type, utf8_type },
-        { cc, timestamp_type, date_type },
-        { cc, date_type, timestamp_type },
     };
     for (auto&& tc : tests) {
         tc.verify(tc.to, tc.from);
