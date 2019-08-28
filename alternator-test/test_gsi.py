@@ -414,6 +414,46 @@ def test_gsi_4_describe(test_table_gsi_4):
     assert len(gsis) == 2
     assert multiset([g['IndexName'] for g in gsis]) == multiset(['hello_a', 'hello_b'])
 
+# A scenario for GSI in which the table has both hash and sort key
+@pytest.fixture(scope="session")
+def test_table_gsi_5(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ])
+    yield table
+    table.delete()
+
+def test_gsi_5(test_table_gsi_5):
+    items1 = [{'p': random_string(), 'c': random_string(), 'x': random_string()} for i in range(10)]
+    p1, x1 = items1[0]['p'], items1[0]['x']
+    p2, x2 = random_string(), random_string()
+    items2 = [{'p': p2, 'c': random_string(), 'x': x2} for i in range(10)]
+    items = items1 + items2
+    with test_table_gsi_5.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    expected_items = [i for i in items if i['p'] == p1 and i['x'] == x1]
+    assert_index_query(test_table_gsi_5, 'hello', expected_items,
+        KeyConditions={'p': {'AttributeValueList': [p1], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+    expected_items = [i for i in items if i['p'] == p2 and i['x'] == x2]
+    assert_index_query(test_table_gsi_5, 'hello', expected_items,
+        KeyConditions={'p': {'AttributeValueList': [p2], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
+
 # All tests above involved "ProjectionType: ALL". This test checks how
 # "ProjectionType:: KEYS_ONLY" works. We note that it projects both
 # the index's key, *and* the base table's key. So items which had different
