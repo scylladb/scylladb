@@ -246,6 +246,24 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
     // The other states (CREATING, UPDATING, DELETING) are not currently
     // returned.
     rjson::set(table_description, "TableStatus", "ACTIVE");
+    table& t = _proxy.get_db().local().find_column_family(schema);
+    if (!t.views().empty()) {
+        rjson::value views_array = rjson::empty_array();
+        for (const view_ptr& vptr : t.views()) {
+            rjson::value view_entry = rjson::empty_object();
+            const sstring& cf_name = vptr->cf_name();
+            size_t delim_it = cf_name.find(':');
+            if (delim_it == sstring::npos) {
+                elogger.error("Invalid internal index table name: {}", cf_name);
+                continue;
+            }
+            sstring index_name = cf_name.substr(delim_it + 1);
+            rjson::set(view_entry, "IndexName", rjson::from_string(index_name));
+            rjson::push_back(views_array, std::move(view_entry));
+        }
+        rjson::set(table_description, "GlobalSecondaryIndexes", std::move(views_array));
+    }
+
     // FIXME: more attributes! Check https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableDescription.html#DDB-Type-TableDescription-TableStatus but also run a test to see what DyanmoDB really fills
     // maybe for TableId or TableArn use  schema.id().to_sstring().c_str();
     // Of course, the whole schema is missing!
@@ -367,7 +385,6 @@ future<json::json_return_type> executor::create_table(client_state& client_state
         add_column(builder, range_key, attribute_definitions, column_kind::clustering_key);
     }
     builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
-    schema_ptr schema = builder.build();
 
     // Alternator does not yet support billing or throughput limitations, but
     // let's verify that BillingMode is at least legal.
@@ -384,11 +401,14 @@ future<json::json_return_type> executor::create_table(client_state& client_state
         throw api_error("ValidationException", "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
     }
 
+    schema_ptr partial_schema = builder.build();
+
     // Parse GlobalSecondaryIndexes parameters before creating the base
     // table, so if we have a parse errors we can fail without creating
     // any table.
     const rjson::value* gsi = rjson::find(table_info, "GlobalSecondaryIndexes");
     std::vector<schema_builder> view_builders;
+    std::vector<sstring> where_clauses;
     if (gsi) {
         if (!gsi->IsArray()) {
             throw api_error("ValidationException", "GlobalSecondaryIndexes must be an array.");
@@ -404,13 +424,22 @@ future<json::json_return_type> executor::create_table(client_state& client_state
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(KEYSPACE_NAME, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(g);
-            if (view_hash_key != hash_key && view_hash_key != range_key) {
-                throw api_error("ValidationException", "FIXME: indexing non-key attributes not yet implemented!");
+            if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
+                // A column that exists in a global secondary index is upgraded from being a map entry
+                // to having a regular column definition in the base schema
+                add_column(builder, view_hash_key, attribute_definitions, column_kind::regular_column);
             }
             add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
             if (!view_range_key.empty()) {
-                if (view_range_key != hash_key && view_range_key != range_key) {
-                    throw api_error("ValidationException", "FIXME: indexing non-key attributes not yet implemented!");
+                if (partial_schema->get_column_definition(to_bytes(view_range_key)) == nullptr) {
+                    // A column that exists in a global secondary index is upgraded from being a map entry
+                    // to having a regular column definition in the base schema
+                    if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
+                        // FIXME: this is alternator limitation only, because Scylla's materialized views
+                        // we use underneath do not allow more than 1 base regular column to be part of the MV key
+                        throw api_error("ValidationException", "Only 1 regular column from the base table can be used in GSI key");
+                    }
+                    add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
                 }
                 add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
             }
@@ -423,16 +452,11 @@ future<json::json_return_type> executor::create_table(client_state& client_state
             if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
                 add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
             }
-            view_builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
-            // Note above we do didn't need to add virtual columns, as all
-            // base columns were copied to view. TODO: reconsider the need
-            // for virtual columns when we support Projection.
             sstring where_clause = "\"" + view_hash_key + "\" IS NOT NULL";
             if (!view_range_key.empty()) {
                 where_clause = where_clause + " AND \"" + view_hash_key + "\" IS NOT NULL";
             }
-            const bool include_all_columns = true;
-            view_builder.with_view_info(*schema, include_all_columns, where_clause);
+            where_clauses.push_back(std::move(where_clause));
             view_builders.emplace_back(std::move(view_builder));
         }
     }
@@ -447,6 +471,25 @@ future<json::json_return_type> executor::create_table(client_state& client_state
         throw api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported.");
     }
     // FIXME: we should read the Tags property, and save them somewhere.
+
+    schema_ptr schema = builder.build();
+    auto where_clause_it = where_clauses.begin();
+    for (auto& view_builder : view_builders) {
+        // Note below we don't need to add virtual columns, as all
+        // base columns were copied to view. TODO: reconsider the need
+        // for virtual columns when we support Projection.
+        for (const column_definition& regular_cdef : schema->regular_columns()) {
+            try {
+                //TODO: add a non-throwing API for finding a column in a schema builder
+                view_builder.find_column(*cql3::to_identifier(regular_cdef));
+            } catch (std::invalid_argument&) {
+                view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+            }
+        }
+        const bool include_all_columns = true;
+        view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
+        ++where_clause_it;
+    }
 
     return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
         return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
@@ -489,6 +532,9 @@ public:
         }
         return ret;
     }
+    bool empty() const {
+        return collected.empty();
+    }
 };
 
 static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) {
@@ -500,18 +546,25 @@ static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) 
 
     auto ts = api::new_timestamp();
 
+    auto& row = m.partition().clustered_row(*schema, ck);
+
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(it->name.GetString());
         const column_definition* cdef = schema->get_column_definition(column_name);
-        if (!cdef || !cdef->is_primary_key()) {
+        if (!cdef) {
             bytes value = serialize_item(it->value);
             attrs_collector.put(std::move(column_name), std::move(value), ts);
+        } else if (!cdef->is_primary_key()) {
+            // Explicitly defined regular columns can appear as a result of creating a global secondary index
+            bytes column_value = get_key_from_typed_value(it->value, *cdef, type_to_string(cdef->type));
+            row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
         }
     }
 
-    auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
-    auto& row = m.partition().clustered_row(*schema, ck);
-    row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+    if (!attrs_collector.empty()) {
+        auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
+        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+    }
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
     // PutItem is supposed to completely replace the old item, so we need to
@@ -1179,7 +1232,8 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(service::st
         bounds.push_back(query::clustering_range::make_singular(ck));
     }
 
-    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto regular_columns = boost::copy_range<query::column_id_vector>(
+            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto selection = cql3::selection::selection::wildcard(schema);
 
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
@@ -1242,6 +1296,34 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
             [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck),
              update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector),
              attribute_updates = rjson::copy(attribute_updates), ts, &client_state] (std::unique_ptr<rjson::value> previous_item) mutable {
+
+        auto& row = m.partition().clustered_row(*schema, ck);
+        auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
+            const column_definition* cdef = schema->get_column_definition(column_name);
+            if (cdef) {
+                if (cdef->is_primary_key()) {
+                    throw api_error("ValidationException",
+                            format("UpdateItem cannot update key column {}", cdef->name_as_text()));
+                }
+                bytes column_value = get_key_from_typed_value(json_value, *cdef, type_to_string(cdef->type));
+                row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
+            } else {
+                attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);
+            }
+        };
+        auto do_delete = [&] (bytes&& column_name) {
+            const column_definition* cdef = schema->get_column_definition(column_name);
+            if (cdef) {
+                if (cdef->is_primary_key()) {
+                    throw api_error("ValidationException",
+                            format("UpdateItem cannot delete key column {}", cdef->name_as_text()));
+                }
+                row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
+            } else {
+                attrs_collector.del(std::move(column_name), ts);
+            }
+        };
+
         if (has_update_expression) {
             std::unordered_set<std::string> seen_column_names;
             std::unordered_set<std::string> used_attribute_values;
@@ -1264,10 +1346,10 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                 std::visit(overloaded {
                     [&] (const parsed::update_expression::action::set& a) {
                         auto value = calculate_value(a._rhs, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                        attrs_collector.put(to_bytes(column_name), serialize_item(value), ts);
+                        do_update(to_bytes(column_name), value);
                     },
                     [&] (const parsed::update_expression::action::remove& a) {
-                        attrs_collector.del(to_bytes(column_name), ts);
+                        do_delete(to_bytes(column_name));
                     },
                     [&] (const parsed::update_expression::action::add& a) {
                         parsed::value base;
@@ -1291,7 +1373,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                         } else {
                             throw api_error("ValidationException", format("An operand in the update expression has an incorrect data type: {}", v1));
                         }
-                        attrs_collector.put(to_bytes(column_name), serialize_item(result), ts);
+                        do_update(to_bytes(column_name), result);
                     },
                     [&] (const parsed::update_expression::action::del& a) {
                         parsed::value base;
@@ -1301,7 +1383,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                         rjson::value v1 = calculate_value(base, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                         rjson::value v2 = calculate_value(subset, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                         rjson::value result  = set_diff(v1, v2);
-                        attrs_collector.put(to_bytes(column_name), serialize_item(result), ts);
+                        do_update(to_bytes(column_name), result);
                     }
                 }, action._action);
             }
@@ -1326,23 +1408,24 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
                     throw api_error("ValidationException",
                             format("UpdateItem DELETE with checking old value not yet supported"));
                 }
-                attrs_collector.del(std::move(column_name), ts);
+                do_delete(std::move(column_name));
             } else if (action == "PUT") {
                 const rjson::value& value = (it->value)["Value"];
                 if (value.MemberCount() != 1) {
                     throw api_error("ValidationException",
                             format("Value field in AttributeUpdates must have just one item", it->name.GetString()));
                 }
-                attrs_collector.put(std::move(column_name), serialize_item(value), ts);
+                do_update(std::move(column_name), value);
             } else {
                 // FIXME: need to support "ADD" as well.
                 throw api_error("ValidationException",
                     format("Unknown Action value '{}' in AttributeUpdates", action));
             }
         }
-        auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
-        auto& row = m.partition().clustered_row(*schema, ck);
-        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        if (!attrs_collector.empty()) {
+            auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
+            row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        }
         // To allow creation of an item with no attributes, we need a row marker.
         // Note that unlike Scylla, even an "update" operation needs to add a row
         // marker. TODO: a row marker isn't really needed for a DELETE operation.
@@ -1400,7 +1483,8 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
     check_key(query_key, schema);
 
     //TODO(sarna): It would be better to fetch only some attributes of the map, not all
-    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto regular_columns = boost::copy_range<query::column_id_vector>(
+            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
 
     auto selection = cql3::selection::selection::wildcard(schema);
 
@@ -1466,7 +1550,8 @@ future<json::json_return_type> executor::batch_get_item(client_state& client_sta
             } else {
                 bounds.push_back(query::clustering_range::make_singular(std::move(r.ck)));
             }
-            query::column_id_vector regular_columns{attrs_column(*rs.schema).id};
+            auto regular_columns = boost::copy_range<query::column_id_vector>(
+                    rs.schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
@@ -1622,7 +1707,8 @@ static future<json::json_return_type> do_query(schema_ptr schema,
         paging_state = ::make_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
-    query::column_id_vector regular_columns{attrs_column(*schema).id};
+    auto regular_columns = boost::copy_range<query::column_id_vector>(
+            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto selection = cql3::selection::selection::wildcard(schema);
     auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
