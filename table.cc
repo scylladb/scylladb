@@ -1214,16 +1214,16 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
         tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::current_exception());
     }
 
-            // unconditionally remove compacted sstables from _sstables_compacted_but_not_deleted,
-            // or they could stay forever in the set, resulting in deleted files remaining
-            // opened and disk space not being released until shutdown.
-            std::unordered_set<sstables::shared_sstable> s(
-                   sstables_to_remove.begin(), sstables_to_remove.end());
-            auto e = boost::range::remove_if(_sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) -> bool {
-                return s.count(sst);
-            });
-            _sstables_compacted_but_not_deleted.erase(e, _sstables_compacted_but_not_deleted.end());
-            rebuild_statistics();
+    // unconditionally remove compacted sstables from _sstables_compacted_but_not_deleted,
+    // or they could stay forever in the set, resulting in deleted files remaining
+    // opened and disk space not being released until shutdown.
+    std::unordered_set<sstables::shared_sstable> s(
+           sstables_to_remove.begin(), sstables_to_remove.end());
+    auto e = boost::range::remove_if(_sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) -> bool {
+        return s.count(sst);
+    });
+    _sstables_compacted_but_not_deleted.erase(e, _sstables_compacted_but_not_deleted.end());
+    rebuild_statistics();
 }
 
 // For replace/remove_ancestors_needed_write, note that we need to update the compaction backlog
