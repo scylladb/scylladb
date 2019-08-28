@@ -121,16 +121,15 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         e.execute_cql("delete from tbl where a = 44;").get();
 
         // In order to guarantee that system.large_rows has been updated, we have to
-        // * flush, so that a thumbstone for the above delete is created.
-        // * do a major compaction, so that the thumbstone is combined with the old entry.
-        // * stop the db, as only then do we wait for sstable deletions.
+        // * flush, so that a tombstone for the above delete is created.
+        // * do a major compaction, so that the tombstone is combined with the old entry,
+        //   and the old sstable is deleted.
         flush(e);
         e.db().invoke_on_all([] (database& dbi) {
             return parallel_for_each(dbi.get_column_families(), [&dbi] (auto& table) {
                 return dbi.get_compaction_manager().submit_major_compaction(&*table.second);
             });
         }).get();
-        stop_database(e.db()).get();
 
         assert_that(e.execute_cql("select partition_key from system.large_rows where table_name = 'tbl' allow filtering;").get0())
             .is_rows()
