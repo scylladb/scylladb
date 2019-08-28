@@ -1795,7 +1795,7 @@ static query::clustering_range get_clustering_range_for_begins_with(bytes&& targ
     if (it != target.end()) {
         ++*it;
         target.resize(std::distance(target.begin(), it) + 1);
-        clustering_key upper_limit = clustering_key::from_singular(*schema, t->deserialize(target));
+        clustering_key upper_limit = clustering_key::from_single_value(*schema, target);
         return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit, false));
     }
     return query::clustering_range::make_starting_with(query::clustering_range::bound(ck));
@@ -1807,7 +1807,7 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         throw api_error("ValidationException", format("{} arguments expected for a sort key restriction: {}", expected_attrs_size, attrs));
     }
     bytes raw_value = ck_cdef.type->from_string(attrs[0][type_to_string(ck_cdef.type)].GetString());
-    clustering_key ck = clustering_key::from_singular(*schema, ck_cdef.type->deserialize(raw_value));
+    clustering_key ck = clustering_key::from_single_value(*schema, raw_value);
     switch (op) {
     case comparison_operator_type::EQ:
         return query::clustering_range(ck);
@@ -1821,7 +1821,7 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         return query::clustering_range::make_starting_with(query::clustering_range::bound(ck, false));
     case comparison_operator_type::BETWEEN: {
         bytes raw_upper_limit = ck_cdef.type->from_string(attrs[1][type_to_string(ck_cdef.type)].GetString());
-        clustering_key upper_limit = clustering_key::from_singular(*schema, ck_cdef.type->deserialize(raw_upper_limit));
+        clustering_key upper_limit = clustering_key::from_single_value(*schema, raw_upper_limit);
         return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit));
     }
     case comparison_operator_type::BEGINS_WITH: {
