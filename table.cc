@@ -1191,6 +1191,10 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
 
     rebuild_sstable_list(new_sstables, sstables_to_remove);
 
+    // refresh underlying data source in row cache to prevent it from holding reference
+    // to sstables files that are about to be deleted.
+    _cache.refresh_snapshot();
+
     _sstables_compacted_but_not_deleted = std::move(new_compacted_but_not_deleted);
 
     rebuild_statistics();
@@ -1222,10 +1226,6 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
             }
             return make_ready_future<>();
          });
-        }).then([this] {
-            // refresh underlying data source in row cache to prevent it from holding reference
-            // to sstables files which were previously deleted.
-            _cache.refresh_snapshot();
         });
     });
 }
