@@ -117,13 +117,13 @@ static void validate_table_name(const std::string& name) {
 // In DynamoDB index names are local to a table, while in Scylla, materialized
 // view names are global (in a keyspace). So we need to compose a unique name
 // for the view taking into account both the table's name and the index name.
-// We concatenate the table and index name separated by a ":" character
-// (a character not allowed by DynamoDB in ordinary table names).
+// We concatenate the table and index name separated by a delim character
+// (a character not allowed by DynamoDB in ordinary table names, default: ":").
 // The downside of this approach is that it limits the sum of the lengths,
 // instead of each component individually as DynamoDB does.
 // The view_name() function assumes the table_name has already been validated
 // but validates the legality of index_name and the combination of both.
-static std::string view_name(const std::string& table_name, const std::string& index_name) {
+static std::string view_name(const std::string& table_name, const std::string& index_name, const std::string& delim = ":") {
     static const std::regex valid_index_name_chars ("[a-zA-Z0-9_.-]*");
     if (index_name.length() < 3) {
         throw api_error("ValidationException", "IndexName must be at least 3 characters long");
@@ -132,13 +132,17 @@ static std::string view_name(const std::string& table_name, const std::string& i
         throw api_error("ValidationException",
                 format("IndexName '{}' must satisfy regular expression pattern: [a-zA-Z0-9_.-]+", index_name));
     }
-    std::string ret = table_name + ":" + index_name;
+    std::string ret = table_name + delim + index_name;
     if (ret.length() > max_table_name_length) {
         throw api_error("ValidationException",
                 format("The total length of TableName ('{}') and IndexName ('{}') cannot exceed {} characters",
-                        table_name, index_name, max_table_name_length - 1));
+                        table_name, index_name, max_table_name_length - delim.size()));
     }
     return ret;
+}
+
+static std::string lsi_name(const std::string& table_name, const std::string& index_name) {
+    return view_name(table_name, index_name, "!:");
 }
 
 /** Extract table name from a request.
@@ -193,6 +197,12 @@ static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::
                     format("Non-string IndexName '{}'", index_name->GetString()));
         }
     }
+
+    // If no tables for global indexes were found, the index may be local
+    if (!proxy.get_db().local().has_schema(executor::KEYSPACE_NAME, table_name)) {
+        table_name = lsi_name(orig_table_name, index_name->GetString());
+    }
+
     try {
         return proxy.get_db().local().find_schema(executor::KEYSPACE_NAME, table_name);
     } catch(no_such_column_family&) {
@@ -252,7 +262,8 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
     rjson::set(table_description, "TableStatus", "ACTIVE");
     table& t = _proxy.get_db().local().find_column_family(schema);
     if (!t.views().empty()) {
-        rjson::value views_array = rjson::empty_array();
+        rjson::value gsi_array = rjson::empty_array();
+        rjson::value lsi_array = rjson::empty_array();
         for (const view_ptr& vptr : t.views()) {
             rjson::value view_entry = rjson::empty_object();
             const sstring& cf_name = vptr->cf_name();
@@ -263,9 +274,16 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
             }
             sstring index_name = cf_name.substr(delim_it + 1);
             rjson::set(view_entry, "IndexName", rjson::from_string(index_name));
-            rjson::push_back(views_array, std::move(view_entry));
+            // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
+            rjson::value& index_array = (delim_it > 1 && cf_name[delim_it-1] == '!') ? lsi_array : gsi_array;
+            rjson::push_back(index_array, std::move(view_entry));
         }
-        rjson::set(table_description, "GlobalSecondaryIndexes", std::move(views_array));
+        if (!lsi_array.Empty()) {
+            rjson::set(table_description, "LocalSecondaryIndexes", std::move(lsi_array));
+        }
+        if (!gsi_array.Empty()) {
+            rjson::set(table_description, "GlobalSecondaryIndexes", std::move(gsi_array));
+        }
     }
 
     // FIXME: more attributes! Check https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableDescription.html#DDB-Type-TableDescription-TableStatus but also run a test to see what DyanmoDB really fills
@@ -465,8 +483,53 @@ future<json::json_return_type> executor::create_table(client_state& client_state
         }
     }
 
-    if (rjson::find(table_info, "LocalSecondaryIndexes")) {
-        throw api_error("ValidationException", "LocalSecondaryIndexes: not yet supported.");
+    const rjson::value* lsi = rjson::find(table_info, "LocalSecondaryIndexes");
+    if (lsi) {
+        if (!lsi->IsArray()) {
+            throw api_error("ValidationException", "LocalSecondaryIndexes must be an array.");
+        }
+        for (const rjson::value& l : lsi->GetArray()) {
+            const rjson::value* index_name = rjson::find(l, "IndexName");
+            if (!index_name || !index_name->IsString()) {
+                throw api_error("ValidationException", "LocalSecondaryIndexes IndexName must be a string.");
+            }
+            std::string vname(lsi_name(table_name, index_name->GetString()));
+            elogger.trace("Adding LSI {}", index_name->GetString());
+            // FIXME: read and handle "Projection" parameter. This will
+            // require the MV code to copy just parts of the attrs map.
+            schema_builder view_builder(KEYSPACE_NAME, vname);
+            auto [view_hash_key, view_range_key] = parse_key_schema(l);
+            if (view_hash_key != hash_key) {
+                throw api_error("ValidationException", "LocalSecondaryIndex hash key must match the base table hash key");
+            }
+            add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
+            if (view_range_key.empty()) {
+                throw api_error("ValidationException", "LocalSecondaryIndex must specify a sort key");
+            }
+            if (view_range_key == hash_key) {
+                throw api_error("ValidationException", "LocalSecondaryIndex sort key cannot be the same as hash key");
+              }
+            if (view_range_key != range_key) {
+                add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
+            }
+            add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
+            // Base key columns which aren't part of the index's key need to
+            // be added to the view nontheless, as (additional) clustering
+            // key(s).
+            if  (!range_key.empty() && view_range_key != range_key) {
+                add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
+            }
+            view_builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
+            // Note above we don't need to add virtual columns, as all
+            // base columns were copied to view. TODO: reconsider the need
+            // for virtual columns when we support Projection.
+            sstring where_clause = "\"" + view_hash_key + "\" IS NOT NULL";
+            if (!view_range_key.empty()) {
+                where_clause = where_clause + " AND \"" + view_range_key + "\" IS NOT NULL";
+            }
+            where_clauses.push_back(std::move(where_clause));
+            view_builders.emplace_back(std::move(view_builder));
+        }
     }
     if (rjson::find(table_info, "SSESpecification")) {
         throw api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported.");
