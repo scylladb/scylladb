@@ -1301,10 +1301,6 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
         auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
             const column_definition* cdef = schema->get_column_definition(column_name);
             if (cdef) {
-                if (cdef->is_primary_key()) {
-                    throw api_error("ValidationException",
-                            format("UpdateItem cannot update key column {}", cdef->name_as_text()));
-                }
                 bytes column_value = get_key_from_typed_value(json_value, *cdef, type_to_string(cdef->type));
                 row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
             } else {
@@ -1314,10 +1310,6 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
         auto do_delete = [&] (bytes&& column_name) {
             const column_definition* cdef = schema->get_column_definition(column_name);
             if (cdef) {
-                if (cdef->is_primary_key()) {
-                    throw api_error("ValidationException",
-                            format("UpdateItem cannot delete key column {}", cdef->name_as_text()));
-                }
                 row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
             } else {
                 attrs_collector.del(std::move(column_name), ts);
