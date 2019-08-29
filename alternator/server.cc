@@ -129,13 +129,11 @@ void server::set_routes(routes& r) {
 
     api_handler* handler = new api_handler([this, routes = std::move(routes)](std::unique_ptr<request> req) -> future<json::json_return_type> {
         _executor.local()._stats.total_operations++;
-        slogger.trace("Raw request: {} ({})", req->content, req->content_length);
         sstring target = req->get_header(TARGET);
         std::vector<sstring> split_target = split(target, ".");
         //NOTICE(sarna): Target consists of Dynamo API version folllowed by a dot '.' and operation type (e.g. CreateTable)
         sstring op = split_target.empty() ? sstring() : split_target.back();
-
-        slogger.trace("Request type: {}", op);
+        slogger.trace("Request: {} {}", op, req->content);
         auto callback_it = routes.find(op);
         if (callback_it == routes.end()) {
             _executor.local()._stats.unsupported_operations++;
