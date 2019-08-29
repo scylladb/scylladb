@@ -332,6 +332,11 @@ struct timestamp_native_type {
     primary_type tp;
 };
 
+struct date_type_native_type {
+    using primary_type = db_clock::time_point;
+    primary_type tp;
+};
+
 struct time_native_type {
     using primary_type = int64_t;
     primary_type nanoseconds;
@@ -384,7 +389,7 @@ public:
     data_value(timestamp_native_type);
     data_value(time_native_type);
     data_value(timeuuid_native_type);
-    data_value(db_clock::time_point);
+    data_value(date_type_native_type);
     data_value(boost::multiprecision::cpp_int);
     data_value(big_decimal);
     data_value(cql_duration);

@@ -3482,7 +3482,7 @@ data_value::data_value(time_native_type v) : data_value(make_new(time_type, v.na
 data_value::data_value(timeuuid_native_type v) : data_value(make_new(timeuuid_type, v.uuid)) {
 }
 
-data_value::data_value(db_clock::time_point v) : data_value(make_new(date_type, v)) {
+data_value::data_value(date_type_native_type v) : data_value(make_new(date_type, v.tp)) {
 }
 
 data_value::data_value(boost::multiprecision::cpp_int v) : data_value(make_new(varint_type, v)) {
@@ -3608,12 +3608,12 @@ simple_date_native_type time_point_to_date(const db_clock::time_point& tp) {
     return simple_date_native_type{uint32_t(diff.days() + (1UL<<31))};
 }
 
-db_clock::time_point date_to_time_point(const uint32_t date) {
+date_type_native_type date_to_time_point(const uint32_t date) {
     const auto epoch = boost::posix_time::from_time_t(0);
     const auto target_date = epoch + boost::gregorian::days(int64_t(date) - (1UL<<31));
     boost::posix_time::time_duration duration = target_date - epoch;
     const auto millis = std::chrono::milliseconds(duration.total_milliseconds());
-    return db_clock::time_point(std::chrono::duration_cast<db_clock::duration>(millis));
+    return date_type_native_type{db_clock::time_point(std::chrono::duration_cast<db_clock::duration>(millis))};
 }
 
 std::function<data_value(data_value)> make_castas_fctn_from_timestamp_to_date() {

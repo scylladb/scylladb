@@ -166,7 +166,7 @@ mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<muta
 
     mutation m(schema, key);
     m.set_cell(clustering_key_prefix::make_empty(), to_bytes("version"), version, timestamp);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), now, timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), date_type_native_type{now}, timestamp);
     m.set_cell(clustering_key_prefix::make_empty(), to_bytes("data"), data_value(std::move(data)), timestamp);
 
     return m;

@@ -111,7 +111,7 @@ make_date_of_fct() {
             return {};
         }
         auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
-        return {timestamp_type->decompose(ts)};
+        return {timestamp_type->decompose(date_type_native_type{ts})};
     });
 }
 
@@ -178,7 +178,7 @@ make_timeuuidtodate_fct() {
         }
         auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
         auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
-        return {simple_date_type->decompose(to_simple_date(ts))};
+        return {simple_date_type->decompose(to_simple_date(date_type_native_type{ts}))};
     });
 }
 
@@ -212,7 +212,7 @@ make_timeuuidtotimestamp_fct() {
             return {};
         }
         auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
-        return {timestamp_type->decompose(ts)};
+        return {timestamp_type->decompose(date_type_native_type{ts})};
     });
 }
 

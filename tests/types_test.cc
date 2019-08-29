@@ -242,37 +242,37 @@ BOOST_AUTO_TEST_CASE(test_inet_type_string_conversions) {
 void test_timestamp_like_string_conversions(data_type timestamp_type) {
     timestamp_type->from_string("now");
     db_clock::time_point tp(db_clock::duration(1435881600000));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("1435881600000"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03+0000"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03-00"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 00:00+0000"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 01:00:00+0000"), timestamp_type->decompose(tp + 1h)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 01:02:03.123+0000"), timestamp_type->decompose(tp + 123ms + 1h + 2min + 3s)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-7-3 1:2:3.123+0000"), timestamp_type->decompose(tp + 123ms + 1h + 2min + 3s)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-007-003 001:002:003.123+0000"), timestamp_type->decompose(tp + 123ms + 1h + 2min + 3s)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-007-003 001:002:003.1+0000"), timestamp_type->decompose(tp + 100ms + 1h + 2min + 3s)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:30:00+1230"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:00:00+12"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:30:00+12:30"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-02 23:00-0100"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00+0000"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T01:00:00+0000"), timestamp_type->decompose(tp + 1h)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03t00:00:00z"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00:00Z"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00:00.123+0000"), timestamp_type->decompose(tp + 123ms)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T12:30:00+1230"), timestamp_type->decompose(tp)));
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-02T23:00-0100"), timestamp_type->decompose(tp)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("1435881600000"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03+0000"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03-00"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 00:00+0000"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 01:00:00+0000"), timestamp_type->decompose(date_type_native_type{tp + 1h})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 01:02:03.123+0000"), timestamp_type->decompose(date_type_native_type{tp + 123ms + 1h + 2min + 3s})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-7-3 1:2:3.123+0000"), timestamp_type->decompose(date_type_native_type{tp + 123ms + 1h + 2min + 3s})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-007-003 001:002:003.123+0000"), timestamp_type->decompose(date_type_native_type{tp + 123ms + 1h + 2min + 3s})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-007-003 001:002:003.1+0000"), timestamp_type->decompose(date_type_native_type{tp + 100ms + 1h + 2min + 3s})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:30:00+1230"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:00:00+12"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:30:00+12:30"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-02 23:00-0100"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00+0000"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T01:00:00+0000"), timestamp_type->decompose(date_type_native_type{tp + 1h})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03t00:00:00z"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00:00Z"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T00:00:00.123+0000"), timestamp_type->decompose(date_type_native_type{tp + 123ms})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T12:30:00+1230"), timestamp_type->decompose(date_type_native_type{tp})));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-02T23:00-0100"), timestamp_type->decompose(date_type_native_type{tp})));
 
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "2015-07-03T00:00:00");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(date_type_native_type{tp})), "2015-07-03T00:00:00");
 
     auto now = time(nullptr);
     auto local_now = *localtime(&now);
     char buf[100];
     db_clock::time_point now_tp(db_clock::duration(now * 1000));
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S%z", &local_now);
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(now_tp)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(date_type_native_type{now_tp})));
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local_now);
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(now_tp)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(date_type_native_type{now_tp})));
 
     struct tm dst = { 0 };
     dst.tm_isdst = -1;
@@ -284,13 +284,13 @@ void test_timestamp_like_string_conversions(data_type timestamp_type) {
     dst.tm_sec = 5;
     auto dst_jan = db_clock::from_time_t(mktime(&dst));
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &dst);
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(dst_jan)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(date_type_native_type{dst_jan})));
 
     dst.tm_isdst = -1;
     dst.tm_mon = 6 - 1;
     auto dst_jun = db_clock::from_time_t(mktime(&dst));
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &dst);
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(dst_jun)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(date_type_native_type{dst_jun})));
 
     test_parsing_fails(timestamp_type, "something");
     test_parsing_fails(timestamp_type, "2001-99-01");
