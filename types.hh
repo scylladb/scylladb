@@ -327,11 +327,6 @@ struct simple_date_native_type {
     primary_type days;
 };
 
-struct timestamp_native_type {
-    using primary_type = db_clock::time_point;
-    primary_type tp;
-};
-
 struct date_type_native_type {
     using primary_type = db_clock::time_point;
     primary_type tp;
@@ -386,7 +381,7 @@ public:
     data_value(net::ipv6_address);
     data_value(seastar::net::inet_address);
     data_value(simple_date_native_type);
-    data_value(timestamp_native_type);
+    data_value(db_clock::time_point);
     data_value(time_native_type);
     data_value(timeuuid_native_type);
     data_value(date_type_native_type);
@@ -959,7 +954,7 @@ shared_ptr<const abstract_type> data_type_for<simple_date_native_type>() {
 
 template <>
 inline
-shared_ptr<const abstract_type> data_type_for<timestamp_native_type>() {
+shared_ptr<const abstract_type> data_type_for<db_clock::time_point>() {
     return timestamp_type;
 }
 

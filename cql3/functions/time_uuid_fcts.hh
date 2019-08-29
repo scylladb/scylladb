@@ -133,7 +133,7 @@ inline shared_ptr<function>
 make_currenttimestamp_fct() {
     return make_native_scalar_function<true>("currenttimestamp", timestamp_type, {},
             [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
-        return {timestamp_type->decompose(timestamp_native_type{db_clock::now()})};
+        return {timestamp_type->decompose(db_clock::now())};
     });
 }
 
@@ -153,7 +153,7 @@ make_currentdate_fct() {
     return make_native_scalar_function<true>("currentdate", simple_date_type, {},
             [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
-        return {simple_date_type->decompose(to_simple_date(timestamp_native_type{db_clock::now()}))};
+        return {simple_date_type->decompose(to_simple_date(db_clock::now()))};
     });
 }
 
