@@ -467,7 +467,7 @@ public:
                         db::system_keyspace::legacy::COLUMNFAMILIES);
         return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
             return parallel_for_each(*result, [this, &dst](row_type& row) {
-                return read_table(dst, row.get_as<sstring>("columnfamily_name"), row.get_as<date_type_native_type>("timestamp"));
+                return read_table(dst, row.get_as<sstring>("columnfamily_name"), row.get_as<time_point>("timestamp"));
             }).finally([result] {});
         });
     }
@@ -551,7 +551,7 @@ public:
                                 , row.get_as<bool>("durable_writes")
                                 , row.get_as<sstring>("strategy_class")
                                 , row.get_as<sstring>("strategy_options")
-                                , row.get_as<date_type_native_type>("timestamp")
+                                , row.get_as<db_clock::time_point>("timestamp")
                                 ).then([this](keyspace ks) {
                     _keyspaces.emplace_back(std::move(ks));
                    });

@@ -52,16 +52,6 @@
 
 namespace cql3 {
 
-template <typename T>
-struct cast_type_for {
-    using type = T;
-};
-
-template <>
-struct cast_type_for<date_type_native_type> {
-    using type = date_type_native_type::primary_type;
-};
-
 class untyped_result_set_row {
 private:
     const std::vector<::shared_ptr<column_specification>> _columns;
@@ -77,8 +67,8 @@ public:
         return *_data.at(name);
     }
     template<typename T>
-    typename cast_type_for<T>::type get_as(const sstring& name) const {
-        return value_cast<typename cast_type_for<T>::type>(data_type_for<T>()->deserialize(get_blob(name)));
+    T get_as(const sstring& name) const {
+        return value_cast<T>(data_type_for<T>()->deserialize(get_blob(name)));
     }
     template<typename T>
     std::optional<T> get_opt(const sstring& name) const {

@@ -279,7 +279,7 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
                 long_type->decompose(123456789l),
                 from_hex("deadbeef"), boolean_type->decompose(true),
                 double_type->decompose(3.14), float_type->decompose(3.14f),
-                timestamp_type->decompose(date_type_native_type{tp}),
+                timestamp_type->decompose(tp),
                 timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
                 uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
                 utf8_type->decompose(sstring("varchar")), varint_type->decompose(boost::multiprecision::cpp_int(123)),

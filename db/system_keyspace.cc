@@ -1263,7 +1263,7 @@ static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
 
         for (const cql3::untyped_result_set_row& row : *rs) {
             auto shard = row.get_as<int32_t>("shard");
-            auto ts = row.get_as<date_type_native_type>("truncated_at");
+            auto ts = row.get_as<db_clock::time_point>("truncated_at");
             auto pos = row.get_as<int32_t>("position");
             auto id = row.get_as<int64_t>("segment_id");
 
@@ -1420,7 +1420,7 @@ static future<> maybe_save_legacy_truncation_record(utils::UUID id, db_clock::ti
 
 future<> save_truncation_record(utils::UUID id, db_clock::time_point truncated_at, db::replay_position rp) {
     sstring req = format("INSERT INTO system.{} (table_uuid, shard, position, segment_id, truncated_at) VALUES(?,?,?,?,?)", TRUNCATED);
-    return qctx->qp().execute_internal(req, {id, int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), date_type_native_type{truncated_at}}).discard_result().then([] {
+    return qctx->qp().execute_internal(req, {id, int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}).discard_result().then([] {
         return force_blocking_flush(TRUNCATED);
     }).then([=] {
         return maybe_save_legacy_truncation_record(id, truncated_at, rp);
