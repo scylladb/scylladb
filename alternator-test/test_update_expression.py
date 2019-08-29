@@ -340,16 +340,28 @@ def test_update_expression_spurious_name(test_table_s):
 def test_update_expression_cannot_modify_key(test_table):
     p = random_string()
     c = random_string()
-    with pytest.raises(ClientError, match='ValidationException'):
+    with pytest.raises(ClientError, match='ValidationException.*key'):
         test_table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET p = :val1', ExpressionAttributeValues={':val1': 4})
-    with pytest.raises(ClientError, match='ValidationException'):
+    with pytest.raises(ClientError, match='ValidationException.*key'):
         test_table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET c = :val1', ExpressionAttributeValues={':val1': 4})
-    with pytest.raises(ClientError, match='ValidationException'):
+    with pytest.raises(ClientError, match='ValidationException.*key'):
         test_table.update_item(Key={'p': p, 'c': c}, UpdateExpression='REMOVE p')
-    with pytest.raises(ClientError, match='ValidationException'):
+    with pytest.raises(ClientError, match='ValidationException.*key'):
         test_table.update_item(Key={'p': p, 'c': c}, UpdateExpression='REMOVE c')
+    with pytest.raises(ClientError, match='ValidationException.*key'):
+        test_table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='ADD p :val1', ExpressionAttributeValues={':val1': 4})
+    with pytest.raises(ClientError, match='ValidationException.*key'):
+        test_table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='ADD c :val1', ExpressionAttributeValues={':val1': 4})
+    with pytest.raises(ClientError, match='ValidationException.*key'):
+        test_table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='DELETE p :val1', ExpressionAttributeValues={':val1': set(['cat', 'mouse'])})
+    with pytest.raises(ClientError, match='ValidationException.*key'):
+        test_table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='DELETE c :val1', ExpressionAttributeValues={':val1': set(['cat', 'mouse'])})
     # As sanity check, verify we *can* modify a non-key column
     test_table.update_item(Key={'p': p, 'c': c}, UpdateExpression='SET a = :val1', ExpressionAttributeValues={':val1': 4})
     assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'a': 4}
