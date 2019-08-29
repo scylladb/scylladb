@@ -186,7 +186,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
     auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
     auto batch = [this, limiter](const cql3::untyped_result_set::row& row) {
-        auto written_at = row.get_as<db_clock::time_point>("written_at");
+        auto written_at = row.get_as<date_type_native_type>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
         auto timeout = get_batch_log_timeout();

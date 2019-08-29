@@ -947,7 +947,7 @@ shared_ptr<const abstract_type> data_type_for<utils::UUID>() {
 
 template <>
 inline
-shared_ptr<const abstract_type> data_type_for<db_clock::time_point>() {
+shared_ptr<const abstract_type> data_type_for<date_type_native_type>() {
     return date_type;
 }
 

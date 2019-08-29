@@ -1263,7 +1263,7 @@ static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
 
         for (const cql3::untyped_result_set_row& row : *rs) {
             auto shard = row.get_as<int32_t>("shard");
-            auto ts = row.get_as<db_clock::time_point>("truncated_at");
+            auto ts = row.get_as<date_type_native_type>("truncated_at");
             auto pos = row.get_as<int32_t>("position");
             auto id = row.get_as<int64_t>("segment_id");
 
