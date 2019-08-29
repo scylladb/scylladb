@@ -125,6 +125,8 @@ struct date_type_impl final : public concrete_type<db_clock::time_point> {
     date_type_impl();
 };
 
+using timestamp_date_base_class = concrete_type<db_clock::time_point>;
+
 struct timeuuid_type_impl final : public concrete_type<utils::UUID> {
     timeuuid_type_impl();
 };
