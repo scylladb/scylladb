@@ -201,6 +201,8 @@ def test_create_table_already_exists(dynamodb, test_table):
 # Test that BillingMode error path works as expected - only the values
 # PROVISIONED or PAY_PER_REQUEST are allowed. The former requires
 # ProvisionedThroughput to be set, the latter forbids it.
+# If BillingMode is outright missing, it defaults (as original
+# DynamoDB did) to PROVISIONED so ProvisionedThroughput is allowed.
 def test_create_table_billing_mode_errors(dynamodb, test_table):
     with pytest.raises(ClientError, match='ValidationException'):
         create_table(dynamodb, test_table_name(), BillingMode='unknown')
@@ -218,6 +220,12 @@ def test_create_table_billing_mode_errors(dynamodb, test_table):
     # ProvisionedThroughput is given, it must have the correct form.
     with pytest.raises(ClientError, match='ValidationException'):
         create_table(dynamodb, test_table_name(), BillingMode='PROVISIONED')
+    # If BillingMode is completely missing, it defaults to PROVISIONED, so
+    # ProvisionedThroughput is required
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.create_table(TableName=test_table_name(),
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }])
 
 # Our first implementation had a special column name called "attrs" where
 # we stored a map for all non-key columns. If the user tried to name one

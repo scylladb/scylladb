@@ -392,7 +392,7 @@ future<json::json_return_type> executor::create_table(client_state& client_state
 
     // Alternator does not yet support billing or throughput limitations, but
     // let's verify that BillingMode is at least legal.
-    std::string billing_mode = get_string_attribute(table_info, "BillingMode", "PAY_PER_REQUEST");
+    std::string billing_mode = get_string_attribute(table_info, "BillingMode", "PROVISIONED");
     if (billing_mode == "PAY_PER_REQUEST") {
         if (rjson::find(table_info, "ProvisionedThroughput")) {
             throw api_error("ValidationException", "When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified.");
