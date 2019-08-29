@@ -25,7 +25,19 @@ import sys
 import glob
 from scylla_util import *
 
+def verify_cpu():
+    if platform.machine() == 'x86_64':
+        needed_flags = set(['sse4_2', 'pclmulqdq'])
+        for line in open('/proc/cpuinfo'):
+            if line.startswith('flags'):
+                flags = set(line.split()[2:])
+                if not needed_flags <= flags:
+                    print('Scylla requires the sse4.2 and clmul instruction sets, check your processor and hypervisor')
+                    sys.exit(1)
+
 if __name__ == '__main__':
+    verify_cpu()
+
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
