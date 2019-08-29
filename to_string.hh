@@ -51,6 +51,20 @@ sstring join(sstring delimiter, const PrintableRange& items) {
     return join(delimiter, items.begin(), items.end());
 }
 
+template<bool NeedsComma, typename Printable>
+struct print_with_comma {
+    const Printable& v;
+};
+
+template<bool NeedsComma, typename Printable>
+std::ostream& operator<<(std::ostream& os, const print_with_comma<NeedsComma, Printable>& x) {
+    os << x.v;
+    if (NeedsComma) {
+        os << ", ";
+    }
+    return os;
+}
+
 namespace std {
 
 template<typename Printable>
@@ -85,6 +99,16 @@ template <typename K, typename V>
 std::ostream& operator<<(std::ostream& os, const std::pair<K, V>& p) {
     os << "{" << p.first << ", " << p.second << "}";
     return os;
+}
+
+template<typename... T, size_t... I>
+std::ostream& print_tuple(std::ostream& os, const std::tuple<T...>& p, std::index_sequence<I...>) {
+    return ((os << "{" ) << ... << print_with_comma<I < sizeof...(I) - 1, T>{std::get<I>(p)}) << "}";
+}
+
+template <typename... T>
+std::ostream& operator<<(std::ostream& os, const std::tuple<T...>& p) {
+    return print_tuple(os, p, std::make_index_sequence<sizeof...(T)>());
 }
 
 template <typename T>
