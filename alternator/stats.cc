@@ -29,10 +29,15 @@ const char* ALTERNATOR_METRICS = "alternator";
 
 stats::stats() : api_operations{} {
     // Register the
-    _metrics.add_group("alternator_operation", {
+    seastar::metrics::label op("op");
+
+    _metrics.add_group("alternator", {
 #define OPERATION(name, CamelCaseName) \
-                seastar::metrics::make_total_operations(#name, api_operations.name, \
-                        seastar::metrics::description("number of " CamelCaseName " operations via Alternator API")),
+                seastar::metrics::make_total_operations("operation", api_operations.name, \
+                        seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName)}),
+#define OPERATION_LATENCY(name, CamelCaseName) \
+                seastar::metrics::make_histogram("op_latency", \
+                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return api_operations.name.get_histogram(1,20);}),
             OPERATION(batch_write_item, "BatchWriteItem")
             OPERATION(create_backup, "CreateBackup")
             OPERATION(create_global_table, "CreateGlobalTable")
@@ -68,6 +73,10 @@ stats::stats() : api_operations{} {
             OPERATION(update_item, "UpdateItem")
             OPERATION(update_table, "UpdateTable")
             OPERATION(update_time_to_live, "UpdateTimeToLive")
+            OPERATION_LATENCY(put_item_latency, "PutItem")
+            OPERATION_LATENCY(get_item_latency, "GetItem")
+            OPERATION_LATENCY(delete_item_latency, "DeleteItem")
+            OPERATION_LATENCY(update_item_latency, "UpdateItem")
     });
     _metrics.add_group("alternator", {
             seastar::metrics::make_total_operations("unsupported_operations", unsupported_operations,
