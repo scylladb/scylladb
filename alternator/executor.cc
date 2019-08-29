@@ -197,12 +197,16 @@ static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::
         return proxy.get_db().local().find_schema(executor::KEYSPACE_NAME, table_name);
     } catch(no_such_column_family&) {
         if (index_name) {
-            // The "Query" documentation specifies that if "The operation
-            // tried to access a nonexistent table or index" it should return
-            // ResourceNotFoundException. But in practice, DynamoDB returns a
-            // ValidationException in the index case.
-            throw api_error("ValidationException",
-                format("Requested resource not found: Table {} index {} not found", orig_table_name, index_name->GetString()));
+            // DynamoDB returns a different error depending on whether the
+            // base table doesn't exist (ResourceNotFoundException) or it
+            // does exist but the index does not (ValidationException).
+            if (proxy.get_db().local().has_schema(executor::KEYSPACE_NAME, orig_table_name)) {
+                throw api_error("ValidationException",
+                    format("Requested resource not found: Index '{}' for table '{}'", index_name->GetString(), orig_table_name));
+            } else {
+                throw api_error("ResourceNotFoundException",
+                    format("Requested resource not found: Table: {} not found", orig_table_name));
+            }
         } else {
             throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
