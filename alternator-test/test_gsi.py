@@ -130,13 +130,24 @@ def test_gsi_same_key(test_table_gsi_1):
         KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
 
 # Check we get an appropriate error when trying to read a non-existing index
-# of an existing table.
+# of an existing table. Although the documentation specifies that a
+# ResourceNotFoundException should be returned if "The operation tried to
+# access a nonexistent table or index", in fact in the specific case that
+# the table does exist but an index does not - we get a ValidationException.
 def test_gsi_missing_index(test_table_gsi_1):
     with pytest.raises(ClientError, match='ValidationException.*wrong_name'):
         full_query(test_table_gsi_1, IndexName='wrong_name',
             KeyConditions={'x': {'AttributeValueList': [1], 'ComparisonOperator': 'EQ'}})
     with pytest.raises(ClientError, match='ValidationException.*wrong_name'):
         full_scan(test_table_gsi_1, IndexName='wrong_name')
+
+# Nevertheless, if the table itself does not exist, a query should return
+# a ResourceNotFoundException, not ValidationException:
+def test_gsi_missing_table(dynamodb):
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        dynamodb.meta.client.query(TableName='nonexistent_table', IndexName='any_name', KeyConditions={'x': {'AttributeValueList': [1], 'ComparisonOperator': 'EQ'}})
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        dynamodb.meta.client.scan(TableName='nonexistent_table', IndexName='any_name')
 
 # Verify that strongly-consistent reads on GSI are *not* allowed.
 @pytest.mark.xfail(reason="GSI strong consistency not checked")
