@@ -441,7 +441,7 @@ future<json::json_return_type> executor::create_table(client_state& client_state
                     if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
                         // FIXME: this is alternator limitation only, because Scylla's materialized views
                         // we use underneath do not allow more than 1 base regular column to be part of the MV key
-                        throw api_error("ValidationException", "Only 1 regular column from the base table can be used in GSI key");
+                        elogger.warn("Only 1 regular column from the base table should be used in the GSI key in order to ensure correct liveness management without assumptions");
                     }
                     add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
                 }
