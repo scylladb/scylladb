@@ -455,7 +455,7 @@ void create_virtual_column(schema_builder& builder, const bytes& name, const dat
         // A map has keys and values. We don't need these values,
         // and can use empty values instead.
         auto mtype = dynamic_pointer_cast<const map_type_impl>(type);
-        builder.with_column(name, map_type_impl::get_instance(mtype->get_values_type(), empty_type, true), column_kind::regular_column, column_view_virtual::yes);
+        builder.with_column(name, map_type_impl::get_instance(mtype->get_keys_type(), empty_type, true), column_kind::regular_column, column_view_virtual::yes);
     } else if (ctype->is_set()) {
         // A set's cell has nothing beyond the keys, so the
         // virtual version of a set is, unfortunately, a complete
