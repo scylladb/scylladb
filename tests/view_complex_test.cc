@@ -515,7 +515,7 @@ SEASTAR_TEST_CASE(test_update_column_not_in_view_with_flush) {
 }
 
 void test_partial_update_with_unselected_collections(cql_test_env& e, std::function<void()>&& maybe_flush) {
-e.execute_cql("create table cf (p int, c int, a int, b int, l list<int>, s set<int>, m map<int,int>, primary key (p, c))").get();
+e.execute_cql("create table cf (p int, c int, a int, b int, l list<int>, s set<int>, m map<int,text>, primary key (p, c))").get();
     e.execute_cql("create materialized view vcf as select a, b from cf "
                   "where p is not null and c is not null "
                   "primary key (c, p)").get();
@@ -563,7 +563,7 @@ e.execute_cql("create table cf (p int, c int, a int, b int, l list<int>, s set<i
         assert_that(msg).is_rows().is_empty();
     });
 
-    e.execute_cql("update cf set m=m+{3:3}, l=l-[1], s=s-{2} where p = 1 and c = 1").get();
+    e.execute_cql("update cf set m=m+{3:'text'}, l=l-[1], s=s-{2} where p = 1 and c = 1").get();
     maybe_flush();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf").get0();
