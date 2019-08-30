@@ -1971,7 +1971,7 @@ mutation_partition::upgrade(const schema& old_schema, const schema& new_schema) 
 class mutation_querier {
     const schema& _schema;
     query::result_memory_accounter& _memory_accounter;
-    query::result::partition_writer& _pw;
+    query::result::partition_writer _pw;
     ser::qr_partition__static_row__cells<bytes_ostream> _static_cells_wr;
     bool _live_data_in_static_row{};
     uint32_t _live_clustering_rows = 0;
@@ -1981,7 +1981,7 @@ private:
     void query_static_row(const row& r, tombstone current_tombstone);
     void prepare_writers();
 public:
-    mutation_querier(const schema& s, query::result::partition_writer& pw,
+    mutation_querier(const schema& s, query::result::partition_writer pw,
                      query::result_memory_accounter& memory_accounter);
     void consume(tombstone) { }
     // Requires that sr.has_any_live_data()
@@ -1992,11 +1992,11 @@ public:
     uint32_t consume_end_of_stream();
 };
 
-mutation_querier::mutation_querier(const schema& s, query::result::partition_writer& pw,
+mutation_querier::mutation_querier(const schema& s, query::result::partition_writer pw,
                                    query::result_memory_accounter& memory_accounter)
     : _schema(s)
     , _memory_accounter(memory_accounter)
-    , _pw(pw)
+    , _pw(std::move(pw))
     , _static_cells_wr(pw.start().start_static_row().start_cells())
     , _short_reads_allowed(pw.slice().options.contains<query::partition_slice::option::allow_short_read>())
 {
@@ -2113,7 +2113,6 @@ uint32_t mutation_querier::consume_end_of_stream() {
 class query_result_builder {
     const schema& _schema;
     query::result::builder& _rb;
-    std::optional<query::result::partition_writer> _pw;
     std::optional<mutation_querier> _mutation_consumer;
     stop_iteration _stop;
     stop_iteration _short_read_allowed;
@@ -2124,8 +2123,7 @@ public:
     { }
 
     void consume_new_partition(const dht::decorated_key& dk) {
-        _pw.emplace(_rb.add_partition(_schema, dk.key()));
-        _mutation_consumer.emplace(mutation_querier(_schema, *_pw, _rb.memory_accounter()));
+        _mutation_consumer.emplace(mutation_querier(_schema, _rb.add_partition(_schema, dk.key()), _rb.memory_accounter()));
     }
 
     void consume(tombstone t) {
