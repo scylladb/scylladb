@@ -317,6 +317,13 @@ static data_type parse_key_type(const std::string& type) {
 
 
 static void add_column(schema_builder& builder, const std::string& name, const rjson::value& attribute_definitions, column_kind kind) {
+    // FIXME: Currently, the column name ATTRS_COLUMN_NAME is not allowed
+    // because we use it for our untyped attribute map, and we can't have a
+    // second column with the same name. We should fix this, by renaming
+    // some column names which we want to reserve.
+    if (name == executor::ATTRS_COLUMN_NAME) {
+        throw api_error("ValidationException", format("Column name '{}' is currently reserved. FIXME.", name));
+    }
     for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
         const rjson::value& attribute_info = *it;
         if (attribute_info["AttributeName"].GetString() == name) {
