@@ -247,7 +247,7 @@ def test_table_special_column_name(dynamodb):
     )
     yield table
     table.delete()
-@pytest.mark.skip(reason="special attrs column not yet hidden correctly")
+@pytest.mark.xfail(reason="special attrs column not yet hidden correctly")
 def test_create_table_special_column_name(test_table_special_column_name):
     s = random_string()
     c = random_string()
