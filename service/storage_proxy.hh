@@ -80,6 +80,7 @@ namespace service {
 class abstract_write_response_handler;
 class abstract_read_executor;
 class mutation_holder;
+class view_update_write_response_handler;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
 
@@ -474,6 +475,7 @@ public:
     friend class abstract_write_response_handler;
     friend class speculating_read_executor;
     friend class view_update_backlog_broker;
+    friend class view_update_write_response_handler;
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;

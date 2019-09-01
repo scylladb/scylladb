@@ -483,15 +483,56 @@ public:
                         std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit)) {
         register_in_intrusive_list(*p);
     }
+    ~view_update_write_response_handler();
 private:
     void register_in_intrusive_list(storage_proxy& p);
 };
 
 class storage_proxy::view_update_handlers_list : public bi::list<view_update_write_response_handler, bi::base_hook<view_update_write_response_handler>, bi::constant_time_size<false>> {
+    // _live_iterators holds all iterators that point into the bi:list in the base class of this object.
+    // If we remove a view_update_write_response_handler from the list, and an iterator happens to point
+    // into it, we advance the iterator so it doesn't point at a removed object. See #4912.
+    std::vector<iterator*> _live_iterators;
+public:
+    view_update_handlers_list() {
+        _live_iterators.reserve(10); // We only expect 1.
+    }
+    void register_live_iterator(iterator* itp) noexcept { // We don't tolerate failure, so abort instead
+        _live_iterators.push_back(itp);
+    }
+    void unregister_live_iterator(iterator* itp) {
+        _live_iterators.erase(boost::remove(_live_iterators, itp), _live_iterators.end());
+    }
+    void update_live_iterators(view_update_write_response_handler* vuwrh) {
+        // vuwrh is being removed from the b::list, so if any live iterator points at it,
+        // move it to the next object (this requires that the list is traversed in the forward
+        // direction).
+        for (auto& itp : _live_iterators) {
+            if (&**itp == vuwrh) {
+                ++*itp;
+            }
+        }
+    }
+    class iterator_guard {
+        view_update_handlers_list& _vuhl;
+        iterator* _itp;
+    public:
+        iterator_guard(view_update_handlers_list& vuhl, iterator& it) : _vuhl(vuhl), _itp(&it) {
+            _vuhl.register_live_iterator(_itp);
+        }
+        ~iterator_guard() {
+            _vuhl.unregister_live_iterator(_itp);
+        }
+    };
 };
 
 void view_update_write_response_handler::register_in_intrusive_list(storage_proxy& p) {
     p.get_view_update_handlers_list().push_back(*this);
+}
+
+
+view_update_write_response_handler::~view_update_write_response_handler() {
+    _proxy->_view_update_handlers_list->update_live_iterators(this);
 }
 
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
@@ -3701,7 +3742,10 @@ void storage_proxy::on_down(const gms::inet_address& endpoint) {
             it->timeout_cb();
         }
         ++it;
-        seastar::thread::yield();
+        if (seastar::thread::should_yield()) {
+            view_update_handlers_list::iterator_guard ig{*_view_update_handlers_list, it};
+            seastar::thread::yield();
+        }
     }
 };
 
