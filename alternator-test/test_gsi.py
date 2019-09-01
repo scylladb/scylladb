@@ -368,7 +368,6 @@ def test_table_gsi_3(dynamodb):
     yield table
     table.delete()
 
-@pytest.mark.xfail(reason="GSI not supported; Two new key columns")
 def test_gsi_3(test_table_gsi_3):
     items = [{'p': random_string(), 'a': random_string(), 'b': random_string()} for i in range(10)]
     with test_table_gsi_3.batch_writer() as batch:
