@@ -11,9 +11,11 @@ class ScyllaSetup:
         self._cpuset = arguments.cpuset
         self._listenAddress = arguments.listenAddress
         self._rpcAddress = arguments.rpcAddress
+        self._alternatorAddress = arguments.alternatorAddress
         self._broadcastAddress = arguments.broadcastAddress
         self._broadcastRpcAddress = arguments.broadcastRpcAddress
         self._apiAddress = arguments.apiAddress
+        self._alternatorPort = arguments.alternatorPort
         self._smp = arguments.smp
         self._memory = arguments.memory
         self._overprovisioned = arguments.overprovisioned
@@ -81,6 +83,9 @@ class ScyllaSetup:
         if self._rpcAddress is None:
             self._rpcAddress = self._listenAddress
 
+        if self._alternatorAddress is None:
+            self._alternatorAddress = self._listenAddress
+
         if self._seeds is None:
             if self._broadcastAddress is not None:
                 self._seeds = self._broadcastAddress
@@ -98,6 +103,10 @@ class ScyllaSetup:
 
         if self._apiAddress is not None:
             args += ["--api-address %s" % self._apiAddress]
+
+        if self._alternatorPort is not None:
+            args += ["--alternator-address %s" % self._alternatorAddress]
+            args += ["--alternator-port %s" % self._alternatorPort]
 
         if self._authenticator is not None:
             args += ["--authenticator %s" % self._authenticator]
