@@ -597,6 +597,7 @@ static db::timeout_clock::time_point default_timeout() {
 
 future<json::json_return_type> executor::put_item(client_state& client_state, std::string content) {
     _stats.api_operations.put_item++;
+    auto start_time = gc_clock::now();
     rjson::value update_info = rjson::parse(content);
     elogger.trace("Updating value {}", update_info);
 
@@ -611,7 +612,8 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
 
     mutation m = make_item_mutation(item, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
+        _stats.api_operations.put_item_latency.add(gc_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
         // Without special options on what to return, PutItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
@@ -639,6 +641,7 @@ static mutation make_delete_item_mutation(const rjson::value& key, schema_ptr sc
 
 future<json::json_return_type> executor::delete_item(client_state& client_state, std::string content) {
     _stats.api_operations.delete_item++;
+    auto start_time = gc_clock::now();
     rjson::value update_info = rjson::parse(content);
 
     schema_ptr schema = get_table(_proxy, update_info);
@@ -653,7 +656,8 @@ future<json::json_return_type> executor::delete_item(client_state& client_state,
     mutation m = make_delete_item_mutation(key, schema);
     check_key(key, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
+    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
+        _stats.api_operations.delete_item_latency.add(gc_clock::now() - start_time, _stats.api_operations.delete_item_latency._count + 1);
         // Without special options on what to return, DeleteItem returns nothing.
         return make_ready_future<json::json_return_type>(json_string(""));
     });
@@ -1269,6 +1273,7 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(service::st
 
 future<json::json_return_type> executor::update_item(client_state& client_state, std::string content) {
     _stats.api_operations.update_item++;
+    auto start_time = gc_clock::now();
     rjson::value update_info = rjson::parse(content);
     elogger.trace("update_item {}", update_info);
     schema_ptr schema = get_table(_proxy, update_info);
@@ -1318,7 +1323,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
     return maybe_get_previous_item(_proxy, schema, pk, ck, has_update_expression, expression, _stats).then(
             [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck),
              update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector),
-             attribute_updates = rjson::copy(attribute_updates), ts, &client_state] (std::unique_ptr<rjson::value> previous_item) mutable {
+             attribute_updates = rjson::copy(attribute_updates), ts, &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
 
         auto& row = m.partition().clustered_row(*schema, ck);
         auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
@@ -1447,8 +1452,9 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
         row.apply(row_marker(ts));
 
         elogger.trace("Applying mutation {}", m);
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
             // Without special options on what to return, UpdateItem returns nothing.
+            _stats.api_operations.update_item_latency.add(gc_clock::now() - start_time, _stats.api_operations.update_item_latency._count + 1);
             return make_ready_future<json::json_return_type>(json_string(""));
         });
     });
@@ -1475,6 +1481,7 @@ static db::consistency_level get_read_consistency(const rjson::value& request) {
 
 future<json::json_return_type> executor::get_item(client_state& client_state, std::string content) {
     _stats.api_operations.get_item++;
+    auto start_time = gc_clock::now();
     rjson::value table_info = rjson::parse(content);
     elogger.trace("Getting item {}", table_info);
 
@@ -1509,7 +1516,8 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
     auto attrs_to_get = calculate_attrs_to_get(table_info);
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit())).then(
-            [schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get)] (service::storage_proxy::coordinator_query_result qr) mutable {
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
+        _stats.api_operations.get_item_latency.add(gc_clock::now() - start_time, _stats.api_operations.get_item_latency._count + 1);
         return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get))));
     });
 }
