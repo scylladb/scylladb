@@ -597,6 +597,10 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
     schema_ptr schema = get_table(_proxy, update_info);
     tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
 
+    if (rjson::find(update_info, "ConditionExpression")) {
+        throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
+    }
+
     const rjson::value& item = update_info["Item"];
 
     mutation m = make_item_mutation(item, schema);
@@ -635,6 +639,10 @@ future<json::json_return_type> executor::delete_item(client_state& client_state,
 
     schema_ptr schema = get_table(_proxy, update_info);
     tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+
+    if (rjson::find(update_info, "ConditionExpression")) {
+        throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
+    }
 
     const rjson::value& key = update_info["Key"];
 
@@ -1264,6 +1272,10 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
     schema_ptr schema = get_table(_proxy, update_info);
     tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
 
+    if (rjson::find(update_info, "ConditionExpression")) {
+        throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
+    }
+
     if (!update_info.HasMember("Key")) {
         throw api_error("ValidationException", "UpdateItem requires a Key parameter");
     }
@@ -1756,6 +1768,10 @@ future<json::json_return_type> executor::scan(client_state& client_state, std::s
 
     schema_ptr schema = get_table_or_view(_proxy, request_info);
 
+    if (rjson::find(request_info, "FilterExpression")) {
+        throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
+    }
+
     rjson::value* exclusive_start_key = rjson::find(request_info, "ExclusiveStartKey");
     //FIXME(sarna): ScanFilter is deprecated in favor of FilterExpression
     rjson::value* scan_filter = rjson::find(request_info, "ScanFilter");
@@ -1916,6 +1932,13 @@ future<json::json_return_type> executor::query(client_state& client_state, std::
     uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
     if (limit <= 0) {
         throw api_error("ValidationException", "Limit must be greater than 0");
+    }
+
+    if (rjson::find(request_info, "KeyConditionExpression")) {
+        throw api_error("ValidationException", "KeyConditionExpression is not yet implemented in alternator");
+    }
+    if (rjson::find(request_info, "FilterExpression")) {
+        throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
     }
 
     //FIXME(sarna): KeyConditions are deprecated in favor of KeyConditionExpression
