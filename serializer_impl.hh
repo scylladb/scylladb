@@ -678,6 +678,28 @@ boost::variant<T...> deserialize(Input& in, boost::type<boost::variant<T...>>) {
     return boost::variant<T...>();
 }
 
+template<typename Output, typename ...T>
+void serialize(Output& out, const std::variant<T...>& v) {
+    static_assert(std::variant_size_v<std::variant<T...>> < 256);
+    size_t type_index = v.index();
+    serialize(out, uint8_t(type_index));
+    std::visit([&out] (const auto& member) {
+        serialize(out, member);
+    }, v);
+}
+
+template<typename Input, typename T, size_t... I>
+T deserialize_std_variant(Input& in, boost::type<T> t,  size_t idx, std::index_sequence<I...>) {
+    T v;
+    ((I == idx ? v = deserialize(in, boost::type<std::variant_alternative_t<I, T>>()), true : false) || ...);
+    return v;
+}
+
+template<typename Input, typename ...T>
+std::variant<T...> deserialize(Input& in, boost::type<std::variant<T...>> v) {
+    size_t idx = deserialize(in, boost::type<uint8_t>());
+    return deserialize_std_variant(in, v, idx, std::make_index_sequence<sizeof...(T)>());
+}
 
 template<typename Output>
 void serialize(Output& out, const unknown_variant_type& v) {
