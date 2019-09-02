@@ -20,6 +20,7 @@
 import pytest
 from botocore.exceptions import ClientError
 from util import random_string, full_scan, multiset
+from boto3.dynamodb.conditions import Attr
 
 # Test that scanning works fine with/without pagination
 def test_scan_basic(filled_test_table):
@@ -120,6 +121,19 @@ def test_scan_with_attribute_equality_filtering(dynamodb, filled_test_table):
     got_items = full_scan(table, ScanFilter=scan_filter)
     expected_items = [item for item in items if "attribute" in item.keys() and item["attribute"] == "xxxxx" and item["another"] == "y" ]
     assert multiset(expected_items) == multiset(got_items)
+
+# Test that FilterExpression works as expected
+@pytest.mark.xfail(reason="FilterExpression not supported yet")
+def test_scan_filter_expression(filled_test_table):
+    test_table, items = filled_test_table
+
+    got_items = full_scan(test_table, FilterExpression=Attr("attribute").eq("xxxx"))
+    print(got_items)
+    assert multiset([item for item in items if 'attribute' in item.keys() and item['attribute'] == 'xxxx']) == multiset(got_items)
+
+    got_items = full_scan(test_table, FilterExpression=Attr("attribute").eq("xxxx") & Attr("another").eq("yy"))
+    print(got_items)
+    assert multiset([item for item in items if 'attribute' in item.keys() and 'another' in item.keys() and item['attribute'] == 'xxxx' and item['another'] == 'yy']) == multiset(got_items)
 
 def test_scan_with_key_equality_filtering(dynamodb, filled_test_table):
     table, items = filled_test_table
