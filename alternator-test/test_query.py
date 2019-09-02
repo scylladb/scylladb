@@ -23,6 +23,7 @@ import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
 from util import random_string, random_bytes, full_query, multiset
+from boto3.dynamodb.conditions import Key, Attr
 
 # Test that scanning works fine with in-stock paginator
 def test_query_basic_restrictions(dynamodb, filled_test_table):
@@ -98,6 +99,17 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
         got_items += page['Items']
     print(got_items)
     assert multiset([item for item in items if item['p'] == 'long' and item['c'].startswith('11')]) == multiset(got_items)
+
+# Test that KeyConditionExpression parameter is supported
+@pytest.mark.xfail(reason="KeyConditionExpression not supported yet")
+def test_query_key_condition_expression(dynamodb, filled_test_table):
+    test_table, items = filled_test_table
+    paginator = dynamodb.meta.client.get_paginator('query')
+    got_items = []
+    for page in paginator.paginate(TableName=test_table.name, KeyConditionExpression=Key("p").eq("long") & Key("c").lt("12")):
+        got_items += page['Items']
+    print(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['c'] < '12']) == multiset(got_items)
 
 def test_begins_with(dynamodb, test_table):
     paginator = dynamodb.meta.client.get_paginator('query')
@@ -228,6 +240,19 @@ def test_query_filtering_attributes_equality(filled_test_table):
     }
 
     got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}}, QueryFilter=query_filter)
+    print(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['attribute'] == 'xxxx' and item['another'] == 'yy']) == multiset(got_items)
+
+# Test that FilterExpression works as expected
+@pytest.mark.xfail(reason="FilterExpression not supported yet")
+def test_query_filter_expression(filled_test_table):
+    test_table, items = filled_test_table
+
+    got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}}, FilterExpression=Attr("attribute").eq("xxxx"))
+    print(got_items)
+    assert multiset([item for item in items if item['p'] == 'long' and item['attribute'] == 'xxxx']) == multiset(got_items)
+
+    got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}}, FilterExpression=Attr("attribute").eq("xxxx") & Attr("another").eq("yy"))
     print(got_items)
     assert multiset([item for item in items if item['p'] == 'long' and item['attribute'] == 'xxxx' and item['another'] == 'yy']) == multiset(got_items)
 
