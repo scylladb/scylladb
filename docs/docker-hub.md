@@ -145,6 +145,24 @@ $ docker run --name some-scylla -d scylladb/scylla --listen-address 10.0.0.5
 
 **Since: 1.4**
 
+### `--alternator-address ADDR`
+
+The `--alternator-address` command line option configures the Alternator API listen address. The default value is the same as `--listen-address`.
+
+**Since: 3.2**
+
+### `--alternator-port PORT`
+
+The `--alternator-port` command line option configures the Alternator API listen port. The Alternator API is disabled by default. You need to specify the port to enable it.
+
+For example, to configure Scylla to listen to Alternator API at port `8000`:
+
+```console
+$ docker run --name some-scylla -d scylladb/scylla --alternator-port 8000
+```
+
+**Since: 3.2**
+
 ### `--broadcast-address ADDR`
 
 The `--broadcast-address` command line option configures the IP address the Scylla instance tells other Scylla nodes in the cluster to connect to.
