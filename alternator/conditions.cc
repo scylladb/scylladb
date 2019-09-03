@@ -21,6 +21,7 @@
 
 #include <list>
 #include <map>
+#include <string_view>
 #include "alternator/conditions.hh"
 #include "alternator/error.hh"
 #include "cql3/constants.hh"
@@ -52,8 +53,8 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
     return it->second;
 }
 
-static ::shared_ptr<cql3::restrictions::single_column_restriction::contains> make_map_element_restriction(const column_definition& cdef, const std::string& key, const rjson::value& value) {
-    bytes raw_key = utf8_type->from_string(sstring(key));
+static ::shared_ptr<cql3::restrictions::single_column_restriction::contains> make_map_element_restriction(const column_definition& cdef, std::string_view key, const rjson::value& value) {
+    bytes raw_key = utf8_type->from_string(sstring_view(key.data(), key.size()));
     auto key_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_key)));
     bytes raw_value = serialize_item(value);
     auto entry_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_value)));
@@ -70,7 +71,7 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_
     clogger.trace("Getting filtering restrictions for: {}", rjson::print(query_filter));
     auto filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(schema, true);
     for (auto it = query_filter.MemberBegin(); it != query_filter.MemberEnd(); ++it) {
-        std::string column_name = it->name.GetString();
+        std::string_view column_name(it->name.GetString(), it->name.GetStringLength());
         const rjson::value& condition = it->value;
 
         const rjson::value& comp_definition = rjson::get(condition, "ComparisonOperator");
@@ -83,7 +84,7 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_
         if (attr_list.Size() != 1) {
             throw api_error("ValidationException", format("EQ restriction needs exactly 1 attribute value: {}", rjson::print(attr_list)));
         }
-        if (const column_definition* cdef = schema->get_column_definition(to_bytes(column_name))) {
+        if (const column_definition* cdef = schema->get_column_definition(to_bytes(column_name.data()))) {
             // Primary key restriction
             filtering_restrictions->add_restriction(make_key_eq_restriction(*cdef, attr_list[0]), false, true);
         } else {
