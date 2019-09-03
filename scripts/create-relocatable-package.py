@@ -40,7 +40,7 @@ def ldd(executable):
             universal_newlines=True).splitlines():
         elements = ldd_line.split()
         if ldd_line.endswith('not found'):
-            raise Exception('ldd could not resolve {}'.format(elements[0]))
+            raise Exception('ldd {}: could not resolve {}'.format(executable, elements[0]))
         if elements[1] != '=>':
             if elements[0].startswith('linux-vdso.so'):
                 # provided by kernel
