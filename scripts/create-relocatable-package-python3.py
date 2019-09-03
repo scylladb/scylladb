@@ -235,6 +235,7 @@ ar.add('dist/debian/python3')
 ar.add('build/python3/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
 ar.add('build/python3/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
 ar.add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
+ar.add('python3/install.sh', arcname='install.sh')
 for p in ['pyhton3-libs'] + packages:
     pdir = pathlib.Path('/usr/share/licenses/{}/'.format(p))
     if pdir.exists():

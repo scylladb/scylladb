@@ -1,0 +1,3 @@
+UUID_FILE=/var/lib/scylla-housekeeping/housekeeping.uuid
+CONFIG_FILE=/etc/scylla.d/housekeeping.cfg
+REPO_FILES=/etc/apt/sources.list.d/scylla*.list

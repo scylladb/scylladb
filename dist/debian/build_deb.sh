@@ -148,9 +148,9 @@ chmod a+rx debian/rules
 if [ "$PRODUCT" != "scylla" ]; then
     SERVER_SERVICE_PREFIX="$PRODUCT-server."
 fi
-pystache dist/common/systemd/scylla-server.service.mustache "{ $MUSTACHE_DIST }" > debian/${SERVER_SERVICE_PREFIX}scylla-server.service
-pystache dist/common/systemd/scylla-housekeeping-daily.service.mustache "{ $MUSTACHE_DIST }" > debian/$PRODUCT-server.scylla-housekeeping-daily.service
-pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MUSTACHE_DIST }" > debian/$PRODUCT-server.scylla-housekeeping-restart.service
+ln -fv dist/common/systemd/scylla-server.service debian/${SERVER_SERVICE_PREFIX}scylla-server.service
+ln -fv dist/common/systemd/scylla-housekeeping-daily.service debian/$PRODUCT-server.scylla-housekeeping-daily.service
+ln -fv dist/common/systemd/scylla-housekeeping-restart.service debian/$PRODUCT-server.scylla-housekeeping-restart.service
 ln -fv dist/common/systemd/scylla-fstrim.service debian/$PRODUCT-server.scylla-fstrim.service
 ln -fv dist/common/systemd/node-exporter.service debian/$PRODUCT-server.node-exporter.service
 

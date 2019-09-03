@@ -1,7 +1,5 @@
 [Unit]
 Description=Scylla Server
-After=local-fs.target network-online.target
-Requires=local-fs.target network-online.target
 Wants=scylla-jmx.service
 Wants=scylla-housekeeping-restart.timer
 Wants=scylla-housekeeping-daily.timer
@@ -13,12 +11,7 @@ LimitMEMLOCK=infinity
 LimitNOFILE=800000
 LimitAS=infinity
 LimitNPROC=8096
-{{#debian}}
-EnvironmentFile=/etc/default/scylla-server
-{{/debian}}
-{{#redhat}}
 EnvironmentFile=/etc/sysconfig/scylla-server
-{{/redhat}}
 EnvironmentFile=/etc/scylla.d/*.conf
 ExecStartPre=/opt/scylladb/scripts/scylla_prepare
 ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET

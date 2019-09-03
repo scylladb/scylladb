@@ -30,6 +30,54 @@ import urllib.parse
 import urllib.request
 import yaml
 import psutil
+import sys
+from pathlib import Path
+
+def scriptsdir_p():
+    p = Path(sys.argv[0]).resolve()
+    if p.parent.name == 'libexec':
+        return p.parents[1]
+    return p.parent
+
+def scylladir_p():
+    p = scriptsdir_p()
+    return p.parent
+
+def is_nonroot():
+    return Path(scylladir_p() / 'SCYLLA-NONROOT-FILE').exists()
+
+def bindir_p():
+    if is_nonroot():
+        return scylladir_p() / 'bin'
+    else:
+        return Path('/usr/bin')
+
+def etcdir_p():
+    if is_nonroot():
+        return scylladir_p() / 'etc'
+    else:
+        return Path('/etc')
+
+def datadir_p():
+    if is_nonroot():
+        return scylladir_p()
+    else:
+        return Path('/var/lib/scylla')
+
+def scriptsdir():
+    return str(scriptsdir_p())
+
+def scylladir():
+    return str(scylladir_p())
+
+def bindir():
+    return str(bindir_p())
+
+def etcdir():
+    return str(etcdir_p())
+
+def datadir():
+    return str(datadir_p())
 
 def curl(url, byte=False):
     max_retries = 5
@@ -195,7 +243,7 @@ def _reopt(s):
 
 
 def is_developer_mode():
-    f = open("/etc/scylla.d/dev-mode.conf", "r")
+    f = open(etcdir() + "/scylla.d/dev-mode.conf", "r")
     pattern = re.compile(_nocomment + r".*developer-mode" + _scyllaeq + "(1|true)")
     return len([x for x in f if pattern.match(x)]) >= 1
 
@@ -206,7 +254,7 @@ class scylla_cpuinfo:
     to run, how many total threads exist in the system, etc"""
 
     def __parse_cpuset(self):
-        f = open("/etc/scylla.d/cpuset.conf", "r")
+        f = open(etcdir() + "/scylla.d/cpuset.conf", "r")
         pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
         grp = [pattern.match(x) for x in f.readlines() if pattern.match(x)]
         if not grp:
@@ -513,36 +561,39 @@ class SystemdException(Exception):
 
 class systemd_unit:
     def __init__(self, unit):
+        if is_nonroot():
+            self.ctlparam = '--user'
+        else:
+            self.ctlparam = ''
         try:
-            run('systemctl cat {}'.format(unit), silent=True)
+            run('systemctl {} cat {}'.format(self.ctlparam, unit), silent=True)
         except subprocess.CalledProcessError:
             raise SystemdException('unit {} not found'.format(unit))
         self._unit = unit
 
     def start(self):
-        return run('systemctl start {}'.format(self._unit))
+        return run('systemctl {} start {}'.format(self.ctlparam, self._unit))
 
     def stop(self):
-        return run('systemctl stop {}'.format(self._unit))
-        return subprocess.check_call(['systemctl', 'stop', self._unit])
+        return run('systemctl {} stop {}'.format(self.ctlparam, self._unit))
 
     def restart(self):
-        return run('systemctl restart {}'.format(self._unit))
+        return run('systemctl {} restart {}'.format(self.ctlparam, self._unit))
 
     def enable(self):
-        return run('systemctl enable {}'.format(self._unit))
+        return run('systemctl {} enable {}'.format(self.ctlparam, self._unit))
 
     def disable(self):
-        return run('systemctl disable {}'.format(self._unit))
+        return run('systemctl {} disable {}'.format(self.ctlparam, self._unit))
 
     def is_active(self):
-        return out('systemctl is-active {}'.format(self._unit), exception=False)
+        return out('systemctl {} is-active {}'.format(self.ctlparam, self._unit), exception=False)
 
     def mask(self):
-        return run('systemctl mask {}'.format(self._unit))
+        return run('systemctl {} mask {}'.format(self.ctlparam, self._unit))
 
     def unmask(self):
-        return run('systemctl unmask {}'.format(self._unit))
+        return run('systemctl {} unmask {}'.format(self.ctlparam, self._unit))
 
 
 class sysconfig_parser:

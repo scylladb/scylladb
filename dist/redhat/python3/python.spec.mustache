@@ -26,10 +26,7 @@ operate are shipped with it.
 %setup -q -c
 
 %install
-mkdir -p %{buildroot}/{{target}}
-cp -a ./ %{buildroot}/{{target}}
-rm -rf %{buildroot}/{{target}}/dist
-rm %{buildroot}/{{target}}/SCYLLA-*-FILE
+./install.sh --root "$RPM_BUILD_ROOT"
 
 %files
 %dir {{target}}
