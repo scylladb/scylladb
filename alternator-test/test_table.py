@@ -232,17 +232,18 @@ def test_create_table_billing_mode_errors(dynamodb, test_table):
 # of the key columns with this same name, the result was a disaster - Scylla
 # goes into a bad state after trying to write data with two updates to same-
 # named columns.
-special_column_name = 'attrs'
+special_column_name1 = 'attrs'
+special_column_name2 = ':attrs'
 @pytest.fixture(scope="session")
 def test_table_special_column_name(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[
-            { 'AttributeName': special_column_name, 'KeyType': 'HASH' },
-            { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+            { 'AttributeName': special_column_name1, 'KeyType': 'HASH' },
+            { 'AttributeName': special_column_name2, 'KeyType': 'RANGE' }
         ],
         AttributeDefinitions=[
-            { 'AttributeName': special_column_name, 'AttributeType': 'S' },
-            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': special_column_name1, 'AttributeType': 'S' },
+            { 'AttributeName': special_column_name2, 'AttributeType': 'S' },
         ],
     )
     yield table
@@ -252,9 +253,9 @@ def test_create_table_special_column_name(test_table_special_column_name):
     s = random_string()
     c = random_string()
     h = random_string()
-    expected = {special_column_name: s, 'c': c, 'hello': h}
+    expected = {special_column_name1: s, special_column_name2: c, 'hello': h}
     test_table_special_column_name.put_item(Item=expected)
-    got = test_table_special_column_name.get_item(Key={special_column_name: s, 'c': c}, ConsistentRead=True)['Item']
+    got = test_table_special_column_name.get_item(Key={special_column_name1: s, special_column_name2: c}, ConsistentRead=True)['Item']
     assert got == expected
 
 # Test that all tables we create are listed, and pagination works properly.
