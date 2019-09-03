@@ -249,7 +249,8 @@ void stream_session::init_messaging_service_handler() {
                         int32_t status = 0;
                         uint64_t received_partitions = 0;
                         if (f.failed()) {
-                            f.ignore_ready_future();
+                            sslog.error("[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
+                                    plan_id, s->ks_name(), s->cf_name(), from.addr, f.get_exception());
                             status = -1;
                         } else {
                             received_partitions = f.get0();
@@ -262,7 +263,8 @@ void stream_session::init_messaging_service_handler() {
                             return sink.close();
                         });
                     }).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
-                        sslog.error("[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS for ks={}, cf={}, peer={}: {}", plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
+                        sslog.error("[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
+                                plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
                     });
                     return make_ready_future<rpc::sink<int>>(sink);
                 });
