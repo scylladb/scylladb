@@ -28,7 +28,7 @@ Usage: install.sh [options]
 
 Options:
   --root /path/to/root     alternative install root (default /)
-  --prefix /prefix         directory prefix (default /usr)
+  --prefix /prefix         directory prefix (default /opt/scylladb)
   --python3 /opt/python3   path of the python3 interpreter relative to install root (default /opt/scylladb/python3/bin/python3)
   --housekeeping           enable housekeeping service
   --target centos          specify target distribution
