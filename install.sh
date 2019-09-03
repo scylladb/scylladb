@@ -105,7 +105,7 @@ adjust_bin() {
 	"$root/$prefix/libexec/$bin"
     cat > "$root/$prefix/bin/$bin" <<EOF
 #!/bin/bash -e
-export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
+export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE:-$prefix/libreloc/gnutls.config}"
 export LD_LIBRARY_PATH="$prefix/libreloc"
 exec -a "\$0" "$prefix/libexec/$bin" "\$@"
 EOF
