@@ -41,7 +41,7 @@ class executor {
 public:
     using client_state = service::client_state;
     stats _stats;
-    static constexpr auto ATTRS_COLUMN_NAME = "attrs";
+    static constexpr auto ATTRS_COLUMN_NAME = ":attrs";
     static constexpr auto KEYSPACE_NAME = "alternator";
 
     executor(service::storage_proxy& proxy, service::migration_manager& mm) : _proxy(proxy), _mm(mm) {}
