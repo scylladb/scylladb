@@ -85,7 +85,7 @@ def create_test_table(dynamodb, **kwargs):
     # save a few seconds on AWS with its very slow table creation, but can
     # more on tests on Scylla with its faster table creation turnaround.
     waiter.config.delay = 1
-    waiter.config.max_attempts = 100
+    waiter.config.max_attempts = 200
     waiter.wait(TableName=name)
     return table
 
