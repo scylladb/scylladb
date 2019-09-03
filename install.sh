@@ -101,13 +101,13 @@ adjust_bin() {
     # We could add --set-rpath too, but then debugedit (called by rpmbuild) barfs
     # on the result. So use LD_LIBRARY_PATH in the thunk, below.
     patchelf \
-	--set-interpreter "$prefix/libreloc/ld.so" \
+	--set-interpreter "$root/$prefix/libreloc/ld.so" \
 	"$root/$prefix/libexec/$bin"
     cat > "$root/$prefix/bin/$bin" <<EOF
 #!/bin/bash -e
-export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE:-$prefix/libreloc/gnutls.config}"
-export LD_LIBRARY_PATH="$prefix/libreloc"
-exec -a "\$0" "$prefix/libexec/$bin" "\$@"
+export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE:-$root/$prefix/libreloc/gnutls.config}"
+export LD_LIBRARY_PATH="$root/$prefix/libreloc"
+exec -a "\$0" "$root/$prefix/libexec/$bin" "\$@"
 EOF
     chmod +x "$root/$prefix/bin/$bin"
 }
