@@ -607,6 +607,7 @@ future<> cql_server::connection::process_request() {
                     auto response = response_f.get0();
                     update_client_state(response);
                     write_response(std::move(response.cql_response), std::move(mem_permit), _compression);
+                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
                 } catch (...) {
                     clogger.error("request processing failed: {}", std::current_exception());
                 }
