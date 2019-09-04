@@ -142,6 +142,31 @@ SEASTAR_TEST_CASE(test_decimal_to_bigint) {
     });
 }
 
+SEASTAR_TEST_CASE(test_varint_to_bigint) {
+    return do_with_cql_env_thread([&](auto& e) {
+        e.execute_cql("CREATE TABLE test (key text primary key, value varint)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k1', 9223372036854775807)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k2', 9223372036854775808)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k3', 18446744073709551615)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k4', 18446744073709551616)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k5', 18446744073709551617)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k6', -1)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k7', -9223372036854775808)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k8', -9223372036854775809)").get();
+        auto v = e.execute_cql("SELECT key,CAST(value as bigint) from test").get0();
+        assert_that(v).is_rows().with_rows_ignore_order({
+            {{utf8_type->decompose("k1")}, {long_type->decompose(std::numeric_limits<int64_t>::max())}},
+            {{utf8_type->decompose("k2")}, {long_type->decompose(std::numeric_limits<int64_t>::min())}},
+            {{utf8_type->decompose("k3")}, {long_type->decompose(int64_t(-1))}},
+            {{utf8_type->decompose("k4")}, {long_type->decompose(int64_t(0))}},
+            {{utf8_type->decompose("k5")}, {long_type->decompose(int64_t(1))}},
+            {{utf8_type->decompose("k6")}, {long_type->decompose(int64_t(-1))}},
+            {{utf8_type->decompose("k7")}, {long_type->decompose(std::numeric_limits<int64_t>::min())}},
+            {{utf8_type->decompose("k8")}, {long_type->decompose(std::numeric_limits<int64_t>::max())}},
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
     return do_with_cql_env_thread([&] (auto& e) {
         e.execute_cql("CREATE TABLE test (a tinyint primary key,"
