@@ -487,22 +487,22 @@ cql_server::connection::~connection() {
 
 future<> cql_server::connection::process()
 {
-    return do_until([this] {
-        return _read_buf.eof();
-    }, [this] {
-        return with_gate(_pending_requests_gate, [this] {
+    return with_gate(_pending_requests_gate, [this] {
+        return do_until([this] {
+            return _read_buf.eof();
+        }, [this] {
             return process_request();
+        }).then_wrapped([this] (future<> f) {
+            try {
+                f.get();
+            } catch (const exceptions::cassandra_exception& ex) {
+                write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
+            } catch (std::exception& ex) {
+                write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
+            } catch (...) {
+                write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
+            }
         });
-    }).then_wrapped([this] (future<> f) {
-        try {
-            f.get();
-        } catch (const exceptions::cassandra_exception& ex) {
-            write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
-        } catch (std::exception& ex) {
-            write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
-        } catch (...) {
-            write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
-        }
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
             _server._notifier->unregister_connection(this);
