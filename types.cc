@@ -3550,6 +3550,16 @@ static boost::multiprecision::cpp_int from_decimal_to_cppint(const data_value& f
     return val_from.unscaled_value() / boost::multiprecision::pow(ten, val_from.scale());
 }
 
+template<typename ToType>
+std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_integer() {
+    return [](data_value from) -> data_value {
+        auto varint = from_decimal_to_cppint(from);
+        bool negative = varint < 0;
+        uint64_t v = negative ? static_cast<uint64_t>(-varint) : static_cast<uint64_t>(varint);
+        return static_cast<ToType>(negative ? -v : v);
+    };
+}
+
 std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_varint() {
     return [](data_value from) -> data_value {
         return from_decimal_to_cppint(from);
@@ -3696,7 +3706,7 @@ thread_local castas_fctns_map castas_fctns {
     { {byte_type, float_type}, make_castas_fctn_simple<int8_t, float>() },
     { {byte_type, double_type}, make_castas_fctn_simple<int8_t, double>() },
     { {byte_type, varint_type}, make_castas_fctn_simple<int8_t, boost::multiprecision::cpp_int>() },
-    { {byte_type, decimal_type}, make_castas_fctn_from_decimal_to_float<int8_t>() },
+    { {byte_type, decimal_type}, make_castas_fctn_from_decimal_to_integer<int8_t>() },
 
     { {short_type, byte_type}, make_castas_fctn_simple<int16_t, int8_t>() },
     { {short_type, short_type}, make_castas_fctn_simple<int16_t, int16_t>() },
@@ -3705,7 +3715,7 @@ thread_local castas_fctns_map castas_fctns {
     { {short_type, float_type}, make_castas_fctn_simple<int16_t, float>() },
     { {short_type, double_type}, make_castas_fctn_simple<int16_t, double>() },
     { {short_type, varint_type}, make_castas_fctn_simple<int16_t, boost::multiprecision::cpp_int>() },
-    { {short_type, decimal_type}, make_castas_fctn_from_decimal_to_float<int16_t>() },
+    { {short_type, decimal_type}, make_castas_fctn_from_decimal_to_integer<int16_t>() },
 
     { {int32_type, byte_type}, make_castas_fctn_simple<int32_t, int8_t>() },
     { {int32_type, short_type}, make_castas_fctn_simple<int32_t, int16_t>() },
@@ -3714,7 +3724,7 @@ thread_local castas_fctns_map castas_fctns {
     { {int32_type, float_type}, make_castas_fctn_simple<int32_t, float>() },
     { {int32_type, double_type}, make_castas_fctn_simple<int32_t, double>() },
     { {int32_type, varint_type}, make_castas_fctn_simple<int32_t, boost::multiprecision::cpp_int>() },
-    { {int32_type, decimal_type}, make_castas_fctn_from_decimal_to_float<int32_t>() },
+    { {int32_type, decimal_type}, make_castas_fctn_from_decimal_to_integer<int32_t>() },
 
     { {long_type, byte_type}, make_castas_fctn_simple<int64_t, int8_t>() },
     { {long_type, short_type}, make_castas_fctn_simple<int64_t, int16_t>() },
@@ -3723,7 +3733,7 @@ thread_local castas_fctns_map castas_fctns {
     { {long_type, float_type}, make_castas_fctn_simple<int64_t, float>() },
     { {long_type, double_type}, make_castas_fctn_simple<int64_t, double>() },
     { {long_type, varint_type}, make_castas_fctn_simple<int64_t, boost::multiprecision::cpp_int>() },
-    { {long_type, decimal_type}, make_castas_fctn_from_decimal_to_float<int64_t>() },
+    { {long_type, decimal_type}, make_castas_fctn_from_decimal_to_integer<int64_t>() },
 
     { {float_type, byte_type}, make_castas_fctn_simple<float, int8_t>() },
     { {float_type, short_type}, make_castas_fctn_simple<float, int16_t>() },
