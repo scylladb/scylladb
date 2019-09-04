@@ -95,12 +95,20 @@ void migration_manager::init_messaging_service()
     _feature_listeners.push_back(ss.cluster_supports_digest_insensitive_to_expiry().when_enabled(update_schema));
 
     auto& ms = netw::get_local_messaging_service();
-    ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> m) {
+    ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
         auto src = netw::messaging_service::get_source(cinfo);
+        auto f = make_ready_future<>();
+        if (cm) {
+            f = do_with(std::move(*cm), get_local_shared_storage_proxy(), [src] (const std::vector<canonical_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+                return service::get_local_migration_manager().merge_schema_from(src, mutations);
+            });
+        } else {
+            f = do_with(std::move(fm), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+                return service::get_local_migration_manager().merge_schema_from(src, mutations);
+            });
+        }
         // Start a new fiber.
-        (void)do_with(std::move(m), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
-            return service::get_local_migration_manager().merge_schema_from(src, mutations);
-        }).then_wrapped([src] (auto&& f) {
+        (void)f.then_wrapped([src] (auto&& f) {
             if (f.failed()) {
                 mlogger.error("Failed to update definitions from {}: {}", src, f.get_exception());
             } else {
@@ -109,14 +117,28 @@ void migration_manager::init_messaging_service()
         });
         return netw::messaging_service::no_wait();
     });
-    ms.register_migration_request([this] (const rpc::client_info& cinfo) {
+    ms.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
+        using frozen_mutations = std::vector<frozen_mutation>;
+        using canonical_mutations = std::vector<canonical_mutation>;
+        const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
+
         auto src = netw::messaging_service::get_source(cinfo);
         if (!has_compatible_schema_tables_version(src.addr)) {
             mlogger.debug("Ignoring schema request from incompatible node: {}", src);
-            return make_ready_future<std::vector<frozen_mutation>>(std::vector<frozen_mutation>());
+            return make_ready_future<frozen_mutations, canonical_mutations>(frozen_mutations{}, canonical_mutations{});
         }
         auto features = get_local_storage_service().cluster_schema_features();
-        return db::schema_tables::convert_schema_to_mutations(get_storage_proxy(), features).finally([p = get_local_shared_storage_proxy()] {
+        auto& proxy = get_storage_proxy();
+        return db::schema_tables::convert_schema_to_mutations(proxy, features).then([&proxy, cm_retval_supported] (std::vector<canonical_mutation>&& cm) {
+            const auto& db = proxy.local().get_db().local();
+            if (cm_retval_supported) {
+                return make_ready_future<frozen_mutations, canonical_mutations>(frozen_mutations{}, std::move(cm));
+            }
+            auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db] (const canonical_mutation& cm) {
+                return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
+            }));
+            return make_ready_future<frozen_mutations, canonical_mutations>(std::move(fm), std::move(cm));
+        }).finally([p = get_local_shared_storage_proxy()] {
             // keep local proxy alive
         });
     });
@@ -248,7 +270,13 @@ future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_ad
 {
     auto& ms = netw::get_local_messaging_service();
     mlogger.info("Pulling schema from {}", id);
-    return ms.send_migration_request(std::move(id)).then([this, id] (std::vector<frozen_mutation> mutations) {
+    return ms.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (std::vector<frozen_mutation> mutations,
+                rpc::optional<std::vector<canonical_mutation>> canonical_mutations) {
+        if (canonical_mutations) {
+            return do_with(std::move(*canonical_mutations), [this, id] (std::vector<canonical_mutation>& mutations) {
+                return this->merge_schema_from(id, mutations);
+            });
+        }
         return do_with(std::move(mutations), [this, id] (auto&& mutations) {
             return this->merge_schema_from(id, mutations);
         });
@@ -270,6 +298,26 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
                 })).first;
     }
     return i->second.trigger();
+}
+
+future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<canonical_mutation>& canonical_mutations) {
+    mlogger.debug("Applying schema mutations from {}", src);
+    auto& proxy = service::get_storage_proxy();
+    const auto& db = proxy.local().get_db().local();
+
+    std::vector<mutation> mutations;
+    mutations.reserve(canonical_mutations.size());
+    try {
+        for (const auto& cm : canonical_mutations) {
+            auto& tbl = db.find_column_family(cm.column_family_id());
+            mutations.emplace_back(cm.to_mutation(tbl.schema()));
+        }
+    } catch (no_such_column_family& e) {
+        mlogger.error("Error while applying schema mutations from {}: {}", src, e);
+        return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
+                    std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
+    }
+    return db::schema_tables::merge_schema(service::get_local_storage_service(), proxy, std::move(mutations));
 }
 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
@@ -854,7 +902,8 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 {
     netw::messaging_service::msg_addr id{endpoint, 0};
     auto fm = std::vector<frozen_mutation>(schema.begin(), schema.end());
-    return netw::get_local_messaging_service().send_definitions_update(id, std::move(fm));
+    auto cm = std::vector<canonical_mutation>(schema.begin(), schema.end());
+    return netw::get_local_messaging_service().send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
 // Returns a future on the local application of the schema

@@ -86,6 +86,8 @@ public:
 
     // Merge mutations received from src.
     // Keep mutations alive around whole async operation.
+    future<> merge_schema_from(netw::msg_addr src, const std::vector<canonical_mutation>& mutations);
+    // Deprecated. The canonical mutation should be used instead.
     future<> merge_schema_from(netw::msg_addr src, const std::vector<frozen_mutation>& mutations);
 
     future<> notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);

@@ -153,6 +153,10 @@ namespace netw {
 
 struct serializer {};
 
+struct schema_pull_options {
+    bool remote_supports_canonical_mutation_retval = true;
+};
+
 class messaging_service : public seastar::async_sharded_service<messaging_service> {
 public:
     struct rpc_protocol_wrapper;
@@ -380,14 +384,17 @@ public:
     future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg);
 
     // Wrapper for DEFINITIONS_UPDATE
-    void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm)>&& func);
+    void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
+                rpc::optional<std::vector<canonical_mutation>> cm)>&& func);
     void unregister_definitions_update();
-    future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm);
+    future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm, std::vector<canonical_mutation> cm);
 
     // Wrapper for MIGRATION_REQUEST
-    void register_migration_request(std::function<future<std::vector<frozen_mutation>> (const rpc::client_info&)>&& func);
+    void register_migration_request(std::function<future<std::vector<frozen_mutation>, std::vector<canonical_mutation>> (
+                const rpc::client_info&, rpc::optional<schema_pull_options>)>&& func);
     void unregister_migration_request();
-    future<std::vector<frozen_mutation>> send_migration_request(msg_addr id);
+    future<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>> send_migration_request(msg_addr id,
+            schema_pull_options options);
 
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
     using response_id_type = uint64_t;
