@@ -3544,12 +3544,11 @@ std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_float() {
     };
 }
 
-template<typename ToType>
-std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_integer() {
+std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_varint() {
     return [](data_value from) -> data_value {
         auto val_from = value_cast<big_decimal>(from);
         boost::multiprecision::cpp_int ten(10);
-        return static_cast<ToType>(val_from.unscaled_value() / boost::multiprecision::pow(ten, val_from.scale()));
+        return static_cast<boost::multiprecision::cpp_int>(val_from.unscaled_value() / boost::multiprecision::pow(ten, val_from.scale()));
     };
 }
 
@@ -3747,7 +3746,7 @@ thread_local castas_fctns_map castas_fctns {
     { {varint_type, float_type}, make_castas_fctn_simple<boost::multiprecision::cpp_int, float>() },
     { {varint_type, double_type}, make_castas_fctn_simple<boost::multiprecision::cpp_int, double>() },
     { {varint_type, varint_type}, make_castas_fctn_simple<boost::multiprecision::cpp_int, boost::multiprecision::cpp_int>() },
-    { {varint_type, decimal_type}, make_castas_fctn_from_decimal_to_integer<boost::multiprecision::cpp_int>() },
+    { {varint_type, decimal_type}, make_castas_fctn_from_decimal_to_varint() },
 
     { {decimal_type, byte_type}, make_castas_fctn_from_integer_to_decimal<int8_t>() },
     { {decimal_type, short_type}, make_castas_fctn_from_integer_to_decimal<int16_t>() },
