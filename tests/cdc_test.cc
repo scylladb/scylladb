@@ -21,6 +21,8 @@
 
 #include <seastar/testing/thread_test_case.hh>
 
+#include "cdc/cdc.hh"
+#include "tests/cql_assertions.hh"
 #include "tests/cql_test_env.hh"
 
 SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
@@ -35,6 +37,19 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
         auto assert_cdc = [&] (const expected& exp) {
             BOOST_REQUIRE_EQUAL(exp.enabled,
                     e.local_db().find_schema("ks", "tbl")->cdc_options().enabled());
+            if (exp.enabled) {
+                e.require_table_exists("ks", cdc::log_name("tbl")).get();
+                e.require_table_exists("ks", cdc::desc_name("tbl")).get();
+                auto msg = e.execute_cql(format("select node_ip, shard_id from ks.{};", cdc::desc_name("tbl"))).get0();
+                std::vector<std::vector<bytes_opt>> expected_rows;
+                expected_rows.reserve(smp::count);
+                auto ip = inet_addr_type->decompose(
+                        utils::fb_utilities::get_broadcast_address().addr());
+                for (int i = 0; i < static_cast<int>(smp::count); ++i) {
+                    expected_rows.push_back({ip, int32_type->decompose(i)});
+                }
+                assert_that(msg).is_rows().with_rows_ignore_order(std::move(expected_rows));
+            }
             BOOST_REQUIRE_EQUAL(exp.preimage,
                     e.local_db().find_schema("ks", "tbl")->cdc_options().preimage());
             BOOST_REQUIRE_EQUAL(exp.postimage,
