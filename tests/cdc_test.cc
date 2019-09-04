@@ -49,6 +49,9 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
                     expected_rows.push_back({ip, int32_type->decompose(i)});
                 }
                 assert_that(msg).is_rows().with_rows_ignore_order(std::move(expected_rows));
+            } else {
+                e.require_table_does_not_exist("ks", cdc::log_name("tbl")).get();
+                e.require_table_does_not_exist("ks", cdc::desc_name("tbl")).get();
             }
             BOOST_REQUIRE_EQUAL(exp.preimage,
                     e.local_db().find_schema("ks", "tbl")->cdc_options().preimage());
