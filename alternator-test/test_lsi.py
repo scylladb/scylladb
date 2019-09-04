@@ -248,7 +248,6 @@ def test_table_lsi_keys_only(dynamodb):
 
 # Check that it's possible to extract a non-projected attribute from the index,
 # as the documentation promises
-@pytest.mark.xfail(reason="LSI selective projection is not implemented yet")
 def test_lsi_get_not_projected_attribute(test_table_lsi_keys_only):
     items1 = [{'p': random_string(), 'c': random_string(), 'b': random_string(), 'd': random_string()} for i in range(10)]
     p1, b1, d1 = items1[0]['p'], items1[0]['b'], items1[0]['d']
@@ -274,8 +273,23 @@ def test_lsi_get_not_projected_attribute(test_table_lsi_keys_only):
                        'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}},
         Select='SPECIFIC_ATTRIBUTES', AttributesToGet=['d'])
 
+# Check that only projected attributes can be extracted
+@pytest.mark.xfail(reason="LSI in alternator currently only implement full projections")
+def test_lsi_get_all_projected_attributes(test_table_lsi_keys_only):
+    items1 = [{'p': random_string(), 'c': random_string(), 'b': random_string(), 'd': random_string()} for i in range(10)]
+    p1, b1, d1 = items1[0]['p'], items1[0]['b'], items1[0]['d']
+    p2, b2, d2 = random_string(), random_string(), random_string()
+    items2 = [{'p': p2, 'c': p2, 'b': b2, 'd': d2}]
+    items = items1 + items2
+    with test_table_lsi_keys_only.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    expected_items = [{'p': i['p'], 'c': i['c'],'b': i['b']} for i in items if i['p'] == p1 and i['b'] == b1]
+    assert_index_query(test_table_lsi_keys_only, 'hello', expected_items,
+        KeyConditions={'p': {'AttributeValueList': [p1], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b1], 'ComparisonOperator': 'EQ'}})
+
 # Check that strongly consistent reads are allowed for LSI
-@pytest.mark.xfail(reason="LSI are not implemented in a strongly consistent manner in alternator")
 def test_lsi_consistent_read(test_table_lsi_1):
     items1 = [{'p': random_string(), 'c': random_string(), 'b': random_string()} for i in range(10)]
     p1, b1 = items1[0]['p'], items1[0]['b']
