@@ -71,6 +71,8 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
             e.execute_cql(format("ALTER TABLE ks.tbl WITH cdc = {}", alter2_prop)).get();
             assert_cdc(alter2_expected);
             e.execute_cql("DROP TABLE ks.tbl").get();
+            e.require_table_does_not_exist("ks", cdc::log_name("tbl")).get();
+            e.require_table_does_not_exist("ks", cdc::desc_name("tbl")).get();
         };
 
         test("", "{'enabled':'true'}", "{'enabled':'false'}", {false}, {true}, {false});
