@@ -92,8 +92,17 @@ progresses and compatibility continues to improve.
   KeyConditionExpression (an alternative syntax replacing the older
   KeyConditions parameter which we do support).
 ### Secondary Indexes
-* Global Secondary Indexes (GSI): Not yet supported.
-* Local Secondary Indexes (LSI): Not yet supported.
+Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) are
+implemented, with the following limitations:
+* GSIs and LSIs can be added only at CreateTable time: GSIs cannot be added
+  or removed at a later time (UpdateTable is not yet supported).
+* Marking a read from an index as strongly-consistent currently changes
+  nothing. Such reads ought to be forbidden for GSI, and be strongly-
+  consistent for LSI (see https://github.com/scylladb/scylla/issues/4365)
+* DescribeTable lists the indexes for the table, but is missing some
+  additional information on each index.
+* Projection of only a subset of the base-table attributes to the index is
+  not respected: All attributes are projected.
 ### Time To Live (TTL)
 * Not yet supported. Note that this is a different feature from Scylla's
   feature with the same name.
