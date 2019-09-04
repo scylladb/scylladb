@@ -34,7 +34,8 @@ class view_info final {
     mutable std::optional<query::partition_slice> _partition_slice;
     mutable std::optional<dht::partition_range_vector> _partition_ranges;
     // Id of a regular base table column included in the view's PK, if any.
-    mutable std::optional<column_id> _base_non_pk_column_in_view_pk;
+    // Scylla views only allow one such column, alternator can have up to two.
+    mutable std::vector<column_id> _base_non_pk_columns_in_view_pk;
 public:
     view_info(const schema& schema, const raw_view_info& raw_view_info);
 
@@ -63,7 +64,7 @@ public:
     const dht::partition_range_vector& partition_ranges() const;
     const column_definition* view_column(const schema& base, column_id base_id) const;
     const column_definition* view_column(const column_definition& base_def) const;
-    std::optional<column_id> base_non_pk_column_in_view_pk() const;
+    const std::vector<column_id>& base_non_pk_columns_in_view_pk() const;
     void initialize_base_dependent_fields(const schema& base);
 
     friend bool operator==(const view_info& x, const view_info& y) {

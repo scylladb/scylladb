@@ -136,16 +136,15 @@ const column_definition* view_info::view_column(const column_definition& base_de
     return _schema.get_column_definition(base_def.name());
 }
 
-std::optional<column_id> view_info::base_non_pk_column_in_view_pk() const {
-    return _base_non_pk_column_in_view_pk;
+const std::vector<column_id>& view_info::base_non_pk_columns_in_view_pk() const {
+    return _base_non_pk_columns_in_view_pk;
 }
 
 void view_info::initialize_base_dependent_fields(const schema& base) {
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         auto* base_col = base.get_column_definition(view_col.name());
         if (base_col && !base_col->is_primary_key()) {
-            _base_non_pk_column_in_view_pk.emplace(base_col->id);
-            break;
+            _base_non_pk_columns_in_view_pk.push_back(base_col->id);
         }
     }
 }
@@ -288,11 +287,15 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
      */
 
     auto marker = base_row.marker();
-    auto col_id = _view_info.base_non_pk_column_in_view_pk();
-    if (col_id) {
-        auto& def = _base->regular_column_at(*col_id);
+    // WARNING: The code assumes that if multiple regular base columns are present in the view key,
+    // they share liveness information. It's true especially in the only case currently allowed by CQL,
+    // which assumes there's up to one non-pk column in the view key. It's also true in alternator,
+    // which does not carry TTL information.
+    const auto& col_ids = _view_info.base_non_pk_columns_in_view_pk();
+    if (!col_ids.empty()) {
+        auto& def = _base->regular_column_at(col_ids[0]);
         // Note: multi-cell columns can't be part of the primary key.
-        auto cell = base_row.cells().cell_at(*col_id).as_atomic_cell(def);
+        auto cell = base_row.cells().cell_at(col_ids[0]).as_atomic_cell(def);
         return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
     }
 
@@ -519,13 +522,13 @@ void view_updates::delete_old_entry(const partition_key& base_key, const cluster
 
 void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
     auto& r = get_view_row(base_key, existing);
-    auto col_id = _view_info.base_non_pk_column_in_view_pk();
-    if (col_id) {
+    const auto& col_ids = _view_info.base_non_pk_columns_in_view_pk();
+    if (!col_ids.empty()) {
         // We delete the old row using a shadowable row tombstone, making sure that
         // the tombstone deletes everything in the row (or it might still show up).
         // Note: multi-cell columns can't be part of the primary key.
-        auto& def = _base->regular_column_at(*col_id);
-        auto cell = existing.cells().cell_at(*col_id).as_atomic_cell(def);
+        auto& def = _base->regular_column_at(col_ids[0]);
+        auto cell = existing.cells().cell_at(col_ids[0]).as_atomic_cell(def);
         if (cell.is_live()) {
             r.apply(shadowable_tombstone(cell.timestamp(), now));
         }
@@ -660,8 +663,8 @@ void view_updates::generate_update(
         return;
     }
 
-    auto col_id = _view_info.base_non_pk_column_in_view_pk();
-    if (!col_id) {
+    const auto& col_ids = _view_info.base_non_pk_columns_in_view_pk();
+    if (col_ids.empty()) {
         // The view key is necessarily the same pre and post update.
         if (existing && existing->is_live(*_base)) {
             if (update.is_live(*_base)) {
@@ -675,28 +678,39 @@ void view_updates::generate_update(
         return;
     }
 
-    auto* after = update.cells().find_cell(*col_id);
-    // Note: multi-cell columns can't be part of the primary key.
-    auto& cdef = _base->regular_column_at(*col_id);
-    if (existing) {
-        auto* before = existing->cells().find_cell(*col_id);
-        if (before && before->as_atomic_cell(cdef).is_live()) {
-            if (after && after->as_atomic_cell(cdef).is_live()) {
-                auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(cdef), after->as_atomic_cell(cdef));
-                if (cmp == 0) {
-                    update_entry(base_key, update, *existing, now);
+    bool should_update = false;
+    bool should_replace = false;
+    bool should_create = false;
+    for (auto col_id : col_ids) {
+        auto* after = update.cells().find_cell(col_id);
+        // Note: multi-cell columns can't be part of the primary key.
+        auto& cdef = _base->regular_column_at(col_id);
+        if (existing) {
+            auto* before = existing->cells().find_cell(col_id);
+            if (before && before->as_atomic_cell(cdef).is_live()) {
+                if (after && after->as_atomic_cell(cdef).is_live()) {
+                    auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(cdef), after->as_atomic_cell(cdef));
+                    if (cmp == 0) {
+                        should_update = true;
+                    } else {
+                        should_replace = true;
+                    }
                 } else {
-                    replace_entry(base_key, update, *existing, now);
+                    delete_old_entry(base_key, *existing, update, now);
+                    return;
                 }
-            } else {
-                delete_old_entry(base_key, *existing, update, now);
             }
-            return;
+        }
+        if (after && after->as_atomic_cell(cdef).is_live()) {
+            should_create = true;
         }
     }
 
-    // No existing row or the cell wasn't live
-    if (after && after->as_atomic_cell(cdef).is_live()) {
+    if (should_replace) {
+        replace_entry(base_key, update, *existing, now);
+    } else if (should_update) {
+        update_entry(base_key, update, *existing, now);
+    } else if (should_create) {
         create_entry(base_key, update, now);
     }
 }
