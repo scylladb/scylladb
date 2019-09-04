@@ -3550,13 +3550,18 @@ static boost::multiprecision::cpp_int from_decimal_to_cppint(const data_value& f
     return val_from.unscaled_value() / boost::multiprecision::pow(ten, val_from.scale());
 }
 
+template <typename ToType>
+static ToType from_varint_to_integer(const boost::multiprecision::cpp_int& varint) {
+    bool negative = varint < 0;
+    uint64_t v = negative ? static_cast<uint64_t>(-varint) : static_cast<uint64_t>(varint);
+    return static_cast<ToType>(negative ? -v : v);
+}
+
 template<typename ToType>
 std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_integer() {
     return [](data_value from) -> data_value {
         auto varint = from_decimal_to_cppint(from);
-        bool negative = varint < 0;
-        uint64_t v = negative ? static_cast<uint64_t>(-varint) : static_cast<uint64_t>(varint);
-        return static_cast<ToType>(negative ? -v : v);
+        return from_varint_to_integer<ToType>(varint);
     };
 }
 
