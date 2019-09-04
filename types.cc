@@ -3544,11 +3544,15 @@ std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_float() {
     };
 }
 
+static boost::multiprecision::cpp_int from_decimal_to_cppint(const data_value& from) {
+    const auto& val_from = value_cast<big_decimal>(from);
+    boost::multiprecision::cpp_int ten(10);
+    return val_from.unscaled_value() / boost::multiprecision::pow(ten, val_from.scale());
+}
+
 std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_varint() {
     return [](data_value from) -> data_value {
-        auto val_from = value_cast<big_decimal>(from);
-        boost::multiprecision::cpp_int ten(10);
-        return static_cast<boost::multiprecision::cpp_int>(val_from.unscaled_value() / boost::multiprecision::pow(ten, val_from.scale()));
+        return from_decimal_to_cppint(from);
     };
 }
 
