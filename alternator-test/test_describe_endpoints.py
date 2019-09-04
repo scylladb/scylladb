@@ -34,7 +34,11 @@ def test_describe_endpoints(dynamodb):
         # send it another describe_endpoints() request ;-) Note that the
         # address does not include the "http://" or "https://" prefix, and
         # we need to choose one manually.
+        # Even though we connect to the local installation, Boto3 still
+        # requires us to specify dummy region and credential parameters,
+        # otherwise the user is forced to properly configure ~/.aws even
+        # for local runs.
         url = "http://" + address
-        boto3.client('dynamodb',endpoint_url=url).describe_endpoints()
+        boto3.client('dynamodb',endpoint_url=url, region_name='us-east-1', aws_access_key_id='whatever', aws_secret_access_key='whatever').describe_endpoints()
         # Nothing to check here - if the above call failed with an exception,
         # the test would fail.
