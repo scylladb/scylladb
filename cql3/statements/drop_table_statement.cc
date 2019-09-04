@@ -39,8 +39,12 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "cdc/cdc.hh"
+
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+
+#include "database.hh"
 
 #include "service/migration_manager.hh"
 
@@ -76,18 +80,20 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_table_statement::an
 {
     return make_ready_future<>().then([this, is_local_only] {
         return service::get_local_migration_manager().announce_column_family_drop(keyspace(), column_family(), is_local_only);
-    }).then_wrapped([this] (auto&& f) {
+    }).then_wrapped([this, &proxy] (auto&& f) {
         try {
             f.get();
             using namespace cql_transport;
-            return make_shared<event::schema_change>(
-                    event::schema_change::change_type::DROPPED,
-                    event::schema_change::target_type::TABLE,
-                    this->keyspace(),
-                    this->column_family());
+            return cdc::remove(cdc::db_context::builder(proxy).build(), keyspace(), column_family()).then([this] {
+                return make_shared<event::schema_change>(
+                        event::schema_change::change_type::DROPPED,
+                        event::schema_change::target_type::TABLE,
+                        this->keyspace(),
+                        this->column_family());
+            });
         } catch (const exceptions::configuration_exception& e) {
             if (_if_exists) {
-                return ::shared_ptr<cql_transport::event::schema_change>();
+                return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(::shared_ptr<cql_transport::event::schema_change>());
             }
             throw e;
         }
