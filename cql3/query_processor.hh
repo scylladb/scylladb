@@ -298,16 +298,6 @@ public:
             const timeout_config& timeout_config,
             const std::initializer_list<data_value>& = { });
 
-    /*
-     * This function provides a timestamp that is guaranteed to be higher than any timestamp
-     * previously used in internal queries.
-     *
-     * This is useful because the client_state have a built-in mechanism to guarantee monotonicity.
-     * Bypassing that mechanism by the use of some other clock may yield times in the past, even if the operation
-     * was done in the future.
-     */
-    api::timestamp_type next_timestamp();
-
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
     prepare(sstring query_string, service::query_state& query_state);
 

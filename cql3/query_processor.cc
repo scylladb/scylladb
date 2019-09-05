@@ -83,14 +83,7 @@ public:
     operator const service::client_state&() const {
         return _qs.get_client_state();
     }
-    api::timestamp_type next_timestamp() {
-        return _qs.get_client_state().get_timestamp();
-    }
 };
-
-api::timestamp_type query_processor::next_timestamp() {
-    return _internal_state->next_timestamp();
-}
 
 query_processor::query_processor(service::storage_proxy& proxy, database& db, query_processor::memory_config mcfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}

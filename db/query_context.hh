@@ -50,9 +50,6 @@ struct query_context {
         return _qp.local().proxy();
     }
 
-    api::timestamp_type next_timestamp() {
-        return _qp.local().next_timestamp();
-    }
     cql3::query_processor& qp() {
         return _qp.local();
     }
