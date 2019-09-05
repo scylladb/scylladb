@@ -665,6 +665,13 @@ static db::timeout_clock::time_point default_timeout() {
     return db::timeout_clock::now() + 10s;
 }
 
+static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
+        service::storage_proxy& proxy,
+        schema_ptr schema,
+        const rjson::value& item,
+        bool need_read_before_write,
+        alternator::stats& stats);
+
 future<json::json_return_type> executor::put_item(client_state& client_state, std::string content) {
     _stats.api_operations.put_item++;
     auto start_time = std::chrono::steady_clock::now();
@@ -677,15 +684,23 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
     if (rjson::find(update_info, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
     }
+    const bool has_expected = update_info.HasMember("Expected");
 
     const rjson::value& item = update_info["Item"];
 
     mutation m = make_item_mutation(item, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
-        _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
-        // Without special options on what to return, PutItem returns nothing.
-        return make_ready_future<json::json_return_type>(json_string(""));
+    return maybe_get_previous_item(_proxy, schema, item, has_expected, _stats).then(
+            [this, schema, has_expected,  update_info = rjson::copy(update_info), m = std::move(m),
+             &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
+        if (has_expected) {
+            verify_expected(update_info, previous_item);
+        }
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
+            _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
+            // Without special options on what to return, PutItem returns nothing.
+            return make_ready_future<json::json_return_type>(json_string(""));
+        });
     });
 
 }
@@ -720,16 +735,24 @@ future<json::json_return_type> executor::delete_item(client_state& client_state,
     if (rjson::find(update_info, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
     }
+    const bool has_expected = update_info.HasMember("Expected");
 
     const rjson::value& key = update_info["Key"];
 
     mutation m = make_delete_item_mutation(key, schema);
     check_key(key, schema);
 
-    return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
-        _stats.api_operations.delete_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.delete_item_latency._count + 1);
-        // Without special options on what to return, DeleteItem returns nothing.
-        return make_ready_future<json::json_return_type>(json_string(""));
+    return maybe_get_previous_item(_proxy, schema, key, has_expected, _stats).then(
+            [this, schema, has_expected,  update_info = rjson::copy(update_info), m = std::move(m),
+             &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
+        if (has_expected) {
+            verify_expected(update_info, previous_item);
+        }
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
+            _stats.api_operations.delete_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.delete_item_latency._count + 1);
+            // Without special options on what to return, DeleteItem returns nothing.
+            return make_ready_future<json::json_return_type>(json_string(""));
+        });
     });
 
 }
@@ -1309,12 +1332,13 @@ static bool check_needs_read_before_write(const std::vector<parsed::update_expre
 
 // FIXME: Getting the previous item does not offer any synchronization guarantees nor linearizability.
 // It should be overridden once we can leverage a consensus protocol.
-static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(service::storage_proxy& proxy, schema_ptr schema, const partition_key& pk, const clustering_key& ck,
-        bool has_update_expression, const parsed::update_expression& expression, alternator::stats& stats) {
-    const bool needs_read_before_write = has_update_expression && check_needs_read_before_write(expression.actions());
-    if (!needs_read_before_write) {
-        return make_ready_future<std::unique_ptr<rjson::value>>();
-    }
+static future<std::unique_ptr<rjson::value>> do_get_previous_item(
+        service::storage_proxy& proxy,
+        schema_ptr schema,
+        const partition_key& pk,
+        const clustering_key& ck,
+        alternator::stats& stats)
+{
     stats.reads_before_write++;
 
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*schema, pk))};
@@ -1341,6 +1365,40 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(service::st
     });
 }
 
+static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
+        service::storage_proxy& proxy,
+        schema_ptr schema,
+        const partition_key& pk,
+        const clustering_key& ck,
+        bool has_update_expression,
+        const parsed::update_expression& expression,
+        bool has_expected,
+        alternator::stats& stats)
+{
+    const bool needs_read_before_write = (has_update_expression && check_needs_read_before_write(expression.actions())) ||
+                                         has_expected;
+    if (!needs_read_before_write) {
+        return make_ready_future<std::unique_ptr<rjson::value>>();
+    }
+    return do_get_previous_item(proxy, std::move(schema), pk, ck, stats);
+}
+
+static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
+        service::storage_proxy& proxy,
+        schema_ptr schema,
+        const rjson::value& item,
+        bool needs_read_before_write,
+        alternator::stats& stats)
+{
+    if (!needs_read_before_write) {
+        return make_ready_future<std::unique_ptr<rjson::value>>();
+    }
+    partition_key pk = pk_from_json(item, schema);
+    clustering_key ck = ck_from_json(item, schema);
+    return do_get_previous_item(proxy, std::move(schema), pk, ck, stats);
+}
+
+
 future<json::json_return_type> executor::update_item(client_state& client_state, std::string content) {
     _stats.api_operations.update_item++;
     auto start_time = std::chrono::steady_clock::now();
@@ -1365,13 +1423,18 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
     attribute_collector attrs_collector;
     auto ts = api::new_timestamp();
 
-    // DynamoDB forbids having both old-style AttributeUpdates and new-style
-    // UpdateExpression in the same request
+    // DynamoDB forbids having both old-style AttributeUpdates or Expected
+    // and new-style UpdateExpression in the same request
     const bool has_update_expression = update_info.HasMember("UpdateExpression");
     const bool has_attribute_updates = update_info.HasMember("AttributeUpdates");
+    const bool has_expected = update_info.HasMember("Expected");
     if (has_update_expression && has_attribute_updates) {
         throw api_error("ValidationException",
                 format("UpdateItem does not allow both AttributeUpdates and UpdateExpression to be given together"));
+    }
+    if (has_update_expression && has_expected) {
+        throw api_error("ValidationException",
+                format("UpdateItem does not allow both old-style Expected and new-style UpdateExpression to be given together"));
     }
 
     rjson::value attribute_updates = rjson::empty_object();
@@ -1390,11 +1453,13 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
         attribute_updates = update_info["AttributeUpdates"];
     }
 
-    return maybe_get_previous_item(_proxy, schema, pk, ck, has_update_expression, expression, _stats).then(
-            [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck),
+    return maybe_get_previous_item(_proxy, schema, pk, ck, has_update_expression, expression, has_expected, _stats).then(
+            [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck), has_expected,
              update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector),
              attribute_updates = rjson::copy(attribute_updates), ts, &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
-
+        if (has_expected) {
+            verify_expected(update_info, previous_item);
+        }
         auto& row = m.partition().clustered_row(*schema, ck);
         auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
             const column_definition* cdef = schema->get_column_definition(column_name);

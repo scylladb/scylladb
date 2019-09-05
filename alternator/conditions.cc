@@ -96,4 +96,150 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_
     return filtering_restrictions;
 }
 
+// Check if two JSON-encoded values match with the EQ relation
+static bool check_EQ(const rjson::value& v1, const rjson::value& v2) {
+    return v1 == v2;
+}
+
+// Check if two JSON-encoded values match with the BEGINS_WITH relation
+static bool check_BEGINS_WITH(const rjson::value& v1, const rjson::value& v2) {
+    // BEGINS_WITH only supports comparing two strings or two binaries -
+    // any other combinations of types, or other malformed values, return
+    // false (no match).
+    if (!v1.IsObject() || v1.MemberCount() != 1 || !v2.IsObject() || v2.MemberCount() != 1) {
+        return false;
+    }
+    auto it1 = v1.MemberBegin();
+    auto it2 = v2.MemberBegin();
+    if (it1->name != it2->name) {
+        return false;
+    }
+    if (it1->name != "S" && it1->name != "B") {
+        return false;
+    }
+    std::string_view val1(it1->value.GetString(), it1->value.GetStringLength());
+    std::string_view val2(it2->value.GetString(), it2->value.GetStringLength());
+    return val1.substr(0, val2.size()) == val2;
+}
+
+// Verify one Expect condition on one attribute (whose content is "got")
+// for the verify_expected() below.
+// This function returns true or false depending on whether the condition
+// succeeded - it does not throw ConditionalCheckFailedException.
+// However, it may throw ValidationException on input validation errors.
+static bool verify_expected_one(const rjson::value& condition, const rjson::value* got) {
+    const rjson::value* comparison_operator = rjson::find(condition, "ComparisonOperator");
+    const rjson::value* attribute_value_list = rjson::find(condition, "AttributeValueList");
+    const rjson::value* value = rjson::find(condition, "Value");
+    const rjson::value* exists = rjson::find(condition, "Exists");
+    // There are three types of conditions that Expected supports:
+    // A value, not-exists, and a comparison of some kind. Each allows
+    // and requires a different combinations of parameters in the request
+    if (value) {
+        if (exists && (!exists->IsBool() || exists->GetBool() != true)) {
+            throw api_error("ValidationException", "Cannot combine Value with Exists!=true");
+        }
+        if (comparison_operator) {
+            throw api_error("ValidationException", "Cannot combine Value with ComparisonOperator");
+        }
+        return got && check_EQ(*got, *value);
+    } else if (exists) {
+        if (comparison_operator) {
+            throw api_error("ValidationException", "Cannot combine Exists with ComparisonOperator");
+        }
+        if (!exists->IsBool() || exists->GetBool() != false) {
+            throw api_error("ValidationException", "Exists!=false requires Value");
+        }
+        // Remember Exists=false, so we're checking that the attribute does *not* exist:
+        return !got;
+    } else {
+        if (!comparison_operator) {
+            throw api_error("ValidationException", "Missing ComparisonOperator, Value or Exists");
+        }
+        if (!attribute_value_list || !attribute_value_list->IsArray()) {
+            throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
+        }
+        comparison_operator_type op = get_comparison_operator(*comparison_operator);
+        switch (op) {
+        case comparison_operator_type::EQ:
+            if (attribute_value_list->Size() != 1) {
+                throw api_error("ValidationException", "EQ operator requires one element in AttributeValueList");
+            }
+            if (got) {
+                const rjson::value& expected = (*attribute_value_list)[0];
+                return check_EQ(*got, expected);
+            }
+            return false;
+        case comparison_operator_type::BEGINS_WITH:
+            if (attribute_value_list->Size() != 1) {
+                throw api_error("ValidationException", "BEGINS_WITH operator requires one element in AttributeValueList");
+            }
+            if (got) {
+                const rjson::value& expected = (*attribute_value_list)[0];
+                return check_BEGINS_WITH(*got, expected);
+            }
+            return false;
+        default:
+            // FIXME: implement all the missing types, so there will be no default here.
+            throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
+        }
+    }
+}
+
+// Verify that the existing values of the item (previous_item) match the
+// conditions given by the Expected and ConditionalOperator parameters
+// (if they exist) in the request (an UpdateItem, PutItem or DeleteItem).
+// This function will throw a ConditionalCheckFailedException API error
+// if the values do not match the condition, or ValidationException if there
+// are errors in the format of the condition itself.
+void verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value>& previous_item) {
+    const rjson::value* expected = rjson::find(req, "Expected");
+    if (!expected) {
+        return;
+    }
+    if (!expected->IsObject()) {
+        throw api_error("ValidationException", "'Expected' parameter, if given, must be an object");
+    }
+    // ConditionalOperator can be "AND" for requiring all conditions, or
+    // "OR" for requiring one condition, and defaults to "AND" if missing.
+    const rjson::value* conditional_operator = rjson::find(req, "ConditionalOperator");
+    bool require_all = true;
+    if (conditional_operator) {
+        if (!conditional_operator->IsString()) {
+            throw api_error("ValidationException", "'ConditionalOperator' parameter, if given, must be a string");
+        }
+        std::string_view s(conditional_operator->GetString(), conditional_operator->GetStringLength());
+        if (s == "AND") {
+            // require_all is already true
+        } else if (s == "OR") {
+            require_all = false;
+        } else {
+            throw api_error("ValidationException", "'ConditionalOperator' parameter must be AND, OR or missing");
+        }
+        if (expected->GetObject().ObjectEmpty()) {
+            throw api_error("ValidationException", "'ConditionalOperator' parameter cannot be specified for empty Expression");
+        }
+    }
+
+    for (auto it = expected->MemberBegin(); it != expected->MemberEnd(); ++it) {
+        const rjson::value* got = nullptr;
+        if (previous_item && previous_item->IsObject() && previous_item->HasMember("Item")) {
+            got = rjson::find((*previous_item)["Item"], rjson::string_ref_type(it->name.GetString()));
+        }
+        bool success = verify_expected_one(it->value, got);
+        if (success && !require_all) {
+            // When !require_all, one success is enough!
+            return;
+        } else if (!success && require_all) {
+            // When require_all, one failure is enough!
+            throw api_error("ConditionalCheckFailedException", "Failed condition.");
+        }
+    }
+    // If we got here and require_all, none of the checks failed, so succeed.
+    // If we got here and !require_all, all of the checks failed, so fail.
+    if (!require_all) {
+        throw api_error("ConditionalCheckFailedException", "None of ORed Expect conditions were successful.");
+    }
+}
+
 }
