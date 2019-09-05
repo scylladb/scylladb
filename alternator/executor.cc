@@ -251,7 +251,8 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
     rjson::value table_description = rjson::empty_object();
     rjson::set(table_description, "TableName", rjson::from_string(schema->cf_name()));
     // FIXME: take the tables creation time, not the current time!
-    rjson::set(table_description, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
+    size_t creation_date_seconds = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
+    rjson::set(table_description, "CreationDateTime", rjson::value(creation_date_seconds));
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
     // the table may be in "Creating" state until creating is finished.
     // We don't currently do this in Alternator - instead CreateTable waits
@@ -260,6 +261,12 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
     // The other states (CREATING, UPDATING, DELETING) are not currently
     // returned.
     rjson::set(table_description, "TableStatus", "ACTIVE");
+    // FIXME: Instead of hardcoding, we should take into account which mode was chosen
+    // when the table was created. But, Spark jobs expect something to be returned
+    // and PAY_PER_REQUEST seems closer to reality than PROVISIONED.
+    rjson::set(table_description, "BillingModeSummary", rjson::empty_object());
+    rjson::set(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
+    rjson::set(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_date_seconds));
     table& t = _proxy.get_db().local().find_column_family(schema);
     if (!t.views().empty()) {
         rjson::value gsi_array = rjson::empty_array();
