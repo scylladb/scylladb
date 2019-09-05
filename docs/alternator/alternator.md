@@ -106,12 +106,10 @@ implemented, with the following limitations:
 ### Time To Live (TTL)
 * Not yet supported. Note that this is a different feature from Scylla's
   feature with the same name.
-### Replication (one availability zone)
-* Most of the code is already correct, including writes  done in LOCAL_QURUM
-  and reads in LOCAL_ONE (eventual consistency) or LOCAL_QUORUM (strong
-  consistency). However, executor::start() currently creates a keyspace with
-  just RF=1 and no concern for racks or number of nodes. This should be
-  fixed.
+### Replication
+* Supported, with RF=3 (unless running on a cluster of less than 3 nodes).
+  Writes are done in LOCAL_QURUM and reads in LOCAL_ONE (eventual consistency)
+  or LOCAL_QUORUM (strong consistency).
 ### Global Tables
 * Not yet supported: CreateGlobalTable, UpdateGlobalTable,
   DescribeGlobalTable, ListGlobalTables, UpdateGlobalTableSettings,
@@ -119,7 +117,8 @@ implemented, with the following limitations:
   features.
 ### Backup and Restore
 * On-demand backup: Not yet supported: CreateBackup, DescribeBackup,
-  DeleteBackup, ListBackups, RestoreTableFromBackup.
+  DeleteBackup, ListBackups, RestoreTableFromBackup. Implementation will
+  use Scylla's snapshots
 * Continuous backup: Not yet supported: UpdateContinuousBackups,
   DescribeContinuousBackups, RestoreTableToPoinInTime.
 ### Transations
@@ -141,10 +140,11 @@ implemented, with the following limitations:
 ### Multi-tenant support
 * Not yet supported (related to authorization, accounting, etc.)
 ### DAX (cache)
-* Not yet supported
+* Not required. Scylla cache is rather advanced and there is no need to place
+  a cache in front of the database: https://www.scylladb.com/2017/07/31/database-caches-not-good/
 ### Metrics
-* Several metrics are available internally but need more and make them
-  more similar to what AWS users are used to.
+* Several metrics are available through the Grafana/Promethues stack: https://docs.scylladb.com/operating-scylla/monitoring/   It is different than the expectations of the current DynamoDB implementation. However, our
+  monitoring is rather advanced and provide more insights to the internals.
 
 ## Alternator design and implementation
 
