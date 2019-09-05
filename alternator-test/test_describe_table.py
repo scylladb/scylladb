@@ -59,7 +59,6 @@ def test_describe_table_schema(test_table):
 
 # Test that DescribeTable correctly returns the table's billing mode,
 # in the BillingModeSummary attribute.
-@pytest.mark.xfail(reason="DescribeTable does not yet return billing mode")
 def test_describe_table_billing(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     assert got['BillingModeSummary']['BillingMode'] == 'PAY_PER_REQUEST'
