@@ -24,13 +24,14 @@
 #include <seastar/core/thread.hh>
 
 #include "cdc/cdc.hh"
+#include "bytes.hh"
 #include "database.hh"
 #include "db/config.hh"
 #include "dht/murmur3_partitioner.hh"
+#include "partition_slice_builder.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "service/storage_service.hh"
 
 using locator::snitch_ptr;
@@ -39,6 +40,17 @@ using locator::topology;
 using seastar::sstring;
 using service::migration_manager;
 using service::storage_proxy;
+
+namespace std {
+
+template<> struct hash<std::pair<net::inet_address, unsigned int>> {
+    std::size_t operator()(const std::pair<net::inet_address, unsigned int> &p) const {
+        return std::hash<net::inet_address>{}(p.first) ^ std::hash<int>{}(p.second);
+    }
+};
+
+}
+
 
 namespace cdc {
 
@@ -192,6 +204,173 @@ db_context db_context::builder::build() {
         _snitch ? _snitch->get() : locator::i_endpoint_snitch::get_local_snitch_ptr(),
         _partitioner ? _partitioner->get() : dht::global_partitioner()
     };
+}
+
+class transformer final {
+public:
+    using streams_type = std::unordered_map<std::pair<net::inet_address, unsigned int>, utils::UUID>;
+private:
+    db_context _ctx;
+    schema_ptr _schema;
+    schema_ptr _log_schema;
+    utils::UUID _time;
+    bytes _decomposed_time;
+    const streams_type& _streams;
+
+    clustering_key set_pk_columns(const partition_key& pk, int batch_no, mutation& m) const {
+        const auto log_ck = clustering_key::from_exploded(
+                *m.schema(), { _decomposed_time, int32_type->decompose(batch_no) });
+        auto pk_value = pk.explode(*_schema);
+        size_t pos = 0;
+        for (const auto& column : _schema->partition_key_columns()) {
+            assert (pos < pk_value.size());
+            auto cdef = m.schema()->get_column_definition(to_bytes("_" + column.name()));
+            auto value = atomic_cell::make_live(*column.type,
+                                                _time.timestamp(),
+                                                bytes_view(pk_value[pos]));
+            m.set_cell(log_ck, *cdef, std::move(value));
+            ++pos;
+        }
+        return log_ck;
+    }
+    partition_key stream_id(const net::inet_address& ip, unsigned int shard_id) const {
+        auto it = _streams.find(std::make_pair(ip, shard_id));
+        if (it == std::end(_streams)) {
+                throw std::runtime_error(format("No stream found for node {} and shard {}", ip, shard_id));
+        }
+        return partition_key::from_exploded(*_log_schema, { uuid_type->decompose(it->second) });
+    }
+public:
+    transformer(db_context ctx, schema_ptr s, const streams_type& streams)
+        : _ctx(ctx)
+        , _schema(std::move(s))
+        , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
+        , _time(utils::UUID_gen::get_time_UUID())
+        , _decomposed_time(timeuuid_type->decompose(_time))
+        , _streams(streams)
+    { }
+
+    mutation transform(const mutation& m) const {
+        auto& t = m.token();
+        auto&& ep = _ctx._token_metadata.get_endpoint(
+                _ctx._token_metadata.first_token(t));
+        if (!ep) {
+            throw std::runtime_error(format("No owner found for key {}", m.decorated_key()));
+        }
+        auto shard_id = dht::murmur3_partitioner(_ctx._snitch->get_shard_count(*ep), _ctx._snitch->get_ignore_msb_bits(*ep)).shard_of(t);
+        mutation res(_log_schema, stream_id(ep->addr(), shard_id));
+        set_pk_columns(m.key(), 0, res);
+        return res;
+    }
+};
+
+// This class is used to build a mapping from <node ip, shard id> to stream_id
+// It is used as a consumer for rows returned by the query to CDC Description Table
+class streams_builder {
+    const schema& _schema;
+    transformer::streams_type _streams;
+    net::inet_address _node_ip = net::inet_address();
+    unsigned int _shard_id = 0;
+    api::timestamp_type _latest_row_timestamp = api::min_timestamp;
+    utils::UUID _latest_row_stream_id = utils::UUID();
+public:
+    streams_builder(const schema& s) : _schema(s) {}
+
+    void accept_new_partition(const partition_key& key, uint32_t row_count) {
+        auto exploded = key.explode(_schema);
+        _node_ip = value_cast<net::inet_address>(inet_addr_type->deserialize(exploded[0]));
+        _shard_id = static_cast<unsigned int>(value_cast<int>(int32_type->deserialize(exploded[1])));
+        _latest_row_timestamp = api::min_timestamp;
+        _latest_row_stream_id = utils::UUID();
+    }
+
+    void accept_new_partition(uint32_t row_count) {
+        assert(false);
+    }
+
+    void accept_new_row(
+            const clustering_key& key,
+            const query::result_row_view& static_row,
+            const query::result_row_view& row) {
+        auto row_iterator = row.iterator();
+        api::timestamp_type timestamp = value_cast<db_clock::time_point>(
+                timestamp_type->deserialize(key.explode(_schema)[0])).time_since_epoch().count();
+        if (timestamp <= _latest_row_timestamp) {
+            return;
+        }
+        _latest_row_timestamp = timestamp;
+        for (auto&& cdef : _schema.regular_columns()) {
+            if (cdef.name_as_text() != "stream_id") {
+                row_iterator.skip(cdef);
+                continue;
+            }
+            auto val_opt = row_iterator.next_atomic_cell();
+            assert(val_opt);
+            val_opt->value().with_linearized([&] (bytes_view bv) {
+                _latest_row_stream_id = value_cast<utils::UUID>(uuid_type->deserialize(bv));
+            });
+        }
+    }
+
+    void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
+        assert(false);
+    }
+
+    void accept_partition_end(const query::result_row_view& static_row) {
+        _streams.emplace(std::make_pair(_node_ip, _shard_id), _latest_row_stream_id);
+    }
+
+    transformer::streams_type build() {
+        return std::move(_streams);
+    }
+};
+
+static future<transformer::streams_type> get_streams(
+        db_context ctx,
+        const sstring& ks_name,
+        const sstring& cf_name,
+        lowres_clock::time_point timeout,
+        service::query_state& qs) {
+    auto s =
+        ctx._proxy.get_db().local().find_schema(ks_name, desc_name(cf_name));
+    query::read_command cmd(
+            s->id(),
+            s->version(),
+            partition_slice_builder(*s).with_no_static_columns().build());
+    return ctx._proxy.query(
+            s,
+            make_lw_shared(std::move(cmd)),
+            {dht::partition_range::make_open_ended_both_sides()},
+            db::consistency_level::QUORUM,
+            {timeout, qs.get_permit(), qs.get_client_state()}).then([s = std::move(s)] (auto qr) mutable {
+        return query::result_view::do_with(*qr.query_result,
+                [s = std::move(s)] (query::result_view v) {
+            auto slice = partition_slice_builder(*s)
+                    .with_no_static_columns()
+                    .build();
+            streams_builder builder{ *s };
+            v.consume(slice, builder);
+            return builder.build();
+        });
+    });
+}
+
+future<std::vector<mutation>> append_log_mutations(
+        db_context ctx,
+        schema_ptr s,
+        service::storage_proxy::clock_type::time_point timeout,
+        service::query_state& qs,
+        std::vector<mutation> muts) {
+    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then(
+            [ctx, s = std::move(s), muts = std::move(muts)]
+            (transformer::streams_type streams) mutable {
+        transformer trans(ctx, std::move(s), streams);
+        muts.reserve(2 * muts.size());
+        for(int i = 0, size = muts.size(); i < size; ++i) {
+            muts.push_back(trans.transform(muts[i]));
+        }
+        return std::move(muts);
+    });
 }
 
 } // namespace cdc

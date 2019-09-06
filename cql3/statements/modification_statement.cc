@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "cdc/cdc.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
@@ -50,9 +51,13 @@
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
+#include "db/config.hh"
+#include "dht/murmur3_partitioner.hh"
 #include "service/storage_service.hh"
 #include "database.hh"
 #include <seastar/core/execution_stage.hh>
+#include "utils/UUID_gen.hh"
+#include "partition_slice_builder.hh"
 
 namespace cql3 {
 
@@ -338,7 +343,22 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
             return now();
         }
 
-        return proxy.mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
+        auto mutate = [&, cl, timeout] (std::vector<mutation> mutations) {
+            return proxy.mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), this->is_raw_counter_shard_write());
+        };
+
+        if (qs.get_client_state().is_internal() || qs.get_client_state().is_thrift() || !s->cdc_options().enabled()) {
+            return mutate(std::move(mutations));
+        }
+        return cdc::append_log_mutations(
+                cdc::db_context::builder(proxy).build(),
+                s,
+                timeout,
+                qs,
+                std::move(mutations))
+        .then([cl, timeout, &proxy, &qs, mutate = std::move(mutate)] (std::vector<mutation> mutations) {
+            return mutate(std::move(mutations));
+        });
     });
 }
 
