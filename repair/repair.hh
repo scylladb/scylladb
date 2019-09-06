@@ -234,11 +234,11 @@ private:
     // by one shared.
     std::vector<semaphore> _range_parallelism_semaphores;
     static const size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
+    void start(int id);
+    void done(int id, bool succeeded);
 public:
     explicit tracker(size_t nr_shards, size_t max_repair_memory);
     ~tracker();
-    void start(int id);
-    void done(int id, bool succeeded);
     repair_status get(int id);
     int next_repair_command();
     future<> shutdown();
@@ -251,6 +251,7 @@ public:
     void abort_all_repairs();
     semaphore& range_parallelism_semaphore();
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
+    future<> run(int id, std::function<future<> ()> func);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
