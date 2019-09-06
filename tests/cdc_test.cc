@@ -135,7 +135,9 @@ SEASTAR_THREAD_TEST_CASE(test_partition_key_logging) {
         assert_row(1, 11);
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
         assert_row(1, 11);
-        // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444
+        // First row for DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444
+        assert_row(1, 11);
+        // Second row for DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444
         assert_row(1, 11);
         // UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
         assert_row(2, 11);

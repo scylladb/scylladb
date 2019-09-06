@@ -259,7 +259,60 @@ public:
         }
         auto shard_id = dht::murmur3_partitioner(_ctx._snitch->get_shard_count(*ep), _ctx._snitch->get_ignore_msb_bits(*ep)).shard_of(t);
         mutation res(_log_schema, stream_id(ep->addr(), shard_id));
-        set_pk_columns(m.key(), 0, res);
+        auto& p = m.partition();
+        if (p.partition_tombstone()) {
+            // Partition deletion
+            set_pk_columns(m.key(), 0, res);
+        } else if (!p.row_tombstones().empty()) {
+            // range deletion
+            int batch_no = 0;
+            for (auto& rt : p.row_tombstones()) {
+                auto set_bound = [&] (const clustering_key& log_ck, const clustering_key_prefix& ckp) {
+                    auto exploded = ckp.explode(*_schema);
+                    size_t pos = 0;
+                    for (const auto& column : _schema->clustering_key_columns()) {
+                        if (pos >= exploded.size()) {
+                            break;
+                        }
+                        auto cdef = _log_schema->get_column_definition(to_bytes("_" + column.name()));
+                        auto value = atomic_cell::make_live(*column.type,
+                                                            _time.timestamp(),
+                                                            bytes_view(exploded[pos]));
+                        res.set_cell(log_ck, *cdef, std::move(value));
+                        ++pos;
+                    }
+                };
+                {
+                    auto log_ck = set_pk_columns(m.key(), batch_no, res);
+                    set_bound(log_ck, rt.start);
+                    ++batch_no;
+                }
+                {
+                    auto log_ck = set_pk_columns(m.key(), batch_no, res);
+                    set_bound(log_ck, rt.end);
+                    ++batch_no;
+                }
+            }
+        } else {
+            // should be update or deletion
+            int batch_no = 0;
+            for (const rows_entry& r : p.clustered_rows()) {
+                auto log_ck = set_pk_columns(m.key(), batch_no, res);
+                auto ck_value = r.key().explode(*_schema);
+                size_t pos = 0;
+                for (const auto& column : _schema->clustering_key_columns()) {
+                    assert (pos < ck_value.size());
+                    auto cdef = _log_schema->get_column_definition(to_bytes("_" + column.name()));
+                    auto value = atomic_cell::make_live(*column.type,
+                                                        _time.timestamp(),
+                                                        bytes_view(ck_value[pos]));
+                    res.set_cell(log_ck, *cdef, std::move(value));
+                    ++pos;
+                }
+
+                ++batch_no;
+            }
+        }
         return res;
     }
 };
