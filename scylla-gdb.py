@@ -1797,6 +1797,9 @@ class circular_buffer(object):
         impl = self.ref['_impl']
         return int(impl['end']) - int(impl['begin'])
 
+    def __len__(self):
+        return self.size()
+
     def external_memory_footprint(self):
         impl = self.ref['_impl']
         return int(impl['capacity']) * self.ref.type.template_argument(0).sizeof
@@ -1821,10 +1824,20 @@ class chunked_vector(object):
                + small_vector(self.ref['_chunks']).external_memory_footprint()
 
 
-def get_local_tasks():
+def get_local_task_queues():
     """ Return a list of task pointers for the local reactor. """
     for tq_ptr in static_vector(gdb.parse_and_eval('\'seastar\'::local_engine._task_queues')):
-        tq = std_unique_ptr(tq_ptr).dereference()
+        yield std_unique_ptr(tq_ptr).dereference()
+
+
+def get_local_tasks(tq_id = None):
+    """ Return a list of task pointers for the local reactor. """
+    if tq_id is not None:
+        tqs = filter(lambda x: x['_id'] == tq_id, get_local_task_queues())
+    else:
+        tqs = get_local_task_queues()
+
+    for tq in tqs:
         for t in circular_buffer(tq['_q']):
             yield std_unique_ptr(t).get()
 
@@ -1887,6 +1900,56 @@ class scylla_tasks(gdb.Command):
         for ptr in get_local_tasks():
             vptr = int(ptr.reinterpret_cast(vptr_type).dereference())
             gdb.write('(task*) 0x%x  %s\n' % (ptr, resolve(vptr)))
+
+
+class scylla_task_queues(gdb.Command):
+    """ Print a summary of the reactor's task queues.
+
+    Example:
+       id name                             shares  tasks
+     A 00 "main"                           1000.00 4
+       01 "atexit"                         1000.00 0
+       02 "streaming"                       200.00 0
+     A 03 "compaction"                      171.51 1
+       04 "mem_compaction"                 1000.00 0
+    *A 05 "statement"                      1000.00 2
+       06 "memtable"                          8.02 0
+       07 "memtable_to_cache"               200.00 0
+
+    Where:
+        * id: seastar::reactor::task_queue::_id
+        * name: seastar::reactor::task_queue::_name
+        * shares: seastar::reactor::task_queue::_shares
+        * tasks: seastar::reactor::task_queue::_q.size()
+        * A: seastar::reactor::task_queue::_active == true
+        * *: seastar::reactor::task_queue::_current == true
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla task-queues', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    @staticmethod
+    def _active(a):
+        if a:
+            return 'A'
+        return ' '
+
+    @staticmethod
+    def _current(c):
+        if c:
+            return '*'
+        return ' '
+
+    def invoke(self, arg, for_tty):
+        gdb.write('   {:2} {:32} {:7} {}\n'.format("id", "name", "shares", "tasks"))
+        for tq in get_local_task_queues():
+            gdb.write('{}{} {:02} {:32} {:>7.2f} {}\n'.format(
+                    self._current(bool(tq['_current'])),
+                    self._active(bool(tq['_active'])),
+                    int(tq['_id']),
+                    str(tq['_name']),
+                    float(tq['_shares']),
+                    len(circular_buffer(tq['_q']))))
+
 
 
 
@@ -2307,6 +2370,7 @@ scylla_unthread()
 scylla_threads()
 scylla_task_stats()
 scylla_tasks()
+scylla_task_queues()
 scylla_fiber()
 scylla_find()
 scylla_task_histogram()
