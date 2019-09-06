@@ -31,12 +31,12 @@ namespace service {
 
 class query_state final {
 private:
-    client_state _client_state;
+    client_state& _client_state;
     tracing::trace_state_ptr _trace_state_ptr;
     service_permit _permit;
 
 public:
-    query_state(client_state client_state, service_permit permit)
+    query_state(client_state& client_state, service_permit permit)
         : _client_state(client_state)
         , _trace_state_ptr(_client_state.get_trace_state())
         , _permit(std::move(permit))

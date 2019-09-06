@@ -204,6 +204,7 @@ class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     const cql3::cql_config& _cql_config;
+    service::client_state _client_state;
     service::query_state _query_state;
     ::timeout_config _timeout_config;
 private:
@@ -223,7 +224,8 @@ public:
         : _db(db)
         , _query_processor(qp)
         , _cql_config(cql_config)
-        , _query_state(service::client_state::for_external_thrift_calls(auth_service), /*FIXME: pass real permit*/empty_service_permit())
+        , _client_state(service::client_state::external_tag{}, auth_service, socket_address(), true)
+        , _query_state(_client_state, /*FIXME: pass real permit*/empty_service_permit())
         , _timeout_config(timeout_config)
     { }
 

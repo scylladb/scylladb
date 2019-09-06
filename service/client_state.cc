@@ -57,9 +57,6 @@ void service::client_state::set_login(::shared_ptr<auth::authenticated_user> use
         throw std::invalid_argument("Must provide user");
     }
     _user = std::move(user);
-    if (_is_request_copy) {
-        _user_is_dirty = true;
-    }
 }
 
 future<> service::client_state::check_user_can_login() {
@@ -97,18 +94,6 @@ void service::client_state::ensure_not_anonymous() const {
     validate_login();
     if (auth::is_anonymous(*_user)) {
         throw exceptions::unauthorized_exception("You have to be logged in and not anonymous to perform this request");
-    }
-}
-
-void service::client_state::merge(const client_state& other) {
-    if (other._dirty) {
-        _keyspace = other._keyspace;
-    }
-    if (_user == nullptr) {
-        _user = other._user;
-    }
-    if (_auth_state != other._auth_state) {
-        _auth_state = other._auth_state;
     }
 }
 
@@ -240,26 +225,6 @@ future<> service::client_state::ensure_has_permission(auth::permission p, const 
     });
 }
 
-auth::service* service::client_state::local_auth_service_copy(const service::client_state& orig) const {
-    if (orig._auth_service && _cpu_of_origin != orig._cpu_of_origin) {
-        // if moved to a different shard - return a pointer to the local auth_service instance
-        return &service::get_local_storage_service().get_local_auth_service();
-    }
-    return orig._auth_service;
-}
-
-::shared_ptr<auth::authenticated_user> service::client_state::local_user_copy(const service::client_state& orig) const {
-    if (orig._user) {
-        if (_cpu_of_origin != orig._cpu_of_origin) {
-            // if we moved to another shard create a local copy of authenticated_user
-            return ::make_shared<auth::authenticated_user>(*orig._user);
-        } else {
-            return orig._user;
-        }
-    }
-    return nullptr;
-}
-
 void service::client_state::set_keyspace(database& db, sstring keyspace) {
     // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
     // call set_keyspace() before calling login(), and we have to handle that.
@@ -267,23 +232,6 @@ void service::client_state::set_keyspace(database& db, sstring keyspace) {
         throw exceptions::invalid_request_exception(format("Keyspace '{}' does not exist", keyspace));
     }
     _keyspace = keyspace;
-    _dirty = true;
-}
-
-
-service::client_state::client_state(service::client_state::request_copy_tag, const service::client_state& orig, api::timestamp_type ts)
-        : _keyspace(orig._keyspace)
-        , _cpu_of_origin(engine().cpu_id())
-        , _user(local_user_copy(orig))
-        , _auth_state(orig._auth_state)
-        , _is_internal(orig._is_internal)
-        , _is_thrift(orig._is_thrift)
-        , _is_request_copy(true)
-        , _remote_address(orig._remote_address)
-        , _auth_service(local_auth_service_copy(orig))
-        , _request_ts(ts)
-{
-    assert(!orig._trace_state_ptr);
 }
 
 future<> service::client_state::ensure_exists(const auth::resource& r) const {

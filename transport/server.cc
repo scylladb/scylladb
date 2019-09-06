@@ -63,13 +63,6 @@ namespace cql_transport {
 
 static logging::logger clogger("cql_server");
 
-cql_server::connection::processing_result::processing_result(response_type r)
-    : cql_response(make_foreign(std::move(r.first)))
-    , keyspace(r.second.is_dirty() ? make_foreign(std::make_unique<sstring>(std::move(r.second.get_raw_keyspace()))) : nullptr)
-    , user(r.second.user_is_dirty() ? make_foreign(r.second.user()) : nullptr)
-    , auth_state(r.second.get_auth_state())
-{}
-
 struct cql_frame_error : std::exception {
     const char* what() const throw () override {
         return "bad cql binary frame";
@@ -345,8 +338,8 @@ cql_server::connection::read_frame() {
     }
 }
 
-future<cql_server::connection::processing_result>
-    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request, service_permit permit) {
+future<std::unique_ptr<cql_server::response>>
+    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit) {
     using auth_state = service::client_state::auth_state;
 
     auto cqlop = static_cast<cql_binary_opcode>(op);
@@ -369,7 +362,7 @@ future<cql_server::connection::processing_result>
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
-    return futurize_apply([this, cqlop, stream, &fbuf, client_state, linearization_buffer_ptr, permit = std::move(permit)] () mutable {
+    return futurize_apply([this, cqlop, stream, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit)] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -404,70 +397,71 @@ future<cql_server::connection::processing_result>
 
         auto in = request_reader(std::move(fbuf), *linearization_buffer_ptr);
         switch (cqlop) {
-        case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::OPTIONS:       return process_options(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), std::move(client_state), std::move(permit));
-        case cql_binary_opcode::PREPARE:       return process_prepare(stream, std::move(in), std::move(client_state));
-        case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), std::move(client_state), std::move(permit));
-        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), std::move(client_state), std::move(permit));
-        case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(in), std::move(client_state));
+        case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(in), client_state);
+        case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(in), client_state);
+        case cql_binary_opcode::OPTIONS:       return process_options(stream, std::move(in), client_state);
+        case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), client_state, std::move(permit));
+        case cql_binary_opcode::PREPARE:       return process_prepare(stream, std::move(in), client_state);
+        case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), client_state, std::move(permit));
+        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), client_state, std::move(permit));
+        case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(in), client_state);
         default:                               throw exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop)));
         }
-    }).then_wrapped([this, cqlop, stream, client_state, linearization_buffer = std::move(linearization_buffer)] (future<response_type> f) -> processing_result {
+    }).then_wrapped([this, cqlop, stream, &client_state, linearization_buffer = std::move(linearization_buffer)] (future<std::unique_ptr<cql_server::response>> f) -> std::unique_ptr<cql_server::response> {
         auto stop_trace = defer([&] {
             tracing::stop_foreground(client_state.get_trace_state());
         });
         --_server._requests_serving;
         try {
-            response_type response = f.get0();
-            service::client_state& resp_client_state = response.second;
-            auto res_op = response.first->opcode();
+            std::unique_ptr<cql_server::response> response = f.get0();
+
+            auto res_op = response->opcode();
 
             // and modify state now that we've generated a response.
             switch (client_state.get_auth_state()) {
-                case auth_state::UNINITIALIZED:
-                    if (cqlop == cql_binary_opcode::STARTUP) {
-                        if (res_op == cql_binary_opcode::AUTHENTICATE) {
-                            resp_client_state.set_auth_state(auth_state::AUTHENTICATION);
-                        } else if (res_op == cql_binary_opcode::READY) {
-                            resp_client_state.set_auth_state(auth_state::READY);
-                        }
+            case auth_state::UNINITIALIZED:
+                if (cqlop == cql_binary_opcode::STARTUP) {
+                    if (res_op == cql_binary_opcode::AUTHENTICATE) {
+                        client_state.set_auth_state(auth_state::AUTHENTICATION);
+                    } else if (res_op == cql_binary_opcode::READY) {
+                        client_state.set_auth_state(auth_state::READY);
                     }
-                    break;
-                case auth_state::AUTHENTICATION:
-                    // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
-                    assert(cqlop == cql_binary_opcode::AUTH_RESPONSE || cqlop == cql_binary_opcode::CREDENTIALS);
-                    if (res_op == cql_binary_opcode::READY || res_op == cql_binary_opcode::AUTH_SUCCESS) {
-                        resp_client_state.set_auth_state(auth_state::READY);
-                    }
-                    break;
-                default:
-                case auth_state::READY:
-                    break;
+                }
+                break;
+            case auth_state::AUTHENTICATION:
+                // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
+                assert(cqlop == cql_binary_opcode::AUTH_RESPONSE || cqlop == cql_binary_opcode::CREDENTIALS);
+                if (res_op == cql_binary_opcode::READY || res_op == cql_binary_opcode::AUTH_SUCCESS) {
+                    client_state.set_auth_state(auth_state::READY);
+                }
+                break;
+            default:
+            case auth_state::READY:
+                break;
             }
-            tracing::set_response_size(client_state.get_trace_state(), response.first->size());
-            return processing_result(std::move(response));
+
+            tracing::set_response_size(client_state.get_trace_state(), response->size());
+            return response;
         } catch (const exceptions::unavailable_exception& ex) {
-            return processing_result(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
+            return make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state());
         } catch (const exceptions::read_timeout_exception& ex) {
-            return processing_result(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+            return make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state());
         } catch (const exceptions::read_failure_exception& ex) {
-            return processing_result(std::make_pair(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+            return make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state());
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
-            return processing_result(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+            return make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state());
         } catch (const exceptions::mutation_write_failure_exception& ex) {
-            return processing_result(std::make_pair(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+            return make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state());
         } catch (const exceptions::already_exists_exception& ex) {
-            return processing_result(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state()), client_state));
+            return make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state());
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
-            return processing_result(std::make_pair(make_unprepared_error(stream, ex.code(), ex.what(), ex.id, client_state.get_trace_state()), client_state));
+            return make_unprepared_error(stream, ex.code(), ex.what(), ex.id, client_state.get_trace_state());
         } catch (const exceptions::cassandra_exception& ex) {
-            return processing_result(std::make_pair(make_error(stream, ex.code(), ex.what(), client_state.get_trace_state()), client_state));
+            return make_error(stream, ex.code(), ex.what(), client_state.get_trace_state());
         } catch (std::exception& ex) {
-            return processing_result(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), client_state.get_trace_state()), client_state));
+            return make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), client_state.get_trace_state());
         } catch (...) {
-            return processing_result(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
+            return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state());
         }
     });
 }
@@ -532,32 +526,6 @@ future<> cql_server::connection::shutdown()
 thread_local cql_server::connection::execution_stage_type
         cql_server::connection::_process_request_stage{"transport", &connection::process_request_one};
 
-void cql_server::connection::update_client_state(processing_result& response) {
-    if (response.keyspace) {
-        if (response.keyspace.get_owner_shard() != engine().cpu_id()) {
-            _client_state.set_raw_keyspace(*response.keyspace);
-        } else {
-            // Avoid extra copy if we are on the same shard
-            _client_state.set_raw_keyspace(std::move(*response.keyspace));
-        }
-    }
-
-    if (response.user) {
-        if (response.user.get_owner_shard() != engine().cpu_id()) {
-            if (!_client_state.user() || *_client_state.user() != *response.user) {
-                _client_state.set_login(make_shared<auth::authenticated_user>(*response.user));
-            }
-        } else if (!_client_state.user()) {
-            // If we are on the same shard there is no need to copy unless _client_state._user == nullptr
-            _client_state.set_login(response.user.release());
-        }
-    }
-
-    if (_client_state.get_auth_state() != response.auth_state) {
-        _client_state.set_auth_state(response.auth_state);
-    }
-}
-
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::optional<cql_binary_frame_v3>>&& v) {
         auto maybe_frame = std::get<0>(v.get());
@@ -601,12 +569,10 @@ future<> cql_server::connection::process_request() {
             // Replacing the immediately-invoked lambda below with just its body costs 5-10 usec extra per invocation.
             // Cause not understood.
             auto istream = buf.get_istream();
-            (void)_process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested, mem_permit)
-                    .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<processing_result> response_f) mutable {
+            (void)_process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit)
+                    .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<std::unique_ptr<cql_server::response>> response_f) mutable {
                 try {
-                    auto response = response_f.get0();
-                    update_client_state(response);
-                    write_response(std::move(response.cql_response), std::move(mem_permit), _compression);
+                    write_response(std::move(response_f.get0()), std::move(mem_permit), _compression);
                     _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
                 } catch (...) {
                     clogger.error("request processing failed: {}", std::current_exception());
@@ -695,7 +661,7 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
     return _buffer_reader.read_exactly(_read_buf, length);
 }
 
-future<response_type> cql_server::connection::process_startup(uint16_t stream, request_reader in, service::client_state client_state)
+future<std::unique_ptr<cql_server::response>> cql_server::connection::process_startup(uint16_t stream, request_reader in, service::client_state& client_state)
 {
     auto options = in.read_string_map();
     auto compression_opt = options.find("COMPRESSION");
@@ -712,33 +678,33 @@ future<response_type> cql_server::connection::process_startup(uint16_t stream, r
     }
     auto& a = client_state.get_auth_service()->underlying_authenticator();
     if (a.require_authentication()) {
-        return make_ready_future<response_type>(std::make_pair(make_autheticate(stream, a.qualified_java_name(), client_state.get_trace_state()), client_state));
+        return make_ready_future<std::unique_ptr<cql_server::response>>(make_autheticate(stream, a.qualified_java_name(), client_state.get_trace_state()));
     }
-    return make_ready_future<response_type>(std::make_pair(make_ready(stream, client_state.get_trace_state()), client_state));
+    return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, client_state.get_trace_state()));
 }
 
-future<response_type> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state client_state)
+future<std::unique_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state)
 {
     auto sasl_challenge = client_state.get_auth_service()->underlying_authenticator().new_sasl_challenge();
     auto buf = in.read_raw_bytes_view(in.bytes_left());
     auto challenge = sasl_challenge->evaluate_response(buf);
     if (sasl_challenge->is_complete()) {
-        return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, client_state = std::move(client_state), challenge = std::move(challenge)](auth::authenticated_user user) mutable {
+        return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge)](auth::authenticated_user user) mutable {
             client_state.set_login(::make_shared<auth::authenticated_user>(std::move(user)));
             auto f = client_state.check_user_can_login();
-            return f.then([this, stream, client_state = std::move(client_state), challenge = std::move(challenge)]() mutable {
+            return f.then([this, stream, &client_state, challenge = std::move(challenge)]() mutable {
                 auto tr_state = client_state.get_trace_state();
-                return make_ready_future<response_type>(std::make_pair(make_auth_success(stream, std::move(challenge), tr_state), std::move(client_state)));
+                return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), tr_state));
             });
         });
     }
     auto tr_state = client_state.get_trace_state();
-    return make_ready_future<response_type>(std::make_pair(make_auth_challenge(stream, std::move(challenge), tr_state), std::move(client_state)));
+    return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_challenge(stream, std::move(challenge), tr_state));
 }
 
-future<response_type> cql_server::connection::process_options(uint16_t stream, request_reader in, service::client_state client_state)
+future<std::unique_ptr<cql_server::response>> cql_server::connection::process_options(uint16_t stream, request_reader in, service::client_state& client_state)
 {
-    return make_ready_future<response_type>(std::make_pair(make_supported(stream, client_state.get_trace_state()), client_state));
+    return make_ready_future<std::unique_ptr<cql_server::response>>(make_supported(stream, client_state.get_trace_state()));
 }
 
 void
@@ -746,7 +712,7 @@ cql_server::connection::init_cql_serialization_format() {
     _cql_serialization_format = cql_serialization_format(_version);
 }
 
-future<response_type> cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
+future<std::unique_ptr<cql_server::response>> cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit)
 {
     auto query = in.read_long_string_view();
     auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
@@ -761,51 +727,43 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, req
     tracing::add_query(query_state.get_trace_state(), query);
     tracing::set_user_timestamp(query_state.get_trace_state(), options.get_specific_options().timestamp);
 
-    tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", query_state.get_client_state().get_client_address());
+    tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", client_state.get_client_address());
 
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, &query_state, skip_metadata] (auto msg) {
          tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
          return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
-    }).then([&query_state, q_state = std::move(q_state), this] (std::unique_ptr<cql_server::response> response) {
-        /* Keep q_state alive. */
-        return make_ready_future<response_type>(std::make_pair(std::move(response), query_state.get_client_state()));
-    });
+    }).finally([q_state = std::move(q_state)] {});
 }
 
-future<response_type> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state client_state_)
+future<std::unique_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state)
 {
     auto query = sstring(in.read_long_string_view());
 
-    tracing::add_query(client_state_.get_trace_state(), query);
-    tracing::begin(client_state_.get_trace_state(), "Preparing CQL3 query", client_state_.get_client_address());
+    tracing::add_query(client_state.get_trace_state(), query);
+    tracing::begin(client_state.get_trace_state(), "Preparing CQL3 query", client_state.get_client_address());
 
     auto cpu_id = engine().cpu_id();
     auto cpus = boost::irange(0u, smp::count);
-    auto client_state = std::make_unique<service::client_state>(client_state_);
-    const auto& cs = *client_state;
-    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &cs] (unsigned int c) mutable {
+    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &client_state] (unsigned int c) mutable {
         if (c != cpu_id) {
-            return smp::submit_to(c, [this, query, &cs] () mutable {
-                return _server._query_processor.local().prepare(std::move(query), cs, false).discard_result();
+            return smp::submit_to(c, [this, query, &client_state] () mutable {
+                return _server._query_processor.local().prepare(std::move(query), client_state, false).discard_result();
             });
         } else {
             return make_ready_future<>();
         }
-    }).then([this, query, stream, &cs] () mutable {
-        tracing::trace(cs.get_trace_state(), "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(std::move(query), cs, false).then([this, stream, &cs] (auto msg) {
-            tracing::trace(cs.get_trace_state(), "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
+    }).then([this, query, stream, &client_state] () mutable {
+        tracing::trace(client_state.get_trace_state(), "Done preparing on remote shards");
+        return _server._query_processor.local().prepare(std::move(query), client_state, false).then([this, stream, &client_state] (auto msg) {
+            tracing::trace(client_state.get_trace_state(), "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
                 return messages::result_message::prepared::cql::get_id(msg);
             }));
-            return this->make_result(stream, msg, cs.get_trace_state());
+            return this->make_result(stream, msg, client_state.get_trace_state());
         });
-    }).then([client_state = std::move(client_state)] (std::unique_ptr<cql_server::response> response) {
-        /* keep client_state alive */
-        return make_ready_future<response_type>(std::make_pair(std::move(response), *client_state));
     });
 }
 
-future<response_type> cql_server::connection::process_execute(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
+future<std::unique_ptr<cql_server::response>> cql_server::connection::process_execute(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit)
 {
     cql3::prepared_cache_key_type cache_key(in.read_short_bytes());
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
@@ -862,12 +820,12 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, r
     }).then([&query_state, q_state = std::move(q_state), this] (std::unique_ptr<cql_server::response> response) {
         /* Keep q_state alive. */
         tracing::stop_foreground_prepared(query_state.get_trace_state(), q_state->options.get());
-        return make_ready_future<response_type>(std::make_pair(std::move(response), query_state.get_client_state()));
+        return std::move(response);
     });
 }
 
-future<response_type>
-cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state client_state, service_permit permit)
+future<std::unique_ptr<cql_server::response>>
+cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit)
 {
     if (_version == 1) {
         throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
@@ -962,12 +920,12 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
     }).then([&query_state, q_state = std::move(q_state), this] (std::unique_ptr<cql_server::response> response) {
         /* Keep q_state alive. */
         tracing::stop_foreground_prepared(query_state.get_trace_state(), q_state->options.get());
-        return make_ready_future<response_type>(std::make_pair(std::move(response), query_state.get_client_state()));
+        return std::move(response);
     });
 }
 
-future<response_type>
-cql_server::connection::process_register(uint16_t stream, request_reader in, service::client_state client_state)
+future<std::unique_ptr<cql_server::response>>
+cql_server::connection::process_register(uint16_t stream, request_reader in, service::client_state& client_state)
 {
     std::vector<sstring> event_types;
     in.read_string_list(event_types);
@@ -975,7 +933,7 @@ cql_server::connection::process_register(uint16_t stream, request_reader in, ser
         auto et = parse_event_type(event_type);
         _server._notifier->register_event(et, this);
     }
-    return make_ready_future<response_type>(std::make_pair(make_ready(stream, client_state.get_trace_state()), client_state));
+    return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, client_state.get_trace_state()));
 }
 
 std::unique_ptr<cql_server::response> cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state)

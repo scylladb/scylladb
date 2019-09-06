@@ -71,7 +71,6 @@ public:
 private:
     sstring _keyspace;
     tracing::trace_state_ptr _trace_state_ptr;
-    unsigned _cpu_of_origin;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ClientState.class);
     public static final SemanticVersion DEFAULT_CQL_VERSION = org.apache.cassandra.cql3.QueryProcessor.CQL_VERSION;
@@ -96,21 +95,15 @@ private:
 #endif
     ::shared_ptr<auth::authenticated_user> _user;
 
-    // Only considered in the "request copy"
-    bool _user_is_dirty = false;
-
     auth_state _auth_state = auth_state::UNINITIALIZED;
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
     bool _is_internal;
     bool _is_thrift;
-    bool _is_request_copy = false;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     api::timestamp_type _last_timestamp_micros = 0;
-
-    bool _dirty = false;
 
     // Address of a client
     socket_address _remote_address;
@@ -118,13 +111,9 @@ private:
     // Only populated for external client state.
     auth::service* _auth_service{nullptr};
 
-    // Only set for "request copy"
-    std::optional<api::timestamp_type> _request_ts;
-
 public:
     struct internal_tag {};
     struct external_tag {};
-    struct request_copy_tag {};
 
     void create_tracing_session(tracing::trace_type type, tracing::trace_state_props_set props) {
         _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, props);
@@ -146,22 +135,8 @@ public:
         _auth_state = new_state;
     }
 
-    /// \brief A cross-shard copy-constructor.
-    /// Copies everything that may be copied on the remote shard (e.g. _user is out since it's a shared_ptr).
-    /// The created copy of the original client state that may be safely used in the specific request handling flow.
-    /// The given timestamp is going to be used in the context of the corresponding query instead of being generated.
-    /// The caller must ensure that the given timestamps are monotonic in the context of a specific client/connection.
-    ///
-    /// \note May not be called if the Tracing state has already been initialized.
-    ///
-    /// \param request_copy_tag
-    /// \param orig The client_state that should be copied.
-    /// \param ts A timestamp to use during the request handling
-    client_state(request_copy_tag, const client_state& orig, api::timestamp_type ts);
-
     client_state(external_tag, auth::service& auth_service, const socket_address& remote_address = socket_address(), bool thrift = false)
-            : _cpu_of_origin(engine().cpu_id())
-            , _is_internal(false)
+            : _is_internal(false)
             , _is_thrift(thrift)
             , _remote_address(remote_address)
             , _auth_service(&auth_service) {
@@ -176,10 +151,11 @@ public:
 
     client_state(internal_tag)
             : _keyspace("system")
-            , _cpu_of_origin(engine().cpu_id())
             , _is_internal(true)
             , _is_thrift(false)
     {}
+
+    client_state(client_state&) = delete;
 
     ///
     /// `nullptr` for internal instances.
@@ -188,14 +164,8 @@ public:
         return _auth_service;
     }
 
-    void merge(const client_state& other);
-
     bool is_thrift() const {
         return _is_thrift;
-    }
-
-    bool is_dirty() const noexcept {
-        return _dirty;
     }
 
     bool is_internal() const {
@@ -205,20 +175,9 @@ public:
     /**
      * @return a ClientState object for internal C* calls (not limited by any kind of auth).
      */
-    static client_state for_internal_calls() {
-        return client_state(internal_tag());
-    }
-
-    /**
-     * The `auth::service` should be non-`nullptr` for native protocol users.
-     *
-     * @return a ClientState object for external clients (thrift/native protocol users).
-     */
-    static client_state for_external_calls(auth::service& ser) {
-        return client_state(external_tag(), ser);
-    }
-    static client_state for_external_thrift_calls(auth::service& ser) {
-        return client_state(external_tag(), ser, socket_address(), true);
+    static client_state& for_internal_calls() {
+        static thread_local client_state s(internal_tag{});
+        return s;
     }
 
     /**
@@ -226,10 +185,6 @@ public:
      * in the sequence seen, even if multiple updates happen in the same millisecond.
      */
     api::timestamp_type get_timestamp() {
-        if (_request_ts) {
-            return *_request_ts;
-        }
-
         auto current = api::new_timestamp();
         auto last = _last_timestamp_micros;
         auto result = last >= current ? last + 1 : current;
@@ -269,16 +224,6 @@ public:
     }
 
 public:
-    /// \brief Get a local copy of the orig._auth_service.
-    /// \param orig The original client_state.
-    /// \return The pointer to the local auth_service instance or nullptr if orig._auth_serice == nullptr.
-    auth::service* local_auth_service_copy(const service::client_state& orig) const;
-
-    /// \brief Get a local copy of the orig._user.
-    /// \param orig The original client_state.
-    /// \return The shared_ptr created on a local shard pointing to the auth::authenticated_user object equal to the *orig._user.
-    ::shared_ptr<auth::authenticated_user> local_user_copy(const service::client_state& orig) const;
-
     void set_keyspace(database& db, sstring keyspace);
 
     void set_raw_keyspace(sstring new_keyspace) noexcept {
@@ -336,10 +281,6 @@ public:
 
     ::shared_ptr<auth::authenticated_user> user() const {
         return _user;
-    }
-
-    bool user_is_dirty() const noexcept {
-        return _user_is_dirty;
     }
 
 #if 0
