@@ -235,7 +235,6 @@ tracker::~tracker() {
 }
 
 void tracker::start(int id) {
-    _gate.enter();
     _status[id] = repair_status::RUNNING;
 }
 
@@ -245,7 +244,6 @@ void tracker::done(int id, bool succeeded) {
     } else {
         _status[id] = repair_status::FAILED;
     }
-    _gate.leave();
 }
 repair_status tracker::get(int id) {
     if (id >= _next_repair_command) {
@@ -323,6 +321,19 @@ void tracker::abort_all_repairs() {
 
 semaphore& tracker::range_parallelism_semaphore() {
     return _range_parallelism_semaphores[engine().cpu_id()];
+}
+
+future<> tracker::run(int id, std::function<future<> ()> func) {
+    return seastar::with_gate(_gate, [this, id, func =std::move(func)] {
+        start(id);
+        return func().then([this, id] {
+            rlogger.info("repair id {} completed successfully", id);
+            done(id, true);
+        }).handle_exception([this, id] (std::exception_ptr ep) {
+            rlogger.info("repair id {} failed: {}", id, ep);
+            done(id, false);
+        });
+    });
 }
 
 void check_in_shutdown() {
@@ -1300,7 +1311,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
         repair_tracker().remove_repair_info(ri->id);
         return make_ready_future<>();
     }).handle_exception([ri] (std::exception_ptr eptr) {
-        rlogger.info("repair id {} failed - {}", ri->id, eptr);
+        rlogger.info("repair id {} on shard {} failed: {}", ri->id, engine().cpu_id(), eptr);
         repair_tracker().remove_repair_info(ri->id);
         return make_exception_future<>(std::move(eptr));
     });
@@ -1323,8 +1334,6 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // yet. Real ids returned by next_repair_command() will be >= 1.
     int id = repair_tracker().next_repair_command();
     rlogger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
-    repair_tracker().start(id);
-    auto fail = defer([id] { repair_tracker().done(id, false); });
 
     if (!gms::get_local_gossiper().is_normal(utils::fb_utilities::get_broadcast_address())) {
         throw std::runtime_error("Node is not in NORMAL status yet!");
@@ -1398,36 +1407,37 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         cfs = list_column_families(db.local(), keyspace);
     }
 
-
-    std::vector<future<>> repair_results;
-    repair_results.reserve(smp::count);
-
-    for (auto shard : boost::irange(unsigned(0), smp::count)) {
-        auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges,
-                data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
-            auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
-                    std::move(keyspace), std::move(ranges), std::move(cfs),
-                    id, std::move(data_centers), std::move(hosts));
-            return repair_ranges(ri);
-        });
-        repair_results.push_back(std::move(f));
-    }
-
     // Do it in the background.
-    (void)when_all(repair_results.begin(), repair_results.end()).then([id, fail = std::move(fail)] (std::vector<future<>> results) mutable {
-        if (std::any_of(results.begin(), results.end(), [] (auto&& f) { return f.failed(); })) {
-            rlogger.info("repair {} failed", id);
-        } else {
-            fail.cancel();
-            repair_tracker().done(id, true);
-            rlogger.info("repair {} completed successfully", id);
+    (void)repair_tracker().run(id, [&db, id, keyspace = std::move(keyspace),
+            cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options)] () mutable {
+        std::vector<future<>> repair_results;
+        repair_results.reserve(smp::count);
+        for (auto shard : boost::irange(unsigned(0), smp::count)) {
+            auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges,
+                    data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
+                auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
+                        std::move(keyspace), std::move(ranges), std::move(cfs),
+                        id, std::move(data_centers), std::move(hosts));
+                return repair_ranges(ri);
+            });
+            repair_results.push_back(std::move(f));
         }
-        for (auto& f : results) {
-            f.ignore_ready_future();
-        }
-        return make_ready_future<>();
-    }).handle_exception([id] (std::exception_ptr eptr) {
-         rlogger.info("repair {} failed: {}", id, eptr);
+        return when_all(repair_results.begin(), repair_results.end()).then([id] (std::vector<future<>> results) mutable {
+            std::vector<sstring> errors;
+            for (unsigned shard = 0; shard < results.size(); shard++) {
+                auto& f = results[shard];
+                if (f.failed()) {
+                    auto ep = f.get_exception();
+                    errors.push_back(format("shard {}: {}", shard, ep));
+                }
+            }
+            if (!errors.empty()) {
+                return make_exception_future<>(std::runtime_error(format("{}", errors)));
+            }
+            return make_ready_future<>();
+        });
+    }).handle_exception([id] (std::exception_ptr ep) {
+        rlogger.info("repair_tracker run for repair id {} failed: {}", id, ep);
     });
 
     return id;
