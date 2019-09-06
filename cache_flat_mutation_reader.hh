@@ -364,7 +364,7 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                 }
             });
             return make_ready_future<>();
-        });
+        }, timeout);
 }
 
 inline

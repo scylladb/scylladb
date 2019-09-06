@@ -449,9 +449,13 @@ GCC6_CONCEPT(requires requires(StopCondition stop, ConsumeMutationFragment consu
     { consume_mf(std::move(mf)) } -> void;
     { consume_eos() } -> future<>;
 })
-future<> consume_mutation_fragments_until(flat_mutation_reader& r, StopCondition&& stop,
-                                          ConsumeMutationFragment&& consume_mf, ConsumeEndOfStream&& consume_eos) {
-    return do_until([stop] { return stop(); }, [&r, stop, consume_mf, consume_eos] {
+future<> consume_mutation_fragments_until(
+        flat_mutation_reader& r,
+        StopCondition&& stop,
+        ConsumeMutationFragment&& consume_mf,
+        ConsumeEndOfStream&& consume_eos,
+        db::timeout_clock::time_point timeout) {
+    return do_until([stop] { return stop(); }, [&r, stop, consume_mf, consume_eos, timeout] {
         while (!r.is_buffer_empty()) {
             consume_mf(r.pop_mutation_fragment());
             if (stop()) {
@@ -461,7 +465,7 @@ future<> consume_mutation_fragments_until(flat_mutation_reader& r, StopCondition
         if (r.is_end_of_stream()) {
             return consume_eos();
         }
-        return r.fill_buffer();
+        return r.fill_buffer(timeout);
     });
 }
 
