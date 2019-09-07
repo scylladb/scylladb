@@ -104,7 +104,7 @@ protected:
     data_type _elements;
     explicit listlike_collection_type_impl(kind k, sstring name, data_type elements,bool is_multi_cell);
 public:
-    data_type get_elements_type() const { return _elements; }
+    const data_type& get_elements_type() const { return _elements; }
 };
 
 template <typename BytesViewIterator>

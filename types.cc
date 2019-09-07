@@ -713,12 +713,11 @@ bool abstract_type::is_string() const {
     return visit(*this, visitor{});
 }
 
-static bool find(const abstract_type& t, std::function<bool(const abstract_type&)> f) {
-    if (f(t)) {
-        return true;
-    }
+template<typename Predicate>
+GCC6_CONCEPT(requires CanHandleAllTypes<Predicate>)
+static bool find(const abstract_type& t, const Predicate& f) {
     struct visitor {
-        std::function<bool(const abstract_type&)>& f;
+        const Predicate& f;
         bool operator()(const abstract_type&) { return false; }
         bool operator()(const reversed_type_impl& r) { return find(*r.underlying_type(), f); }
         bool operator()(const tuple_type_impl& t) {
@@ -727,21 +726,30 @@ static bool find(const abstract_type& t, std::function<bool(const abstract_type&
         bool operator()(const map_type_impl& m) { return find(*m.get_keys_type(), f) || find(*m.get_values_type(), f); }
         bool operator()(const listlike_collection_type_impl& l) { return find(*l.get_elements_type(), f); }
     };
-    return visit(t, visitor{f});
+    return visit(t, [&](const auto& t) {
+        if (f(t)) {
+            return true;
+        }
+        return visitor{f}(t);
+    });
 }
 
 bool abstract_type::references_duration() const {
-    return find(*this, [] (const abstract_type& t) { return t.get_kind() == kind::duration; });
+    struct visitor {
+        bool operator()(const abstract_type&) const { return false; }
+        bool operator()(const duration_type_impl&) const { return true; }
+    };
+    return find(*this, visitor{});
 }
 
 bool abstract_type::references_user_type(const sstring& keyspace, const bytes& name) const {
     struct visitor {
         const sstring& keyspace;
         const bytes& name;
-        bool operator()(const abstract_type&) { return false; }
-        bool operator()(const user_type_impl& u) { return u._keyspace == keyspace && u._name == name; }
+        bool operator()(const abstract_type&) const { return false; }
+        bool operator()(const user_type_impl& u) const { return u._keyspace == keyspace && u._name == name; }
     };
-    return find(*this, [&](const abstract_type& t) { return visit(t, visitor{keyspace, name}); });
+    return find(*this, visitor{keyspace, name});
 }
 
 namespace {
