@@ -282,25 +282,26 @@ void messaging_service::start_listen() {
     if (_compress_what != compress_what::none) {
         so.compressor_factory = &compressor_factory;
     }
-    so.streaming_domain = rpc::streaming_domain_type(0x55AA);
     // FIXME: we don't set so.tcp_nodelay, because we can't tell at this point whether the connection will come from a
     //        local or remote datacenter, and whether or not the connection will be used for gossip. We can fix
     //        the first by wrapping its server_socket, but not the second.
     auto limits = rpc_resource_limits(_mcfg.rpc_memory_limit);
     if (!_server[0]) {
-        auto listen = [&] (const gms::inet_address& a) {
+        auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
+            so.streaming_domain = sdomain;
             auto addr = ipv4_addr{a.raw_addr(), _port};
             return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
                     so, addr, limits));
         };
-        _server[0] = listen(_listen_address);
+        _server[0] = listen(_listen_address, rpc::streaming_domain_type(0x55AA));
         if (listen_to_bc) {
-            _server[1] = listen(utils::fb_utilities::get_broadcast_address());
+            _server[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x66BB));
         }
     }
 
     if (!_server_tls[0]) {
-        auto listen = [&] (const gms::inet_address& a) {
+        auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
+            so.streaming_domain = sdomain;
             return std::unique_ptr<rpc_protocol_server_wrapper>(
                     [this, &so, &a, limits] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
                 if (_encrypt_what == encrypt_what::none) {
@@ -313,9 +314,9 @@ void messaging_service::start_listen() {
                         so, seastar::tls::listen(_credentials, addr, lo), limits);
             }());
         };
-        _server_tls[0] = listen(_listen_address);
+        _server_tls[0] = listen(_listen_address, rpc::streaming_domain_type(0x77CC));
         if (listen_to_bc) {
-            _server_tls[1] = listen(utils::fb_utilities::get_broadcast_address());
+            _server_tls[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x88DD));
         }
     }
     // Do this on just cpu 0, to avoid duplicate logs.
