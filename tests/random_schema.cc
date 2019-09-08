@@ -426,7 +426,7 @@ data_value generate_boolean_value(std::mt19937& engine, size_t) {
 }
 
 data_value generate_date_value(std::mt19937& engine, size_t) {
-    return data_value(db_clock::time_point(db_clock::duration(random::get_int<std::make_unsigned_t<db_clock::rep>>(engine))));
+    return data_value(date_type_native_type{db_clock::time_point(db_clock::duration(random::get_int<std::make_unsigned_t<db_clock::rep>>(engine)))});
 }
 
 data_value generate_timeuuid_value(std::mt19937&, size_t) {
@@ -434,8 +434,8 @@ data_value generate_timeuuid_value(std::mt19937&, size_t) {
 }
 
 data_value generate_timestamp_value(std::mt19937& engine, size_t) {
-    using pt = timestamp_native_type::primary_type;
-    return data_value(timestamp_native_type{pt(pt::duration(random::get_int<pt::rep>(engine)))});
+    using pt = db_clock::time_point;
+    return data_value(pt(pt::duration(random::get_int<pt::rep>(engine))));
 }
 
 data_value generate_simple_date_value(std::mt19937& engine, size_t) {
