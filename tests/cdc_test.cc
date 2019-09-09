@@ -87,7 +87,7 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     }).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_partition_key_logging) {
+SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
@@ -100,7 +100,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_key_logging) {
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444");
         cquery_nofail(e, "UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11");
-        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_pk2\" FROM ks.{}", cdc::log_name("tbl"))).get0();
+        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_pk2\", \"_ck\", \"_ck2\" FROM ks.{}", cdc::log_name("tbl"))).get0();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
         auto rs = rows->rs().result_set().rows();
@@ -114,33 +114,44 @@ SEASTAR_THREAD_TEST_CASE(test_partition_key_logging) {
                 });
         auto actual_i = results.begin();
         auto actual_end = results.end();
-        auto assert_row = [&] (int pk, int pk2) {
+        auto assert_row = [&] (int pk, int pk2, int ck = -1, int ck2 = -1) {
+            std::cerr << "check " << pk << " " << pk2 << " " << ck << " " << ck2 << std::endl;
             BOOST_REQUIRE(actual_i != actual_end);
             auto& actual_row = *actual_i;
             BOOST_REQUIRE_EQUAL(int32_type->decompose(pk), actual_row[1]);
             BOOST_REQUIRE_EQUAL(int32_type->decompose(pk2), actual_row[2]);
+            if (ck != -1) {
+                BOOST_REQUIRE_EQUAL(int32_type->decompose(ck), actual_row[3]);
+            } else {
+                BOOST_REQUIRE(!actual_row[3]);
+            }
+            if (ck2 != -1) {
+                BOOST_REQUIRE_EQUAL(int32_type->decompose(ck2), actual_row[4]);
+            } else {
+                BOOST_REQUIRE(!actual_row[4]);
+            }
             ++actual_i;
         };
         // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)
-        assert_row(1, 11);
+        assert_row(1, 11, 111, 1111);
         // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 22, 222, 2222, 22222)
-        assert_row(1, 22);
+        assert_row(1, 22, 222, 2222);
         // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 33, 333, 3333, 33333)
-        assert_row(1, 33);
+        assert_row(1, 33, 333, 3333);
         // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 44, 444, 4444, 44444)
-        assert_row(1, 44);
+        assert_row(1, 44, 444, 4444);
         // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(2, 11, 111, 1111, 11111)
-        assert_row(2, 11);
+        assert_row(2, 11, 111, 1111);
         // DELETE val FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
-        assert_row(1, 11);
+        assert_row(1, 11, 111, 1111);
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
-        assert_row(1, 11);
+        assert_row(1, 11, 111, 1111);
         // First row for DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444
-        assert_row(1, 11);
+        assert_row(1, 11, 222);
         // Second row for DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444
-        assert_row(1, 11);
+        assert_row(1, 11, 444);
         // UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
-        assert_row(2, 11);
+        assert_row(2, 11, 111, 1111);
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11
         assert_row(1, 11);
         BOOST_REQUIRE(actual_i == actual_end);
