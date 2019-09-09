@@ -57,6 +57,31 @@ sum of all shards and all nodes.
 The "type" label should be ignored - it appears for historic reasons
 (it was used by collectd) and is planned to be removed in the future.
 
+## Additional metric labels
+In some cases, we have several metrics which measure the same thing but for
+different cases. For example, Scylla has about a dozen _scheduling groups_
+(see isolation.md), and we would like to get some statistics - e.g. the
+scheduler queue length - separately for each of these scheduling groups.
+
+One option is to have a dozen different metrics with different names, e.g.,
+`scylla_scheduler_queue_length_main`, `scylla_scheduler_queue_length_statement`
+for the two scheduling groups called "main" and "statement".
+
+However, there is a second option - which we chose in this case. The second
+option is to have just one metric name, and qualify it by a **label** with
+a value. In this case, we have one metric name `scylla_scheduler_queue_length`,
+and metrics on different scheduling groups differ by the `group` label:
+`scylla_scheduler_queue_length{group="main"}` and
+`scylla_scheduler_queue_length{group="statement"}`.
+
+Each metric reported by Scylla often has multiple labels, e.g.,
+```
+scylla_scheduler_queue_length{group="main",shard="0",type="gauge"} 0.000000
+```
+This metric has the `group` label, saying to which scheduling group this
+measurement pertains, and also `shard` and `type` labels which we described
+in the previous section.
+
 ## Per-table metrics
 Most of Scylla's metrics are global (in each shard). Scylla also supports
 per-table metrics, which are maintained separately for each table in the
@@ -179,8 +204,14 @@ a user asks to graph some metric `xyz` the result is a graph with multiple
 lines, one line for each shard and node. The syntax `xyz{instance="..."}`
 will limit the lines to all shards of just one node (given the node's IP
 address), and the syntax `xyz{instance="...",shard="0"}` will show only
-one shard of one node. The syntax `sum(xyz)` will plot just one line, with
-the total of the metric `xyz` over all shards in all nodes.
+one shard of one node. The syntax `xyz{group=~"memtable.*"}` will show
+only metrics where the `group` label matches the given regular expression.
+
+The syntax `sum(xyz)` will plot just one line, with the total of the metric
+`xyz` over all shards in all nodes. It's also possible to plot partial sums -
+for example `sum(xyz) by (group)` generates a separate sum (and plot line)
+for each value of the label `group`.
+
 The expression `irate(xyz[1m])` graphs the rate of change (i.e.,
 the derivative) of the metric `xyz`. In this last example, the "1m"
 selector is ignored by the `irate()` function, but some duration is required
