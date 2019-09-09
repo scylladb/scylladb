@@ -619,14 +619,14 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
     BOOST_REQUIRE_EQUAL(muts2[0], muts[0]);
 
     if (thread) {
-        auto filter = [&] (const dht::decorated_key& dk) {
+        auto filter = flat_mutation_reader::filter([&] (const dht::decorated_key& dk) {
             for (auto j = size_t(0); j < muts.size(); j += 2) {
                 if (dk.equal(*s, muts[j].decorated_key())) {
                     return false;
                 }
             }
             return true;
-        };
+        });
         BOOST_TEST_MESSAGE("Consume all, filtered");
         fmr = flat_mutation_reader_from_mutations(muts);
         muts2 = fmr.consume_in_thread(flat_stream_consumer(s, reversed), std::move(filter), db::no_timeout);
