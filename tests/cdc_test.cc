@@ -24,6 +24,7 @@
 #include "cdc/cdc.hh"
 #include "tests/cql_assertions.hh"
 #include "tests/cql_test_env.hh"
+#include "transport/messages/result_message.hh"
 
 SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     do_with_cql_env_thread([](cql_test_env& e) {
@@ -86,3 +87,60 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_partition_key_logging) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 22, 222, 2222, 22222)");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 33, 333, 3333, 33333)");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 44, 444, 4444, 44444)");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(2, 11, 111, 1111, 11111)");
+        cquery_nofail(e, "DELETE val FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
+        cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
+        cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444");
+        cquery_nofail(e, "UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
+        cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11");
+        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_pk2\" FROM ks.{}", cdc::log_name("tbl"))).get0();
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        BOOST_REQUIRE(rows);
+        auto rs = rows->rs().result_set().rows();
+        std::vector<std::vector<bytes_opt>> results;
+        for (auto it = rs.begin(); it != rs.end(); ++it) {
+            results.push_back(*it);
+        }
+        std::sort(results.begin(), results.end(),
+                [] (const std::vector<bytes_opt>& a, const std::vector<bytes_opt>& b) {
+                    return timeuuid_type->as_less_comparator()(*a[0], *b[0]);
+                });
+        auto actual_i = results.begin();
+        auto actual_end = results.end();
+        auto assert_row = [&] (int pk, int pk2) {
+            BOOST_REQUIRE(actual_i != actual_end);
+            auto& actual_row = *actual_i;
+            BOOST_REQUIRE_EQUAL(int32_type->decompose(pk), actual_row[1]);
+            BOOST_REQUIRE_EQUAL(int32_type->decompose(pk2), actual_row[2]);
+            ++actual_i;
+        };
+        // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)
+        assert_row(1, 11);
+        // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 22, 222, 2222, 22222)
+        assert_row(1, 22);
+        // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 33, 333, 3333, 33333)
+        assert_row(1, 33);
+        // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 44, 444, 4444, 44444)
+        assert_row(1, 44);
+        // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(2, 11, 111, 1111, 11111)
+        assert_row(2, 11);
+        // DELETE val FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
+        assert_row(1, 11);
+        // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
+        assert_row(1, 11);
+        // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444
+        assert_row(1, 11);
+        // UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
+        assert_row(2, 11);
+        // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11
+        assert_row(1, 11);
+        BOOST_REQUIRE(actual_i == actual_end);
+    }).get();
+}
