@@ -466,6 +466,7 @@ private:
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
     bool _shared = true;  // across shards; safe default
+    bool _open = false;
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
     metadata_collector _collector;

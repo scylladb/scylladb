@@ -1269,6 +1269,7 @@ future<> sstable::open_data() {
         if (_shards.empty()) {
             _shards = compute_shards_for_this_sstable();
         }
+        _open = true;
     });
 }
 
