@@ -3310,6 +3310,27 @@ mutation_source sstable::as_mutation_source() {
     });
 }
 
+sstable::sstable(schema_ptr schema,
+        sstring dir,
+        int64_t generation,
+        version_types v,
+        format_types f,
+        db::large_data_handler& large_data_handler,
+        gc_clock::time_point now,
+        io_error_handler_gen error_handler_gen,
+        size_t buffer_size)
+    : sstable_buffer_size(buffer_size)
+    , _schema(std::move(schema))
+    , _dir(std::move(dir))
+    , _generation(generation)
+    , _version(v)
+    , _format(f)
+    , _now(now)
+    , _read_error_handler(error_handler_gen(sstable_read_error))
+    , _write_error_handler(error_handler_gen(sstable_write_error))
+    , _large_data_handler(large_data_handler)
+{ }
+
 bool supports_correct_non_compound_range_tombstones() {
     return service::get_local_storage_service().cluster_supports_reading_correctly_serialized_range_tombstones();
 }
