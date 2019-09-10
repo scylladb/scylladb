@@ -2219,16 +2219,8 @@ class scylla_cache(gdb.Command):
 
 def find_sstables():
     """A generator which yields pointers to all live sstable objects on current shard."""
-    visited = set()
-    # FIXME: Add support for other sstable sets. Also, we should change Scylla to make this easier
-    for sst_set in find_instances('sstables::bag_sstable_set'):
-        sstables = std_vector(sst_set['_sstables'])
-        for sst_ptr in sstables:
-            sst = seastar_lw_shared_ptr(sst_ptr).get()
-            if not int(sst) in visited:
-                visited.add(int(sst))
-                yield sst
-
+    for sst in intrusive_list(gdb.parse_and_eval('sstables::tracker._sstables')):
+        yield sst.address
 
 class scylla_sstables(gdb.Command):
     """Lists all sstable objects on currents shard together with useful information like on-disk and in-memory size."""
@@ -2244,6 +2236,8 @@ class scylla_sstables(gdb.Command):
         count = 0
 
         for sst in find_sstables():
+            if not sst['_open']:
+                continue
             count += 1
             size = 0
 
