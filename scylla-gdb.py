@@ -696,6 +696,13 @@ class seastar_lw_shared_ptr():
             return self.ref['_p'].cast(type)['_value'].address
 
 
+def all_tables(db):
+    """Returns pointers to table objects which exist on current shard"""
+
+    for (key, value) in list_unordered_map(db['_column_families']):
+        yield seastar_lw_shared_ptr(value).get()
+
+
 class lsa_region():
     def __init__(self, region):
         impl_ptr_type = gdb.lookup_type('logalloc::region_impl').pointer()
@@ -2347,6 +2354,24 @@ class scylla_sstables(gdb.Command):
         gdb.write('total (shard-local): count=%d, data_file=%d, in_memory=%d\n' % (count, total_on_disk_size, total_size))
 
 
+class scylla_memtables(gdb.Command):
+    """Lists basic information about all memtable objects on current shard."""
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla memtables', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        db = find_db()
+        region_ptr_type = gdb.lookup_type('logalloc::region').pointer()
+        for table in all_tables(db):
+            gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
+            memtable_list = seastar_lw_shared_ptr(table['_memtables']).get()
+            for mt_ptr in std_vector(memtable_list['_memtables']):
+                mt = seastar_lw_shared_ptr(mt_ptr).get()
+                reg = lsa_region(mt.cast(region_ptr_type))
+                gdb.write('  (memtable*) 0x%x: total=%d, used=%d, free=%d, flushed=%d\n' % (mt, reg.total(), reg.used(), reg.free(), mt['_flushed_memory']))
+
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -2376,3 +2401,4 @@ scylla_netw()
 scylla_gms()
 scylla_cache()
 scylla_sstables()
+scylla_memtables()
