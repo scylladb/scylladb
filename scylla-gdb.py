@@ -2340,8 +2340,9 @@ class scylla_sstables(gdb.Command):
             # FIXME: Include compression info
 
             data_file_size = sst['_data_file_size']
-            gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d)\n'
-                      % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size))
+            schema = schema_ptr(sst['_schema'])
+            gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d) %s\n'
+                      % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size, schema.table_name()))
 
             if local:
                 total_size += size
