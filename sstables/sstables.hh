@@ -140,7 +140,7 @@ public:
             size_t buffer_size);
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
-    sstable(sstable&&) = default;
+    sstable(sstable&&) = delete;
 
     ~sstable();
 
