@@ -50,6 +50,8 @@ class intrusive_list:
             # Some boost versions have this instead
             self.root = rps['m_header']
         member_hook = get_template_arg_with_prefix(list_type, "boost::intrusive::member_hook")
+        if not member_hook:
+            member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
         if member_hook:
             self.link_offset = member_hook.template_argument(2).cast(self.size_t)
         else:
