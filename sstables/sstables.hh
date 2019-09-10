@@ -64,6 +64,7 @@
 #include "sstables/shareable_components.hh"
 
 #include <seastar/util/optimized_optional.hh>
+#include <boost/intrusive/list.hpp>
 
 class sstable_assertions;
 
@@ -123,11 +124,15 @@ struct sstable_writer_config {
     utils::UUID run_identifier = utils::make_random_uuid();
 };
 
+class sstable_tracker;
+
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
+    friend sstable_tracker;
 public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
+    using tracker_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
             sstring dir,
@@ -531,6 +536,7 @@ private:
     db::large_data_handler& _large_data_handler;
 
     sstables_stats _stats;
+    tracker_link_type _tracker_link;
 
 public:
     const bool has_component(component_type f) const;

@@ -84,6 +84,20 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
+namespace bi = boost::intrusive;
+
+class sstable_tracker {
+    bi::list<sstable,
+        bi::member_hook<sstable, sstable::tracker_link_type, &sstable::_tracker_link>,
+        bi::constant_time_size<false>> _sstables;
+public:
+    void add(sstable& sst) {
+        _sstables.push_back(sst);
+    }
+};
+
+static thread_local sstable_tracker tracker;
+
 // Because this is a noop and won't hold any state, it is better to use a global than a
 // thread_local. It will be faster, specially on non-x86.
 static noop_write_monitor default_noop_write_monitor;
@@ -3329,7 +3343,9 @@ sstable::sstable(schema_ptr schema,
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))
     , _large_data_handler(large_data_handler)
-{ }
+{
+    tracker.add(*this);
+}
 
 bool supports_correct_non_compound_range_tombstones() {
     return service::get_local_storage_service().cluster_supports_reading_correctly_serialized_range_tombstones();
