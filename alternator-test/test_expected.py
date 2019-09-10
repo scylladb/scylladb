@@ -56,6 +56,7 @@ def test_update_expression_and_expected(test_table_s):
 # and the "false" case, where the condition evaluates to false, so the update
 # doesn't happen and we get a ConditionalCheckFailedException instead.
 
+# Tests for Expected with ComparisonOperator = "EQ":
 def test_update_expected_1_eq_true(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -125,6 +126,582 @@ def test_update_expected_1_eq_false(test_table_s):
         )
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1}
 
+# Tests for Expected with ComparisonOperator = "NE":
+@pytest.mark.xfail(reason="ComparisonOperator=NE in Expected not yet implemented")
+def test_update_expected_1_ne_true(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'}})
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'NE',
+                        'AttributeValueList': [2]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1, 'b': 3}
+    # For NE, AttributeValueList must have a single element
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NE',
+                            'AttributeValueList': [2, 3]}}
+        )
+    # If the types are different, this is considered "not equal":
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'b': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'NE',
+                        'AttributeValueList': ["1"]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1, 'b': 4}
+    # If the attribute does not exist at all, this is also considered "not equal":
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'b': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'q': {'ComparisonOperator': 'NE',
+                        'AttributeValueList': [1]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1, 'b': 5}
+
+@pytest.mark.xfail(reason="ComparisonOperator=NE in Expected not yet implemented")
+def test_update_expected_1_ne_false(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NE',
+                            'AttributeValueList': [1]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "LE":
+@pytest.mark.xfail(reason="ComparisonOperator=LE in Expected not yet implemented")
+def test_update_expected_1_le(test_table_s):
+    p = random_string()
+    # LE should work for string, number, and binary type
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                          'b': {'Value': 'cat', 'Action': 'PUT'},
+                          'c': {'Value': bytearray('cat', 'utf-8'), 'Action': 'PUT'}})
+    # true cases:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'LE',
+                        'AttributeValueList': [2]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'LE',
+                        'AttributeValueList': [1]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'LE',
+                        'AttributeValueList': ['dog']}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'LE',
+                        'AttributeValueList': [bytearray('dog', 'utf-8')]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'LE',
+                            'AttributeValueList': [0]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'LE',
+                            'AttributeValueList': ['aardvark']}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'LE',
+                            'AttributeValueList': [bytearray('aardvark', 'utf-8')]}}
+        )
+    # If the types are different, this is also considered false
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'LE',
+                            'AttributeValueList': ["1"]}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # For LE, AttributeValueList must have a single element
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'LE',
+                            'AttributeValueList': [2, 3]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "LT":
+@pytest.mark.xfail(reason="ComparisonOperator=LT in Expected not yet implemented")
+def test_update_expected_1_lt(test_table_s):
+    p = random_string()
+    # LT should work for string, number, and binary type
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                          'b': {'Value': 'cat', 'Action': 'PUT'},
+                          'c': {'Value': bytearray('cat', 'utf-8'), 'Action': 'PUT'}})
+    # true cases:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'LT',
+                        'AttributeValueList': [2]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'LT',
+                        'AttributeValueList': ['dog']}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'LT',
+                        'AttributeValueList': [bytearray('dog', 'utf-8')]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'LT',
+                            'AttributeValueList': [1]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'LT',
+                            'AttributeValueList': [0]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'LT',
+                            'AttributeValueList': ['aardvark']}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'LT',
+                            'AttributeValueList': [bytearray('aardvark', 'utf-8')]}}
+        )
+    # If the types are different, this is also considered false
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'LT',
+                            'AttributeValueList': ["1"]}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # For LT, AttributeValueList must have a single element
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'LT',
+                            'AttributeValueList': [2, 3]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "GE":
+@pytest.mark.xfail(reason="ComparisonOperator=GE in Expected not yet implemented")
+def test_update_expected_1_ge(test_table_s):
+    p = random_string()
+    # GE should work for string, number, and binary type
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                          'b': {'Value': 'cat', 'Action': 'PUT'},
+                          'c': {'Value': bytearray('cat', 'utf-8'), 'Action': 'PUT'}})
+    # true cases:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'GE',
+                        'AttributeValueList': [0]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'GE',
+                        'AttributeValueList': [1]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'GE',
+                        'AttributeValueList': ['aardvark']}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'GE',
+                        'AttributeValueList': [bytearray('aardvark', 'utf-8')]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'GE',
+                            'AttributeValueList': [3]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'GE',
+                            'AttributeValueList': ['dog']}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'GE',
+                            'AttributeValueList': [bytearray('dog', 'utf-8')]}}
+        )
+    # If the types are different, this is also considered false
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'GE',
+                            'AttributeValueList': ["1"]}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # For GE, AttributeValueList must have a single element
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'GE',
+                            'AttributeValueList': [2, 3]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "GT":
+@pytest.mark.xfail(reason="ComparisonOperator=GT in Expected not yet implemented")
+def test_update_expected_1_gt(test_table_s):
+    p = random_string()
+    # GT should work for string, number, and binary type
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                          'b': {'Value': 'cat', 'Action': 'PUT'},
+                          'c': {'Value': bytearray('cat', 'utf-8'), 'Action': 'PUT'}})
+    # true cases:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'GT',
+                        'AttributeValueList': [0]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'GT',
+                        'AttributeValueList': ['aardvark']}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'GT',
+                        'AttributeValueList': [bytearray('aardvark', 'utf-8')]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'GT',
+                            'AttributeValueList': [3]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'GT',
+                            'AttributeValueList': [1]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'GT',
+                            'AttributeValueList': ['dog']}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'GT',
+                            'AttributeValueList': [bytearray('dog', 'utf-8')]}}
+        )
+    # If the types are different, this is also considered false
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'GT',
+                            'AttributeValueList': ["1"]}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # For GE, AttributeValueList must have a single element
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'GT',
+                            'AttributeValueList': [2, 3]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "NOT_NULL":
+@pytest.mark.xfail(reason="ComparisonOperator=NOT_NULL in Expected not yet implemented")
+def test_update_expected_1_not_null(test_table_s):
+    # Note that despite its name, the "NOT_NULL" comparison operator doesn't check if
+    # the attribute has the type "NULL", or an empty value. Rather it is explicitly
+    # documented to check if the attribute exists at all.
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                          'b': {'Value': 'cat', 'Action': 'PUT'},
+                          'c': {'Value': None, 'Action': 'PUT'}})
+    # true cases:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'NOT_NULL', 'AttributeValueList': []}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'NOT_NULL', 'AttributeValueList': []}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'NOT_NULL', 'AttributeValueList': []}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'q': {'ComparisonOperator': 'NOT_NULL', 'AttributeValueList': []}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    # For NOT_NULL, AttributeValueList must be empty
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NOT_NULL', 'AttributeValueList': [2]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "NULL":
+@pytest.mark.xfail(reason="ComparisonOperator=NULL in Expected not yet implemented")
+def test_update_expected_1_null(test_table_s):
+    # Note that despite its name, the "NULL" comparison operator doesn't check if
+    # the attribute has the type "NULL", or an empty value. Rather it is explicitly
+    # documented to check if the attribute exists at all.
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                          'b': {'Value': 'cat', 'Action': 'PUT'},
+                          'c': {'Value': None, 'Action': 'PUT'}})
+    # true cases:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'q': {'ComparisonOperator': 'NULL', 'AttributeValueList': []}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NULL', 'AttributeValueList': []}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'NULL', 'AttributeValueList': []}}
+        )
+        assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'NULL', 'AttributeValueList': []}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    # For NULL, AttributeValueList must be empty
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NOT_NULL', 'AttributeValueList': [2]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "CONTAINS":
+@pytest.mark.xfail(reason="ComparisonOperator=CONTAINS in Expected not yet implemented")
+def test_update_expected_1_contains(test_table_s):
+    # true cases. CONTAINS can be used for two unrelated things: check substrings
+    # (in string or binary) and membership (in set or list).
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'},
+                          'b': {'Value': set([2, 4, 7]), 'Action': 'PUT'},
+                          'c': {'Value': [2, 4, 7], 'Action': 'PUT'},
+                          'd': {'Value': bytearray('hi there', 'utf-8'), 'Action': 'PUT'}})
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': ['ell']}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [4]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+    # The CONTAINS documentation uses confusing wording on whether it works
+    # only on sets, or also on lists. In fact, it does work on lists:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [4]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'d': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [bytearray('here', 'utf-8')]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': ['dog']}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [1]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [1]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [1]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'q': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [1]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'d': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [bytearray('dog', 'utf-8')]}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    # For CONTAINS, AttributeValueList must have just one item, and it must be
+    # a string, number or binary
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [2, 3]}}
+        )
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': []}}
+        )
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': [[1]]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "NOT_CONTAINS":
+@pytest.mark.xfail(reason="ComparisonOperator=NOT_CONTAINS in Expected not yet implemented")
+def test_update_expected_1_not_contains(test_table_s):
+    # true cases. NOT_CONTAINS can be used for two unrelated things: check substrings
+    # (in string or binary) and membership (in set or list).
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'},
+                          'b': {'Value': set([2, 4, 7]), 'Action': 'PUT'},
+                          'c': {'Value': [2, 4, 7], 'Action': 'PUT'},
+                          'd': {'Value': bytearray('hi there', 'utf-8'), 'Action': 'PUT'}})
+
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': ['dog']}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [1]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [1]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [1]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 7, 'Action': 'PUT'}},
+        Expected={'d': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [bytearray('dog', 'utf-8')]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 7
+
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': ['ell']}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [4]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [4]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+            Expected={'d': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [bytearray('here', 'utf-8')]}}
+        )
+    # Surprisingly, if an attribute does not exist at all, NOT_CONTAINS
+    # fails, rather than succeeding. This is surprising because it means in
+    # this case both CONTAINS and NOT_CONTAINS are false, and because "NE" does not
+    # behave this way (if the attribute does not exist, NE succeeds).
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'q': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [1]}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 7
+    # For NOT_CONTAINS, AttributeValueList must have just one item, and it must be
+    # a string, number or binary
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [2, 3]}}
+        )
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': []}}
+        )
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': [[1]]}}
+        )
+
+# Tests for Expected with ComparisonOperator = "BEGINS_WITH":
 def test_update_expected_1_begins_with_true(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -165,9 +742,121 @@ def test_update_expected_1_begins_with_false(test_table_s):
         )
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello'}
 
-# FIXME: need to test many more ComparisonOperator options... See full list in
-# description in https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/LegacyConditionalParameters.Expected.html
+# Tests for Expected with ComparisonOperator = "IN":
+@pytest.mark.xfail(reason="ComparisonOperator=IN in Expected not yet implemented")
+def test_update_expected_1_in(test_table_s):
+    # Some copies of "IN"'s documentation are outright wrong: "IN" checks
+    # whether the attribute value is in the give list of values. It does NOT
+    # do the opposite - testing whether certain items are in a set attribute.
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': set([2, 4, 7]), 'Action': 'PUT'},
+                          'c': {'Value': 3, 'Action': 'PUT'}})
+    # true cases:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'IN', 'AttributeValueList': [2, 3, 8]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'IN', 'AttributeValueList': [1, 2, 4]}}
+        )
+    # a bunch of wrong interpretations of what the heck that "IN" does :-(
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'IN', 'AttributeValueList': [2]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'IN', 'AttributeValueList': [1, 2, 4, 7, 8]}}
+        )
+    # Strangely, all the items in AttributeValueList must be of the same type,
+    # we can't check if an item is either the number 3 or the string 'dog',
+    # although allowing this case as well would have been easy:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'IN', 'AttributeValueList': [3, 'dog']}}
+        )
+    # Empty list is not allowed
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'IN', 'AttributeValueList': []}}
+    )
 
+# Tests for Expected with ComparisonOperator = "BETWEEN":
+@pytest.mark.xfail(reason="ComparisonOperator=BETWEEN in Expected not yet implemented")
+def test_update_expected_1_between(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 2, 'Action': 'PUT'},
+                          'b': {'Value': 'cat', 'Action': 'PUT'},
+                          'c': {'Value': bytearray('cat', 'utf-8'), 'Action': 'PUT'}})
+    # true cases:
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [1, 3]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [1, 2]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [2, 3]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': ['aardvark', 'dog']}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 6, 'Action': 'PUT'}},
+        Expected={'c': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [bytearray('aardvark', 'utf-8'), bytearray('dog', 'utf-8')]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 6
+    # false cases:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [0, 1]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': ['cat', 'dog']}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 6
+    # The given AttributeValueList array must contain exactly two items of the
+    # same type, and in the right order. Any other input is considered a validation
+    # error:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': []}})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [2, 3, 4]}})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [4, 3]}})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [4, 'dog']}})
+
+##############################################################################
 # Instead of ComparisonOperator and AttributeValueList, one can specify either
 # Value or Exists:
 def test_update_expected_1_value_true(test_table_s):
