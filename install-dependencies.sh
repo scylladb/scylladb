@@ -25,6 +25,7 @@ debian_base_packages=(
     python3-pyparsing
     libsnappy-dev
     libjsoncpp-dev
+    rapidjson-dev
     scylla-libthrift010-dev
     scylla-antlr35-c++-dev
     thrift-compiler
@@ -38,6 +39,7 @@ fedora_packages=(
     antlr3-tool
     antlr3-C++-devel
     jsoncpp-devel
+    rapidjson-devel
     snappy-devel
     systemd-devel
     git
@@ -78,6 +80,7 @@ centos_packages=(
     scylla-antlr35-tool
     scylla-antlr35-C++-devel
     jsoncpp-devel snappy-devel
+    rapidjson-devel
     scylla-boost163-static
     scylla-python34-pyparsing20
     systemd-devel
