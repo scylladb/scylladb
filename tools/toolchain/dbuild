@@ -46,6 +46,15 @@ EOF
     exit 0
 }
 
+function usage () {
+    cat <<EOF 1>&2
+$1
+
+Run \`$0 --help' to print the full help message.
+EOF
+    exit 1
+}
+
 if [[ $# -eq 0 ]]; then
     interactive=y
     docker_args=(-it)
@@ -62,7 +71,7 @@ elif [[ "$1" = -* ]]; then
                     exec docker image ls
                 fi
                 if ! docker image inspect "$image" >/dev/null; then
-                    exit 1
+                    usage
                 fi
                 continue
                 ;;
@@ -83,8 +92,7 @@ elif [[ "$1" = -* ]]; then
 	shift
     done
     if [[ "$1" != "--" ]]; then
-	echo "Expected '--' to terminate docker flag list"
-	exit 1
+	usage "Expected '--' to terminate docker flag list"
     fi
     shift
 fi
