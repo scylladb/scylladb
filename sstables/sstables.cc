@@ -84,6 +84,20 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
+namespace bi = boost::intrusive;
+
+class sstable_tracker {
+    bi::list<sstable,
+        bi::member_hook<sstable, sstable::tracker_link_type, &sstable::_tracker_link>,
+        bi::constant_time_size<false>> _sstables;
+public:
+    void add(sstable& sst) {
+        _sstables.push_back(sst);
+    }
+};
+
+static thread_local sstable_tracker tracker;
+
 // Because this is a noop and won't hold any state, it is better to use a global than a
 // thread_local. It will be faster, specially on non-x86.
 static noop_write_monitor default_noop_write_monitor;
@@ -1277,6 +1291,7 @@ future<> sstable::open_data() {
         }
         auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
         if (!sm) {
+            _open = true;
             return make_ready_future<>();
         }
         auto c = &sm->token_ranges.elements;
@@ -1286,6 +1301,7 @@ future<> sstable::open_data() {
             return make_ready_future<>();
         }).then([this, c] () mutable {
             c = {};
+            _open = true;
             return make_ready_future<>();
         });
     });
@@ -3347,6 +3363,29 @@ mutation_source sstable::as_mutation_source() {
             return sst->read_range_rows_flat(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr);
         }
     });
+}
+
+sstable::sstable(schema_ptr schema,
+        sstring dir,
+        int64_t generation,
+        version_types v,
+        format_types f,
+        db::large_data_handler& large_data_handler,
+        gc_clock::time_point now,
+        io_error_handler_gen error_handler_gen,
+        size_t buffer_size)
+    : sstable_buffer_size(buffer_size)
+    , _schema(std::move(schema))
+    , _dir(std::move(dir))
+    , _generation(generation)
+    , _version(v)
+    , _format(f)
+    , _now(now)
+    , _read_error_handler(error_handler_gen(sstable_read_error))
+    , _write_error_handler(error_handler_gen(sstable_write_error))
+    , _large_data_handler(large_data_handler)
+{
+    tracker.add(*this);
 }
 
 bool supports_correct_non_compound_range_tombstones() {

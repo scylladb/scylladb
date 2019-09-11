@@ -64,6 +64,7 @@
 #include "sstables/shareable_components.hh"
 
 #include <seastar/util/optimized_optional.hh>
+#include <boost/intrusive/list.hpp>
 
 class sstable_assertions;
 
@@ -123,11 +124,15 @@ struct sstable_writer_config {
     utils::UUID run_identifier = utils::make_random_uuid();
 };
 
+class sstable_tracker;
+
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
+    friend sstable_tracker;
 public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
+    using tracker_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
             sstring dir,
@@ -137,21 +142,10 @@ public:
             db::large_data_handler& large_data_handler,
             gc_clock::time_point now,
             io_error_handler_gen error_handler_gen,
-            size_t buffer_size)
-        : sstable_buffer_size(buffer_size)
-        , _schema(std::move(schema))
-        , _dir(std::move(dir))
-        , _generation(generation)
-        , _version(v)
-        , _format(f)
-        , _now(now)
-        , _read_error_handler(error_handler_gen(sstable_read_error))
-        , _write_error_handler(error_handler_gen(sstable_write_error))
-        , _large_data_handler(large_data_handler)
-    { }
+            size_t buffer_size);
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
-    sstable(sstable&&) = default;
+    sstable(sstable&&) = delete;
 
     ~sstable();
 
@@ -472,6 +466,7 @@ private:
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
     bool _shared = true;  // across shards; safe default
+    bool _open = false;
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
     metadata_collector _collector;
@@ -546,6 +541,7 @@ private:
     db::large_data_handler& _large_data_handler;
 
     sstables_stats _stats;
+    tracker_link_type _tracker_link;
 
 public:
     const bool has_component(component_type f) const;
