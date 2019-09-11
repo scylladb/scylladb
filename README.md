@@ -38,6 +38,15 @@ Please see [HACKING.md](HACKING.md) for detailed information on building and dev
 ./build/release/scylla --help
 ```
 
+## Scylla APIs and compatibility
+By default, Scylla is compatible with Apache Cassandra and its APIs - CQL and
+Thrift. There is also experimental support for the API of Amazon DynamoDB,
+but being experimental it needs to be explicitly enabled to be used. For more
+information on how to enable the experimental DynamoDB compatibility in Scylla,
+and the current limitations of this feature, see
+[Alternator](docs/alternator/alternator.md) and
+[Getting started with Alternator](docs/alternator/getting-started.md).
+
 ## Building Fedora RPM
 
 As a pre-requisite, you need to install [Mock](https://fedoraproject.org/wiki/Mock) on your machine:
