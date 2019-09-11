@@ -4,6 +4,7 @@ here="$(realpath $(dirname "$0"))"
 toplevel="$(realpath "$here/../..")"
 group_args=()
 docker_args=()
+image="$(<"$here/image")"
 
 for gid in $(id -G); do
     group_args+=(--group-add "$gid")
@@ -17,6 +18,14 @@ if [[ $# -eq 0 ]]; then
 elif [[ "$1" = -* ]]; then
     while [[ "$1" != "--" && $# != 0 ]]; do
 	case "$1" in
+            --image)
+                image="$2"
+                shift 2
+                if ! docker image inspect "$image" >/dev/null; then
+                    exit 1
+                fi
+                continue
+                ;;
 	    --*)
 		if [[ "$1" = --interactive || "$1" = --interactive=true ]]; then
 		    interactive=y
@@ -64,7 +73,7 @@ docker_common_args=(
        -v /etc/localtime:/etc/localtime:ro \
        -w "$PWD" \
        "${docker_args[@]}" \
-       "$(<"$here/image")" \
+       "$image" \
        "${args[@]}"
 )
 
