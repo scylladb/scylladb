@@ -21,6 +21,9 @@ elif [[ "$1" = -* ]]; then
             --image)
                 image="$2"
                 shift 2
+                if [[ -z "$image" ]]; then
+                    exec docker image ls
+                fi
                 if ! docker image inspect "$image" >/dev/null; then
                     exit 1
                 fi
