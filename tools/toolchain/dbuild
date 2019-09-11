@@ -4,6 +4,7 @@ here="$(realpath $(dirname "$0"))"
 toplevel="$(realpath "$here/../..")"
 group_args=()
 docker_args=()
+image="$(<"$here/image")"
 
 for gid in $(id -G); do
     group_args+=(--group-add "$gid")
@@ -11,12 +12,69 @@ done
 
 interactive=
 
+function help () {
+    cat <<EOF 1>&2
+NAME
+    $(basename $0) - Run a command in scylla's frozen toolchain docker build image.
+
+SYNOPSIS
+    $0 [OPTIONS --] [command [arg ...]]
+
+DESCRIPTION
+    $(basename $0) is used mainly to build scylla in a docker image containing
+    a frozen version of the toolchain.
+
+    When no command is provided, $(basename $0) runs an interactive shell in
+    the docker instance.  The image to use is taken by default from "$(dirname $0)/image".
+    It may be overriden using the --image option.
+
+    When providing docker options, the options list must be terminated with \`--'.
+
+OPTIONS
+   -h | --help
+       Print this help message.
+
+   --image [IMAGE]
+       Use the specified docker IMAGE.
+       If omitted, list the available images using \`docker image ls'
+
+   -i | --interactive
+       Run an interactive session.
+
+   See \`docker help run' for available options.
+EOF
+    exit 0
+}
+
+function usage () {
+    cat <<EOF 1>&2
+$1
+
+Run \`$0 --help' to print the full help message.
+EOF
+    exit 1
+}
+
 if [[ $# -eq 0 ]]; then
     interactive=y
     docker_args=(-it)
 elif [[ "$1" = -* ]]; then
     while [[ "$1" != "--" && $# != 0 ]]; do
 	case "$1" in
+            -h|--help)
+                help
+                ;;
+            --image)
+                image="$2"
+                shift 2
+                if [[ -z "$image" ]]; then
+                    exec docker image ls
+                fi
+                if ! docker image inspect "$image" >/dev/null; then
+                    usage
+                fi
+                continue
+                ;;
 	    --*)
 		if [[ "$1" = --interactive || "$1" = --interactive=true ]]; then
 		    interactive=y
@@ -34,8 +92,7 @@ elif [[ "$1" = -* ]]; then
 	shift
     done
     if [[ "$1" != "--" ]]; then
-	echo "Expected '--' to terminate docker flag list"
-	exit 1
+	usage "Expected '--' to terminate docker flag list"
     fi
     shift
 fi
@@ -64,7 +121,7 @@ docker_common_args=(
        -v /etc/localtime:/etc/localtime:ro \
        -w "$PWD" \
        "${docker_args[@]}" \
-       "$(<"$here/image")" \
+       "$image" \
        "${args[@]}"
 )
 
