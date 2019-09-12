@@ -1405,8 +1405,9 @@ future<> view_builder::calculate_shard_build_step(
     }
 
     auto f = seastar::when_all_succeed(bookkeeping_ops->begin(), bookkeeping_ops->end());
-    return f.handle_exception([bookkeeping_ops = std::move(bookkeeping_ops)] (std::exception_ptr ep) {
-        vlogger.error("Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
+    return f.handle_exception([this, bookkeeping_ops = std::move(bookkeeping_ops)] (std::exception_ptr ep) {
+        log_level severity = _as.abort_requested() ? log_level::warn : log_level::error;
+        vlogger.log(severity, "Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
     });
 }
 
@@ -1724,8 +1725,9 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
                     system_keyspace::update_view_build_progress(view->ks_name(), view->cf_name(), *next_token));
         }
     }
-    seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([] (std::exception_ptr ep) {
-        vlogger.error("Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
+    seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([this] (std::exception_ptr ep) {
+        log_level severity = _as.abort_requested() ? log_level::warn : log_level::error;
+        vlogger.log(severity, "Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
     }).get();
 }
 
