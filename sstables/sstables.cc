@@ -1291,14 +1291,15 @@ future<file> sstable::open_file(component_type type, open_flags flags, file_open
     return new_sstable_component_file(_read_error_handler, type, flags, opts);
 }
 
-future<> sstable::open_data() {
-    return when_all(open_file(component_type::Index, open_flags::ro),
-                    open_file(component_type::Data, open_flags::ro))
-                    .then([this] (auto files) {
+future<> sstable::open_or_create_data(open_flags oflags, file_open_options options) noexcept {
+    return when_all_succeed(
+        open_file(component_type::Index, oflags, options).then([this] (file f) { _index_file = std::move(f); }),
+        open_file(component_type::Data, oflags, options).then([this] (file f) { _data_file = std::move(f); })
+    ).discard_result();
+}
 
-        _index_file = std::get<file>(std::get<0>(files).get());
-        _data_file = std::get<file>(std::get<1>(files).get());
-
+future<> sstable::open_data() noexcept {
+    return open_or_create_data(open_flags::ro).then([this] {
         return this->update_info_for_opened_data();
     }).then([this] {
         if (_shards.empty()) {
@@ -1365,21 +1366,12 @@ future<> sstable::update_info_for_opened_data() {
     });
 }
 
-future<> sstable::create_data() {
+future<> sstable::create_data() noexcept {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     file_open_options opt;
     opt.extent_allocation_size_hint = 32 << 20;
     opt.sloppy_size = true;
-    return when_all(open_file(component_type::Index, oflags, opt),
-                    open_file(component_type::Data, oflags, opt)).then([this] (auto files) {
-        // FIXME: If both files could not be created, the first get below will
-        // throw an exception, and second get() will not be attempted, and
-        // we'll get a warning about the second future being destructed
-        // without its exception being examined.
-
-        _index_file = std::get<file>(std::get<0>(files).get());
-        _data_file = std::get<file>(std::get<1>(files).get());
-    });
+    return open_or_create_data(oflags, std::move(opt));
 }
 
 future<> sstable::read_filter(const io_priority_class& pc) {

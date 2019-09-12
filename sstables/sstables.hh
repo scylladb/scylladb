@@ -190,7 +190,7 @@ public:
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
     future<> load(const io_priority_class& pc = default_priority_class());
-    future<> open_data();
+    future<> open_data() noexcept;
     future<> update_info_for_opened_data();
 
     future<> set_generation(int64_t generation);
@@ -614,7 +614,7 @@ private:
     // to be called when loading an existing sstable or after writing a new one.
     void set_clustering_components_ranges();
 
-    future<> create_data();
+    future<> create_data() noexcept;
 
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
@@ -675,6 +675,8 @@ private:
         serialization_header& s = *static_cast<serialization_header *>(p.get());
         return s;
     }
+
+    future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
 public:
     future<> read_toc();
 
