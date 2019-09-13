@@ -3531,9 +3531,13 @@ static boost::multiprecision::cpp_int from_decimal_to_cppint(const data_value& f
 
 template <typename ToType>
 static ToType from_varint_to_integer(const boost::multiprecision::cpp_int& varint) {
-    bool negative = varint < 0;
-    uint64_t v = negative ? static_cast<uint64_t>(-varint) : static_cast<uint64_t>(varint);
-    return static_cast<ToType>(negative ? -v : v);
+    // The behavior CQL expects on overflow is for values to wrap
+    // around. For cpp_int conversion functions, the behavior is to
+    // return the largest or smallest number that the target type can
+    // represent. To implement one with the other, we first mask the
+    // low 64 bits, convert to a uint64_t, and then let c++ convert,
+    // with possible overflow, to ToType.
+    return static_cast<uint64_t>(~static_cast<uint64_t>(0) & varint);
 }
 
 template<typename ToType>
