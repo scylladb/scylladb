@@ -1301,6 +1301,7 @@ private:
     bool _supports_infinite_bound_range_deletions = false;
 
     future<> init_commitlog();
+public:
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
 private:

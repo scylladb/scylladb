@@ -301,16 +301,21 @@ future<> db::commitlog_replayer::impl::process(stats* s, fragmented_temporary_bu
                 mutation m(cf.schema(), fm.decorated_key(*cf.schema()));
                 converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
                 fm.partition().accept(cm, v);
-                cf.apply(std::move(m));
+                return do_with(std::move(m), [&db, &cf] (mutation m) {
+                    return db.apply_in_memory(m, cf, db::rp_handle(), db::no_timeout);
+                });
             } else {
-                cf.apply(fm, cf.schema());
+                return db.apply_in_memory(fm, cf.schema(), db::rp_handle(), db::no_timeout);
             }
-            s->applied_mutations++;
-            return make_ready_future<>();
-        }).handle_exception([s](auto ep) {
-            s->invalid_mutations++;
-            // TODO: write mutation to file like origin.
-            rlogger.warn("error replaying: {}", ep);
+        }).then_wrapped([s] (future<> f) {
+            try {
+                f.get();
+                s->applied_mutations++;
+            } catch (...) {
+                s->invalid_mutations++;
+                // TODO: write mutation to file like origin.
+                rlogger.warn("error replaying: {}", std::current_exception());
+            }
         });
     } catch (no_such_column_family&) {
         // No such CF now? Origin just ignores this.
