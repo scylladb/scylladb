@@ -155,9 +155,9 @@ public:
 
     virtual bool allow_clustering_key_slices() const = 0;
 
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) = 0;
+    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const = 0;
 
-    virtual uint32_t get_bound_terms() override;
+    virtual uint32_t get_bound_terms() const override;
 
     virtual const sstring& keyspace() const;
 
@@ -173,10 +173,10 @@ public:
 
     gc_clock::duration get_time_to_live(const query_options& options) const;
 
-    virtual future<> check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) const override;
 
     // Validate before execute, using client state and current schema
-    void validate(service::storage_proxy&, const service::client_state& state) override;
+    void validate(service::storage_proxy&, const service::client_state& state) const override;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const override;
 
@@ -184,7 +184,7 @@ public:
 
     void add_operation(::shared_ptr<operation> op);
 
-    void inc_cql_stats(bool is_internal);
+    void inc_cql_stats(bool is_internal) const;
 
     const ::shared_ptr<restrictions::statement_restrictions>& restrictions() const {
         return _restrictions;
@@ -217,8 +217,8 @@ public:
             const column_set& mask, bool is_applied,
             const update_parameters::prefetch_data& rows);
 public:
-    virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache);
-    virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache);
+    virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const;
+    virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const;
 
 private:
     // Return true if this statement doesn't update or read any regular rows, only static rows.
@@ -240,7 +240,7 @@ public:
 
     // Columns of the statement result set (only CAS statement
     // returns a result set).
-    const column_set& columns_of_cas_result_set() { return _columns_of_cas_result_set; }
+    const column_set& columns_of_cas_result_set() const { return _columns_of_cas_result_set; }
 
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
@@ -253,7 +253,7 @@ public:
             const std::vector<dht::partition_range>& keys,
             const std::vector<query::clustering_range>& ranges,
             const update_parameters& params,
-            const json_cache_opt& json_cache);
+            const json_cache_opt& json_cache) const;
 
     /**
      * Checks whether the conditions represented by this statement apply provided the current state of the row on
@@ -267,7 +267,7 @@ public:
 
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
-    do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
+    do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
     friend class modification_statement_executor;
 public:
     // True if the statement has IF conditions. Pre-computed during prepare.
@@ -278,14 +278,14 @@ public:
     bool has_only_static_column_conditions() const { return !_has_regular_column_conditions && _has_static_column_conditions; }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
+    execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const override;
 
 private:
     future<>
-    execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
+    execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
+    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
 
 public:
     /**
@@ -298,9 +298,9 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs);
+    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
 
-    virtual json_cache_opt maybe_prepare_json_cache(const query_options& options);
+    virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 protected:
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been

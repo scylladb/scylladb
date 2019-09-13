@@ -158,7 +158,7 @@ public:
         setter_by_index(const column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
             : operation(column, std::move(t)), _idx(std::move(idx)) {
         }
-        virtual bool requires_read() override;
+        virtual bool requires_read() const override;
         virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names);
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
@@ -168,7 +168,7 @@ public:
         setter_by_uuid(const column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
             : setter_by_index(column, std::move(idx), std::move(t)) {
         }
-        virtual bool requires_read() override;
+        virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
@@ -195,7 +195,7 @@ public:
         discarder(const column_definition& column, shared_ptr<term> t)
                 : operation(column, std::move(t)) {
         }
-        virtual bool requires_read() override;
+        virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
@@ -204,7 +204,7 @@ public:
         discarder_by_index(const column_definition& column, shared_ptr<term> idx)
                 : operation(column, std::move(idx)) {
         }
-        virtual bool requires_read() override;
+        virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params);
     };
 };

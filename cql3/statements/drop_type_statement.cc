@@ -63,12 +63,12 @@ void drop_type_statement::prepare_keyspace(const service::client_state& state)
     }
 }
 
-future<> drop_type_statement::check_access(const service::client_state& state)
+future<> drop_type_statement::check_access(const service::client_state& state) const
 {
     return state.has_keyspace_access(keyspace(), auth::permission::DROP);
 }
 
-void drop_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
+void drop_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
     try {
         auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
@@ -142,7 +142,7 @@ const sstring& drop_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
 {
     auto&& db = proxy.get_db().local();
 

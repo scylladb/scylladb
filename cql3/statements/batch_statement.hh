@@ -124,9 +124,9 @@ public:
 
     virtual bool depends_on_column_family(const sstring& cf_name) const override;
 
-    virtual uint32_t get_bound_terms() override;
+    virtual uint32_t get_bound_terms() const override;
 
-    virtual future<> check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) const override;
 
     // Validates a prepared batch statement without validating its nested statements.
     void validate();
@@ -137,12 +137,12 @@ public:
 
     // The batch itself will be validated in either Parsed#prepare() - for regular CQL3 batches,
     //   or in QueryProcessor.processBatch() - for native protocol batches.
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) override;
+    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
 
     const std::vector<single_statement>& get_statements();
 private:
     future<std::vector<mutation>> get_mutations(service::storage_proxy& storage, const query_options& options, db::timeout_clock::time_point timeout,
-            bool local, api::timestamp_type now, service::query_state& query_state);
+            bool local, api::timestamp_type now, service::query_state& query_state) const;
 
 public:
     /**
@@ -152,13 +152,13 @@ public:
     static void verify_batch_size(const std::vector<mutation>& mutations);
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
-            service::storage_proxy& storage, service::query_state& state, const query_options& options) override;
+            service::storage_proxy& storage, service::query_state& state, const query_options& options) const override;
 private:
     friend class batch_statement_executor;
     future<shared_ptr<cql_transport::messages::result_message>> do_execute(
             service::storage_proxy& storage,
             service::query_state& query_state, const query_options& options,
-            bool local, api::timestamp_type now);
+            bool local, api::timestamp_type now) const;
 
     future<> execute_without_conditions(
             service::storage_proxy& storage,
@@ -166,12 +166,12 @@ private:
             db::consistency_level cl,
             db::timeout_clock::time_point timeout,
             tracing::trace_state_ptr tr_state,
-            service_permit permit);
+            service_permit permit) const;
 
     future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
             service::storage_proxy& storage,
             const query_options& options,
-            service::query_state& state);
+            service::query_state& state) const;
 public:
     // FIXME: no cql_statement::to_string() yet
 #if 0

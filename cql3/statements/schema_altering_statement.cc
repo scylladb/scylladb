@@ -61,7 +61,7 @@ schema_altering_statement::schema_altering_statement(::shared_ptr<cf_name> name,
 {
 }
 
-future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&) {
+future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&) const {
     return make_ready_future<>();
 }
 
@@ -80,7 +80,7 @@ bool schema_altering_statement::depends_on_column_family(const sstring& cf_name)
     return false;
 }
 
-uint32_t schema_altering_statement::get_bound_terms()
+uint32_t schema_altering_statement::get_bound_terms() const
 {
     return 0;
 }
@@ -93,7 +93,7 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
 }
 
 future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute0(service::storage_proxy& proxy, service::query_state& state, const query_options& options, bool is_local_only) {
+schema_altering_statement::execute0(service::storage_proxy& proxy, service::query_state& state, const query_options& options, bool is_local_only) const {
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
     return announce_migration(proxy, is_local_only).then([this] (auto ce) {
@@ -108,7 +108,7 @@ schema_altering_statement::execute0(service::storage_proxy& proxy, service::quer
 }
 
 future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
+schema_altering_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
     bool internal = state.get_client_state().is_internal();
     return execute0(proxy, state, options, internal).then([this, &state, internal](::shared_ptr<messages::result_message> result) {
         auto permissions_granted_fut = internal

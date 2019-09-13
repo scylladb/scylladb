@@ -90,11 +90,11 @@ create_view_statement::create_view_statement(
     }
 }
 
-future<> create_view_statement::check_access(const service::client_state& state) {
+future<> create_view_statement::check_access(const service::client_state& state) const {
     return state.has_column_family_access(keyspace(), _base_name->get_column_family(), auth::permission::ALTER);
 }
 
-void create_view_statement::validate(service::storage_proxy&, const service::client_state& state) {
+void create_view_statement::validate(service::storage_proxy&, const service::client_state& state) const {
     // validated in announceMigration()
 }
 
@@ -143,7 +143,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) {
+future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -218,7 +218,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         return def;
     }));
 
-    if (!get_bound_variables()->empty()) {
+    if (!_variables->empty()) {
         throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
     }
 

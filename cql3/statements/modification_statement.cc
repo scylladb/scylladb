@@ -112,7 +112,7 @@ bool modification_statement::uses_function(const sstring& ks_name, const sstring
     return false;
 }
 
-uint32_t modification_statement::get_bound_terms() {
+uint32_t modification_statement::get_bound_terms() const {
     return _bound_terms;
 }
 
@@ -144,7 +144,7 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
     return gc_clock::duration(attrs->get_time_to_live(options));
 }
 
-future<> modification_statement::check_access(const service::client_state& state) {
+future<> modification_statement::check_access(const service::client_state& state) const {
     auto f = state.has_column_family_access(keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
         f = f.then([this, &state] {
@@ -168,7 +168,7 @@ future<> modification_statement::check_access(const service::client_state& state
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) {
+modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
     auto cl = options.get_consistency();
     auto json_cache = maybe_prepare_json_cache(options);
     auto keys = build_partition_keys(options, json_cache);
@@ -244,7 +244,7 @@ std::vector<mutation> modification_statement::apply_updates(
         const std::vector<dht::partition_range>& keys,
         const std::vector<query::clustering_range>& ranges,
         const update_parameters& params,
-        const json_cache_opt& json_cache) {
+        const json_cache_opt& json_cache) const {
 
     std::vector<mutation> mutations;
     mutations.reserve(keys.size());
@@ -271,14 +271,14 @@ modification_statement::read_command(query::clustering_row_ranges ranges, db::co
 }
 
 std::vector<query::clustering_range>
-modification_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) {
+modification_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const {
     return _restrictions->get_clustering_bounds(options);
 }
 
 dht::partition_range_vector
-modification_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) {
+modification_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const {
     auto keys = _restrictions->get_partition_key_restrictions()->bounds_ranges(options);
-    for (auto&& k : keys) {
+    for (auto const& k : keys) {
         validation::validate_cql_key(s, *k.start()->value().key());
     }
     return keys;
@@ -289,18 +289,18 @@ struct modification_statement_executor {
 };
 static thread_local inheriting_concrete_execution_stage<
         future<::shared_ptr<cql_transport::messages::result_message>>,
-        modification_statement*,
+        const modification_statement*,
         service::storage_proxy&,
         service::query_state&,
         const query_options&> modify_stage{"cql3_modification", modification_statement_executor::get()};
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
     return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
@@ -320,7 +320,7 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
 }
 
 future<>
-modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
@@ -348,7 +348,7 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
 
     auto cl_for_commit = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
@@ -605,7 +605,7 @@ modification_statement::prepare_conditions(database& db, schema_ptr schema, ::sh
 }  // namespace raw
 
 void
-modification_statement::validate(service::storage_proxy&, const service::client_state& state) {
+modification_statement::validate(service::storage_proxy&, const service::client_state& state) const {
     if (has_conditions() && attrs->is_timestamp_set()) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
     }
@@ -660,7 +660,7 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
     _column_operations.push_back(std::move(op));
 }
 
-void modification_statement::inc_cql_stats(bool is_internal) {
+void modification_statement::inc_cql_stats(bool is_internal) const {
     const source_selector src_sel = is_internal
             ? source_selector::INTERNAL : source_selector::USER;
     const cond_selector cond_sel = has_conditions()
@@ -736,7 +736,7 @@ void modification_statement::validate_where_clause_for_conditions() const {
     }
 }
 
-modification_statement::json_cache_opt modification_statement::maybe_prepare_json_cache(const query_options& options) {
+modification_statement::json_cache_opt modification_statement::maybe_prepare_json_cache(const query_options& options) const {
     return {};
 }
 

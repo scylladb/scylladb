@@ -62,7 +62,7 @@ public:
 
     virtual bool allow_clustering_key_slices() const override;
 
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) override;
+    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const override;
 };
 
 }

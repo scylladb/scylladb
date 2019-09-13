@@ -115,7 +115,7 @@ public:
     * @return whether the operation requires a read of the previous value to be executed
     * (only lists setterByIdx, discard and discardByIdx requires that).
     */
-    virtual bool requires_read() {
+    virtual bool requires_read() const {
         return false;
     }
 

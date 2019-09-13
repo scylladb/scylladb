@@ -164,11 +164,11 @@ bool select_statement::uses_function(const sstring& ks_name, const sstring& func
     return _selection->get_result_metadata();
 }
 
-uint32_t select_statement::get_bound_terms() {
+uint32_t select_statement::get_bound_terms() const {
     return _bound_terms;
 }
 
-future<> select_statement::check_access(const service::client_state& state) {
+future<> select_statement::check_access(const service::client_state& state) const {
     try {
         auto&& s = service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family());
         auto& cf_name = s->is_view() ? s->view_info()->base_name() : column_family();
@@ -179,7 +179,7 @@ future<> select_statement::check_access(const service::client_state& state) {
     }
 }
 
-void select_statement::validate(service::storage_proxy&, const service::client_state& state) {
+void select_statement::validate(service::storage_proxy&, const service::client_state& state) const {
     // Nothing to do, all validation has been done by raw_statemet::prepare()
 }
 
@@ -200,7 +200,7 @@ const sstring& select_statement::column_family() const {
 }
 
 query::partition_slice
-select_statement::make_partition_slice(const query_options& options)
+select_statement::make_partition_slice(const query_options& options) const
 {
     query::column_id_vector static_columns;
     query::column_id_vector regular_columns;
@@ -279,7 +279,7 @@ struct select_statement_executor {
 
 static thread_local inheriting_concrete_execution_stage<
         future<shared_ptr<cql_transport::messages::result_message>>,
-        select_statement*,
+        const select_statement*,
         service::storage_proxy&,
         service::query_state&,
         const query_options&> select_stage{"cql3_select", select_statement_executor::get()};
@@ -287,7 +287,7 @@ static thread_local inheriting_concrete_execution_stage<
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(service::storage_proxy& proxy,
                              service::query_state& state,
-                             const query_options& options)
+                             const query_options& options) const
 {
     return select_stage(this, seastar::ref(proxy), seastar::ref(state), seastar::cref(options));
 }
@@ -295,7 +295,7 @@ select_statement::execute(service::storage_proxy& proxy,
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::do_execute(service::storage_proxy& proxy,
                           service::query_state& state,
-                          const query_options& options)
+                          const query_options& options) const
 {
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
@@ -428,7 +428,7 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const clustering_
 }
 
 lw_shared_ptr<query::read_command>
-indexed_table_select_statement::prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now, bool use_paging) {
+indexed_table_select_statement::prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now, bool use_paging) const {
     lw_shared_ptr<query::read_command> cmd = ::make_lw_shared<query::read_command>(
             _schema->id(),
             _schema->version(),
@@ -456,7 +456,7 @@ indexed_table_select_statement::do_execute_base_query(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) {
+        ::shared_ptr<const service::pager::paging_state> paging_state) const {
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     uint32_t queried_ranges_count = partition_ranges.size();
@@ -513,7 +513,7 @@ indexed_table_select_statement::execute_base_query(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) {
+        ::shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(proxy, std::move(partition_ranges), state, options, now, paging_state).then(
             [this, &proxy, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
         return process_base_query_results(std::move(result), std::move(cmd), proxy, state, options, now, std::move(paging_state));
@@ -527,7 +527,7 @@ indexed_table_select_statement::do_execute_base_query(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) {
+        ::shared_ptr<const service::pager::paging_state> paging_state) const {
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
 
@@ -589,7 +589,7 @@ indexed_table_select_statement::execute_base_query(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) {
+        ::shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(proxy, std::move(primary_keys), state, options, now, paging_state).then(
             [this, &proxy, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
         return process_base_query_results(std::move(result), std::move(cmd), proxy, state, options, now, std::move(paging_state));
@@ -602,7 +602,7 @@ select_statement::execute(service::storage_proxy& proxy,
                           dht::partition_range_vector&& partition_ranges,
                           service::query_state& state,
                           const query_options& options,
-                          gc_clock::time_point now)
+                          gc_clock::time_point now) const
 {
     // If this is a query with IN on partition key, ORDER BY clause and LIMIT
     // is specified we need to get "limit" rows from each partition since there
@@ -643,7 +643,7 @@ indexed_table_select_statement::process_base_query_results(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state)
+        ::shared_ptr<const service::pager::paging_state> paging_state) const
 {
     if (paging_state) {
         paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, proxy, state, options);
@@ -656,7 +656,7 @@ future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
-                                  gc_clock::time_point now)
+                                  gc_clock::time_point now) const
 {
     const bool restrictions_need_filtering = _restrictions->need_filtering();
     const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !restrictions_need_filtering;
@@ -854,7 +854,7 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
 future<shared_ptr<cql_transport::messages::result_message>>
 indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                              service::query_state& state,
-                             const query_options& options)
+                             const query_options& options) const
 {
     tracing::add_table_name(state.get_trace_state(), _view_schema->ks_name(), _view_schema->cf_name());
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
@@ -1073,7 +1073,7 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
                   service::query_state& state,
                   gc_clock::time_point now,
                   db::timeout_clock::time_point timeout,
-                  bool include_base_clustering_key)
+                  bool include_base_clustering_key) const
 {
     dht::partition_range_vector partition_ranges = _get_partition_ranges_for_posting_list(options);
     auto partition_slice = _get_partition_slice_for_posting_list(options);
@@ -1125,7 +1125,7 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
 future<dht::partition_range_vector, ::shared_ptr<const service::pager::paging_state>>
 indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
                                              service::query_state& state,
-                                             const query_options& options)
+                                             const query_options& options) const
 {
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
@@ -1165,7 +1165,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
 future<std::vector<indexed_table_select_statement::primary_key>, ::shared_ptr<const service::pager::paging_state>>
-indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
+indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const
 {
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();

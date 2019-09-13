@@ -65,7 +65,7 @@ void property_definitions::add_property(const sstring& name, const std::map<sstr
     _properties.emplace(name, value);
 }
 
-void property_definitions::validate(const std::set<sstring>& keywords, const std::set<sstring>& exts, const std::set<sstring>& obsolete) {
+void property_definitions::validate(const std::set<sstring>& keywords, const std::set<sstring>& exts, const std::set<sstring>& obsolete) const {
     for (auto&& kv : _properties) {
         auto&& name = kv.first;
         if (keywords.count(name) || exts.count(name)) {
@@ -181,7 +181,7 @@ long property_definitions::to_long(sstring key, std::optional<sstring> value, lo
     }
 }
 
-void property_definitions::remove_from_map_if_exists(const sstring& name, const sstring& key)
+void property_definitions::remove_from_map_if_exists(const sstring& name, const sstring& key) const
 {
     auto it = _properties.find(name);
     if (it == _properties.end()) {

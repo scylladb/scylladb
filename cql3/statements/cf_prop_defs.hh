@@ -88,9 +88,9 @@ public:
     static constexpr int32_t DEFAULT_MIN_INDEX_INTERVAL = 128;
     static constexpr int32_t DEFAULT_MAX_INDEX_INTERVAL = 2048;
 private:
-    std::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
+    mutable std::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
-    void validate(const db::extensions&);
+    void validate(const db::extensions&) const;
     std::map<sstring, sstring> get_compaction_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
     std::optional<std::map<sstring, sstring>> get_cdc_options() const;

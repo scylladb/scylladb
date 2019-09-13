@@ -30,7 +30,7 @@ namespace cql3 {
 
 namespace statements {
 
-void create_function_statement::create(service::storage_proxy& proxy, functions::function* old) {
+void create_function_statement::create(service::storage_proxy& proxy, functions::function* old) const {
     if (old && !dynamic_cast<functions::user_function*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
     }
@@ -59,7 +59,7 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(database&
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_function_statement::announce_migration(
-        service::storage_proxy& proxy, bool is_local_only) {
+        service::storage_proxy& proxy, bool is_local_only) const {
     if (!_func) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
     }

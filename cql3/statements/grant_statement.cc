@@ -43,7 +43,7 @@
 #include "auth/authorizer.hh"
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::grant_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
+cql3::statements::grant_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
     auto& auth_service = *state.get_client_state().get_auth_service();
 
     return auth::grant_permissions(auth_service, _role_name, _permissions, _resource).then([] {

@@ -76,16 +76,16 @@ create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
 {
 }
 
-future<> create_table_statement::check_access(const service::client_state& state) {
+future<> create_table_statement::check_access(const service::client_state& state) const {
     return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
 }
 
-void create_table_statement::validate(service::storage_proxy&, const service::client_state& state) {
+void create_table_statement::validate(service::storage_proxy&, const service::client_state& state) const {
     // validated in announceMigration()
 }
 
 // Column definitions
-std::vector<column_definition> create_table_statement::get_columns()
+std::vector<column_definition> create_table_statement::get_columns() const
 {
     std::vector<column_definition> column_defs;
     for (auto&& col : _columns) {
@@ -102,7 +102,7 @@ template <typename CreateTable>
 future<shared_ptr<cql_transport::event::schema_change>>
 create_table_statement::create_table_with_cdc(service::storage_proxy& proxy,
                                               schema_ptr schema,
-                                              CreateTable&& create_table) {
+                                              CreateTable&& create_table) const {
     if (_if_not_exists) {
         throw exceptions::invalid_request_exception(
                 "Can't create table with CDC support using IF NOT EXISTS");
@@ -117,7 +117,7 @@ create_table_statement::create_table_with_cdc(service::storage_proxy& proxy,
     });
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) {
+future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const {
     auto schema = get_cf_meta_data(proxy.get_db().local());
     auto create_table = [this, is_local_only, schema] () mutable {
         return make_ready_future<>().then([this, is_local_only, schema = std::move(schema)] {
@@ -153,13 +153,13 @@ future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::
  * @return a CFMetaData instance corresponding to the values parsed from this statement
  * @throws InvalidRequestException on failure to validate parsed parameters
  */
-schema_ptr create_table_statement::get_cf_meta_data(const database& db) {
+schema_ptr create_table_statement::get_cf_meta_data(const database& db) const {
     schema_builder builder{keyspace(), column_family(), _id};
     apply_properties_to(builder, db);
     return builder.build(_use_compact_storage ? schema_builder::compact_storage::yes : schema_builder::compact_storage::no);
 }
 
-void create_table_statement::apply_properties_to(schema_builder& builder, const database& db) {
+void create_table_statement::apply_properties_to(schema_builder& builder, const database& db) const {
     auto&& columns = get_columns();
     for (auto&& column : columns) {
         builder.with_column(column);
@@ -178,7 +178,7 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
     _properties->apply_to_builder(builder, db.extensions());
 }
 
-void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind)
+void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const
 {
     assert(aliases.size() == types.size());
     for (size_t i = 0; i < aliases.size(); i++) {
@@ -195,7 +195,7 @@ create_table_statement::prepare(database& db, cql_stats& stats) {
     abort();
 }
 
-future<> create_table_statement::grant_permissions_to_creator(const service::client_state& cs) {
+future<> create_table_statement::grant_permissions_to_creator(const service::client_state& cs) const {
     return do_with(auth::make_data_resource(keyspace(), column_family()), [&cs](const auth::resource& r) {
         return auth::grant_applicable_permissions(
                 *cs.get_auth_service(),

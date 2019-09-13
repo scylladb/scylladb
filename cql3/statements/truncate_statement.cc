@@ -56,7 +56,7 @@ truncate_statement::truncate_statement(::shared_ptr<cf_name> name)
 {
 }
 
-uint32_t truncate_statement::get_bound_terms()
+uint32_t truncate_statement::get_bound_terms() const
 {
     return 0;
 }
@@ -81,12 +81,12 @@ bool truncate_statement::depends_on_column_family(const sstring& cf_name) const
     return false;
 }
 
-future<> truncate_statement::check_access(const service::client_state& state)
+future<> truncate_statement::check_access(const service::client_state& state) const
 {
     return state.has_column_family_access(keyspace(), column_family(), auth::permission::MODIFY);
 }
 
-void truncate_statement::validate(service::storage_proxy&, const service::client_state& state)
+void truncate_statement::validate(service::storage_proxy&, const service::client_state& state) const
 {
     warn(unimplemented::cause::VALIDATION);
 #if 0
@@ -95,7 +95,7 @@ void truncate_statement::validate(service::storage_proxy&, const service::client
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-truncate_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
+truncate_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const
 {
     if (service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family())->is_view()) {
         throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");

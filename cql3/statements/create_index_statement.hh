@@ -77,9 +77,9 @@ public:
             std::vector<::shared_ptr<index_target::raw>> raw_targets,
             ::shared_ptr<index_prop_defs> properties, bool if_not_exists);
 
-    future<> check_access(const service::client_state& state) override;
-    void validate(service::storage_proxy&, const service::client_state& state) override;
-    future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy&, bool is_local_only) override;
+    future<> check_access(const service::client_state& state) const override;
+    void validate(service::storage_proxy&, const service::client_state& state) const override;
+    future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy&, bool is_local_only) const override;
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 private:

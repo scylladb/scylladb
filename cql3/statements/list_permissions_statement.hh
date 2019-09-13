@@ -54,19 +54,19 @@ namespace statements {
 class list_permissions_statement : public authorization_statement {
 private:
     auth::permission_set _permissions;
-    std::optional<auth::resource> _resource;
+    mutable std::optional<auth::resource> _resource;
     std::optional<sstring> _role_name;
     bool _recursive;
 
 public:
     list_permissions_statement(auth::permission_set, std::optional<auth::resource>, std::optional<sstring>, bool);
 
-    void validate(service::storage_proxy&, const service::client_state&) override;
+    void validate(service::storage_proxy&, const service::client_state&) const override;
 
-    future<> check_access(const service::client_state&) override;
+    future<> check_access(const service::client_state&) const override;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(service::storage_proxy& , service::query_state& , const query_options&) override;
+    execute(service::storage_proxy& , service::query_state& , const query_options&) const override;
 };
 
 }

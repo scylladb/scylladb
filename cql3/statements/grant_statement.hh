@@ -53,7 +53,7 @@ public:
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy&
                     , service::query_state&
-                    , const query_options&) override;
+                    , const query_options&) const override;
 };
 
 }

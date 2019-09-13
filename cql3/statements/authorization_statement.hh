@@ -58,7 +58,7 @@ class authorization_statement : public raw::parsed_statement, public cql_stateme
 public:
     authorization_statement() : cql_statement_no_metadata(&timeout_config::other_timeout) {}
 
-    uint32_t get_bound_terms() override;
+    uint32_t get_bound_terms() const override;
 
     std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
@@ -68,9 +68,9 @@ public:
 
     bool depends_on_column_family(const sstring& cf_name) const override;
 
-    future<> check_access(const service::client_state& state) override;
+    future<> check_access(const service::client_state& state) const override;
 
-    void validate(service::storage_proxy&, const service::client_state& state) override;
+    void validate(service::storage_proxy&, const service::client_state& state) const override;
 
 protected:
     static void maybe_correct_resource(auth::resource&, const service::client_state&);

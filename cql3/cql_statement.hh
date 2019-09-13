@@ -72,14 +72,14 @@ public:
 
     timeout_config_selector get_timeout_config_selector() const { return _timeout_config_selector; }
 
-    virtual uint32_t get_bound_terms() = 0;
+    virtual uint32_t get_bound_terms() const = 0;
 
     /**
      * Perform any access verification necessary for the statement.
      *
      * @param state the current client state
      */
-    virtual future<> check_access(const service::client_state& state) = 0;
+    virtual future<> check_access(const service::client_state& state) const = 0;
 
     /**
      * Perform additional validation required by the statment.
@@ -87,7 +87,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) = 0;
+    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const = 0;
 
     /**
      * Execute the statement and return the resulting result or null if there is no result.
@@ -96,7 +96,7 @@ public:
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-        execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) = 0;
+        execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const = 0;
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 

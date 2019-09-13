@@ -102,12 +102,12 @@ bool batch_statement::depends_on_column_family(const sstring& cf_name) const
     return false;
 }
 
-uint32_t batch_statement::get_bound_terms()
+uint32_t batch_statement::get_bound_terms() const
 {
     return _bound_terms;
 }
 
-future<> batch_statement::check_access(const service::client_state& state)
+future<> batch_statement::check_access(const service::client_state& state) const
 {
     return parallel_for_each(_statements.begin(), _statements.end(), [&state](auto&& s) {
         if (s.needs_authorization) {
@@ -171,7 +171,7 @@ void batch_statement::validate()
     }
 }
 
-void batch_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
+void batch_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
     for (auto&& s : _statements) {
         s.statement->validate(proxy, state);
@@ -184,7 +184,7 @@ const std::vector<batch_statement::single_statement>& batch_statement::get_state
 }
 
 future<std::vector<mutation>> batch_statement::get_mutations(service::storage_proxy& storage, const query_options& options,
-        db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) {
+        db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) const {
     // Do not process in parallel because operations like list append/prepend depend on execution order.
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
     return do_with(mutation_set_type(), [this, &storage, &options, timeout, now, local, &query_state] (auto& result) mutable {
@@ -255,7 +255,7 @@ struct batch_statement_executor {
 };
 static thread_local inheriting_concrete_execution_stage<
         future<shared_ptr<cql_transport::messages::result_message>>,
-        batch_statement*,
+        const batch_statement*,
         service::storage_proxy&,
         service::query_state&,
         const query_options&,
@@ -263,7 +263,7 @@ static thread_local inheriting_concrete_execution_stage<
         api::timestamp_type> batch_stage{"cql3_batch", batch_statement_executor::get()};
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
-        service::storage_proxy& storage, service::query_state& state, const query_options& options) {
+        service::storage_proxy& storage, service::query_state& state, const query_options& options) const {
     return batch_stage(this, seastar::ref(storage), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));
 }
@@ -271,7 +271,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
         service::storage_proxy& storage,
         service::query_state& query_state, const query_options& options,
-        bool local, api::timestamp_type now)
+        bool local, api::timestamp_type now) const
 {
     // FIXME: we don't support nulls here
 #if 0
@@ -305,7 +305,7 @@ future<> batch_statement::execute_without_conditions(
         db::consistency_level cl,
         db::timeout_clock::time_point timeout,
         tracing::trace_state_ptr tr_state,
-        service_permit permit)
+        service_permit permit) const
 {
     // FIXME: do we need to do this?
 #if 0
@@ -338,7 +338,7 @@ future<> batch_statement::execute_without_conditions(
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
         service::storage_proxy& proxy,
         const query_options& options,
-        service::query_state& qs) {
+        service::query_state& qs) const {
 
     auto cl_for_commit = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
