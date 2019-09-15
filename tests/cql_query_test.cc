@@ -46,6 +46,7 @@
 #include "cql3/cql_config.hh"
 #include "sstables/compaction_manager.hh"
 #include "exception_utils.hh"
+#include "json.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -4075,5 +4076,81 @@ SEASTAR_TEST_CASE(test_alter_type_on_compact_storage_with_no_regular_columns_doe
         cquery_nofail(e, "CREATE TYPE my_udf (first text);");
         cquery_nofail(e, "create table z (pk int, ck frozen<my_udf>, primary key(pk, ck)) with compact storage;");
         cquery_nofail(e, "alter type my_udf add test_int int;");
+    });
+}
+
+SEASTAR_TEST_CASE(test_rf_expand) {
+    constexpr static auto simple = "org.apache.cassandra.locator.SimpleStrategy";
+    constexpr static auto network_topology = "org.apache.cassandra.locator.NetworkTopologyStrategy";
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto get_replication = [&] (const sstring& ks) {
+            auto msg = e.execute_cql(
+                format("SELECT JSON replication FROM system_schema.keyspaces WHERE keyspace_name = '{}'", ks)).get0();
+            auto res = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            auto rows = res->rs().result_set().rows();
+            BOOST_REQUIRE_EQUAL(rows.size(), 1);
+            auto row0 = rows[0];
+            BOOST_REQUIRE_EQUAL(row0.size(), 1);
+
+            return json::to_json_value(sstring(to_sstring_view(*row0[0])))["replication"];
+        };
+
+        auto assert_replication_contains = [&] (const sstring& ks, const std::map<sstring, sstring>& kvs) {
+            auto repl = get_replication(ks);
+            for (const auto& [k, v] : kvs) {
+                BOOST_REQUIRE_EQUAL(v, repl[k].asString());
+            }
+        };
+
+        auto assert_replication_not_contains = [&] (const sstring& ks, const std::vector<sstring>& keys) {
+            auto repl = get_replication(ks);
+            return std::none_of(keys.begin(), keys.end(), [&] (const sstring& k) {
+                return repl.isMember(std::string(k.begin(), k.end()));
+            });
+        };
+
+        e.execute_cql("CREATE KEYSPACE rf_expand_1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}").get();
+        assert_replication_contains("rf_expand_1", {
+            {"class", network_topology},
+            {"datacenter1", "3"}
+        });
+
+        // The auto-expansion should not change existing replication factors.
+        e.execute_cql("ALTER KEYSPACE rf_expand_1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}").get();
+        assert_replication_contains("rf_expand_1", {
+            {"class", network_topology},
+            {"datacenter1", "3"}
+        });
+
+        e.execute_cql("CREATE KEYSPACE rf_expand_2 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}").get();
+        assert_replication_contains("rf_expand_2", {
+            {"class", simple},
+            {"replication_factor", "3"}
+        });
+
+        // Should auto-expand when switching from SimpleStrategy to NetworkTopologyStrategy without additional options.
+        e.execute_cql("ALTER KEYSPACE rf_expand_2 WITH replication = {'class': 'NetworkTopologyStrategy'}").get();
+        assert_replication_contains("rf_expand_2", {
+            {"class", network_topology},
+            {"datacenter1", "3"}
+        });
+
+        e.execute_cql("CREATE KEYSPACE rf_expand_3 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}").get();
+        assert_replication_contains("rf_expand_3", {
+            {"class", simple},
+            {"replication_factor", "3"}
+        });
+
+        // Should not auto-expand when switching to NetworkTopologyStrategy with additional options.
+        e.execute_cql("ALTER KEYSPACE rf_expand_3 WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter2': 2}").get();
+        assert_replication_not_contains("rf_expand_3", {"datacenter1"});
+
+        // Respect factors specified manually.
+        e.execute_cql("CREATE KEYSPACE rf_expand_4 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3, 'datacenter1': 2}").get();
+        assert_replication_contains("rf_expand_4", {
+            {"class", network_topology},
+            {"datacenter1", "2"}
+        });
     });
 }
