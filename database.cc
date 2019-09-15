@@ -298,6 +298,7 @@ dirty_memory_manager::setup_collectd(sstring namestr) {
 }
 
 static const metrics::label class_label("class");
+static const metrics::label uuid_label("uuid");
 
 void
 database::setup_metrics() {
@@ -333,6 +334,7 @@ database::setup_metrics() {
                        sm::description("Holds the number of failed memtable flushes. "
                                        "High value in this metric may indicate a permanent failure to flush a memtable.")),
     });
+
 
     _metrics.add_group("database", {
         sm::make_gauge("requests_blocked_memory_current", [this] { return _dirty_memory_manager.region_group().blocked_requests(); },
@@ -527,6 +529,14 @@ database::setup_metrics() {
         sm::make_total_operations("total_view_updates_failed_remote", _cf_stats.total_view_updates_failed_remote,
                 sm::description("Total number of view updates generated for tables and failed to be sent to remote replicas.")),
     });
+    if (engine().cpu_id() == 0) {
+        _metrics.add_group("database", {
+            sm::make_gauge("schema_version", [this] { return _version.get_least_significant_bits(); },
+                    sm::description("return the schema version as MSB and LSB"), {uuid_label("LSB")}),
+            sm::make_gauge("schema_version", [this] { return _version.get_most_significant_bits(); },
+                    sm::description("return the schema version as MSB and LSB"), {uuid_label("MSB")}),
+        });
+    }
 }
 
 database::~database() {
