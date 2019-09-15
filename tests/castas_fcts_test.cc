@@ -167,6 +167,31 @@ SEASTAR_TEST_CASE(test_varint_to_bigint) {
     });
 }
 
+SEASTAR_TEST_CASE(test_varint_to_int) {
+    return do_with_cql_env_thread([&](auto& e) {
+        e.execute_cql("CREATE TABLE test (key text primary key, value varint)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k1', 2147483647)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k2', 2147483648)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k3', 4294967295)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k4', 4294967296)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k5', 4294967297)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k6', -1)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k7', -2147483648)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k8', -2147483649)").get();
+        auto v = e.execute_cql("SELECT key,CAST(value as int) from test").get0();
+        assert_that(v).is_rows().with_rows_ignore_order({
+            {{utf8_type->decompose("k1")}, {int32_type->decompose(std::numeric_limits<int32_t>::max())}},
+            {{utf8_type->decompose("k2")}, {int32_type->decompose(std::numeric_limits<int32_t>::min())}},
+            {{utf8_type->decompose("k3")}, {int32_type->decompose(int32_t(-1))}},
+            {{utf8_type->decompose("k4")}, {int32_type->decompose(int32_t(0))}},
+            {{utf8_type->decompose("k5")}, {int32_type->decompose(int32_t(1))}},
+            {{utf8_type->decompose("k6")}, {int32_type->decompose(int32_t(-1))}},
+            {{utf8_type->decompose("k7")}, {int32_type->decompose(std::numeric_limits<int32_t>::min())}},
+            {{utf8_type->decompose("k8")}, {int32_type->decompose(std::numeric_limits<int32_t>::max())}},
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
     return do_with_cql_env_thread([&] (auto& e) {
         e.execute_cql("CREATE TABLE test (a tinyint primary key,"
