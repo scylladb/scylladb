@@ -8,6 +8,8 @@ class Metric(object):
         self._metric_source = metric_source
         self._status = {}
         self._help_line = hlp
+        self._expiration = None
+        self._absent = False
 
     @property
     def symbol(self):
@@ -20,6 +22,14 @@ class Metric(object):
     @property
     def status(self):
         return self._status
+
+    @property
+    def is_absent(self):
+        return self._absent
+
+    @property
+    def expiration(self):
+        return self._expiration
 
     def update_info(self, line):
         match = self._metric_source._METRIC_INFO_PATTERN.search(line)
@@ -38,9 +48,11 @@ class Metric(object):
             self.update_info(line)
             logging.debug('update {}: {}'.format(self.symbol, line.strip()))
 
-    def markAbsent(self):
+    def markAbsent(self, expiration=None):
         for key in list(self._status.keys()):
             self._status[key] = 'not available'
+        self._absent = True
+        self._expiration = expiration
 
     def add_to_results(self, results):
         if not isinstance(results, dict):

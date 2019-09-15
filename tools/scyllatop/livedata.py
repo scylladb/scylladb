@@ -7,11 +7,14 @@ import defaults
 
 
 class LiveData(object):
-    def __init__(self, metricPatterns, interval, metric_source):
+    def __init__(self, metricPatterns, interval, metric_source, ttl=None):
         logging.info('will query metric_source {} every {} seconds'.format(metric_source, interval))
+        if ttl:
+            logging.info('absent data will be kept for {} seconds'.format(ttl))
         self._startedAt = time.time()
         self._results = {}
         self._interval = interval
+        self._ttl = ttl
         self._metric_source = metric_source
         if metricPatterns and len(metricPatterns) > 0:
             self._metricPatterns = metricPatterns
@@ -52,18 +55,27 @@ class LiveData(object):
     def go(self, mainLoop):
         num_updated = 0
         num_absent = 0
+        num_expired = 0
         num_added = 0
+        now = time.time()
         while not self._stop:
             new_results = self._discoverMetrics();
+            expiration = time.time() + self._ttl if self._ttl else None
             for metric in self._results:
                 if not metric in new_results:
                     metric_obj = self._results[metric]
-                    metric_obj.markAbsent()
-                    num_absent += 1
+                    if not metric_obj.is_absent:
+                        metric_obj.markAbsent(expiration)
+                        num_absent += 1
+                    elif metric_obj.expiration and now >= metric_obj.expiration:
+                        self._results.pop(metric)
+                        num_expired += 1
+                    else:
+                        num_absent += 1
             num_updated = len(self._results) - num_absent
             num_added = len(new_results) - num_updated
             self._results.update(new_results)
-            logging.debug('go: updated {} measurements, added {}, {} marked absent'.format(num_updated, num_added, num_absent))
+            logging.debug('go: updated {} measurements, added {}, {} marked absent, {} expired'.format(num_updated, num_added, num_absent, num_expired))
 
             for view in self._views:
                 logging.debug('go: updating view {}'.format(view))
