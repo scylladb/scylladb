@@ -584,7 +584,7 @@ def test_update_expression_if_not_exists(test_table_s):
 # value may itself be a function call - ad infinitum. So expressions like
 # list_append(if_not_exists(a, :val1), :val2) are legal and so is deeper
 # nesting.
-@pytest.mark.xfail(reason="SET functions not yet implemented")
+@pytest.mark.xfail(reason="for unknown reason, DynamoDB does not allow nesting list_append")
 def test_update_expression_function_nesting(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
