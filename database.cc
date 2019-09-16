@@ -260,6 +260,10 @@ void backlog_controller::adjust() {
 
 float backlog_controller::backlog_of_shares(float shares) const {
     size_t idx = 1;
+    // No control points means the controller is disabled.
+    if (_control_points.size() == 0) {
+            return 1.0f;
+    }
     while ((idx < _control_points.size() - 1) && (_control_points[idx].output < shares)) {
         idx++;
     }
