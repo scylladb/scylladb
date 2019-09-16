@@ -103,7 +103,7 @@ private:
     bool _is_thrift;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
-    api::timestamp_type _last_timestamp_micros = 0;
+    static thread_local api::timestamp_type _last_timestamp_micros;
 
     // Address of a client
     socket_address _remote_address;
