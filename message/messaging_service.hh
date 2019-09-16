@@ -38,6 +38,7 @@
 #include "streaming/stream_reason.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "cache_temperature.hh"
+#include "service/paxos/prepare_response.hh"
 
 #include <list>
 #include <vector>
@@ -134,7 +135,10 @@ enum class messaging_verb : int32_t {
     REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM = 36,
     REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM = 37,
     REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM = 38,
-    LAST = 39,
+    PAXOS_PREPARE = 39,
+    PAXOS_ACCEPT = 40,
+    PAXOS_LEARN = 41,
+    LAST = 42,
 };
 
 } // namespace netw
@@ -455,6 +459,36 @@ public:
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);
     void unregister_replication_finished();
     future<> send_replication_finished(msg_addr id, inet_address from);
+
+    // Wrappers for PAXOS verbs
+    void register_paxos_prepare(std::function<future<service::paxos::prepare_response>(
+                const rpc::client_info&, rpc::opt_time_point, utils::UUID schema_version, partition_key key, utils::UUID ballot,
+                std::optional<tracing::trace_info>)>&& func);
+
+    void unregister_paxos_prepare();
+
+    future<service::paxos::prepare_response> send_paxos_prepare(
+        gms::inet_address peer, clock_type::time_point timeout, utils::UUID schema_version,
+        partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
+
+    void register_paxos_accept(std::function<future<bool>(const rpc::client_info&, rpc::opt_time_point,
+            service::paxos::proposal proposal, std::optional<tracing::trace_info>)>&& func);
+
+    void unregister_paxos_accept();
+
+    future<bool> send_paxos_accept(gms::inet_address peer, clock_type::time_point timeout,
+            const service::paxos::proposal& proposal, std::optional<tracing::trace_info> trace_info);
+
+    void register_paxos_learn(std::function<future<rpc::no_wait_type> (const rpc::client_info&,
+                rpc::opt_time_point, service::paxos::proposal decision, std::vector<inet_address> forward, inet_address reply_to,
+                unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info)>&& func);
+
+    void unregister_paxos_learn();
+
+    future<> send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
+            std::vector<inet_address> forward, inet_address reply_to, unsigned shard, response_id_type response_id,
+            std::optional<tracing::trace_info> trace_info = std::nullopt);
+
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
     bool remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
