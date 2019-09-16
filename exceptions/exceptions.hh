@@ -110,11 +110,17 @@ struct unavailable_exception : cassandra_exception {
     int32_t required;
     int32_t alive;
 
-    unavailable_exception(db::consistency_level cl, int32_t required, int32_t alive) noexcept
-        : exceptions::cassandra_exception(exceptions::exception_code::UNAVAILABLE, prepare_message("Cannot achieve consistency level for cl %s. Requires %ld, alive %ld", cl, required, alive))
+
+    unavailable_exception(sstring msg, db::consistency_level cl, int32_t required, int32_t alive) noexcept
+        : exceptions::cassandra_exception(exceptions::exception_code::UNAVAILABLE, std::move(msg))
         , consistency(cl)
         , required(required)
         , alive(alive)
+    {}
+
+    unavailable_exception(db::consistency_level cl, int32_t required, int32_t alive) noexcept
+        : unavailable_exception(prepare_message("Cannot achieve consistency level for cl %s. Requires %ld, alive %ld", cl, required, alive),
+                cl, required, alive)
     {}
 };
 
