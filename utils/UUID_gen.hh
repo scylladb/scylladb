@@ -42,6 +42,8 @@
 
 #include <memory>
 #include <chrono>
+#include <random>
+#include <limits>
 
 #include "UUID.hh"
 #include "db_clock.hh"
@@ -121,6 +123,26 @@ public:
     static UUID get_time_UUID(int64_t when, int64_t clock_seq_and_node)
     {
         return UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
+    }
+    /**
+     * Similar to get_time_UUID, but randomize the clock and sequence.
+     * If you can guarantee that the when_in_micros() argument is unique for
+     * every call, then you should prefer get_time_UUID_from_micros() which is faster. If you can't
+     * guarantee this however, this method will ensure the returned UUID are still unique (across calls)
+     * through randomization.
+     *
+     * @param when_in_micros a unix time in microseconds.
+     * @return a new UUID 'id' such that micros_timestamp(id) == when_in_micros. The UUID returned
+     * by different calls will be unique even if when_in_micros is not.
+     */
+    static UUID get_random_time_UUID_from_micros(int64_t when_in_micros) {
+        static thread_local std::mt19937_64 rand_gen(std::random_device().operator()());
+        static thread_local std::uniform_int_distribution<int64_t> rand_dist(std::numeric_limits<int64_t>::min());
+
+        int64_t when_in_millis = when_in_micros / 1000;
+        int64_t nanos = (when_in_micros - (when_in_millis * 1000)) * 10;
+
+        return UUID(create_time(from_unix_timestamp(when_in_millis) + nanos), rand_dist(rand_gen));
     }
 
     /** creates uuid from raw bytes. */
@@ -202,6 +224,16 @@ public:
     static int64_t unix_timestamp(UUID uuid)
     {
         return (uuid.timestamp() / 10000) + START_EPOCH;
+    }
+
+    /**
+     * @param uuid
+     * @return seconds since Unix epoch
+     */
+    static std::chrono::seconds unix_timestamp_in_sec(UUID uuid)
+    {
+        using namespace std::chrono;
+        return duration_cast<seconds>(static_cast<milliseconds>(unix_timestamp(uuid)));
     }
 
     /**
