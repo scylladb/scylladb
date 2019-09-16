@@ -192,21 +192,21 @@ const std::vector<batch_statement::single_statement>& batch_statement::get_state
     return _statements;
 }
 
-future<std::vector<mutation>> batch_statement::get_mutations(service::storage_proxy& storage, const query_options& options, db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state,
-                                                             service_permit permit) {
+future<std::vector<mutation>> batch_statement::get_mutations(service::storage_proxy& storage, const query_options& options,
+        db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) {
     // Do not process in parallel because operations like list append/prepend depend on execution order.
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
-    return do_with(mutation_set_type(), [this, &storage, &options, timeout, now, local, trace_state, permit = std::move(permit)] (auto& result) mutable {
+    return do_with(mutation_set_type(), [this, &storage, &options, timeout, now, local, &query_state] (auto& result) mutable {
         result.reserve(_statements.size());
         _stats.statements_in_batches += _statements.size();
         return do_for_each(boost::make_counting_iterator<size_t>(0),
                            boost::make_counting_iterator<size_t>(_statements.size()),
-                           [this, &storage, &options, now, local, &result, timeout, trace_state, permit = std::move(permit)] (size_t i) {
+                           [this, &storage, &options, now, local, &result, timeout, &query_state] (size_t i) {
             auto&& statement = _statements[i].statement;
             statement->inc_cql_stats();
             auto&& statement_options = options.for_statement(i);
             auto timestamp = _attrs->get_timestamp(now, statement_options);
-            return statement->get_mutations(storage, statement_options, timeout, local, timestamp, trace_state, permit).then([&result] (auto&& more) {
+            return statement->get_mutations(storage, statement_options, timeout, local, timestamp, query_state).then([&result] (auto&& more) {
                 for (auto&& m : more) {
                     // We want unordered_set::try_emplace(), but we don't have it
                     auto pos = result.find(m);
@@ -296,7 +296,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     }
 
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return get_mutations(storage, options, timeout, local, now, query_state.get_trace_state(), query_state.get_permit()).then([this, &storage, &options, timeout, tr_state = query_state.get_trace_state(),
+    return get_mutations(storage, options, timeout, local, now, query_state).then([this, &storage, &options, timeout, tr_state = query_state.get_trace_state(),
                                                                                                                                permit = query_state.get_permit()] (std::vector<mutation> ms) mutable {
         return execute_without_conditions(storage, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
     }).then([] {
