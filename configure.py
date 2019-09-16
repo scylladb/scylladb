@@ -819,6 +819,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/cache_temperature.idl.hh',
         'idl/view.idl.hh',
         'idl/messaging_service.idl.hh',
+        'idl/paxos.idl.hh',
         ]
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
