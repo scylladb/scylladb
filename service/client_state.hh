@@ -192,23 +192,55 @@ public:
         return result;
     }
 
-#if 0
     /**
-     * Can be use when a timestamp has been assigned by a query, but that timestamp is
-     * not directly one returned by getTimestamp() (see SP.beginAndRepairPaxos()).
-     * This ensure following calls to getTimestamp() will return a timestamp strictly
-     * greated than the one provided to this method.
+     * Returns a timestamp suitable for paxos given the timestamp of the last known commit (or in progress update).
+     *
+     * Paxos ensures that the timestamp it uses for commits respects the serial order of those commits. It does so
+     * by having each replica reject any proposal whose timestamp is not strictly greater than the last proposal it
+     * accepted. So in practice, which timestamp we use for a given proposal doesn't affect correctness but it does
+     * affect the chance of making progress (if we pick a timestamp lower than what has been proposed before, our
+     * new proposal will just get rejected).
+     *
+     * As during the prepared phase replica send us the last propose they accepted, a first option would be to take
+     * the maximum of those last accepted proposal timestamp plus 1 (and use a default value, say 0, if it's the
+     * first known proposal for the partition). This would mostly work (giving commits the timestamp 0, 1, 2, ...
+     * in the order they are commited) but with 2 important caveats:
+     *   1) it would give a very poor experience when Paxos and non-Paxos updates are mixed in the same partition,
+     *      since paxos operations wouldn't be using microseconds timestamps. And while you shouldn't theoretically
+     *      mix the 2 kind of operations, this would still be pretty nonintuitive. And what if you started writing
+     *      normal updates and realize later you should switch to Paxos to enforce a property you want?
+     *   2) this wouldn't actually be safe due to the expiration set on the Paxos state table.
+     *
+     * So instead, we initially chose to use the current time in microseconds as for normal update. Which works in
+     * general but mean that clock skew creates unavailability periods for Paxos updates (either a node has his clock
+     * in the past and he may no be able to get commit accepted until its clock catch up, or a node has his clock in
+     * the future and then once one of its commit his accepted, other nodes ones won't be until they catch up). This
+     * is ok for small clock skew (few ms) but can be pretty bad for large one.
+     *
+     * Hence our current solution: we mix both approaches. That is, we compare the timestamp of the last known
+     * accepted proposal and the local time. If the local time is greater, we use it, thus keeping paxos timestamps
+     * locked to the current time in general (making mixing Paxos and non-Paxos more friendly, and behaving correctly
+     * when the paxos state expire (as long as your maximum clock skew is lower than the Paxos state expiration
+     * time)). Otherwise (the local time is lower than the last proposal, meaning that this last proposal was done
+     * with a clock in the future compared to the local one), we use the last proposal timestamp plus 1, ensuring
+     * progress.
+     *
+     * @param min_timestamp_to_use the max timestamp of the last proposal accepted by replica having responded
+     * to the prepare phase of the paxos round this is for. In practice, that's the minimum timestamp this method
+     * may return.
+     * @return a timestamp suitable for a Paxos proposal (using the reasoning described above). Note that
+     * contrary to the get_timestamp() method, the return value is not guaranteed to be unique (nor
+     * monotonic) across calls since it can return it's argument (so if the same argument is passed multiple times,
+     * it may be returned multiple times). Note that we still ensure Paxos "ballot" are unique (for different
+     * proposal) by (securely) randomizing the non-timestamp part of the UUID.
      */
-    public void updateLastTimestamp(long tstampMicros)
-    {
-        while (true)
-        {
-            long last = lastTimestampMicros.get();
-            if (tstampMicros <= last || lastTimestampMicros.compareAndSet(last, tstampMicros))
-                return;
-        }
+    api::timestamp_type get_timestamp_for_paxos(api::timestamp_type min_timestamp_to_use) {
+        api::timestamp_type current = std::max(api::new_timestamp(), min_timestamp_to_use);
+        _last_timestamp_micros = _last_timestamp_micros > current ? _last_timestamp_micros + 1 : current;
+        return _last_timestamp_micros;
     }
 
+#if 0
     public SocketAddress getRemoteAddress()
     {
         return remoteAddress;
