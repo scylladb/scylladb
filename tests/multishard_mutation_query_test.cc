@@ -132,7 +132,7 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
 
     // First page is special, needs to have `is_first_page` set.
     {
-        auto res = query_mutations_on_all_shards(db, s, cmd, {range}, nullptr, max_size).get0();
+        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {range}, nullptr, max_size).get0());
         for (auto& part : res->partitions()) {
             auto mut = part.mut().unfreeze(s);
             results.emplace_back(std::move(mut));
@@ -176,7 +176,7 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
             cmd.slice.set_range(*s, last_pkey.key(), std::move(ckranges));
         }
 
-        auto res = query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, max_size).get0();
+        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, max_size).get0());
 
         if (is_stateful) {
             BOOST_REQUIRE(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);

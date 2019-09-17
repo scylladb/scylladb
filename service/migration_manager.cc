@@ -125,19 +125,19 @@ void migration_manager::init_messaging_service()
         auto src = netw::messaging_service::get_source(cinfo);
         if (!has_compatible_schema_tables_version(src.addr)) {
             mlogger.debug("Ignoring schema request from incompatible node: {}", src);
-            return make_ready_future<frozen_mutations, canonical_mutations>(frozen_mutations{}, canonical_mutations{});
+            return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(frozen_mutations{}, canonical_mutations{}));
         }
         auto features = get_local_storage_service().cluster_schema_features();
         auto& proxy = get_storage_proxy();
         return db::schema_tables::convert_schema_to_mutations(proxy, features).then([&proxy, cm_retval_supported] (std::vector<canonical_mutation>&& cm) {
             const auto& db = proxy.local().get_db().local();
             if (cm_retval_supported) {
-                return make_ready_future<frozen_mutations, canonical_mutations>(frozen_mutations{}, std::move(cm));
+                return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(frozen_mutations{}, std::move(cm)));
             }
             auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db] (const canonical_mutation& cm) {
                 return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
             }));
-            return make_ready_future<frozen_mutations, canonical_mutations>(std::move(fm), std::move(cm));
+            return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(std::move(fm), std::move(cm)));
         }).finally([p = get_local_shared_storage_proxy()] {
             // keep local proxy alive
         });
@@ -270,8 +270,9 @@ future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_ad
 {
     auto& ms = netw::get_local_messaging_service();
     mlogger.info("Pulling schema from {}", id);
-    return ms.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (std::vector<frozen_mutation> mutations,
-                rpc::optional<std::vector<canonical_mutation>> canonical_mutations) {
+    return ms.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (
+            rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>> frozen_and_canonical_mutations) {
+        auto&& [mutations, canonical_mutations] = frozen_and_canonical_mutations;
         if (canonical_mutations) {
             return do_with(std::move(*canonical_mutations), [this, id] (std::vector<canonical_mutation>& mutations) {
                 return this->merge_schema_from(id, mutations);

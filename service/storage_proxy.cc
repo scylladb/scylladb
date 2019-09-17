@@ -2405,7 +2405,7 @@ public:
     }
 
 protected:
-    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.mutation_data_read_attempts.get_ep_stat(ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
@@ -2413,13 +2413,14 @@ protected:
         } else {
             auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return ms.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](reconcilable_result&& result, rpc::optional<cache_temperature> hit_rate) {
+            return ms.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
+                auto&& [result, hit_rate] = result_and_hit_rate;
                 tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
-                return make_ready_future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid()));
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
             });
         }
     }
-    future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
         ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
         auto opts = want_digest
                   ? query::result_options{query::result_request::result_and_digest, digest_algorithm()}
@@ -2430,13 +2431,14 @@ protected:
         } else {
             auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
-            return ms.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](query::result&& result, rpc::optional<cache_temperature> hit_rate) {
+            return ms.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
+                auto&& [result, hit_rate] = result_hit_rate;
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
-                return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid()));
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
             });
         }
     }
-    future<query::result_digest, api::timestamp_type, cache_temperature> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
+    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.digest_read_attempts.get_ep_stat(ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
@@ -2444,18 +2446,19 @@ protected:
         } else {
             auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
-            return ms.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, digest_algorithm()).then([this, ep] (query::result_digest d, rpc::optional<api::timestamp_type> t,
-                    rpc::optional<cache_temperature> hit_rate) {
+            return ms.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, digest_algorithm()).then([this, ep] (
+                    rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>> digest_timestamp_hit_rate) {
+                auto&& [d, t, hit_rate] = digest_timestamp_hit_rate;
                 tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
-                return make_ready_future<query::result_digest, api::timestamp_type, cache_temperature>(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid()));
+                return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid())));
             });
         }
     }
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> f) {
+            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
                 try {
-                    auto v = f.get();
+                    auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->_stats.mutation_data_read_completed.get_ep_stat(ep);
@@ -2468,9 +2471,9 @@ protected:
     }
     future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout, bool want_digest) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout, want_digest] (gms::inet_address ep) {
-            return make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> f) {
+            return make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
                 try {
-                    auto v = f.get();
+                    auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->_stats.data_read_completed.get_ep_stat(ep);
@@ -2484,9 +2487,9 @@ protected:
     }
     future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<query::result_digest, api::timestamp_type, cache_temperature> f) {
+            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) {
                 try {
-                    auto v = f.get();
+                    auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
                     ++_proxy->_stats.digest_read_completed.get_ep_stat(ep);
@@ -2843,14 +2846,15 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     }
 }
 
-future<query::result_digest, api::timestamp_type, cache_temperature>
+future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>
 storage_proxy::query_result_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, query::digest_algorithm da, uint64_t max_size) {
-    return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout, max_size).then([] (foreign_ptr<lw_shared_ptr<query::result>> result, cache_temperature hit_rate) {
-        return make_ready_future<query::result_digest, api::timestamp_type, cache_temperature>(*result->digest(), result->last_modified(), hit_rate);
+    return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout, max_size).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
+        auto&& [result, hit_rate] = result_and_hit_rate;
+        return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(*result->digest(), result->last_modified(), hit_rate));
     });
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>
+future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
 storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_options opts,
                                   tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, uint64_t max_size) {
     cmd->slice.options.set_if<query::partition_slice::option::with_digest>(opts.request != query::result_request::only_result);
@@ -2862,14 +2866,15 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
             tracing::trace(trace_state, "Start querying the token range that starts with {}", seastar::value_of([&prv] { return prv.begin()->start()->value().token(); }));
             return db.query(gs, *cmd, opts, prv, trace_state, max_size, timeout).then([trace_state](auto&& f, cache_temperature ht) {
                 tracing::trace(trace_state, "Querying is done");
-                return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(make_foreign(std::move(f)), ht);
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(std::move(f)), ht));
             });
         });
     } else {
         // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
-        return query_nonsingular_mutations_locally(s, cmd, {pr}, std::move(trace_state), max_size, timeout).then([s, cmd, opts] (foreign_ptr<lw_shared_ptr<reconcilable_result>>&& r, cache_temperature&& ht) {
-            return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(
-                    ::make_foreign(::make_lw_shared(to_data_query_result(*r, s, cmd->slice,  cmd->row_limit, cmd->partition_limit, opts))), ht);
+        return query_nonsingular_mutations_locally(s, cmd, {pr}, std::move(trace_state), max_size, timeout).then([s, cmd, opts] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>&& r_ht) {
+            auto&& [r, ht] = r_ht;
+            return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(
+                    rpc::tuple(::make_foreign(::make_lw_shared(to_data_query_result(*r, s, cmd->slice,  cmd->row_limit, cmd->partition_limit, opts))), ht));
         });
     }
 }
@@ -3682,7 +3687,7 @@ void storage_proxy::uninit_messaging_service() {
     ms.unregister_truncate();
 }
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
+future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
 storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                        storage_proxy::clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state, uint64_t max_size) {
@@ -3692,7 +3697,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
         return _db.invoke_on(shard, _read_smp_service_group, [max_size, cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
           return db.get_result_memory_limiter().new_mutation_read(max_size).then([&] (query::result_memory_accounter ma) {
             return db.query_mutations(gs, *cmd, pr, std::move(ma), gt, timeout).then([] (reconcilable_result&& result, cache_temperature ht) {
-                return make_ready_future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>(make_foreign(make_lw_shared(std::move(result))), ht);
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared(std::move(result))), ht));
             });
           });
         });
@@ -3701,7 +3706,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     }
 }
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
+future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
 storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const ::compat::one_or_two_partition_ranges& pr,
                                        storage_proxy::clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state, uint64_t max_size) {
@@ -3712,7 +3717,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     }
 }
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
+future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
 storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
                                                    lw_shared_ptr<query::read_command> cmd,
                                                    const dht::partition_range_vector&& prs,
@@ -3721,7 +3726,9 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
                                                    storage_proxy::clock_type::time_point timeout) {
     return do_with(cmd, std::move(prs), [=, s = std::move(s), trace_state = std::move(trace_state)] (lw_shared_ptr<query::read_command>& cmd,
                 const dht::partition_range_vector& prs) mutable {
-        return query_mutations_on_all_shards(_db, std::move(s), *cmd, prs, std::move(trace_state), max_size, timeout);
+        return query_mutations_on_all_shards(_db, std::move(s), *cmd, prs, std::move(trace_state), max_size, timeout).then([] (std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> t) {
+            return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(std::move(t));
+        });
     });
 }
 
