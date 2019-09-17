@@ -20,6 +20,7 @@
  */
 
 #include "leveled_compaction_strategy.hh"
+#include <algorithm>
 
 namespace sstables {
 
@@ -117,12 +118,25 @@ void leveled_compaction_strategy::notify_completion(const std::vector<shared_sst
     }
 
     const sstables::sstable *last = nullptr;
+    int target_level = 0;
     for (auto& candidate : added) {
         if (!last || last->compare_by_first_key(*candidate) < 0) {
             last = &*candidate;
         }
+        target_level = std::max(target_level, int(candidate->get_sstable_level()));
     }
     _last_compacted_keys.value().at(min_level) = last->get_last_decorated_key();
+
+    for (int i = leveled_manifest::MAX_LEVELS - 1; i > 0; i--) {
+        _compaction_counter[i]++;
+    }
+    _compaction_counter[target_level] = 0;
+
+    if (leveled_manifest::logger.level() == logging::log_level::debug) {
+        for (auto j = 0U; j < _compaction_counter.size(); j++) {
+            leveled_manifest::logger.debug("CompactionCounter: {}: {}", j, _compaction_counter[j]);
+        }
+    }
 }
 
 void leveled_compaction_strategy::generate_last_compacted_keys(leveled_manifest& manifest) {

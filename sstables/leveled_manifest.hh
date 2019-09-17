@@ -295,18 +295,7 @@ private:
      * @return
      */
     std::vector<sstables::shared_sstable>
-    get_overlapping_starved_sstables(int target_level, std::vector<sstables::shared_sstable>&& candidates, std::vector<int>& compaction_counter) {
-        for (int i = _generations.size() - 1; i > 0; i--) {
-            compaction_counter[i]++;
-        }
-        compaction_counter[target_level] = 0;
-
-        if (logger.level() == logging::log_level::debug) {
-            for (auto j = 0U; j < compaction_counter.size(); j++) {
-                logger.debug("CompactionCounter: {}: {}", j, compaction_counter[j]);
-            }
-        }
-
+    get_overlapping_starved_sstables(int target_level, std::vector<sstables::shared_sstable>&& candidates, const std::vector<int>& compaction_counter) {
         for (int i = _generations.size() - 1; i > target_level; i--) {
             if (!get_level_size(i) || compaction_counter[i] <= NO_COMPACTION_LIMIT) {
                 continue;
