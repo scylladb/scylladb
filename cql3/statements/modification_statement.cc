@@ -534,9 +534,40 @@ bool modification_statement::has_if_exist_condition() const {
     return _if_exists;
 }
 
+void modification_statement::validate_where_clause_for_conditions() const {
+    // We don't support IN for CAS operation so far
+    if (_restrictions->key_is_in_relation()) {
+        throw exceptions::invalid_request_exception(
+                format("IN on the partition key is not supported with conditional {}",
+                    type.is_update() ? "updates" : "deletions"));
+    }
 
-void modification_statement::validate_where_clause_for_conditions() {
-    //  no-op by default
+    if (_restrictions->clustering_key_restrictions_has_IN()) {
+        throw exceptions::invalid_request_exception(
+                format("IN on the clustering key columns is not supported with conditional {}",
+                    type.is_update() ? "updates" : "deletions"));
+    }
+    if (type.is_delete() && (_restrictions->has_unrestricted_clustering_columns() ||
+                !_restrictions->clustering_key_restrictions_has_only_eq())) {
+
+        bool deletes_regular_columns = _column_operations.empty() ||
+            std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
+                return !op->column.is_static();
+            });
+        // For example, primary key is (a, b, c), only a and b are restricted
+        if (deletes_regular_columns) {
+            throw exceptions::invalid_request_exception(
+                    "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
+                    " in order to delete non static columns");
+        }
+
+        // All primary key parts must be specified, unless this statement has only static column conditions
+        if (_column_conditions.empty() == false) {
+            throw exceptions::invalid_request_exception(
+                    "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
+                    " in order to use IF condition on non static columns");
+        }
+    }
 }
 
 modification_statement::json_cache_opt modification_statement::maybe_prepare_json_cache(const query_options& options) {

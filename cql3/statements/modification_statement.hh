@@ -158,6 +158,7 @@ public:
 
     virtual future<> check_access(const service::client_state& state) override;
 
+    // Validate before execute, using client state and current schema
     void validate(service::storage_proxy&, const service::client_state& state) override;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const override;
@@ -255,7 +256,7 @@ protected:
      * processed to check that they are compatible.
      * @throws InvalidRequestException
      */
-    virtual void validate_where_clause_for_conditions();
+    virtual void validate_where_clause_for_conditions() const;
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options);
     friend class raw::modification_statement;
 };

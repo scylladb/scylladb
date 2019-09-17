@@ -138,6 +138,20 @@ public:
     }
 
     /**
+     * Checks if the restrictions on the clustering key is an IN restriction.
+     *
+     * @return <code>true</code> the restrictions on the partition key is an IN restriction, <code>false</code>
+     * otherwise.
+     */
+    bool clustering_key_restrictions_has_IN() const {
+        return _clustering_columns_restrictions->is_IN();
+    }
+
+    bool clustering_key_restrictions_has_only_eq() const {
+        return _clustering_columns_restrictions->empty() || _clustering_columns_restrictions->is_all_eq();
+    }
+
+    /**
      * Checks if the query request a range of partition keys.
      *
      * @return <code>true</code> if the query request a range of partition keys, <code>false</code> otherwise.
