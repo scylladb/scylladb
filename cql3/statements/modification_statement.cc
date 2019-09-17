@@ -200,7 +200,7 @@ modification_statement::make_update_parameters(
             });
 }
 
-future<update_parameters::prefetched_rows_type>
+future<update_parameters::prefetch_data>
 modification_statement::read_required_rows(
         service::storage_proxy& proxy,
         dht::partition_range_vector keys,
@@ -210,8 +210,7 @@ modification_statement::read_required_rows(
         db::timeout_clock::time_point timeout,
         service::query_state& qs) {
     if (!requires_read()) {
-        return make_ready_future<update_parameters::prefetched_rows_type>(
-                update_parameters::prefetched_rows_type{});
+        return make_ready_future<update_parameters::prefetch_data>(s);
     }
     auto cl = options.get_consistency();
     try {

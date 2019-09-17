@@ -187,7 +187,7 @@ public:
     bool requires_read();
 
 protected:
-    future<update_parameters::prefetched_rows_type> read_required_rows(
+    future<update_parameters::prefetch_data> read_required_rows(
                 service::storage_proxy& proxy,
                 dht::partition_range_vector keys,
                 lw_shared_ptr<query::clustering_row_ranges> ranges,

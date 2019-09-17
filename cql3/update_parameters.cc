@@ -51,15 +51,15 @@ update_parameters::get_prefetched_list(
     clustering_key_view ckey,
     const column_definition& column) const
 {
-    if (!_prefetched) {
+    if (_prefetched.rows.empty()) {
         return {};
     }
 
     if (column.is_static()) {
         ckey = clustering_key_view::make_empty();
     }
-    auto i = _prefetched->rows.find(std::make_pair(std::move(pkey), std::move(ckey)));
-    if (i == _prefetched->rows.end()) {
+    auto i = _prefetched.rows.find(std::make_pair(std::move(pkey), std::move(ckey)));
+    if (i == _prefetched.rows.end()) {
         return {};
     }
 
@@ -144,14 +144,12 @@ public:
     }
 };
 
-update_parameters::prefetched_rows_type update_parameters::build_prefetch_data(schema_ptr s, const query::result& query_result,
-            const query::partition_slice& ps) {
+update_parameters::prefetch_data update_parameters::build_prefetch_data(schema_ptr schema, const query::result& query_result,
+            const query::partition_slice& slice) {
 
-    return query::result_view::do_with(query_result, [&] (query::result_view v) {
-        auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
-        v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
-        return prefetched_rows;
-    });
+    update_parameters::prefetch_data rows(schema);
+    query::result_view::consume(query_result, slice, prefetch_data_builder(schema, rows, slice));
+    return rows;
 }
 
 }

@@ -111,10 +111,9 @@ public:
         prefetch_data(schema_ptr schema);
     };
     // Note: value (mutation) only required to contain the rows we are interested in
-    using prefetched_rows_type = std::optional<prefetch_data>;
 private:
     const gc_clock::duration _ttl;
-    const prefetched_rows_type _prefetched; // For operation that require a read-before-write
+    const prefetch_data _prefetched; // For operation that require a read-before-write
 public:
     const api::timestamp_type _timestamp;
     const gc_clock::time_point _local_deletion_time;
@@ -122,7 +121,7 @@ public:
     const query_options& _options;
 
     update_parameters(const schema_ptr schema_, const query_options& options,
-            api::timestamp_type timestamp, gc_clock::duration ttl, prefetched_rows_type prefetched)
+            api::timestamp_type timestamp, gc_clock::duration ttl, prefetch_data prefetched)
         : _ttl(ttl)
         , _prefetched(std::move(prefetched))
         , _timestamp(timestamp)
@@ -206,7 +205,7 @@ public:
         clustering_key_view ckey,
         const column_definition& column) const;
 
-    static prefetched_rows_type build_prefetch_data(schema_ptr schema, const query::result& query_result,
+    static prefetch_data build_prefetch_data(schema_ptr schema, const query::result& query_result,
             const query::partition_slice& slice);
 };
 
