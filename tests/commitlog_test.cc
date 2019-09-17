@@ -42,6 +42,7 @@
 #include "db/commitlog/rp_set.hh"
 #include "log.hh"
 #include "service/priority_manager.hh"
+#include "exception_utils.hh"
 
 using namespace db;
 
@@ -245,6 +246,21 @@ SEASTAR_TEST_CASE(test_exceed_record_limit){
                         throw std::runtime_error("Did not get expected exception from writing too large record");
                     });
         });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_closed) {
+    commitlog::config cfg;
+    return cl_test(cfg, [](commitlog& log) {
+        return log.shutdown().then([&log] {
+            sstring tmp = "test321";
+            auto uuid = utils::UUID_gen::get_time_UUID();
+            return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            }).then_wrapped([] (future<db::rp_handle> f) {
+                BOOST_REQUIRE_EXCEPTION(f.get(), gate_closed_exception, exception_predicate::message_equals("gate closed"));
+            });
+        });
+    });
 }
 
 SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
