@@ -3532,5 +3532,16 @@ db::schema_features storage_service::cluster_schema_features() const {
     return f;
 }
 
+future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
+    return get_storage_service().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
+        auto my_address = ss.get_broadcast_address();
+        auto pending_ranges = ss.get_token_metadata().get_pending_ranges(keyspace, my_address).size();
+        bool is_bootstrap_mode = ss._is_bootstrap_mode;
+        slogger.debug("is_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
+                keyspace, is_bootstrap_mode, pending_ranges);
+        return !is_bootstrap_mode && pending_ranges == 0;
+    });
+}
+
 } // namespace service
 

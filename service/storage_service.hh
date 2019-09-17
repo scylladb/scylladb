@@ -2379,6 +2379,8 @@ private:
     void notify_up(inet_address endpoint);
     void notify_joined(inet_address endpoint);
     void notify_cql_change(inet_address endpoint, bool ready);
+public:
+    future<bool> is_cleanup_allowed(sstring keyspace);
 };
 
 future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service,
