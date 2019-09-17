@@ -421,6 +421,47 @@ public:
     virtual void on_drop_view(const sstring&, const sstring&) override { ++drop_view_count; }
 };
 
+SEASTAR_TEST_CASE(test_alter_nested_type) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TYPE foo (foo_k int);").get();
+        e.execute_cql("CREATE TYPE bar (bar_k frozen<foo>);").get();
+        e.execute_cql("alter type foo add zed_v int;").get();
+        e.execute_cql("CREATE TABLE tbl (key int PRIMARY KEY, val frozen<bar>);").get();
+        e.execute_cql("insert into tbl (key, val) values (1, {bar_k: {foo_k: 2, zed_v: 3} });").get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
+    // ALTER TYPE always creates a mutation with a single type. This
+    // creates a mutation with 2 types, one nested in the other, to
+    // show that we can handle that.
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        counting_migration_listener listener;
+        service::get_local_migration_manager().register_listener(&listener);
+
+        e.execute_cql("CREATE TYPE foo (foo_k int);").get();
+        e.execute_cql("CREATE TYPE bar (bar_k frozen<foo>);").get();
+
+        BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 2);
+
+        service::migration_manager& mm = service::get_local_migration_manager();
+        auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
+
+        auto type1 = user_type_impl::get_instance("ks", to_bytes("foo"), {"foo_k", "extra"}, {int32_type, int32_type});
+        auto muts1 = db::schema_tables::make_create_type_mutations(keyspace, type1, api::new_timestamp());
+
+        auto type2 = user_type_impl::get_instance("ks", to_bytes("bar"), {"bar_k", "extra"}, {type1, int32_type});
+        auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, api::new_timestamp());
+
+        auto muts = muts1;
+        muts.insert(muts.end(), muts2.begin(), muts2.end());
+        mm.announce(std::move(muts), false).get();
+
+        BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 2);
+        BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 2);
+    });
+}
+
 SEASTAR_TEST_CASE(test_notifications) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {

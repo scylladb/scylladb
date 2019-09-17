@@ -51,6 +51,7 @@ public:
     bytes_view field_name(size_t i) const { return _field_names[i]; }
     sstring field_name_as_string(size_t i) const { return _string_field_names[i]; }
     const std::vector<bytes>& field_names() const { return _field_names; }
+    const std::vector<sstring>& string_field_names() const { return _string_field_names; }
     sstring get_name_as_string() const;
     virtual sstring cql3_type_name_impl() const override;
     virtual bool is_native() const override { return false; }

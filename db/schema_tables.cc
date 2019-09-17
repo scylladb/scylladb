@@ -1092,10 +1092,31 @@ static std::vector<V> get_list(const query::result_set_row& row, const sstring& 
 // Create types for a given keyspace. This takes care of topologically sorting user defined types.
 template <typename T> static std::vector<user_type> create_types(keyspace_metadata& ks, T&& range) {
     cql_type_parser::raw_builder builder(ks);
+    std::unordered_set<bytes> names;
     for (const query::result_set_row& row : range) {
-        builder.add(row.get_nonnull<sstring>("type_name"),
-                        get_list<sstring>(row, "field_names"),
-                        get_list<sstring>(row, "field_types"));
+        auto name = row.get_nonnull<sstring>("type_name");
+        names.insert(to_bytes(name));
+        builder.add(std::move(name), get_list<sstring>(row, "field_names"), get_list<sstring>(row, "field_types"));
+    }
+    // Add user types that use any of the above types. From the
+    // database point of view they haven't changed since the content
+    // of system.types is the same for them. The runtime objects in
+    // the other hand now point to out of date types, so we need to
+    // recreate them.
+    for (const auto& p : ks.user_types()->get_all_types()) {
+        const user_type& t = p.second;
+        if (names.count(t->_name) != 0) {
+            continue;
+        }
+        for (const auto& name : names) {
+            if (t->references_user_type(t->_keyspace, name)) {
+                std::vector<sstring> field_types;
+                for (const data_type& f : t->field_types()) {
+                    field_types.push_back(f->as_cql3_type().to_string());
+                }
+                builder.add(t->get_name_as_string(), t->string_field_names(), std::move(field_types));
+            }
+        }
     }
     return builder.build();
 }
