@@ -535,6 +535,43 @@ listlike_collection_type_impl::listlike_collection_type_impl(
         kind k, sstring name, data_type elements, bool is_multi_cell)
     : collection_type_impl(k, name, is_multi_cell), _elements(elements) {}
 
+
+int listlike_collection_type_impl::compare_with_map(const map_type_impl& map_type, bytes_view list, bytes_view map) const
+{
+    assert((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
+
+    if (list.empty()) {
+        return map.empty() ? 0 : -1;
+    } else if (map.empty()) {
+        return 1;
+    }
+
+    const abstract_type& element_type = *_elements;
+    auto sf = cql_serialization_format::internal();
+
+    size_t list_size = read_collection_size(list, sf);
+    size_t map_size = read_collection_size(map, sf);
+
+    bytes_view list_value;
+    bytes_view map_value[2];
+
+    // Lists are represented as vector<pair<timeuuid, value>>, sets are vector<pair<value, empty>>
+    size_t map_value_index = is_list();
+    // Both set elements and map keys are sorted, so can be compared in linear order;
+    // List elements are stored in both vectors in list index order.
+    for (size_t i = 0; i < std::min(list_size, map_size); ++i) {
+
+        list_value = read_collection_value(list, sf);
+        map_value[0] = read_collection_value(map, sf);
+        map_value[1] = read_collection_value(map, sf);
+        auto cmp = element_type.compare(list_value, map_value[map_value_index]);
+        if (cmp != 0) {
+            return cmp;
+        }
+    }
+    return list_size == map_size ? 0 : (list_size < map_size ? -1 : 1);
+}
+
 std::vector<atomic_cell>
 collection_type_impl::enforce_limit(std::vector<atomic_cell> cells, int version) const {
     assert(is_multi_cell());

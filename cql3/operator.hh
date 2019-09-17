@@ -78,6 +78,10 @@ public:
     bool is_slice() const {
         return (*this == LT) || (*this == LTE) || (*this == GT) || (*this == GTE);
     }
+    bool is_compare() const {
+        // EQ, LT, LTE, GT, GTE, NEQ
+        return _b < 5 || _b == 8;
+    }
     sstring to_string() const { return _text; }
     bool operator==(const operator_type& other) const { return this == &other; }
     bool operator!=(const operator_type& other) const { return this != &other; }
