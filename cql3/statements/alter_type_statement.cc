@@ -122,18 +122,6 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
             }
         }
     }
-
-    // Other user types potentially using the updated type
-    for (auto&& ut : ks.metadata()->user_types()->get_all_types() | boost::adaptors::map_values) {
-        // Re-updating the type we've just updated would be harmless but useless so we avoid it.
-        if (ut->_keyspace != updated->_keyspace || ut->_name != updated->_name) {
-            auto upd_opt = ut->update_user_type(updated);
-            if (upd_opt) {
-                service::get_local_migration_manager().announce_type_update(
-                    static_pointer_cast<const user_type_impl>(*upd_opt), is_local_only).get();
-            }
-        }
-    }
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
