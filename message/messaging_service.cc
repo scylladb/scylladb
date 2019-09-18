@@ -609,6 +609,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         opts.compressor_factory = &compressor_factory;
     }
     opts.tcp_nodelay = must_tcp_nodelay;
+    opts.reuseaddr = true;
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
