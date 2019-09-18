@@ -648,17 +648,20 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
 void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) {
     auto entry = _response_handlers.find(id);
     assert(entry != _response_handlers.end());
+    remove_response_handler_entry(std::move(entry));
+}
+
+void storage_proxy::remove_response_handler_entry(response_handlers_map::iterator entry) {
     entry->second->on_released();
     _response_handlers.erase(std::move(entry));
 }
-
 
 void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_address from, std::optional<db::view::update_backlog> backlog) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second->get_trace_state(), "Got a response from /{}", from);
         if (it->second->response(from)) {
-            remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
+            remove_response_handler_entry(std::move(it)); // last one, remove entry. Will cancel expiration timer too.
         } else {
             it->second->check_for_early_completion();
         }
@@ -671,7 +674,7 @@ void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms
     if (it != _response_handlers.end()) {
         tracing::trace(it->second->get_trace_state(), "Got {} failures from /{}", count, from);
         if (it->second->failure_response(from, count)) {
-            remove_response_handler(id);
+            remove_response_handler_entry(std::move(it));
         } else {
             it->second->check_for_early_completion();
         }
