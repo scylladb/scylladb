@@ -647,6 +647,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
 
 void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) {
     auto entry = _response_handlers.find(id);
+    assert(entry != _response_handlers.end());
     entry->second->on_released();
     _response_handlers.erase(std::move(entry));
 }
