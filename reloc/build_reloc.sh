@@ -2,7 +2,7 @@
 
 . /etc/os-release
 
-DEFAULT_FLAGS="--enable-dpdk"
+DEFAULT_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=."
 DEFAULT_MODE="release"
 
 print_usage() {
