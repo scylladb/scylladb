@@ -2930,6 +2930,12 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     dht::partition_range_vector ranges = ranges_to_vnodes(concurrency_factor);
     dht::partition_range_vector::iterator i = ranges.begin();
 
+    // query_ranges_to_vnodes_generator can return less results than requested. If the number of results
+    // is small enough or there are a lot of results - concurrentcy_factor which is increased by shifting left can
+    // eventualy zero out resulting in an infinite recursion. This line makes sure that concurrency factor is never
+    // get stuck on 0 and never increased too much if the number of results remains small.
+    concurrency_factor = std::max(size_t(1), ranges.size());
+
     while (i != ranges.end()) {
         dht::partition_range& range = *i;
         std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
