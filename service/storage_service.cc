@@ -967,16 +967,14 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     slogger.debug("endpoint={} handle_state_normal", endpoint);
     auto tokens = get_tokens_for(endpoint);
 
-    std::unordered_set<token> tokens_to_update_in_metadata;
-    std::unordered_set<token> tokens_to_update_in_system_keyspace;
-    std::unordered_set<inet_address> endpoints_to_remove;
-
     slogger.debug("Node {} state normal, token {}", endpoint, tokens);
 
     if (_token_metadata.is_member(endpoint)) {
         slogger.info("Node {} state jump to normal", endpoint);
     }
     update_peer_info(endpoint);
+
+    std::unordered_set<inet_address> endpoints_to_remove;
 
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     if (_gossiper.uses_host_id(endpoint)) {
@@ -1009,22 +1007,24 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         }
     }
 
+    // Tokens owned by the handled endpoint.
+    // The endpoint broadcasts its set of chosen tokens. If a token was also chosen by another endpoint,
+    // the collision is resolved by assigning the token to the endpoint which started later.
+    std::unordered_set<token> owned_tokens;
+
     for (auto t : tokens) {
         // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
         auto current_owner = _token_metadata.get_endpoint(t);
         if (!current_owner) {
             slogger.debug("handle_state_normal: New node {} at token {}", endpoint, t);
-            tokens_to_update_in_metadata.insert(t);
-            tokens_to_update_in_system_keyspace.insert(t);
+            owned_tokens.insert(t);
         } else if (endpoint == *current_owner) {
             slogger.debug("handle_state_normal: endpoint={} == current_owner={} token {}", endpoint, *current_owner, t);
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
-            tokens_to_update_in_metadata.insert(t);
-            tokens_to_update_in_system_keyspace.insert(t);
+            owned_tokens.insert(t);
         } else if (_gossiper.compare_endpoint_startup(endpoint, *current_owner) > 0) {
             slogger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", endpoint, *current_owner, t);
-            tokens_to_update_in_metadata.insert(t);
-            tokens_to_update_in_system_keyspace.insert(t);
+            owned_tokens.insert(t);
             // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
             // a host no longer has any tokens, we'll want to remove it.
             std::multimap<inet_address, token> ep_to_token_copy = get_token_metadata().get_endpoint_to_token_map_for_reading();
@@ -1049,7 +1049,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     // Update pending ranges after update of normal tokens immediately to avoid
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
-    _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
+    _token_metadata.update_normal_tokens(owned_tokens, endpoint);
     _update_pending_ranges_action.trigger_later().get();
 
     for (auto ep : endpoints_to_remove) {
@@ -1059,9 +1059,9 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             _gossiper.replacement_quarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
         }
     }
-    slogger.debug("handle_state_normal: endpoint={} tokens_to_update_in_system_keyspace = {}", endpoint, tokens_to_update_in_system_keyspace);
-    if (!tokens_to_update_in_system_keyspace.empty()) {
-        db::system_keyspace::update_tokens(endpoint, tokens_to_update_in_system_keyspace).then_wrapped([endpoint] (auto&& f) {
+    slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
+    if (!owned_tokens.empty()) {
+        db::system_keyspace::update_tokens(endpoint, owned_tokens).then_wrapped([endpoint] (auto&& f) {
             try {
                 f.get();
             } catch (...) {
