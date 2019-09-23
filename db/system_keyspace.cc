@@ -1454,7 +1454,7 @@ future<db_clock::time_point> get_truncated_at(utils::UUID cf_id) {
     });
 }
 
-set_type_impl::native_type prepare_tokens(std::unordered_set<dht::token>& tokens) {
+static set_type_impl::native_type prepare_tokens(const std::unordered_set<dht::token>& tokens) {
     set_type_impl::native_type tset;
     for (auto& t: tokens) {
         tset.push_back(dht::global_partitioner().to_sstring(t));
