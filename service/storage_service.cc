@@ -969,7 +969,6 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     std::unordered_set<token> tokens_to_update_in_metadata;
     std::unordered_set<token> tokens_to_update_in_system_keyspace;
-    std::unordered_set<token> local_tokens_to_remove;
     std::unordered_set<inet_address> endpoints_to_remove;
 
     slogger.debug("Node {} state normal, token {}", endpoint, tokens);
@@ -1070,9 +1069,6 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             }
             return make_ready_future<>();
         }).get();
-    }
-    if (!local_tokens_to_remove.empty()) {
-        db::system_keyspace::update_local_tokens(std::unordered_set<dht::token>(), local_tokens_to_remove).discard_result().get();
     }
 
     // Send joined notification only when this node was not a member prior to this
