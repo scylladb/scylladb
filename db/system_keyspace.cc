@@ -1475,7 +1475,7 @@ std::unordered_set<dht::token> decode_tokens(set_type_impl::native_type& tokens)
 /**
  * Record tokens being used by another node
  */
-future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> tokens)
+future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens)
 {
     if (ep == utils::fb_utilities::get_broadcast_address()) {
         return remove_endpoint(ep);
@@ -1651,7 +1651,7 @@ future<> remove_endpoint(gms::inet_address ep) {
     /**
      * This method is used to update the System Keyspace with the new tokens for this node
     */
-future<> update_tokens(std::unordered_set<dht::token> tokens) {
+future<> update_tokens(const std::unordered_set<dht::token>& tokens) {
     if (tokens.empty()) {
         throw std::invalid_argument("remove_endpoint should be used instead");
     }
