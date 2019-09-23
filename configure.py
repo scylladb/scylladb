@@ -843,7 +843,6 @@ pure_boost_tests = set([
     'tests/range_test',
     'tests/crc_test',
     'tests/checksum_utils_test',
-    'tests/managed_vector_test',
     'tests/dynamic_bitset_test',
     'tests/idl_test',
     'tests/cartesian_product_test',

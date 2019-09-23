@@ -19,9 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "utils/managed_vector.hh"
 #include "utils/logalloc.hh"
@@ -60,7 +59,7 @@ void verify_empty(const Vector& vec) {
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_emplace) {
+SEASTAR_THREAD_TEST_CASE(test_emplace) {
     managed_vector<unsigned> vec;
     fill(vec);
     verify_filled(vec);
@@ -69,7 +68,7 @@ BOOST_AUTO_TEST_CASE(test_emplace) {
     verify_empty(vec);
 }
 
-BOOST_AUTO_TEST_CASE(test_copy) {
+SEASTAR_THREAD_TEST_CASE(test_copy) {
     managed_vector<unsigned> vec;
 
     managed_vector<unsigned> vec2(vec);
@@ -82,7 +81,7 @@ BOOST_AUTO_TEST_CASE(test_copy) {
     verify_filled(vec3);
 }
 
-BOOST_AUTO_TEST_CASE(test_move) {
+SEASTAR_THREAD_TEST_CASE(test_move) {
     managed_vector<unsigned> vec;
 
     managed_vector<unsigned> vec2(std::move(vec));
@@ -95,7 +94,7 @@ BOOST_AUTO_TEST_CASE(test_move) {
     verify_filled(vec3);
 }
 
-BOOST_AUTO_TEST_CASE(test_erase) {
+SEASTAR_THREAD_TEST_CASE(test_erase) {
     managed_vector<unsigned> vec;
     fill(vec);
 
@@ -110,7 +109,7 @@ BOOST_AUTO_TEST_CASE(test_erase) {
     BOOST_CHECK_EQUAL(idx, count);
 }
 
-BOOST_AUTO_TEST_CASE(test_resize_up) {
+SEASTAR_THREAD_TEST_CASE(test_resize_up) {
     managed_vector<unsigned> vec;
     fill(vec);
     vec.resize(count + 5);
@@ -129,7 +128,7 @@ BOOST_AUTO_TEST_CASE(test_resize_up) {
     BOOST_CHECK_EQUAL(idx, count + 5);
 }
 
-BOOST_AUTO_TEST_CASE(test_resize_down) {
+SEASTAR_THREAD_TEST_CASE(test_resize_down) {
     managed_vector<unsigned> vec;
     fill(vec);
     vec.resize(5);
@@ -143,7 +142,7 @@ BOOST_AUTO_TEST_CASE(test_resize_down) {
     BOOST_CHECK_EQUAL(idx, 5);
 }
 
-BOOST_AUTO_TEST_CASE(test_compaction) {
+SEASTAR_THREAD_TEST_CASE(test_compaction) {
     logalloc::region reg;
     with_allocator(reg.allocator(), [&] {
         managed_vector<unsigned> vec;
