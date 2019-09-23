@@ -547,8 +547,10 @@ public:
 class basic_region_impl : public allocation_strategy {
 protected:
     bool _reclaiming_enabled = true;
+    seastar::shard_id _cpu = seastar::local_engine->cpu_id();
 public:
     void set_reclaiming_enabled(bool enabled) {
+        assert(seastar::local_engine->cpu_id() == _cpu);
         _reclaiming_enabled = enabled;
     }
 
