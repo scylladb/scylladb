@@ -38,6 +38,7 @@
 #include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
 #include "backlog_controller.hh"
+#include "seastarx.hh"
 
 class table;
 using column_family = table;
