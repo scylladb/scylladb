@@ -599,11 +599,9 @@ static auth::service_config auth_service_config_from_db_config(const db::config&
 }
 
 void storage_service::maybe_start_sys_dist_ks() {
-    if (!_is_survey_mode) {
-        supervisor::notify("starting system distributed keyspace");
-        _sys_dist_ks.start(std::ref(cql3::get_query_processor()), std::ref(service::get_migration_manager())).get();
-        _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
-    }
+    supervisor::notify("starting system distributed keyspace");
+    _sys_dist_ks.start(std::ref(cql3::get_query_processor()), std::ref(service::get_migration_manager())).get();
+    _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
 }
 
 // Runs inside seastar::async context
@@ -756,35 +754,31 @@ void storage_service::join_token_ring(int delay) {
         MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
 #endif
 
-    if (!_is_survey_mode) {
-        // start participating in the ring.
-        db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
-        set_tokens(_bootstrap_tokens);
-        // remove the existing info about the replaced node.
-        if (!current.empty()) {
-            for (auto existing : current) {
-                _gossiper.replaced_endpoint(existing);
-            }
+    // start participating in the ring.
+    db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+    set_tokens(_bootstrap_tokens);
+    // remove the existing info about the replaced node.
+    if (!current.empty()) {
+        for (auto existing : current) {
+            _gossiper.replaced_endpoint(existing);
         }
-        if (_token_metadata.sorted_tokens().empty()) {
-            auto err = format("join_token_ring: Sorted token in token_metadata is empty");
-            slogger.error("{}", err);
-            throw std::runtime_error(err);
-        }
-
-        _auth_service.start(
-                permissions_cache_config_from_db_config(_db.local().get_config()),
-                std::ref(cql3::get_query_processor()),
-                std::ref(service::get_migration_manager()),
-                auth_service_config_from_db_config(_db.local().get_config())).get();
-
-        _auth_service.invoke_on_all(&auth::service::start).get();
-
-        supervisor::notify("starting tracing");
-        tracing::tracing::start_tracing().get();
-    } else {
-        slogger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
+    if (_token_metadata.sorted_tokens().empty()) {
+        auto err = format("join_token_ring: Sorted token in token_metadata is empty");
+        slogger.error("{}", err);
+        throw std::runtime_error(err);
+    }
+
+    _auth_service.start(
+            permissions_cache_config_from_db_config(_db.local().get_config()),
+            std::ref(cql3::get_query_processor()),
+            std::ref(service::get_migration_manager()),
+            auth_service_config_from_db_config(_db.local().get_config())).get();
+
+    _auth_service.invoke_on_all(&auth::service::start).get();
+
+    supervisor::notify("starting tracing");
+    tracing::tracing::start_tracing().get();
 }
 
 future<> storage_service::join_ring() {
@@ -793,25 +787,6 @@ future<> storage_service::join_ring() {
             if (!ss._joined) {
                 slogger.info("Joining ring by operator request");
                 ss.join_token_ring(0);
-            } else if (ss._is_survey_mode) {
-                auto tokens = db::system_keyspace::get_saved_tokens().get0();
-                ss.set_tokens(std::move(tokens));
-                db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
-                ss._is_survey_mode = false;
-                slogger.info("Leaving write survey mode and joining ring at operator request");
-                if (ss._token_metadata.sorted_tokens().empty()) {
-                    auto err = format("join_ring: Sorted token in token_metadata is empty");
-                    slogger.error("{}", err);
-                    throw std::runtime_error(err);
-                }
-
-                ss._auth_service.start(
-                        permissions_cache_config_from_db_config(ss._db.local().get_config()),
-                        std::ref(cql3::get_query_processor()),
-                        std::ref(service::get_migration_manager()),
-                        auth_service_config_from_db_config(ss._db.local().get_config())).get();
-
-               ss._auth_service.invoke_on_all(&auth::service::start).get();
             }
         });
     });
@@ -820,7 +795,7 @@ future<> storage_service::join_ring() {
 bool storage_service::is_joined() {
     // Every time we set _joined, we do it on all shards, so we can read its
     // value locally.
-    return _joined && !_is_survey_mode;
+    return _joined;
 }
 
 void storage_service::mark_existing_views_as_built() {
