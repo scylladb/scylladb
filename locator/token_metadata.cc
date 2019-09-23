@@ -102,7 +102,7 @@ void token_metadata::update_normal_tokens(std::unordered_set<token> tokens, inet
  *
  * @param endpointTokens
  */
-void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
+void token_metadata::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
     if (endpoint_tokens.empty()) {
         return;
     }
@@ -110,7 +110,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
     bool should_sort_tokens = false;
     for (auto&& i : endpoint_tokens) {
         inet_address endpoint = i.first;
-        std::unordered_set<token>& tokens = i.second;
+        const auto& tokens = i.second;
 
         if (tokens.empty()) {
             auto msg = format("tokens is empty in update_normal_tokens");
