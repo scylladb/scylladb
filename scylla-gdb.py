@@ -251,6 +251,71 @@ class static_vector:
         return self.__nonzero__()
 
 
+class std_list:
+    """Make `std::list` usable in python as a read-only container."""
+
+    @staticmethod
+    def _make_dereference_func(value_type):
+        list_node_type = gdb.lookup_type('std::_List_node<{}>'.format(str(value_type))).pointer()
+        def deref(node):
+            list_node = node.cast(list_node_type)
+            return list_node['_M_storage']['_M_storage'].cast(value_type.pointer()).dereference()
+
+        return deref
+
+    def __init__(self, ref):
+        self.ref = ref
+        self._dereference_node = std_list._make_dereference_func(self.ref.type.strip_typedefs().template_argument(0))
+
+    def __len__(self):
+        return int(self.ref['_M_impl']['_M_node']['_M_size'])
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+    def __getitem__(self, item):
+        if not isinstance(item, int):
+            raise ValueError("Invalid index: expected `{}`, got: `{}`".format(int, type(item)))
+
+        if item >= len(self):
+            raise ValueError("Index out of range: expected < {}, got {}".format(len(self), item))
+
+        i = 0
+        it = iter(self)
+        val = next(it)
+        while i != item:
+            i += 1
+            val = next(it)
+
+        return val
+
+    def __iter__(self):
+        class std_list_iterator:
+            def __init__(self, lst):
+                self._list = lst
+                node_header = self._list.ref['_M_impl']['_M_node']
+                self._node = node_header['_M_next']
+                self._end = node_header['_M_next']['_M_prev']
+
+            def __next__(self):
+                if self._node == self._end:
+                    raise StopIteration()
+
+                val = self._list._dereference_node(self._node)
+                self._node = self._node['_M_next']
+                return val
+
+        return std_list_iterator(self)
+
+    @staticmethod
+    def dereference_iterator(it):
+        deref = std_list._make_dereference_func(it.type.strip_typedefs().template_argument(0))
+        return deref(it['_M_node'])
+
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
