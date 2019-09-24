@@ -2531,6 +2531,38 @@ class scylla_memtables(gdb.Command):
                 gdb.write('  (memtable*) 0x%x: total=%d, used=%d, free=%d, flushed=%d\n' % (mt, reg.total(), reg.used(), reg.free(), mt['_flushed_memory']))
 
 
+class scylla_gdb_func_dereference_lw_shared_ptr(gdb.Function):
+    """Dereference the pointer guarded by the `seastar::lw_shared_ptr` instance.
+
+    Usage:
+    $dereference_lw_shared_ptr($ptr)
+
+    Where:
+    $lst - a convenience variable or any gdb expression that evaluates
+        to an `seastar::lw_shared_ptr` instance.
+
+    Returns:
+    The value pointed to by the guarded pointer.
+
+    Example:
+    (gdb) p $1._read_context
+    $2 = {_p = 0x60b00b068600}
+    (gdb) p $dereference_lw_shared_ptr($1._read_context)
+    $3 = {<seastar::enable_lw_shared_from_this<cache::read_context>> = {<seastar::lw_shared_ptr_counter_base> = {_count = 1}, ...
+    """
+
+    def __init__(self):
+        super(scylla_gdb_func_dereference_lw_shared_ptr, self).__init__('dereference_lw_shared_ptr')
+
+    def invoke(self, expr):
+        if isinstance(expr, gdb.Value):
+            ptr = seastar_lw_shared_ptr(expr)
+        else:
+            ptr = seastar_lw_shared_ptr(gdb.parse_and_eval(expr))
+        return ptr.get().dereference()
+
+
+# Commands
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -2561,3 +2593,13 @@ scylla_gms()
 scylla_cache()
 scylla_sstables()
 scylla_memtables()
+
+
+# Convenience functions
+#
+# List them inside `gdb` with
+#   (gdb) help function
+#
+# To get the usage of an individual function:
+#   (gdb) help function $function_name
+scylla_gdb_func_dereference_lw_shared_ptr()
