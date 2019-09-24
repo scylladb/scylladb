@@ -2562,6 +2562,51 @@ class scylla_gdb_func_dereference_lw_shared_ptr(gdb.Function):
         return ptr.get().dereference()
 
 
+class scylla_gdb_func_downcast_vptr(gdb.Function):
+    """Downcast a ptr to a virtual object to a ptr of the actual object
+
+    Usage:
+    $downcast_vptr($ptr)
+
+    Where:
+    $ptr - an integer literal, a convenience variable or any gdb
+        expression that evaluates to an pointer, which points to an
+        virtual object.
+
+    Returns:
+    The pointer to the actual concrete object.
+
+    Example:
+    (gdb) p $1
+    $2 = (flat_mutation_reader::impl *) 0x60b03363b900
+    (gdb) p $downcast_vptr(0x60b03363b900)
+    $3 = (combined_mutation_reader *) 0x60b03363b900
+    # The return value can also be dereferenced on the spot.
+    (gdb) p *$downcast_vptr($1)
+    $4 = {<flat_mutation_reader::impl> = {_vptr.impl = 0x46a3ea8 <vtable for combined_mutation_reader+16>, _buffer = {_impl = {<std::allocator<mutation_fragment>> = ...
+    """
+
+    def __init__(self):
+        super(scylla_gdb_func_downcast_vptr, self).__init__('downcast_vptr')
+        self._symbol_pattern = re.compile('vtable for (.*) \+ 16.*')
+        self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
+
+    def invoke(self, ptr):
+        if not isinstance(ptr, gdb.Value):
+            ptr = gdb.parse_and_eval(ptr)
+
+        symbol_name = resolve(ptr.reinterpret_cast(self._vptr_type).dereference(), cache=False)
+        if symbol_name is None:
+            raise ValueError("Failed to resolve first word of virtual object @ {} as a vtable symbol".format(int(ptr)))
+
+        m = re.match(self._symbol_pattern, symbol_name)
+        if m is None:
+            raise ValueError("Failed to extract type name from symbol name `{}'".format(symbol_name))
+
+        actual_type = gdb.lookup_type(m[1]).pointer()
+        return ptr.reinterpret_cast(actual_type)
+
+
 # Commands
 scylla()
 scylla_databases()
@@ -2603,3 +2648,4 @@ scylla_memtables()
 # To get the usage of an individual function:
 #   (gdb) help function $function_name
 scylla_gdb_func_dereference_lw_shared_ptr()
+scylla_gdb_func_downcast_vptr()
