@@ -309,6 +309,8 @@ public:
     static const std::chrono::seconds default_entry_ttl;
 
     struct stats {
+        // The number of inserts into the cache.
+        uint64_t inserts = 0;
         // The number of cache lookups.
         uint64_t lookups = 0;
         // The subset of lookups that missed.

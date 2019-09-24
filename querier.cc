@@ -262,6 +262,8 @@ static void insert_querier(
         return;
     }
 
+    ++stats.inserts;
+
     tracing::trace(trace_state, "Caching querier with key {}", key);
 
     auto memory_usage = boost::accumulate(entries | boost::adaptors::transformed(std::mem_fn(&querier_cache::entry::memory_usage)), size_t(0));
