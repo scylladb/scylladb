@@ -1503,7 +1503,7 @@ static mutation_sets generate_mutation_sets() {
             auto tomb = new_tombstone();
             m1.partition().apply_delete(*s1, ck2, tomb);
             result.unequal.emplace_back(mutations{m1, m2});
-            m2.partition().apply_delete(*s1, ck2, tomb);
+            m2.partition().apply_delete(*s2, ck2, tomb);
             result.equal.emplace_back(mutations{m1, m2});
         }
 
@@ -1512,7 +1512,7 @@ static mutation_sets generate_mutation_sets() {
             auto key = clustering_key_prefix::from_deeply_exploded(*s1, {data_value(bytes("ck2_0"))});
             m1.partition().apply_row_tombstone(*s1, key, tomb);
             result.unequal.emplace_back(mutations{m1, m2});
-            m2.partition().apply_row_tombstone(*s1, key, tomb);
+            m2.partition().apply_row_tombstone(*s2, key, tomb);
             result.equal.emplace_back(mutations{m1, m2});
 
             // Add a row which falls under the tombstone prefix.
@@ -1544,7 +1544,7 @@ static mutation_sets generate_mutation_sets() {
             auto ts = new_timestamp();
             m1.partition().apply_insert(*s1, ck2, ts);
             result.unequal.emplace_back(mutations{m1, m2});
-            m2.partition().apply_insert(*s1, ck2, ts);
+            m2.partition().apply_insert(*s2, ck2, ts);
             result.equal.emplace_back(mutations{m1, m2});
         }
 
