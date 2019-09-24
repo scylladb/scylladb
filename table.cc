@@ -677,6 +677,14 @@ void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, co
     }
 }
 
+inline void table::add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
+    // Don't add sstables that belong to more than one shard to the table's backlog tracker
+    // given that such sstables are supposed to be tracked only by resharding's own tracker.
+    if (!sstable->is_shared()) {
+        tracker.add_sstable(sstable);
+    }
+}
+
 void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsigned>& shards_for_the_sstable) {
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared(*_sstables);
@@ -686,7 +694,7 @@ void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsi
     if (sstable->requires_view_building()) {
         _sstables_staging.emplace(sstable->generation(), sstable);
     } else {
-        _compaction_strategy.get_backlog_tracker().add_sstable(sstable);
+        add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sstable);
     }
 }
 
@@ -1405,7 +1413,7 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
 
     auto new_sstables = new_cs.make_sstable_set(_schema);
     for (auto&& s : *_sstables->all()) {
-        new_cs.get_backlog_tracker().add_sstable(s);
+        add_sstable_to_backlog_tracker(new_cs.get_backlog_tracker(), s);
         new_sstables.insert(s);
     }
 
