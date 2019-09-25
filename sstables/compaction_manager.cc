@@ -639,7 +639,7 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
         return cf->run_with_compaction_disabled([this, cf, &tables, exclude_current_version] {
             auto last_version = get_highest_supported_format();
 
-            for (auto& sst : *(cf->get_sstables())) {
+            for (auto& sst : cf->candidates_for_compaction()) {
                 // if we are a "normal" upgrade, we only care about
                 // tables with older versions, but potentially
                 // we are to actually rewrite everything. (-a)
