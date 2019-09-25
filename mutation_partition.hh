@@ -928,6 +928,9 @@ private:
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
     range_tombstone_list _row_tombstones;
+#ifdef SEASTAR_DEBUG
+    table_schema_version _schema_version;
+#endif
 
     friend class mutation_partition_applier;
     friend class converting_mutation_partition_applier;
@@ -942,10 +945,16 @@ public:
     mutation_partition(schema_ptr s)
         : _rows()
         , _row_tombstones(*s)
+#ifdef SEASTAR_DEBUG
+        , _schema_version(s->version())
+#endif
     { }
     mutation_partition(mutation_partition& other, copy_comparators_only)
         : _rows()
         , _row_tombstones(other._row_tombstones, range_tombstone_list::copy_comparator_only())
+#ifdef SEASTAR_DEBUG
+        , _schema_version(other._schema_version)
+#endif
     { }
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const schema& s, const mutation_partition&);
@@ -1169,6 +1178,12 @@ private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
     friend class counter_write_query_result_builder;
+
+    void check_schema(const schema& s) const {
+#ifdef SEASTAR_DEBUG
+        assert(s.version() == _schema_version);
+#endif
+    }
 };
 
 inline

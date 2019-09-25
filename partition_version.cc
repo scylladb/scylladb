@@ -338,7 +338,7 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
 
 void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema)
 {
-    apply(s, mutation_partition(s, mp), mp_schema);
+    apply(s, mutation_partition(mp_schema, mp), mp_schema);
 }
 
 void partition_entry::apply(const schema& s, mutation_partition&& mp, const schema& mp_schema)
