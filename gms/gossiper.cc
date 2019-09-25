@@ -610,9 +610,9 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep) {
 // - failure_detector
 // - on_remove callbacks, e.g, storage_service -> access token_metadata
 void gossiper::run() {
-    // Run it in the background.
-    (void)timer_callback_lock().then([this, g = this->shared_from_this()] {
-        return seastar::async([this, g] {
+   // Run it in the background.
+  (void)seastar::with_semaphore(_callback_running, 1, [this] {
+    return seastar::async([this, g = this->shared_from_this()] {
             logger.trace("=== Gossip round START");
 
             //wait on messaging service to start listening
@@ -734,14 +734,13 @@ void gossiper::run() {
                     }
                 }).get();
             }
-        });
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
             _nr_run++;
             logger.trace("=== Gossip round OK");
         } catch (...) {
-            logger.trace("=== Gossip round FAIL");
+            logger.warn("=== Gossip round FAIL: {}", std::current_exception());
         }
 
         if (logger.is_enabled(logging::log_level::trace)) {
@@ -751,9 +750,11 @@ void gossiper::run() {
         }
         if (_enabled) {
             _scheduled_gossip_task.arm(INTERVAL);
+        } else {
+            logger.info("Gossip loop is not scheduled because it is disabled");
         }
-        this->timer_callback_unlock();
     });
+  });
 }
 
 void gossiper::check_seen_seeds() {
@@ -1848,23 +1849,22 @@ future<> gossiper::do_stop_gossiping() {
         } else {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
+        logger.info("Disable and wait for gossip loop started");
+        // Set disable flag and cancel the timer makes sure gossip loop will not be scheduled
         _enabled = false;
         _scheduled_gossip_task.cancel();
-        timer_callback_lock().get();
-        //
-        // Release the timer semaphore since storage_proxy may be waiting for
-        // it.
-        // Gossiper timer is promised to be neither running nor scheduled.
-        //
-        timer_callback_unlock();
-        get_gossiper().invoke_on_all([] (gossiper& g) {
-            if (engine().cpu_id() == 0) {
-                g.fd().unregister_failure_detection_event_listener(&g);
-            }
-            g.uninit_messaging_service_handler();
-            g._features_condvar.broken();
-            return make_ready_future<>();
+        // Take the semaphore makes sure existing gossip loop is finished
+        seastar::with_semaphore(_callback_running, 1, [] {
+            logger.info("Disable and wait for gossip loop finished");
+            return get_gossiper().invoke_on_all([] (gossiper& g) {
+                if (engine().cpu_id() == 0) {
+                    g.fd().unregister_failure_detection_event_listener(&g);
+                }
+                g.uninit_messaging_service_handler();
+                g._features_condvar.broken();
+            });
         }).get();
+        logger.info("Gossip is now stopped");
     });
 }
 
