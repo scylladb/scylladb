@@ -76,7 +76,7 @@ public:
         virtual bool references_user_type(const sstring&) const;
         virtual std::optional<sstring> keyspace() const;
         virtual void freeze();
-        virtual cql3_type prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata>) = 0;
+        virtual cql3_type prepare_internal(const sstring& keyspace, user_types_metadata&) = 0;
         virtual cql3_type prepare(database& db, const sstring& keyspace);
         static shared_ptr<raw> from(cql3_type type);
         static shared_ptr<raw> user_type(ut_name name);

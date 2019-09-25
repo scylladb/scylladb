@@ -83,7 +83,7 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
     }
 
     auto raw = parse_raw(str);
-    auto cql = raw->prepare_internal(keyspace, user_types);
+    auto cql = raw->prepare_internal(keyspace, *user_types);
     return cql.get_type();
 }
 
@@ -108,7 +108,7 @@ public:
             std::vector<data_type> fields;
             fields.reserve(field_types.size());
             std::transform(field_types.begin(), field_types.end(), std::back_inserter(fields), [&](auto& r) {
-                return r->prepare_internal(keyspace, user_types).get_type();
+                return r->prepare_internal(keyspace, *user_types).get_type();
             });
             std::vector<bytes> names;
             names.reserve(field_names.size());
