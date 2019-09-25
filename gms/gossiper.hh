@@ -119,8 +119,6 @@ private:
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
 public:
-    future<> timer_callback_lock() { return _callback_running.wait(); }
-    void timer_callback_unlock() { _callback_running.signal(); }
     sstring get_cluster_name();
     sstring get_partitioner_name();
     inet_address get_broadcast_address() const {
