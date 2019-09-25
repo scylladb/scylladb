@@ -139,6 +139,7 @@ private:
         ~unique_response_handler();
         response_id_type release();
     };
+    using response_handlers_map = std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>>;
 
 public:
     static const sstring COORDINATOR_STATS_CATEGORY;
@@ -192,7 +193,7 @@ private:
     smp_service_group _write_smp_service_group;
     smp_service_group _write_ack_smp_service_group;
     response_id_type _next_response_id;
-    std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>> _response_handlers;
+    response_handlers_map _response_handlers;
     // This buffer hold ids of throttled writes in case resource consumption goes
     // below the threshold and we want to unthrottle some of them. Without this throttled
     // request with dead or slow replica may wait for up to timeout ms before replying
@@ -235,6 +236,7 @@ private:
             coordinator_query_options optional_params);
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
+    void remove_response_handler_entry(response_handlers_map::iterator entry);
     void got_response(response_id_type id, gms::inet_address from, std::optional<db::view::update_backlog> backlog);
     void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
