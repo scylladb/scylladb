@@ -83,7 +83,7 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
     }
 
     auto raw = parse_raw(str);
-    auto cql = raw->prepare_internal(keyspace, user_types);
+    auto cql = raw->prepare_internal(keyspace, *user_types);
     return cql.get_type();
 }
 
@@ -104,7 +104,7 @@ public:
         std::vector<sstring> field_names;
         std::vector<::shared_ptr<cql3::cql3_type::raw>> field_types;
 
-        user_type prepare(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) const {
+        user_type prepare(const sstring& keyspace, user_types_metadata& user_types) const {
             std::vector<data_type> fields;
             fields.reserve(field_types.size());
             std::transform(field_types.begin(), field_types.end(), std::back_inserter(fields), [&](auto& r) {
@@ -161,7 +161,11 @@ public:
             }
         }
 
-        auto types = _ks.user_types();
+        // Create a copy of the existing types, so that we don't
+        // modify the one in the keyspace. It is up to the caller to
+        // do that.
+        user_types_metadata types = *_ks.user_types();
+
         const auto &ks_name = _ks.name();
         std::vector<user_type> created;
 
@@ -178,7 +182,7 @@ public:
             }
 
             created.push_back(e->prepare(ks_name, types));
-            types->add_type(created.back());
+            types.add_type(created.back());
             resolvable_types.pop_front();
         }
 

@@ -37,7 +37,7 @@ namespace cql3 {
 cql3_type cql3_type::raw::prepare(database& db, const sstring& keyspace) {
     try {
         auto&& ks = db.find_keyspace(keyspace);
-        return prepare_internal(keyspace, ks.metadata()->user_types());
+        return prepare_internal(keyspace, *ks.metadata()->user_types());
     } catch (no_such_keyspace& nsk) {
         throw exceptions::invalid_request_exception("Unknown keyspace " + keyspace);
     }
@@ -62,7 +62,7 @@ public:
     virtual cql3_type prepare(database& db, const sstring& keyspace) {
         return _type;
     }
-    cql3_type prepare_internal(const sstring&, lw_shared_ptr<user_types_metadata>) override {
+    cql3_type prepare_internal(const sstring&, user_types_metadata&) override {
         return _type;
     }
 
@@ -110,7 +110,7 @@ public:
         return true;
     }
 
-    virtual cql3_type prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, user_types_metadata& user_types) override {
         assert(_values); // "Got null values type for a collection";
 
         if (!_frozen && _values->supports_freezing() && !_values->_frozen) {
@@ -180,7 +180,7 @@ public:
         _frozen = true;
     }
 
-    virtual cql3_type prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, user_types_metadata& user_types) override {
         if (_name.has_keyspace()) {
             // The provided keyspace is the one of the current statement this is part of. If it's different from the keyspace of
             // the UTName, we reject since we want to limit user types to their own keyspace (see #6643)
@@ -192,12 +192,8 @@ public:
         } else {
             _name.set_keyspace(keyspace);
         }
-        if (!user_types) {
-            // bootstrap mode.
-            throw exceptions::invalid_request_exception(format("Unknown type {}", _name));
-        }
         try {
-            auto&& type = user_types->get_type(_name.get_user_type_name());
+            auto&& type = user_types.get_type(_name.get_user_type_name());
             if (!_frozen) {
                 throw exceptions::invalid_request_exception("Non-frozen User-Defined types are not supported, please use frozen<>");
             }
@@ -239,7 +235,7 @@ public:
         }
         _frozen = true;
     }
-    virtual cql3_type prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, user_types_metadata& user_types) override {
         if (!_frozen) {
             freeze();
         }
