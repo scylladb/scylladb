@@ -38,6 +38,9 @@
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "tmpdir.hh"
+#include "db/data_listeners.hh"
+
+using namespace std::chrono_literals;
 
 SEASTAR_TEST_CASE(test_safety_after_truncate) {
     auto cfg = make_shared<db::config>();
@@ -447,5 +450,22 @@ SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
     return do_with_some_data([] (cql_test_env& e) {
         e.local_db().clear_snapshot("test", {"ks"}).get();
         return make_ready_future<>();
+    });
+}
+
+
+// toppartitions_query caused a lw_shared_ptr to cross shards when moving results, #5104
+SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.tab (id int PRIMARY KEY)").get();
+        db::toppartitions_query tq(e.db(), "ks", "tab", 1s, 100, 100);
+        tq.scatter().get();
+        auto q = e.prepare("INSERT INTO ks.tab(id) VALUES(?)").get0();
+        // Generate many values to ensure crossing shards
+        for (auto i = 0; i != 100; ++i) {
+            e.execute_prepared(q, {cql3::raw_value::make_value(int32_type->decompose(i))}).get();
+        }
+        // This should trigger the bug in debug mode
+        tq.gather().get();
     });
 }
