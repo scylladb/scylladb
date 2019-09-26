@@ -31,6 +31,7 @@
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"
 #include "utils/top_k.hh"
+#include "schema_registry.hh"
 
 #include <vector>
 #include <set>
@@ -91,7 +92,32 @@ struct toppartitions_item_key {
 
     struct comp {
         bool operator()(const toppartitions_item_key& k1, const toppartitions_item_key& k2) const {
-            return k1.schema == k2.schema && k1.key.equal(*k2.schema, k2.key);
+            return k1.schema->id() == k2.schema->id() && k1.key.equal(*k2.schema, k2.key);
+        }
+    };
+
+    explicit operator sstring() const;
+};
+
+// Like toppartitions_item_key, but uses global_schema_ptr, so can be safely transported across shards
+struct toppartitions_global_item_key {
+    global_schema_ptr schema;
+    dht::decorated_key key;
+
+    toppartitions_global_item_key(toppartitions_item_key&& tik) : schema(std::move(tik.schema)), key(std::move(tik.key)) {}
+    operator toppartitions_item_key() const {
+        return toppartitions_item_key(schema, key);
+    }
+
+    struct hash {
+        size_t operator()(const toppartitions_global_item_key& k) const {
+            return std::hash<dht::token>()(k.key.token());
+        }
+    };
+
+    struct comp {
+        bool operator()(const toppartitions_global_item_key& k1, const toppartitions_global_item_key& k2) const {
+            return k1.schema.get()->id() == k2.schema.get()->id() && k1.key.equal(*k2.schema.get(), k2.key);
         }
     };
 
@@ -107,6 +133,10 @@ class toppartitions_data_listener : public data_listener, public weakly_referenc
 
 public:
     using top_k = utils::space_saving_top_k<toppartitions_item_key, toppartitions_item_key::hash, toppartitions_item_key::comp>;
+    using global_top_k = utils::space_saving_top_k<toppartitions_global_item_key, toppartitions_global_item_key::hash, toppartitions_global_item_key::comp>;
+public:
+    static global_top_k::results globalize(top_k::results&& r);
+    static top_k::results localize(const global_top_k::results& r);
 private:
     top_k _top_k_read;
     top_k _top_k_write;

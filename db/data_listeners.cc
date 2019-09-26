@@ -101,6 +101,26 @@ void toppartitions_data_listener::on_write(const schema_ptr& s, const frozen_mut
     _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s)});
 }
 
+toppartitions_data_listener::global_top_k::results
+toppartitions_data_listener::globalize(top_k::results&& r) {
+    toppartitions_data_listener::global_top_k::results n;
+    n.reserve(r.size());
+    for (auto&& e : r) {
+        n.emplace_back(global_top_k::results::value_type{toppartitions_global_item_key(std::move(e.item)), e.count, e.error});
+    }
+    return n;
+}
+
+toppartitions_data_listener::top_k::results
+toppartitions_data_listener::localize(const global_top_k::results& r) {
+    toppartitions_data_listener::top_k::results n;
+    n.reserve(r.size());
+    for (auto&& e : r) {
+        n.emplace_back(top_k::results::value_type{toppartitions_item_key(e.item), e.count, e.error});
+    }
+    return n;
+}
+
 toppartitions_query::toppartitions_query(distributed<database>& xdb, sstring ks, sstring cf,
         std::chrono::milliseconds duration, size_t list_size, size_t capacity)
         : _xdb(xdb), _ks(ks), _cf(cf), _duration(duration), _list_size(list_size), _capacity(capacity) {
@@ -111,20 +131,20 @@ future<> toppartitions_query::scatter() {
     return _query.start(std::ref(_xdb), _ks, _cf);
 }
 
-using top_t = toppartitions_data_listener::top_k::results;
+using top_t = toppartitions_data_listener::global_top_k::results;
 
 future<toppartitions_query::results> toppartitions_query::gather(unsigned res_size) {
     dblog.debug("toppartitions_query::gather");
 
     auto map = [res_size, this] (toppartitions_data_listener& listener) {
         dblog.trace("toppartitions_query::map_reduce with listener {}", &listener);
-        top_t rd = listener._top_k_read.top(res_size);
-        top_t wr = listener._top_k_write.top(res_size);
-        return std::tuple<top_t, top_t>{std::move(rd), std::move(wr)};
+        top_t rd = toppartitions_data_listener::globalize(listener._top_k_read.top(res_size));
+        top_t wr = toppartitions_data_listener::globalize(listener._top_k_write.top(res_size));
+        return make_foreign(std::make_unique<std::tuple<top_t, top_t>>(std::move(rd), std::move(wr)));
     };
-    auto reduce = [this] (results res, std::tuple<top_t, top_t> rd_wr) {
-        res.read.append(std::get<0>(rd_wr));
-        res.write.append(std::get<1>(rd_wr));
+    auto reduce = [this] (results res, foreign_ptr<std::unique_ptr<std::tuple<top_t, top_t>>> rd_wr) {
+        res.read.append(toppartitions_data_listener::localize(std::get<0>(*rd_wr)));
+        res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
         return std::move(res);
     };
     return _query.map_reduce0(map, results{res_size}, reduce)
