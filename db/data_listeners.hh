@@ -91,7 +91,7 @@ struct toppartitions_item_key {
 
     struct comp {
         bool operator()(const toppartitions_item_key& k1, const toppartitions_item_key& k2) const {
-            return k1.schema == k2.schema && k1.key.equal(*k2.schema, k2.key);
+            return k1.schema->id() == k2.schema->id() && k1.key.equal(*k2.schema, k2.key);
         }
     };
 
