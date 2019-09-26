@@ -265,11 +265,9 @@ global_schema_ptr::global_schema_ptr(const global_schema_ptr& o)
     : global_schema_ptr(o.get())
 { }
 
-global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) {
+global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) noexcept {
     auto current = engine().cpu_id();
-    if (o._cpu_of_origin != current) {
-        throw std::runtime_error("Attempted to move global_schema_ptr across shards");
-    }
+    assert(o._cpu_of_origin == current);
     _ptr = std::move(o._ptr);
     _cpu_of_origin = current;
 }

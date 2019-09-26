@@ -173,7 +173,7 @@ public:
     // The other may come from a different shard.
     global_schema_ptr(const global_schema_ptr& other);
     // The other must come from current shard.
-    global_schema_ptr(global_schema_ptr&& other);
+    global_schema_ptr(global_schema_ptr&& other) noexcept;
     // May be invoked across shards. Always returns an engaged pointer.
     schema_ptr get() const;
     operator schema_ptr() const { return get(); }
