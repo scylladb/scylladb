@@ -122,6 +122,35 @@ static bool check_BEGINS_WITH(const rjson::value& v1, const rjson::value& v2) {
     return val1.substr(0, val2.size()) == val2;
 }
 
+// Verify that an Expect comparison operator holds between got and expected value.
+static bool verify_expected_comparison_operator(
+        const rjson::value* got,
+        const rjson::value& comparison_operator,
+        const rjson::value& expected) {
+    // TODO: when IN, BETWEEN, IS_NULL, or NOT_NULL are supported, this will depend on operator:
+    if (expected.Size() != 1) {
+        throw api_error("ValidationException",
+                        format("{} operator requires one element in AttributeValueList", comparison_operator));
+    }
+    if (!got) {
+        return false;
+    }
+
+    using checks_map = std::unordered_map<comparison_operator_type,
+                                          bool(*)(const rjson::value&, const rjson::value&)>;
+    static const checks_map checks{
+        {comparison_operator_type::EQ, &check_EQ},
+        {comparison_operator_type::BEGINS_WITH, &check_BEGINS_WITH},
+    };
+    try {
+        const auto optype = get_comparison_operator(comparison_operator);
+        return (*checks.at(optype))(*got, expected[0]); // TODO: when IN or BETWEEN are supported, `[0]` will change.
+    } catch (std::out_of_range&) {
+        throw api_error("ValidationException",
+                        format("ComparisonOperator {} is not yet supported", comparison_operator));
+    }
+}
+
 // Verify one Expect condition on one attribute (whose content is "got")
 // for the verify_expected() below.
 // This function returns true or false depending on whether the condition
@@ -159,30 +188,7 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         if (!attribute_value_list || !attribute_value_list->IsArray()) {
             throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
         }
-        comparison_operator_type op = get_comparison_operator(*comparison_operator);
-        switch (op) {
-        case comparison_operator_type::EQ:
-            if (attribute_value_list->Size() != 1) {
-                throw api_error("ValidationException", "EQ operator requires one element in AttributeValueList");
-            }
-            if (got) {
-                const rjson::value& expected = (*attribute_value_list)[0];
-                return check_EQ(*got, expected);
-            }
-            return false;
-        case comparison_operator_type::BEGINS_WITH:
-            if (attribute_value_list->Size() != 1) {
-                throw api_error("ValidationException", "BEGINS_WITH operator requires one element in AttributeValueList");
-            }
-            if (got) {
-                const rjson::value& expected = (*attribute_value_list)[0];
-                return check_BEGINS_WITH(*got, expected);
-            }
-            return false;
-        default:
-            // FIXME: implement all the missing types, so there will be no default here.
-            throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
-        }
+        return verify_expected_comparison_operator(got, *comparison_operator, *attribute_value_list);
     }
 }
 
