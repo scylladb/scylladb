@@ -713,11 +713,11 @@ def test_update_expected_1_begins_with_true(test_table_s):
                         'AttributeValueList': ['hell']}}
     )
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello', 'b': 3}
-    # For BEGIN_WITH, AttributeValueList must have a single element
+    # For BEGINS_WITH, AttributeValueList must have a single element
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
-            Expected={'a': {'ComparisonOperator': 'EQ',
+            Expected={'a': {'ComparisonOperator': 'BEGINS_WITH',
                             'AttributeValueList': ['hell', 'heaven']}}
         )
 
@@ -728,7 +728,7 @@ def test_update_expected_1_begins_with_false(test_table_s):
     with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
-            Expected={'a': {'ComparisonOperator': 'EQ',
+            Expected={'a': {'ComparisonOperator': 'BEGINS_WITH',
                             'AttributeValueList': ['dog']}}
         )
     # Although BEGINS_WITH requires String or Binary type, giving it a
@@ -737,7 +737,7 @@ def test_update_expected_1_begins_with_false(test_table_s):
     with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
-            Expected={'a': {'ComparisonOperator': 'EQ',
+            Expected={'a': {'ComparisonOperator': 'BEGINS_WITH',
                             'AttributeValueList': [3]}}
         )
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello'}
