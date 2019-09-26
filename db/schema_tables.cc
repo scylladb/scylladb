@@ -67,6 +67,7 @@
 #include "hashers.hh"
 
 #include <seastar/util/noncopyable_function.hh>
+#include <seastar/rpc/rpc_types.hh>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -688,7 +689,8 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
     auto dk = dht::global_partitioner().decorate_key(*s, pkey);
     return do_with(dht::partition_range::make_singular(dk), [&proxy, dk, s = std::move(s), cmd = std::move(cmd)] (auto& range) {
         return proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout)
-                .then([dk = std::move(dk), s](foreign_ptr<lw_shared_ptr<reconcilable_result>> res, cache_temperature hit_rate) {
+                .then([dk = std::move(dk), s](rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> res_hit_rate) {
+                    auto&& [res, hit_rate] = res_hit_rate;
                     auto&& partitions = res->partitions();
                     if (partitions.size() == 0) {
                         return mutation(s, std::move(dk));
