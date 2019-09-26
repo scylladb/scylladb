@@ -35,13 +35,14 @@ static logging::logger clogger("alternator-conditions");
 comparison_operator_type get_comparison_operator(const rjson::value& comparison_operator) {
     static std::unordered_map<std::string, comparison_operator_type> ops = {
             {"EQ", comparison_operator_type::EQ},
+            {"NE", comparison_operator_type::NE},
             {"LE", comparison_operator_type::LE},
             {"LT", comparison_operator_type::LT},
             {"GE", comparison_operator_type::GE},
             {"GT", comparison_operator_type::GT},
             {"BETWEEN", comparison_operator_type::BETWEEN},
             {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
-    }; //TODO(sarna): NE, IN, CONTAINS, NULL, NOT_NULL
+    }; //TODO: IN, CONTAINS, NULL, NOT_NULL
     if (!comparison_operator.IsString()) {
         throw api_error("ValidationException", format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
@@ -101,6 +102,11 @@ static bool check_EQ(const rjson::value& v1, const rjson::value& v2) {
     return v1 == v2;
 }
 
+// Check if two JSON-encoded values match with the NE relation
+static bool check_NE(const rjson::value& v1, const rjson::value& v2) {
+    return !check_EQ(v1, v2);
+}
+
 // Check if two JSON-encoded values match with the BEGINS_WITH relation
 static bool check_BEGINS_WITH(const rjson::value& v1, const rjson::value& v2) {
     // BEGINS_WITH only supports comparing two strings or two binaries -
@@ -127,23 +133,25 @@ static bool verify_expected_comparison_operator(
         const rjson::value* got,
         const rjson::value& comparison_operator,
         const rjson::value& expected) {
+    const auto optype = get_comparison_operator(comparison_operator);
     // TODO: when IN, BETWEEN, IS_NULL, or NOT_NULL are supported, this will depend on operator:
     if (expected.Size() != 1) {
         throw api_error("ValidationException",
                         format("{} operator requires one element in AttributeValueList", comparison_operator));
     }
     if (!got) {
-        return false;
+        // False for all but NE; a missing value does not equal any RHS.
+        return optype == comparison_operator_type::NE;
     }
 
     using checks_map = std::unordered_map<comparison_operator_type,
                                           bool(*)(const rjson::value&, const rjson::value&)>;
     static const checks_map checks{
         {comparison_operator_type::EQ, &check_EQ},
+        {comparison_operator_type::NE, &check_NE},
         {comparison_operator_type::BEGINS_WITH, &check_BEGINS_WITH},
     };
     try {
-        const auto optype = get_comparison_operator(comparison_operator);
         return (*checks.at(optype))(*got, expected[0]); // TODO: when IN or BETWEEN are supported, `[0]` will change.
     } catch (std::out_of_range&) {
         throw api_error("ValidationException",
