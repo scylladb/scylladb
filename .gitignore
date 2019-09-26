@@ -19,3 +19,5 @@ CMakeLists.txt.user
 __pycache__CMakeLists.txt.user
 .gdbinit
 resources
+.pytest_cache
+/expressions.tokens
