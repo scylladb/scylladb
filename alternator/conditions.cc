@@ -96,20 +96,35 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_
     return filtering_restrictions;
 }
 
+// Check that array has the expected number of elements
+static void verify_operand_count(const rjson::value* array, rapidjson::SizeType expected, const rjson::value& op) {
+    if (!array || !array->IsArray()) {
+        throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
+    }
+    if (array->Size() != expected) {
+        throw api_error("ValidationException",
+                        format("{} operator requires AttributeValueList of length {}, found {} instead",
+                               op, expected, array->Size()));
+    }
+}
+
 // Check if two JSON-encoded values match with the EQ relation
-static bool check_EQ(const rjson::value& v1, const rjson::value& v2) {
-    return v1 == v2;
+static bool check_EQ(const rjson::value* v1, const rjson::value& v2) {
+    return v1 && *v1 == v2;
 }
 
 // Check if two JSON-encoded values match with the BEGINS_WITH relation
-static bool check_BEGINS_WITH(const rjson::value& v1, const rjson::value& v2) {
+static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
+    if (!v1) {
+        return false;
+    }
     // BEGINS_WITH only supports comparing two strings or two binaries -
     // any other combinations of types, or other malformed values, return
     // false (no match).
-    if (!v1.IsObject() || v1.MemberCount() != 1 || !v2.IsObject() || v2.MemberCount() != 1) {
+    if (!v1->IsObject() || v1->MemberCount() != 1 || !v2.IsObject() || v2.MemberCount() != 1) {
         return false;
     }
-    auto it1 = v1.MemberBegin();
+    auto it1 = v1->MemberBegin();
     auto it2 = v2.MemberBegin();
     if (it1->name != it2->name) {
         return false;
@@ -142,7 +157,7 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         if (comparison_operator) {
             throw api_error("ValidationException", "Cannot combine Value with ComparisonOperator");
         }
-        return got && check_EQ(*got, *value);
+        return check_EQ(got, *value);
     } else if (exists) {
         if (comparison_operator) {
             throw api_error("ValidationException", "Cannot combine Exists with ComparisonOperator");
@@ -156,29 +171,14 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         if (!comparison_operator) {
             throw api_error("ValidationException", "Missing ComparisonOperator, Value or Exists");
         }
-        if (!attribute_value_list || !attribute_value_list->IsArray()) {
-            throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
-        }
         comparison_operator_type op = get_comparison_operator(*comparison_operator);
         switch (op) {
         case comparison_operator_type::EQ:
-            if (attribute_value_list->Size() != 1) {
-                throw api_error("ValidationException", "EQ operator requires one element in AttributeValueList");
-            }
-            if (got) {
-                const rjson::value& expected = (*attribute_value_list)[0];
-                return check_EQ(*got, expected);
-            }
-            return false;
+            verify_operand_count(attribute_value_list, 1, *comparison_operator);
+            return check_EQ(got, (*attribute_value_list)[0]);
         case comparison_operator_type::BEGINS_WITH:
-            if (attribute_value_list->Size() != 1) {
-                throw api_error("ValidationException", "BEGINS_WITH operator requires one element in AttributeValueList");
-            }
-            if (got) {
-                const rjson::value& expected = (*attribute_value_list)[0];
-                return check_BEGINS_WITH(*got, expected);
-            }
-            return false;
+            verify_operand_count(attribute_value_list, 1, *comparison_operator);
+            return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
         default:
             // FIXME: implement all the missing types, so there will be no default here.
             throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
