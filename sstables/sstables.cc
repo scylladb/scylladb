@@ -3091,6 +3091,56 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ran
     return std::nullopt;
 }
 
+/**
+ * Returns a pair of positions [p1, p2) in the summary file corresponding to
+ * pages which may include keys covered by the specified range, or a disengaged
+ * optional if the sstable does not include any keys from the range.
+ */
+std::optional<std::pair<uint64_t, uint64_t>> sstable::get_index_pages_for_range(const dht::token_range& range) {
+    const auto& entries = _components->summary.entries;
+    auto entries_size = entries.size();
+    index_comparator cmp(*_schema);
+    dht::ring_position_comparator rp_cmp(*_schema);
+    uint64_t left = 0;
+    if (range.start()) {
+        dht::ring_position_view pos = range.start()->is_inclusive()
+            ? dht::ring_position_view::starting_at(range.start()->value())
+            : dht::ring_position_view::ending_at(range.start()->value());
+
+        // There is no summary entry for the last key, so in order to determine
+        // if pos overlaps with the sstable or not we have to compare with the
+        // last key.
+        if (rp_cmp(pos, get_last_decorated_key()) > 0) {
+            // left is past the end of the sampling.
+            return std::nullopt;
+        }
+
+        left = std::distance(std::begin(entries),
+            std::lower_bound(entries.begin(), entries.end(), pos, cmp));
+
+        if (left) {
+            --left;
+        }
+    }
+    uint64_t right = entries_size;
+    if (range.end()) {
+        dht::ring_position_view pos = range.end()->is_inclusive()
+                                      ? dht::ring_position_view::ending_at(range.end()->value())
+                                      : dht::ring_position_view::starting_at(range.end()->value());
+
+        right = std::distance(std::begin(entries),
+            std::lower_bound(entries.begin(), entries.end(), pos, cmp));
+        if (right == 0) {
+            // The first key is strictly greater than right.
+            return std::nullopt;
+        }
+    }
+    if (left < right) {
+        return std::optional<std::pair<uint64_t, uint64_t>>(std::in_place_t(), left, right);
+    }
+    return std::nullopt;
+}
+
 std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const dht::token_range& range) {
     auto index_range = get_sample_indexes_for_range(range);
     std::vector<dht::decorated_key> res;
@@ -3104,10 +3154,15 @@ std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const 
 }
 
 uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
-    auto sample_index_range = get_sample_indexes_for_range(range);
-    uint64_t sample_key_count = sample_index_range ? sample_index_range->second - sample_index_range->first : 0;
-    // adjust for the current sampling level
-    uint64_t estimated_keys = sample_key_count * ((downsampling::BASE_SAMPLING_LEVEL * _components->summary.header.min_index_interval) / _components->summary.header.sampling_level);
+    auto page_range = get_index_pages_for_range(range);
+    if (!page_range) {
+        return 0;
+    }
+    using uint128_t = unsigned __int128;
+    uint64_t range_pages = page_range->second - page_range->first;
+    auto total_keys = get_estimated_key_count();
+    auto total_pages = _components->summary.entries.size();
+    uint64_t estimated_keys = (uint128_t)range_pages * total_keys / total_pages;
     return std::max(uint64_t(1), estimated_keys);
 }
 

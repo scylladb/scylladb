@@ -393,7 +393,7 @@ SEASTAR_THREAD_TEST_CASE(read_partial_range_2) {
 }
 
 static
-mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
+shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
     auto sst = env.make_sstable(s,
         dir,
@@ -412,7 +412,13 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
     sst->write_components(mt->make_flat_reader(s), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
 
-    return as_mutation_source(sst);
+    return sst;
+}
+
+static
+mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
+        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
+    return as_mutation_source(make_sstable(env, s, dir, std::move(mutations), cfg, version, query_time));
 }
 
 // Must be run in a seastar thread
@@ -1408,6 +1414,73 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
                 BOOST_REQUIRE_EQUAL(index_accesses(), before);
             }
       }
+    });
+}
+
+SEASTAR_TEST_CASE(test_key_count_estimation) {
+    return seastar::async([] {
+        auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+        for (const auto version : all_sstable_versions) {
+            storage_service_for_tests ssft;
+            simple_schema ss;
+            auto s = ss.schema();
+
+            int count = 10'000;
+            std::vector<dht::decorated_key> all_pks = ss.make_pkeys(count + 2);
+            std::vector<dht::decorated_key> pks(all_pks.begin() + 1, all_pks.end() - 1);
+            std::vector<mutation> muts;
+            for (auto pk : pks) {
+                mutation m(ss.schema(), pk);
+                ss.add_row(m, ss.make_ckey(1), "v");
+                muts.push_back(std::move(m));
+            }
+
+            tmpdir dir;
+            sstables::test_env env;
+            shared_sstable sst = make_sstable(env, s, dir.path().string(), muts, sstable_writer_config{}, version);
+
+            auto max_est = sst->get_estimated_key_count();
+            BOOST_TEST_MESSAGE(format("count = {}", count));
+            BOOST_TEST_MESSAGE(format("est = {}", max_est));
+
+            {
+                auto est = sst->estimated_keys_for_range(dht::token_range::make_open_ended_both_sides());
+                BOOST_TEST_MESSAGE(format("est([-inf; +inf]) = {}", est));
+                BOOST_REQUIRE_EQUAL(est, sst->get_estimated_key_count());
+            }
+
+            for (int size : {1, 64, 256, 512, 1024, 4096, count}) {
+                auto r = dht::token_range::make(pks[0].token(), pks[size - 1].token());
+                auto est = sst->estimated_keys_for_range(r);
+                BOOST_TEST_MESSAGE(format("est([0; {}] = {}", size - 1, est));
+                BOOST_REQUIRE_GE(est, size);
+                BOOST_REQUIRE_LE(est, max_est);
+            }
+
+            for (int size : {1, 64, 256, 512, 1024, 4096, count}) {
+                auto lower = 5000;
+                auto upper = std::min(count - 1, lower + size - 1);
+                auto r = dht::token_range::make(pks[lower].token(), pks[upper].token());
+                auto est = sst->estimated_keys_for_range(r);
+                BOOST_TEST_MESSAGE(format("est([{}; {}]) = {}", lower, upper, est));
+                BOOST_REQUIRE_GE(est, upper - lower + 1);
+                BOOST_REQUIRE_LE(est, max_est);
+            }
+
+            {
+                auto r = dht::token_range::make(all_pks[0].token(), all_pks[0].token());
+                auto est = sst->estimated_keys_for_range(r);
+                BOOST_TEST_MESSAGE(format("est(non-overlapping to the left) = {}", est));
+                BOOST_REQUIRE_EQUAL(est, 0);
+            }
+
+            {
+                auto r = dht::token_range::make(all_pks[all_pks.size() - 1].token(), all_pks[all_pks.size() - 1].token());
+                auto est = sst->estimated_keys_for_range(r);
+                BOOST_TEST_MESSAGE(format("est(non-overlapping to the right) = {}", est));
+                BOOST_REQUIRE_EQUAL(est, 0);
+            }
+        }
     });
 }
 

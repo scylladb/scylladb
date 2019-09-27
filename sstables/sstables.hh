@@ -656,6 +656,7 @@ private:
             composite::eoc marker = composite::eoc::none);
 
     std::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
+    std::optional<std::pair<uint64_t, uint64_t>> get_index_pages_for_range(const dht::token_range& range);
 
     std::vector<unsigned> compute_shards_for_this_sstable() const;
     template <typename Components>
