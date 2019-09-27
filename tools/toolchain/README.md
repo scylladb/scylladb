@@ -36,11 +36,8 @@ out alongside scylla, you can write
 
 You will have access to both scylla and scylla-ccm in the container.
 
-Interactive mode is also supported, using the docker `-i` and `-t` flags:
-
-    ./tools/toolchain/dbuild -it -- bash
-
-this will drop you into a shell, with all of the toolchain accessible.
+Interactive mode is also supported: running `dbuild` with no arguments
+will drop you into a shell, with all of the toolchain accessible.
 
 ## Obtaining the current toolchain
 
