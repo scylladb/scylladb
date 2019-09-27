@@ -138,12 +138,15 @@ def check_version(ar):
             params = params + "&rtype=" + repo_type
         versions = get_json_from_url(version_url + params)
         latest_version = versions["version"]
-        latest_patch_version = versions["latest_patch_version"]
+        latest_patch_version = versions.get("latest_patch_version")
     except Exception:
         traceln("Unable to retrieve version information")
         return
 
-    if latest_patch_version != latest_version:
+    if latest_patch_version is None:
+        traceln("Your current Scylla version is ", current_version, ", does not find official latest patch release, ",
+                "and the latest official minor release is " + latest_version)
+    elif latest_patch_version != latest_version:
         # user is using an older minor version
         if version_compare(current_version, latest_patch_version):
             # user is also running an older patch version
