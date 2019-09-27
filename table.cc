@@ -136,9 +136,12 @@ contains_rows(const sstables::sstable& sst, const schema_ptr& schema, const ck_f
 // of a range for each clustering component.
 static std::vector<sstables::shared_sstable>
 filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, column_family& cf, const schema_ptr& schema,
-        const sstables::key& key, const query::partition_slice& slice) {
-    auto sstable_has_not_key = [&] (const sstables::shared_sstable& sst) {
-        return !sst->filter_has_key(key);
+        const dht::partition_range& pr, const sstables::key& key, const query::partition_slice& slice) {
+    const dht::ring_position& pr_key = pr.start()->value();
+    auto sstable_has_not_key = [&, cmp = dht::ring_position_comparator(*schema)] (const sstables::shared_sstable& sst) {
+        return cmp(pr_key, sst->get_first_decorated_key()) < 0 ||
+               cmp(pr_key, sst->get_last_decorated_key()) > 0 ||
+               !sst->filter_has_key(key);
     };
     sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
 
@@ -286,7 +289,7 @@ create_single_key_sstable_reader(column_family* cf,
 {
     auto key = sstables::key::from_partition_key(*schema, *pr.start()->value().key());
     auto readers = boost::copy_range<std::vector<flat_mutation_reader>>(
-        filter_sstable_for_reader(sstables->select(pr), *cf, schema, key, slice)
+        filter_sstable_for_reader(sstables->select(pr), *cf, schema, pr, key, slice)
         | boost::adaptors::transformed([&] (const sstables::shared_sstable& sstable) {
             tracing::trace(trace_state, "Reading key {} from sstable {}", pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
             return sstable->read_row_flat(schema, pr.start()->value(), slice, pc, resource_tracker, fwd);
