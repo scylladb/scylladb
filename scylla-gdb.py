@@ -590,20 +590,47 @@ class scylla_column_families(gdb.Command):
 
 
 class scylla_task_histogram(gdb.Command):
+    """Print a histogram of the virtual objects found in memory.
+
+    Sample the virtual objects in memory and create a histogram with the results.
+    By default up to 20000 samples will be collected and the top 30 items will
+    be shown. The number of collected samples, as well as number of items shown
+    can be customized by command line arguments. The sampling can also be
+    constrained to objects of a certain size. For more details invoke:
+
+        scylla task_histogram --help
+
+    Example:
+     12280: 0x4bc5878 vtable for seastar::file_data_source_impl + 16
+      9352: 0x4be2cf0 vtable for seastar::continuation<seastar::future<seasta...
+      9352: 0x4bc59a0 vtable for seastar::continuation<seastar::future<seasta...
+     (1)    (2)       (3)
+
+     Where:
+     (1): Number of objects of this type.
+     (2): The address of the class's vtable.
+     (3): The name of the class's vtable symbol.
+    """
     def __init__(self):
         gdb.Command.__init__(self, 'scylla task_histogram', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def invoke(self, arg, from_tty):
-        args = arg.split(' ')
-
-        def print_usage():
-            gdb.write("Usage: scylla task_histogram [object size]\n")
-
-        if len(args) > 1:
-            print_usage()
+        parser = argparse.ArgumentParser(description="scylla task_histogram")
+        parser.add_argument("-m", "--samples", action="store", type=int, default=20000,
+                help="The number of samples to collect. Defaults to 20000. Set to 0 to sample all objects. Ignored when `--all` is used."
+                " Note that due to this limit being checked only after scanning an entire page, in practice it will always be overshot.")
+        parser.add_argument("-c", "--count", action="store", type=int, default=30,
+                help="Show only the top COUNT elements of the histogram. Defaults to 30. Set to 0 to show all items. Ignored when `--all` is used.")
+        parser.add_argument("-a", "--all", action="store_true", default=False,
+                help="Sample all pages and show all results. Equivalent to -m=0 -c=0.")
+        parser.add_argument("-s", "--size", action="store", default=0,
+                help="The size of objects to sample. When set, only objects of this size will be sampled. A size of 0 (the default value) means no size restrictions.")
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
             return
 
-        size = int(args[0]) if args[0] != '' else 0
+        size = args.size
         cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
         page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
         mem_start = cpu_mem['memory']
@@ -612,6 +639,7 @@ class scylla_task_histogram(gdb.Command):
 
         pages = cpu_mem['pages']
         nr_pages = int(cpu_mem['nr_pages'])
+        page_samples = range(0, nr_pages) if args.all else random.sample(range(0, nr_pages), nr_pages)
 
         sections = gdb.execute('info files', False, True).split('\n')
         for line in sections:
@@ -625,8 +653,7 @@ class scylla_task_histogram(gdb.Command):
         sc = span_checker()
         vptr_count = defaultdict(int)
         scanned_pages = 0
-        limit = 20000
-        for idx in random.sample(range(0, nr_pages), nr_pages):
+        for idx in page_samples:
             span = sc.get_span(mem_start + idx * page_size)
             if not span or span.index != idx or not span.is_small():
                 continue
@@ -641,10 +668,12 @@ class scylla_task_histogram(gdb.Command):
                 addr = gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference()
                 if addr >= text_start and addr <= text_end:
                     vptr_count[int(addr)] += 1
-            if scanned_pages >= limit or len(vptr_count) >= limit:
+            if (not args.all or args.samples > 0) and (scanned_pages >= args.samples or len(vptr_count) >= args.samples):
                 break
 
-        for vptr, count in sorted(vptr_count.items(), key=lambda e: -e[1])[:30]:
+        sorted_counts = sorted(vptr_count.items(), key=lambda e: -e[1])
+        to_show = sorted_counts if args.all or args.count == 0 else sorted_counts[:args.count]
+        for vptr, count in to_show:
             sym = resolve(vptr)
             if sym:
                 gdb.write('%10d: 0x%x %s\n' % (count, vptr, sym))
