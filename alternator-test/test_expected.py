@@ -127,7 +127,6 @@ def test_update_expected_1_eq_false(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1}
 
 # Tests for Expected with ComparisonOperator = "NE":
-@pytest.mark.xfail(reason="ComparisonOperator=NE in Expected not yet implemented")
 def test_update_expected_1_ne_true(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -160,7 +159,6 @@ def test_update_expected_1_ne_true(test_table_s):
     )
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1, 'b': 5}
 
-@pytest.mark.xfail(reason="ComparisonOperator=NE in Expected not yet implemented")
 def test_update_expected_1_ne_false(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},

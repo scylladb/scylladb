@@ -35,13 +35,14 @@ static logging::logger clogger("alternator-conditions");
 comparison_operator_type get_comparison_operator(const rjson::value& comparison_operator) {
     static std::unordered_map<std::string, comparison_operator_type> ops = {
             {"EQ", comparison_operator_type::EQ},
+            {"NE", comparison_operator_type::NE},
             {"LE", comparison_operator_type::LE},
             {"LT", comparison_operator_type::LT},
             {"GE", comparison_operator_type::GE},
             {"GT", comparison_operator_type::GT},
             {"BETWEEN", comparison_operator_type::BETWEEN},
             {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
-    }; //TODO(sarna): NE, IN, CONTAINS, NULL, NOT_NULL
+    }; //TODO: IN, CONTAINS, NULL, NOT_NULL
     if (!comparison_operator.IsString()) {
         throw api_error("ValidationException", format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
@@ -113,6 +114,11 @@ static bool check_EQ(const rjson::value* v1, const rjson::value& v2) {
     return v1 && *v1 == v2;
 }
 
+// Check if two JSON-encoded values match with the NE relation
+static bool check_NE(const rjson::value* v1, const rjson::value& v2) {
+    return !v1 || *v1 != v2; // null is unequal to anything.
+}
+
 // Check if two JSON-encoded values match with the BEGINS_WITH relation
 static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
     if (!v1) {
@@ -176,6 +182,9 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         case comparison_operator_type::EQ:
             verify_operand_count(attribute_value_list, 1, *comparison_operator);
             return check_EQ(got, (*attribute_value_list)[0]);
+        case comparison_operator_type::NE:
+            verify_operand_count(attribute_value_list, 1, *comparison_operator);
+            return check_NE(got, (*attribute_value_list)[0]);
         case comparison_operator_type::BEGINS_WITH:
             verify_operand_count(attribute_value_list, 1, *comparison_operator);
             return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
