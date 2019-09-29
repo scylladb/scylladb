@@ -34,21 +34,21 @@ import boto3
 dynamodb = boto3.resource('dynamodb',endpoint_url='http://localhost:8000',
                   region_name='None', aws_access_key_id='None', aws_secret_access_key='None')
 
- dynamodb.create_table(
+dynamodb.create_table(
     AttributeDefinitions=[
     {
         'AttributeName': 'key',
         'AttributeType': 'S'
     },
-],
-BillingMode='PAY_PER_REQUEST',
-TableName='usertable',
-KeySchema=[
+    ],
+    BillingMode='PAY_PER_REQUEST',
+    TableName='usertable',
+    KeySchema=[
     {
         'AttributeName': 'key',
         'KeyType': 'HASH'
     },
-])
+    ])
 ```
 
 2. Put the following **write** example script in a python file and run it (changing local host
@@ -59,9 +59,9 @@ import boto3
 dynamodb = boto3.resource('dynamodb',endpoint_url='http://localhost:8000',
                   region_name='None', aws_access_key_id='None', aws_secret_access_key='None')
 
-  dynamodb.batch_write_item(RequestItems={
-     'usertable': [
-         {
+dynamodb.batch_write_item(RequestItems={
+    'usertable': [
+        {
              'PutRequest': {
                  'Item': {
                      'key': 'test', 'x' : {'hello': 'world'}
@@ -79,7 +79,7 @@ import boto3
 dynamodb = boto3.resource('dynamodb',endpoint_url='http://localhost:8000',
                   region_name='None', aws_access_key_id='None', aws_secret_access_key='None')
 
-  print(dynamodb.batch_get_item(RequestItems={
+print(dynamodb.batch_get_item(RequestItems={
     'usertable' : { 'Keys': [{ 'key': 'test' }] }
 }))
 ```
