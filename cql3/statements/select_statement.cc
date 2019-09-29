@@ -486,7 +486,7 @@ indexed_table_select_statement::do_execute_base_query(
                         std::vector<query::clustering_range>{query::clustering_range::make_starting_with(range_bound<clustering_key>(base_ck, false))});
             }
             concurrency *= 2;
-            return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_trace_state()})
+            return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
             .then([&ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) {
                 bool is_short_read = qr.query_result->is_short_read();
                 merger(std::move(qr.query_result));
@@ -558,7 +558,7 @@ indexed_table_select_statement::do_execute_base_query(
                 if (key.clustering) {
                     command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
                 }
-                return proxy.query(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_trace_state()})
+                return proxy.query(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
                 .then([] (service::storage_proxy::coordinator_query_result qr) {
                     return std::move(qr.query_result);
                 });
@@ -614,7 +614,7 @@ select_statement::execute(service::storage_proxy& proxy,
                         command,
                         std::move(prange),
                         options.get_consistency(),
-                        {timeout, state.get_permit(), state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
+                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
                     return std::move(qr.query_result);
                 });
             }, std::move(merger));
@@ -622,7 +622,7 @@ select_statement::execute(service::storage_proxy& proxy,
             return this->process_results(std::move(result), cmd, options, now);
         });
     } else {
-        return proxy.query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_trace_state()})
+        return proxy.query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
             .then([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
                 return this->process_results(std::move(qr.query_result), cmd, options, now);
             });
@@ -1089,7 +1089,7 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
 
     int32_t page_size = options.get_page_size();
     if (page_size <= 0 || !service::pager::query_pagers::may_need_paging(*_view_schema, page_size, *cmd, partition_ranges)) {
-        return proxy.query(_view_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_trace_state()})
+        return proxy.query(_view_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
         .then([this, now, &options, selection = std::move(selection), partition_slice = std::move(partition_slice)] (service::storage_proxy::coordinator_query_result qr) {
             cql3::selection::result_set_builder builder(*selection, now, options.get_cql_serialization_format());
             query::result_view::consume(*qr.query_result,

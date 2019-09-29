@@ -36,6 +36,7 @@
 #include "utils/input_stream.hh"
 #include "utils/fragment_range.hh"
 #include "utils/chunked_vector.hh"
+#include <variant>
 
 #include <boost/range/algorithm/for_each.hpp>
 
@@ -261,6 +262,12 @@ void serialize(Output& out, const boost::variant<T...>& v);
 
 template<typename Input, typename ...T>
 boost::variant<T...> deserialize(Input& in, boost::type<boost::variant<T...>>);
+
+template<typename Output, typename ...T>
+void serialize(Output& out, const std::variant<T...>& v);
+
+template<typename Input, typename ...T>
+std::variant<T...> deserialize(Input& in, boost::type<std::variant<T...>>);
 
 struct unknown_variant_type {
     size_type index;

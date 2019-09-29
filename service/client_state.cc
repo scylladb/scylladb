@@ -52,6 +52,8 @@
 #include "storage_service.hh"
 #include "database.hh"
 
+thread_local api::timestamp_type service::client_state::_last_timestamp_micros = 0;
+
 void service::client_state::set_login(::shared_ptr<auth::authenticated_user> user) {
     if (user == nullptr) {
         throw std::invalid_argument("Must provide user");

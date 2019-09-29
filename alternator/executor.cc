@@ -667,6 +667,7 @@ static db::timeout_clock::time_point default_timeout() {
 
 static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
         service::storage_proxy& proxy,
+        service::client_state& client_state,
         schema_ptr schema,
         const rjson::value& item,
         bool need_read_before_write,
@@ -690,7 +691,7 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
 
     mutation m = make_item_mutation(item, schema);
 
-    return maybe_get_previous_item(_proxy, schema, item, has_expected, _stats).then(
+    return maybe_get_previous_item(_proxy, client_state, schema, item, has_expected, _stats).then(
             [this, schema, has_expected,  update_info = rjson::copy(update_info), m = std::move(m),
              &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
         if (has_expected) {
@@ -742,7 +743,7 @@ future<json::json_return_type> executor::delete_item(client_state& client_state,
     mutation m = make_delete_item_mutation(key, schema);
     check_key(key, schema);
 
-    return maybe_get_previous_item(_proxy, schema, key, has_expected, _stats).then(
+    return maybe_get_previous_item(_proxy, client_state, schema, key, has_expected, _stats).then(
             [this, schema, has_expected,  update_info = rjson::copy(update_info), m = std::move(m),
              &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
         if (has_expected) {
@@ -1334,6 +1335,7 @@ static bool check_needs_read_before_write(const std::vector<parsed::update_expre
 // It should be overridden once we can leverage a consensus protocol.
 static future<std::unique_ptr<rjson::value>> do_get_previous_item(
         service::storage_proxy& proxy,
+        service::client_state& client_state,
         schema_ptr schema,
         const partition_key& pk,
         const clustering_key& ck,
@@ -1358,7 +1360,7 @@ static future<std::unique_ptr<rjson::value>> do_get_previous_item(
 
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
-    return proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit())).then(
+    return proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
             [schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
         auto previous_item = describe_item(schema, partition_slice, *selection, std::move(qr.query_result), {});
         return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(previous_item)));
@@ -1367,6 +1369,7 @@ static future<std::unique_ptr<rjson::value>> do_get_previous_item(
 
 static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
         service::storage_proxy& proxy,
+        service::client_state& client_state,
         schema_ptr schema,
         const partition_key& pk,
         const clustering_key& ck,
@@ -1380,11 +1383,12 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
     if (!needs_read_before_write) {
         return make_ready_future<std::unique_ptr<rjson::value>>();
     }
-    return do_get_previous_item(proxy, std::move(schema), pk, ck, stats);
+    return do_get_previous_item(proxy, client_state, std::move(schema), pk, ck, stats);
 }
 
 static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
         service::storage_proxy& proxy,
+        service::client_state& client_state,
         schema_ptr schema,
         const rjson::value& item,
         bool needs_read_before_write,
@@ -1395,7 +1399,7 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
     }
     partition_key pk = pk_from_json(item, schema);
     clustering_key ck = ck_from_json(item, schema);
-    return do_get_previous_item(proxy, std::move(schema), pk, ck, stats);
+    return do_get_previous_item(proxy, client_state, std::move(schema), pk, ck, stats);
 }
 
 
@@ -1453,7 +1457,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
         attribute_updates = update_info["AttributeUpdates"];
     }
 
-    return maybe_get_previous_item(_proxy, schema, pk, ck, has_update_expression, expression, has_expected, _stats).then(
+    return maybe_get_previous_item(_proxy, client_state, schema, pk, ck, has_update_expression, expression, has_expected, _stats).then(
             [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck), has_expected,
              update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector),
              attribute_updates = rjson::copy(attribute_updates), ts, &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
@@ -1650,7 +1654,7 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
 
     auto attrs_to_get = calculate_attrs_to_get(table_info);
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit())).then(
+    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.get_item_latency._count + 1);
         return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get))));
@@ -1713,7 +1717,7 @@ future<json::json_return_type> executor::batch_get_item(client_state& client_sta
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
-            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit())).then(
+            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
                 std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get));
                 return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(

@@ -62,6 +62,7 @@
 #include "cache_temperature.hh"
 #include "mutation_query.hh"
 #include "service_permit.hh"
+#include "service/client_state.hh"
 
 
 namespace seastar::rpc {
@@ -161,17 +162,20 @@ public:
 
     public:
         service_permit permit;
+        client_state& cstate;
         tracing::trace_state_ptr trace_state = nullptr;
         replicas_per_token_range preferred_replicas;
         std::optional<db::read_repair_decision> read_repair_decision;
 
         coordinator_query_options(clock_type::time_point timeout,
                 service_permit permit_,
+                client_state& client_state_,
                 tracing::trace_state_ptr trace_state = nullptr,
                 replicas_per_token_range preferred_replicas = { },
                 std::optional<db::read_repair_decision> read_repair_decision = { })
             : _timeout(timeout)
             , permit(std::move(permit_))
+            , cstate(client_state_)
             , trace_state(std::move(trace_state))
             , preferred_replicas(std::move(preferred_replicas))
             , read_repair_decision(read_repair_decision) {
