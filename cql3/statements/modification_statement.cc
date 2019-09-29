@@ -230,10 +230,7 @@ modification_statement::read_command(query::clustering_row_ranges ranges, db::co
             std::move(ranges),
             std::move(static_cols),
             std::move(regular_cols),
-            query::partition_slice::option_set::of<
-                query::partition_slice::option::send_partition_key,
-                query::partition_slice::option::send_clustering_key,
-                query::partition_slice::option::collections_as_maps>());
+            update_parameters::options);
     return make_lw_shared<query::read_command>(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
 }
 
