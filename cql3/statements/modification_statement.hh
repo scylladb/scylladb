@@ -151,17 +151,6 @@ public:
 
     void add_operation(::shared_ptr<operation> op);
 
-#if 0
-    public Iterable<ColumnDefinition> getColumnsWithConditions()
-    {
-        if (ifNotExists || ifExists)
-            return null;
-
-        return Iterables.concat(columnConditions == null ? Collections.<ColumnDefinition>emptyList() : Iterables.transform(columnConditions, getColumnForCondition),
-                                staticConditions == null ? Collections.<ColumnDefinition>emptyList() : Iterables.transform(staticConditions, getColumnForCondition));
-    }
-#endif
-
     void inc_cql_stats() {
         ++(*_cql_modification_counter_ptr);
     }
@@ -222,120 +211,6 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
-
-#if 0
-    public void addConditions(Composite clusteringPrefix, CQL3CasRequest request, QueryOptions options) throws InvalidRequestException
-    {
-        if (ifNotExists)
-        {
-            // If we use ifNotExists, if the statement applies to any non static columns, then the condition is on the row of the non-static
-            // columns and the prefix should be the clusteringPrefix. But if only static columns are set, then the ifNotExists apply to the existence
-            // of any static columns and we should use the prefix for the "static part" of the partition.
-            request.addNotExist(clusteringPrefix);
-        }
-        else if (ifExists)
-        {
-            request.addExist(clusteringPrefix);
-        }
-        else
-        {
-            if (columnConditions != null)
-                request.addConditions(clusteringPrefix, columnConditions, options);
-            if (staticConditions != null)
-                request.addConditions(cfm.comparator.staticPrefix(), staticConditions, options);
-        }
-    }
-
-    private ResultSet buildCasResultSet(ByteBuffer key, ColumnFamily cf, QueryOptions options) throws InvalidRequestException
-    {
-        return buildCasResultSet(keyspace(), key, columnFamily(), cf, getColumnsWithConditions(), false, options);
-    }
-
-    public static ResultSet buildCasResultSet(String ksName, ByteBuffer key, String cfName, ColumnFamily cf, Iterable<ColumnDefinition> columnsWithConditions, boolean isBatch, QueryOptions options)
-    throws InvalidRequestException
-    {
-        boolean success = cf == null;
-
-        ColumnSpecification spec = new ColumnSpecification(ksName, cfName, CAS_RESULT_COLUMN, BooleanType.instance);
-        ResultSet.Metadata metadata = new ResultSet.Metadata(Collections.singletonList(spec));
-        List<List<ByteBuffer>> rows = Collections.singletonList(Collections.singletonList(BooleanType.instance.decompose(success)));
-
-        ResultSet rs = new ResultSet(metadata, rows);
-        return success ? rs : merge(rs, buildCasFailureResultSet(key, cf, columnsWithConditions, isBatch, options));
-    }
-
-    private static ResultSet merge(ResultSet left, ResultSet right)
-    {
-        if (left.size() == 0)
-            return right;
-        else if (right.size() == 0)
-            return left;
-
-        assert left.size() == 1;
-        int size = left.metadata.names.size() + right.metadata.names.size();
-        List<ColumnSpecification> specs = new ArrayList<ColumnSpecification>(size);
-        specs.addAll(left.metadata.names);
-        specs.addAll(right.metadata.names);
-        List<List<ByteBuffer>> rows = new ArrayList<>(right.size());
-        for (int i = 0; i < right.size(); i++)
-        {
-            List<ByteBuffer> row = new ArrayList<ByteBuffer>(size);
-            row.addAll(left.rows.get(0));
-            row.addAll(right.rows.get(i));
-            rows.add(row);
-        }
-        return new ResultSet(new ResultSet.Metadata(specs), rows);
-    }
-
-    private static ResultSet buildCasFailureResultSet(ByteBuffer key, ColumnFamily cf, Iterable<ColumnDefinition> columnsWithConditions, boolean isBatch, QueryOptions options)
-    throws InvalidRequestException
-    {
-        CFMetaData cfm = cf.metadata();
-        Selection selection;
-        if (columnsWithConditions == null)
-        {
-            selection = Selection.wildcard(cfm);
-        }
-        else
-        {
-            // We can have multiple conditions on the same columns (for collections) so use a set
-            // to avoid duplicate, but preserve the order just to it follows the order of IF in the query in general
-            Set<ColumnDefinition> defs = new LinkedHashSet<>();
-            // Adding the partition key for batches to disambiguate if the conditions span multipe rows (we don't add them outside
-            // of batches for compatibility sakes).
-            if (isBatch)
-            {
-                defs.addAll(cfm.partitionKeyColumns());
-                defs.addAll(cfm.clusteringColumns());
-            }
-            for (ColumnDefinition def : columnsWithConditions)
-                defs.add(def);
-            selection = Selection.forColumns(cfm, new ArrayList<>(defs));
-
-        }
-
-        long now = System.currentTimeMillis();
-        Selection.ResultSetBuilder builder = selection.resultSetBuilder(now);
-        SelectStatement.forSelection(cfm, selection).processColumnFamily(key, cf, options, now, builder);
-
-        return builder.build(options.getProtocolVersion());
-    }
-
-    public ResultMessage executeInternal(QueryState queryState, QueryOptions options) throws RequestValidationException, RequestExecutionException
-    {
-        if (hasConditions())
-            throw new UnsupportedOperationException();
-
-        for (IMutation mutation : getMutations(options, true, queryState.getTimestamp()))
-        {
-            // We don't use counters internally.
-            assert mutation instanceof Mutation;
-
-            ((Mutation) mutation).apply();
-        }
-        return null;
-    }
-#endif
 
 public:
     /**

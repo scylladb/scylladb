@@ -421,29 +421,6 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     fail(unimplemented::cause::LWT);
-#if 0
-        List<ByteBuffer> keys = buildPartitionKeyNames(options);
-        // We don't support IN for CAS operation so far
-        if (keys.size() > 1)
-            throw new InvalidRequestException("IN on the partition key is not supported with conditional updates");
-
-        ByteBuffer key = keys.get(0);
-        long now = options.getTimestamp(queryState);
-        Composite prefix = createClusteringPrefix(options);
-
-        CQL3CasRequest request = new CQL3CasRequest(cfm, key, false);
-        addConditions(prefix, request, options);
-        request.addRowUpdate(prefix, this, options, now);
-
-        ColumnFamily result = StorageProxy.cas(keyspace(),
-                                               columnFamily(),
-                                               key,
-                                               request,
-                                               options.getSerialConsistency(),
-                                               options.getConsistency(),
-                                               queryState.getClientState());
-        return new ResultMessage.Rows(buildCasResultSet(key, result, options));
-#endif
 }
 
 void

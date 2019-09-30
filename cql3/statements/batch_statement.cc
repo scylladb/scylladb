@@ -347,51 +347,6 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         service::query_state& state)
 {
     fail(unimplemented::cause::LWT);
-#if 0
-    auto now = state.get_timestamp();
-    ByteBuffer key = null;
-    String ksName = null;
-    String cfName = null;
-    CQL3CasRequest casRequest = null;
-    Set<ColumnDefinition> columnsWithConditions = new LinkedHashSet<>();
-
-    for (int i = 0; i < statements.size(); i++)
-    {
-        ModificationStatement statement = statements.get(i);
-        QueryOptions statementOptions = options.forStatement(i);
-        long timestamp = attrs.getTimestamp(now, statementOptions);
-        List<ByteBuffer> pks = statement.buildPartitionKeyNames(statementOptions);
-        if (pks.size() > 1)
-            throw new IllegalArgumentException("Batch with conditions cannot span multiple partitions (you cannot use IN on the partition key)");
-        if (key == null)
-        {
-            key = pks.get(0);
-            ksName = statement.cfm.ksName;
-            cfName = statement.cfm.cfName;
-            casRequest = new CQL3CasRequest(statement.cfm, key, true);
-        }
-        else if (!key.equals(pks.get(0)))
-        {
-            throw new InvalidRequestException("Batch with conditions cannot span multiple partitions");
-        }
-
-        Composite clusteringPrefix = statement.createClusteringPrefix(statementOptions);
-        if (statement.hasConditions())
-        {
-            statement.addConditions(clusteringPrefix, casRequest, statementOptions);
-            // As soon as we have a ifNotExists, we set columnsWithConditions to null so that everything is in the resultSet
-            if (statement.hasIfNotExistCondition() || statement.hasIfExistCondition())
-                columnsWithConditions = null;
-            else if (columnsWithConditions != null)
-                Iterables.addAll(columnsWithConditions, statement.getColumnsWithConditions());
-        }
-        casRequest.addRowUpdate(clusteringPrefix, statement, statementOptions, timestamp);
-    }
-
-    ColumnFamily result = StorageProxy.cas(ksName, cfName, key, casRequest, options.getSerialConsistency(), options.getConsistency(), state.getClientState());
-
-    return new ResultMessage.Rows(ModificationStatement.buildCasResultSet(ksName, key, cfName, result, columnsWithConditions, true, options.forStatement(0)));
-#endif
 }
 
 namespace raw {
