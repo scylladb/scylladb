@@ -43,25 +43,6 @@
 #include "database.hh"
 #include <seastar/core/execution_stage.hh>
 
-namespace {
-
-struct mutation_equals_by_key {
-    bool operator()(const mutation& m1, const mutation& m2) const {
-        return m1.schema() == m2.schema()
-                && m1.decorated_key().equal(*m1.schema(), m2.decorated_key());
-    }
-};
-
-struct mutation_hash_by_key {
-    size_t operator()(const mutation& m) const {
-        auto dk_hash = std::hash<dht::decorated_key>();
-        return dk_hash(m.decorated_key());
-    }
-};
-
-}
-
-
 namespace cql3 {
 
 namespace statements {

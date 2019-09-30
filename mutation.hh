@@ -143,6 +143,20 @@ private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
+struct mutation_equals_by_key {
+    bool operator()(const mutation& m1, const mutation& m2) const {
+        return m1.schema() == m2.schema()
+                && m1.decorated_key().equal(*m1.schema(), m2.decorated_key());
+    }
+};
+
+struct mutation_hash_by_key {
+    size_t operator()(const mutation& m) const {
+        auto dk_hash = std::hash<dht::decorated_key>();
+        return dk_hash(m.decorated_key());
+    }
+};
+
 struct mutation_decorated_key_less_comparator {
     bool operator()(const mutation& m1, const mutation& m2) const;
 };
