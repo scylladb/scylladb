@@ -1182,7 +1182,8 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
             // to put in the exception. The exception is not needed for
             // correctness (e.g., hints are written by timeout_cb(), not
             // because of an exception here).
-            return make_exception_future<>(std::runtime_error("unstarted write cancelled"));
+            slogger.debug("unstarted write cancelled for id {}", response_id);
+            return make_ready_future<>();
         }
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
