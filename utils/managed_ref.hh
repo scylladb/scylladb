@@ -68,6 +68,14 @@ struct managed_ref {
         return *this;
     }
 
+    T* get() {
+        return _ptr ? &_ptr->_value : nullptr;
+    }
+
+    const T* get() const {
+        return _ptr ? &_ptr->_value : nullptr;
+    }
+
     T& operator*() {
         return _ptr->_value;
     }
