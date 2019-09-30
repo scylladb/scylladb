@@ -1784,10 +1784,15 @@ public:
     }
 };
 
+struct digest_read_result {
+    foreign_ptr<lw_shared_ptr<query::result>> result;
+    bool digests_match;
+};
+
 class digest_read_resolver : public abstract_read_resolver {
     size_t _block_for;
     size_t _cl_responses = 0;
-    promise<foreign_ptr<lw_shared_ptr<query::result>>, bool> _cl_promise; // cl is reached
+    promise<digest_read_result> _cl_promise; // cl is reached
     bool _cl_reported = false;
     foreign_ptr<lw_shared_ptr<query::result>> _data_result;
     std::vector<query::result_digest> _digest_results;
@@ -1847,7 +1852,7 @@ public:
             }
             if (_cl_responses >= _block_for && _data_result) {
                 _cl_reported = true;
-                _cl_promise.set_value(std::move(_data_result), digests_match());
+                _cl_promise.set_value(digest_read_result{std::move(_data_result), digests_match()});
             }
         }
         if (is_completed()) {
@@ -1869,7 +1874,7 @@ public:
             fail_request(std::make_exception_ptr(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result)));
         }
     }
-    future<foreign_ptr<lw_shared_ptr<query::result>>, bool> has_cl() {
+    future<digest_read_result> has_cl() {
         return _cl_promise.get_future();
     }
     bool has_data() {
@@ -2619,14 +2624,12 @@ public:
         });
 
         // Waited on indirectly.
-        (void)digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<foreign_ptr<lw_shared_ptr<query::result>>, bool> f) mutable {
+        (void)digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<digest_read_result> f) mutable {
             bool background_repair_check = false;
             try {
                 exec->got_cl();
 
-                foreign_ptr<lw_shared_ptr<query::result>> result;
-                bool digests_match;
-                std::tie(result, digests_match) = f.get(); // can throw
+                auto&& [result, digests_match] = f.get0(); // can throw
 
                 if (digests_match) {
                     exec->_result_promise.set_value(std::move(result));
