@@ -290,13 +290,13 @@ public:
             return mask & e.mask;
         }
 
-        static enum_set<Enum> unfreeze() {
+        static constexpr enum_set<Enum> unfreeze() {
             return enum_set<Enum>(mask);
         }
     };
 
     template<enum_type... items>
-    static enum_set<Enum> of() {
+    static constexpr enum_set<Enum> of() {
         return frozen<items...>::unfreeze();
     }
 };
