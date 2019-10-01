@@ -526,7 +526,7 @@ def test_update_expected_1_null(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'b': {'Value': 17, 'Action': 'PUT'}},
-            Expected={'a': {'ComparisonOperator': 'NOT_NULL', 'AttributeValueList': [2]}}
+            Expected={'a': {'ComparisonOperator': 'NULL', 'AttributeValueList': [2]}}
         )
 
 # Tests for Expected with ComparisonOperator = "CONTAINS":
