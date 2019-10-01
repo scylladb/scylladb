@@ -40,9 +40,10 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
             {"LT", comparison_operator_type::LT},
             {"GE", comparison_operator_type::GE},
             {"GT", comparison_operator_type::GT},
+            {"IN", comparison_operator_type::IN},
             {"BETWEEN", comparison_operator_type::BETWEEN},
             {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
-    }; //TODO: IN, CONTAINS, NULL, NOT_NULL
+    }; //TODO: CONTAINS, NULL, NOT_NULL
     if (!comparison_operator.IsString()) {
         throw api_error("ValidationException", format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
@@ -143,6 +144,40 @@ static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
     return val1.substr(0, val2.size()) == val2;
 }
 
+// Check if a JSON-encoded value equals any element of an array.
+static bool check_IN(const rjson::value* val, const rjson::value* array) {
+    if (!array || !array->IsArray()) {
+        throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
+    }
+    if (array->Size() < 1) {
+        throw api_error("ValidationException", "IN operator requires nonempty AttributeValueList");
+    }
+    const auto& elem0 = (*array)[0];
+    if (!elem0.IsObject() || elem0.MemberCount() != 1) {
+        throw api_error("ValidationException", format("IN operator encountered malformed AttributeValue: {}", elem0));
+    }
+    const auto& type = elem0.MemberBegin()->name;
+    if (type != "S" && type != "N" && type != "B") {
+        throw api_error("ValidationException",
+                        "IN operator requires AttributeValueList elements to be of type String, Number, or Binary ");
+    }
+    if (!val) {
+        return false;
+    }
+    bool have_match = false;
+    for (const auto& elem : array->GetArray()) {
+        if (!elem.IsObject() || elem.MemberCount() != 1 || elem.MemberBegin()->name != type) {
+            throw api_error("ValidationException",
+                            "IN operator requires all AttributeValueList elements to have the same type ");
+        }
+        if (!have_match && *val == elem) {
+            // Can't return yet, must check types of all array elements. <sigh>
+            have_match = true;
+        }
+    }
+    return have_match;
+}
+
 // Verify one Expect condition on one attribute (whose content is "got")
 // for the verify_expected() below.
 // This function returns true or false depending on whether the condition
@@ -188,6 +223,8 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         case comparison_operator_type::BEGINS_WITH:
             verify_operand_count(attribute_value_list, 1, *comparison_operator);
             return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
+        case comparison_operator_type::IN:
+            return check_IN(got, attribute_value_list);
         default:
             // FIXME: implement all the missing types, so there will be no default here.
             throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
