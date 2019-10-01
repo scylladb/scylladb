@@ -746,6 +746,14 @@ class schema_ptr:
         schema_ptr_type = gdb.lookup_type('schema').pointer()
         self.ptr = ptr['_p'].reinterpret_cast(schema_ptr_type)
 
+    @property
+    def ks_name(self):
+        return self.ptr['_raw']['_ks_name']
+
+    @property
+    def cf_name(self):
+        return self.ptr['_raw']['_cf_name']
+
     def table_name(self):
         return '%s.%s' % (self.ptr['_raw']['_ks_name'], self.ptr['_raw']['_cf_name'])
 
@@ -2426,6 +2434,29 @@ class scylla_sstables(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla sstables', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
+    @staticmethod
+    def filename(sst):
+        """The name of the sstable.
+
+        Should mirror `sstables::sstable::component_basename()`.
+        """
+        version_to_str = ['ka', 'la', 'mc']
+        format_to_str = ['big']
+        formats = [
+                '{keyspace}-{table}-{version}-{generation}-Data.db',
+                '{version}-{generation}-{format}-Data.db',
+                '{version}-{generation}-{format}-Data.db',
+            ]
+        schema = schema_ptr(sst['_schema'])
+        int_type = gdb.lookup_type('int')
+        return formats[sst['_version']].format(
+                keyspace=str(schema.ks_name)[1:-1],
+                table=str(schema.cf_name)[1:-1],
+                version=version_to_str[int(sst['_version'].cast(int_type))],
+                generation=sst['_generation'],
+                format=format_to_str[int(sst['_format'].cast(int_type))],
+            )
+
     def invoke(self, arg, from_tty):
         filter_type = gdb.lookup_type('utils::filter::murmur3_bloom_filter')
         cpu_id = current_shard()
@@ -2472,8 +2503,8 @@ class scylla_sstables(gdb.Command):
 
             data_file_size = sst['_data_file_size']
             schema = schema_ptr(sst['_schema'])
-            gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d) %s\n'
-                      % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size, schema.table_name()))
+            gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d) %s filename=%s\n'
+                      % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size, schema.table_name(), scylla_sstables.filename(sst)))
 
             if local:
                 total_size += size
