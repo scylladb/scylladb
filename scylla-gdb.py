@@ -2259,6 +2259,12 @@ class scylla_find(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla find', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
+    @staticmethod
+    def find(value):
+        mem_start, mem_size = get_seastar_memory_start_and_size()
+        for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
+            yield (obj, off)
+
     def invoke(self, arg, for_tty):
         args = arg.split(' ')
 
@@ -2277,8 +2283,7 @@ class scylla_find(gdb.Command):
             return
         value = int(args[0], 0)
 
-        mem_start, mem_size = get_seastar_memory_start_and_size()
-        for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
+        for obj, off in scylla_find.find(value):
             gdb.execute("scylla ptr 0x%x" % (obj + off))
 
 
