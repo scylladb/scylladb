@@ -129,6 +129,35 @@ class boost_variant:
         return self.ref['storage_'].address.cast(self.type().pointer())
 
 
+class std_variant:
+    """Wrapper around and std::variant.
+
+    Call get() to access the current value.
+    """
+    def __init__(self, ref):
+        self.ref = ref
+        self.member_types = list(template_arguments(self.ref.type))
+
+    def index(self):
+        return int(self.ref['_M_index'])
+
+    def _get_next(self, variadic_union, index):
+        current_type = self.member_types[index].strip_typedefs()
+        if index > 0:
+            return self._get_next(variadic_union['_M_rest'], index - 1)
+
+        wrapper = variadic_union['_M_first']['_M_storage']
+        # literal types are stored directly in `_M_storage`.
+        if wrapper.type.strip_typedefs() == current_type:
+            return wrapper
+
+        # non-literal types are stored via a __gnu_cxx::__aligned_membuf
+        return wrapper['_M_storage'].reinterpret_cast(current_type.pointer()).dereference()
+
+    def get(self):
+        return self._get_next(self.ref['_M_u'], self.index())
+
+
 class std_map:
     size_t = gdb.lookup_type('size_t')
 
