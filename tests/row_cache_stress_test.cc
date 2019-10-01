@@ -65,6 +65,16 @@ struct table {
         c_keys = s.make_ckeys(rows);
     }
 
+    void set_schema(schema_ptr new_s) {
+        s.set_schema(new_s);
+        mt->set_schema(new_s);
+        if (prev_mt) {
+            prev_mt->set_schema(new_s);
+        }
+        cache.set_schema(new_s);
+        underlying.set_schema(new_s);
+    }
+
     size_t index_of_key(const dht::decorated_key& dk) {
         for (auto i : boost::irange<size_t>(0, p_keys.size())) {
             if (p_keys[i].equal(*s.schema(), dk)) {
@@ -124,6 +134,15 @@ struct table {
         query::partition_slice slice;
         flat_mutation_reader rd;
     };
+
+    void alter_schema() {
+        static thread_local int col_id = 0;
+        auto new_s = schema_builder(s.schema())
+            .with_column(to_bytes(format("_a{}", col_id++)), byte_type)
+            .build();
+        test_log.trace("changing schema to {}", *new_s);
+        set_schema(new_s);
+    }
 
     std::unique_ptr<reader> make_reader(dht::partition_range pr, query::partition_slice slice) {
         test_log.trace("making reader, pk={} ck={}", pr, slice);
@@ -353,6 +372,12 @@ int main(int argc, char** argv) {
                 t.cache.evict();
             });
             evictor.arm_periodic(3s);
+
+            timer<> schema_changer;
+            schema_changer.set_callback([&] {
+                t.alter_schema();
+            });
+            schema_changer.arm_periodic(1s);
 
             // Mutator
             while (!cancelled) {
