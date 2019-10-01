@@ -1075,7 +1075,7 @@ int main(int ac, char** av) {
                 }).get();
             }
 
-            if (cfg->alternator_port()) {
+            if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 net::inet_address addr;
                 try {
                     addr = net::dns::get_host_by_name(cfg->alternator_address(), family).get0().addr_list.front();
@@ -1085,8 +1085,31 @@ int main(int ac, char** av) {
                 static sharded<alternator::executor> alternator_executor;
                 alternator_executor.start(std::ref(proxy), std::ref(mm)).get();
                 static alternator::server alternator_server(alternator_executor);
-                alternator_server.init(addr, cfg->alternator_port()).get();
-                startlog.info("Alternator server listening on {} port {}", addr, cfg->alternator_port());
+                std::optional<uint16_t> alternator_port;
+                if (cfg->alternator_port()) {
+                    alternator_port = cfg->alternator_port();
+                }
+                std::optional<uint16_t> alternator_https_port;
+                std::optional<tls::credentials_builder> creds;
+                if (cfg->alternator_https_port()) {
+                    creds.emplace();
+                    alternator_https_port = cfg->alternator_https_port();
+                    creds->set_dh_level(tls::dh_params::level::MEDIUM);
+                    creds->set_x509_key_file(cert, key, tls::x509_crt_format::PEM).get();
+                    if (trust_store.empty()) {
+                        creds->set_system_trust().get();
+                    } else {
+                        creds->set_x509_trust_file(trust_store, tls::x509_crt_format::PEM).get();
+                    }
+                    creds->set_priority_string(db::config::default_tls_priority);
+                    if (!prio.empty()) {
+                        creds->set_priority_string(prio);
+                    }
+                    if (clauth) {
+                        creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
+                    }
+                }
+                alternator_server.init(addr, alternator_port, alternator_https_port, creds).get();
             }
 
             if (cfg->defragment_memory_on_idle()) {
