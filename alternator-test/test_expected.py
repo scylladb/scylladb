@@ -488,7 +488,6 @@ def test_update_expected_1_not_null(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "NULL":
-@pytest.mark.xfail(reason="ComparisonOperator=NULL in Expected not yet implemented")
 def test_update_expected_1_null(test_table_s):
     # Note that despite its name, the "NULL" comparison operator doesn't check if
     # the attribute has the type "NULL", or an empty value. Rather it is explicitly
