@@ -168,11 +168,13 @@ class validating_consumer {
     size_t _row_count = 0;
     size_t _key = 0;
     std::vector<api::timestamp_type> _writetimes;
+    schema_ptr _s;
 public:
-    validating_consumer(table& t, reader_id id)
+    validating_consumer(table& t, reader_id id, schema_ptr s)
         : _t(t)
         , _id(id)
         , _writetimes(t.p_writetime)
+        , _s(s)
     { }
 
     void consume_new_partition(const dht::decorated_key& key) {
@@ -190,8 +192,8 @@ public:
         ++_row_count;
         sstring value;
         api::timestamp_type t;
-        std::tie(value, t) = _t.s.get_value(row);
-        test_log.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_t.s.schema(), row));
+        std::tie(value, t) = _t.s.get_value(*_s, row);
+        test_log.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_s, row));
         if (_value && value != _value) {
             throw std::runtime_error(format("Saw values from two different writes in partition {:d}: {} and {}", _key, _value, value));
         }
@@ -305,7 +307,7 @@ int main(int argc, char** argv) {
                 while (!cancelled) {
                     test_log.trace("{}: starting read", id);
                     auto rd = t.make_single_key_reader(pk, ck_range);
-                    auto row_count = rd->rd.consume(validating_consumer(t, id), db::no_timeout).get0();
+                    auto row_count = rd->rd.consume(validating_consumer(t, id, t.s.schema()), db::no_timeout).get0();
                     if (row_count != len) {
                         throw std::runtime_error(format("Expected {:d} fragments, got {:d}", len, row_count));
                     }
@@ -317,7 +319,7 @@ int main(int argc, char** argv) {
                 while (!cancelled) {
                     test_log.trace("{}: starting read", id);
                     auto rd = t.make_scanning_reader();
-                    auto row_count = rd->rd.consume(validating_consumer(t, id), db::no_timeout).get0();
+                    auto row_count = rd->rd.consume(validating_consumer(t, id, t.s.schema()), db::no_timeout).get0();
                     if (row_count != expected_row_count) {
                         throw std::runtime_error(format("Expected {:d} fragments, got {:d}", expected_row_count, row_count));
                     }
