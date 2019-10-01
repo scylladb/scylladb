@@ -93,6 +93,11 @@ class view_update_write_response_handler;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
 
+struct query_partition_key_range_concurrent_result {
+    std::vector<foreign_ptr<lw_shared_ptr<query::result>>> result;
+    replicas_per_token_range replicas;
+};
+
 struct view_update_backlog_timestamped {
     db::view::update_backlog backlog;
     api::timestamp_type ts;
@@ -293,7 +298,7 @@ private:
             coordinator_query_options optional_params);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
-    future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>, replicas_per_token_range> query_partition_key_range_concurrent(clock_type::time_point timeout,
+    future<query_partition_key_range_concurrent_result> query_partition_key_range_concurrent(clock_type::time_point timeout,
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
             lw_shared_ptr<query::read_command> cmd,
             db::consistency_level cl,
