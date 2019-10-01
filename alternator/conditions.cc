@@ -42,9 +42,10 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
             {"GT", comparison_operator_type::GT},
             {"IN", comparison_operator_type::IN},
             {"NULL", comparison_operator_type::IS_NULL},
+            {"NOT_NULL", comparison_operator_type::NOT_NULL},
             {"BETWEEN", comparison_operator_type::BETWEEN},
             {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
-    }; //TODO: CONTAINS, NOT_NULL
+    }; //TODO: CONTAINS
     if (!comparison_operator.IsString()) {
         throw api_error("ValidationException", format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
@@ -190,6 +191,17 @@ static bool check_NULL(const rjson::value* val, const rjson::value* array) {
     return val == nullptr;
 }
 
+// Check if array is empty and val is not null.
+static bool check_NOT_NULL(const rjson::value* val, const rjson::value* array) {
+    if (!array || !array->IsArray()) {
+        throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
+    }
+    if (array->Size() > 0) {
+        throw api_error("ValidationException", "NOT_NULL operator requires empty AttributeValueList");
+    }
+    return val != nullptr;
+}
+
 // Verify one Expect condition on one attribute (whose content is "got")
 // for the verify_expected() below.
 // This function returns true or false depending on whether the condition
@@ -239,6 +251,8 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
             return check_IN(got, attribute_value_list);
         case comparison_operator_type::IS_NULL:
             return check_NULL(got, attribute_value_list);
+        case comparison_operator_type::NOT_NULL:
+            return check_NOT_NULL(got, attribute_value_list);
         default:
             // FIXME: implement all the missing types, so there will be no default here.
             throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
