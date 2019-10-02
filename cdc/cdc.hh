@@ -166,6 +166,19 @@ struct db_context final {
 /// param[in] schema schema of a table for which CDC tables are being created
 seastar::future<> setup(db_context ctx, schema_ptr schema);
 
+// cdc log table operation
+enum class operation : int8_t {
+    // note: these values will eventually be read by a third party, probably not privvy to this
+    // enum decl, so don't change the constant values (or the datatype).
+    pre_image = 0, update = 1, row_delete = 2, range_delete_start = 3, range_delete_end = 4, partition_delete = 5
+};
+
+// cdc log data column operation
+enum class column_op : int8_t {
+    // same as "operation". Do not edit values or type/type unless you _really_ want to.
+    set = 0, del = 1, add = 2,
+};
+
 /// \brief Deletes CDC Log and CDC Description tables for a given table
 ///
 /// This function cleans up all CDC related tables created for a given table.
