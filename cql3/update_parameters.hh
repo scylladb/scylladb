@@ -205,6 +205,9 @@ public:
         partition_key_view pkey,
         clustering_key_view ckey,
         const column_definition& column) const;
+
+    static prefetched_rows_type build_prefetch_data(schema_ptr schema, const query::result& query_result,
+            const query::partition_slice& slice);
 };
 
 }
