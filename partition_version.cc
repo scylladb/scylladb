@@ -161,7 +161,10 @@ mutation_partition partition_snapshot::squashed() const {
     return ::squashed<mutation_partition>(version(),
                                [] (const mutation_partition& mp) -> const mutation_partition& { return mp; },
                                [this] (const mutation_partition& mp) { return mutation_partition(*_schema, mp); },
-                               [this] (mutation_partition& a, const mutation_partition& b) { a.apply(*_schema, b, *_schema); });
+                               [this] (mutation_partition& a, const mutation_partition& b) {
+                                   mutation_application_stats app_stats;
+                                   a.apply(*_schema, b, *_schema, app_stats);
+                               });
 }
 
 tombstone partition_entry::partition_tombstone() const {
@@ -186,11 +189,12 @@ partition_snapshot::~partition_snapshot() {
 }
 
 void merge_versions(const schema& s, mutation_partition& newer, mutation_partition&& older, cache_tracker* tracker) {
-    older.apply_monotonically(s, std::move(newer), tracker);
+    mutation_application_stats app_stats;
+    older.apply_monotonically(s, std::move(newer), tracker, app_stats);
     newer = std::move(older);
 }
 
-stop_iteration partition_snapshot::merge_partition_versions() {
+stop_iteration partition_snapshot::merge_partition_versions(mutation_application_stats& app_stats) {
     partition_version_ref& v = version();
     if (!v.is_unique_owner()) {
         // Shift _version to the oldest unreferenced version and then keep merging left hand side into it.
@@ -203,7 +207,12 @@ stop_iteration partition_snapshot::merge_partition_versions() {
         }
         while (auto prev = current->prev()) {
             region().allocator().invalidate_references();
-            if (current->partition().apply_monotonically(*schema(), std::move(prev->partition()), _tracker, is_preemptible::yes) == stop_iteration::no) {
+            // Here we count writes that overwrote rows from a previous version. Total number of writes does not change.
+            mutation_application_stats local_app_stats;
+            const auto do_stop_iteration = current->partition().apply_monotonically(*schema(),
+                    std::move(prev->partition()), _tracker, local_app_stats, is_preemptible::yes);
+            app_stats.row_hits += local_app_stats.row_hits;
+            if (do_stop_iteration == stop_iteration::no) {
                 return stop_iteration::no;
             }
             if (prev->is_referenced()) {
@@ -342,20 +351,22 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
     return *new_version;
 }
 
-void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema)
-{
-    apply(s, mutation_partition(mp_schema, mp), mp_schema);
+void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema,
+        mutation_application_stats& app_stats) {
+    apply(s, mutation_partition(mp_schema, mp), mp_schema, app_stats);
 }
 
-void partition_entry::apply(const schema& s, mutation_partition&& mp, const schema& mp_schema)
-{
+void partition_entry::apply(const schema& s, mutation_partition&& mp, const schema& mp_schema,
+        mutation_application_stats& app_stats) {
+    // A note about app_stats: it may happen that mp has rows that overwrite other rows
+    // in older partition_version. Those overwrites will be counted when their versions get merged.
     if (s.version() != mp_schema.version()) {
         mp.upgrade(mp_schema, s);
     }
     auto new_version = current_allocator().construct<partition_version>(std::move(mp));
     if (!_snapshot) {
         try {
-            _version->partition().apply_monotonically(s, std::move(new_version->partition()), no_cache_tracker);
+            _version->partition().apply_monotonically(s, std::move(new_version->partition()), no_cache_tracker, app_stats);
             current_allocator().destroy(new_version);
             return;
         } catch (...) {
@@ -364,6 +375,7 @@ void partition_entry::apply(const schema& s, mutation_partition&& mp, const sche
     }
     new_version->insert_before(*_version);
     set_version(new_version);
+    app_stats.row_writes += new_version->partition().row_count();
 }
 
 // Iterates over all rows in mutation represented by partition_entry.

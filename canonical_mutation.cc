@@ -79,7 +79,8 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
 
     if (version == m.schema()->version()) {
         auto partition_view = mutation_partition_view::from_view(mv.partition());
-        m.partition().apply(*m.schema(), partition_view, *m.schema());
+        mutation_application_stats app_stats;
+        m.partition().apply(*m.schema(), partition_view, *m.schema(), app_stats);
     } else {
         column_mapping cm = mv.mapping();
         converting_mutation_partition_applier v(cm, *m.schema(), m.partition());

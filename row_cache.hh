@@ -237,6 +237,7 @@ private:
 private:
     void setup_metrics();
 public:
+    cache_tracker(mutation_application_stats&);
     cache_tracker();
     ~cache_tracker();
     void clear();

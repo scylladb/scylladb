@@ -215,8 +215,9 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
 
             auto m2 = fms.back().unfreeze(m.schema());
             fms.pop_back();
+            mutation_application_stats app_stats;
             while (!fms.empty()) {
-                m2.partition().apply(*m.schema(), fms.back().partition(), *m.schema());
+                m2.partition().apply(*m.schema(), fms.back().partition(), *m.schema(), app_stats);
                 fms.pop_back();
             }
             BOOST_REQUIRE_EQUAL(m, m2);

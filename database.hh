@@ -173,19 +173,22 @@ private:
     dirty_memory_manager* _dirty_memory_manager;
     std::optional<shared_promise<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
+    table_stats& _table_stats;
 public:
     memtable_list(
             seal_immediate_fn_type seal_immediate_fn,
             seal_delayed_fn_type seal_delayed_fn,
             std::function<schema_ptr()> cs,
             dirty_memory_manager* dirty_memory_manager,
+            table_stats& table_stats,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
         : _memtables({})
         , _seal_immediate_fn(seal_immediate_fn)
         , _seal_delayed_fn(seal_delayed_fn)
         , _current_schema(cs)
         , _dirty_memory_manager(dirty_memory_manager)
-        , _compaction_scheduling_group(compaction_scheduling_group) {
+        , _compaction_scheduling_group(compaction_scheduling_group)
+        , _table_stats(table_stats) {
         add_memtable();
     }
 
@@ -193,12 +196,15 @@ public:
             seal_immediate_fn_type seal_immediate_fn,
             std::function<schema_ptr()> cs,
             dirty_memory_manager* dirty_memory_manager,
+            table_stats& table_stats,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
-        : memtable_list(std::move(seal_immediate_fn), {}, std::move(cs), dirty_memory_manager, compaction_scheduling_group) {
+        : memtable_list(std::move(seal_immediate_fn), {}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
     }
 
-    memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager, seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
-        : memtable_list({}, {}, std::move(cs), dirty_memory_manager, compaction_scheduling_group) {
+    memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager,
+            table_stats& table_stats,
+            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
+        : memtable_list({}, {}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
     }
 
     bool may_flush() const {
@@ -327,6 +333,9 @@ struct table_stats {
     int64_t live_sstable_count = 0;
     /** Estimated number of compactions pending for this column family */
     int64_t pending_compactions = 0;
+    int64_t memtable_partition_insertions = 0;
+    int64_t memtable_partition_hits = 0;
+    mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_and_histogram reads{256};
     utils::timed_rate_moving_average_and_histogram writes{256};
     utils::timed_rate_moving_average_and_histogram cas_prepare{256};

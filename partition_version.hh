@@ -352,7 +352,7 @@ public:
     // If possible, merges the version pointed to by this snapshot with
     // adjacent partition versions. Leaves the snapshot in an unspecified state.
     // Can be retried if previous merge attempt has failed.
-    stop_iteration merge_partition_versions();
+    stop_iteration merge_partition_versions(mutation_application_stats& app_stats);
 
     // Prepares the snapshot for cleaning by moving to the right-most unreferenced version.
     // Returns stop_iteration::yes if there is nothing to merge with and the snapshot
@@ -535,8 +535,8 @@ public:
     // Assumes this instance and mp are fully continuous.
     // Use only on non-evictable entries.
     // Must not be called when is_locked().
-    void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
-    void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema);
+    void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema, mutation_application_stats& app_stats);
+    void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema, mutation_application_stats& app_stats);
 
     // Adds mutation_partition represented by "other" to the one represented
     // by this entry.

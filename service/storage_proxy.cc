@@ -2855,7 +2855,8 @@ public:
             });
             auto m = boost::accumulate(v, mutation(schema, it->par->mut().key(*schema)), [this, schema] (mutation& m, const version& ver) {
                 if (ver.par) {
-                    m.partition().apply(*schema, ver.par->mut().partition(), *schema);
+                    mutation_application_stats app_stats;
+                    m.partition().apply(*schema, ver.par->mut().partition(), *schema, app_stats);
                 }
                 return std::move(m);
             });

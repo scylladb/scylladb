@@ -878,6 +878,7 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
     auto do_test = [](auto&& gen) {
         auto&& alloc = standard_allocator();
         with_allocator(alloc, [&] {
+            mutation_application_stats app_stats;
             auto&& s = *gen.schema();
             mutation target = gen();
             mutation second = gen();
@@ -897,7 +898,7 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                     // Continutiy merging rules mandate that continuous range in the newer verison
                     // contains all rows which are in the old versions.
                     if (use_second) {
-                        second.partition().apply(s, target.partition().sliced(s, {ck_range}));
+                        second.partition().apply(s, target.partition().sliced(s, {ck_range}), app_stats);
                     }
                 }
             }
@@ -911,7 +912,7 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                 auto m2 = mutation_partition(*m.schema(), second.partition());
                 injector.fail_after(fail_offset++);
                 try {
-                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats);
                     injector.cancel();
                     assert_that(m).is_equal_to(expected)
                         .has_same_continuity(expected);
@@ -928,7 +929,7 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                             expected_cont, target.partition().get_continuity(s), second.partition().get_continuity(s),
                             actual, c1, c2));
                     }
-                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats);
                     assert_that(m).is_equal_to(expected);
                 }
             } while (injector.failed());
@@ -942,6 +943,8 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
 
 SEASTAR_TEST_CASE(test_mutation_diff) {
     return seastar::async([] {
+        mutation_application_stats app_stats;
+
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
         auto s = schema_builder("ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
@@ -1013,7 +1016,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 
         mutation m12_1(s, partition_key::from_single_value(*s, "key1"));
         m12_1.apply(m1);
-        m12_1.partition().apply(*s, m2_1, *s);
+        m12_1.partition().apply(*s, m2_1, *s, app_stats);
         BOOST_REQUIRE_EQUAL(m12, m12_1);
 
         auto m1_2 = m1.partition().difference(s, m2.partition());
@@ -1031,7 +1034,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 
         mutation m12_2(s, partition_key::from_single_value(*s, "key1"));
         m12_2.apply(m2);
-        m12_2.partition().apply(*s, m1_2, *s);
+        m12_2.partition().apply(*s, m1_2, *s, app_stats);
         BOOST_REQUIRE_EQUAL(m12, m12_2);
 
         auto m3_12 = m3.partition().difference(s, m12.partition());
@@ -1042,7 +1045,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 
         mutation m123(s, partition_key::from_single_value(*s, "key1"));
         m123.apply(m3);
-        m123.partition().apply(*s, m12_3, *s);
+        m123.partition().apply(*s, m12_3, *s, app_stats);
         BOOST_REQUIRE_EQUAL(m12, m123);
     });
 }
@@ -1157,18 +1160,19 @@ SEASTAR_TEST_CASE(test_query_digest) {
             } else {
                 BOOST_TEST_MESSAGE("If not equal, they should become so after applying diffs mutually");
 
+                mutation_application_stats app_stats;
                 schema_ptr s = m1.schema();
 
                 auto m3 = m2;
                 {
                     auto diff = m1.partition().difference(s, m2.partition());
-                    m3.partition().apply(*m3.schema(), std::move(diff));
+                    m3.partition().apply(*m3.schema(), std::move(diff), app_stats);
                 }
 
                 auto m4 = m1;
                 {
                     auto diff = m2.partition().difference(s, m1.partition());
-                    m4.partition().apply(*m4.schema(), std::move(diff));
+                    m4.partition().apply(*m4.schema(), std::move(diff), app_stats);
                 }
 
                 check_digests_equal(m3, m4);
@@ -1606,6 +1610,7 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             }
         };
         for_each_mutation_pair([&] (auto&& m1, auto&& m2, are_equal eq) {
+            mutation_application_stats app_stats;
             auto s = m1.schema();
             if (s != m2.schema()) {
                 return;
@@ -1613,7 +1618,7 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             auto m12 = m1;
             m12.apply(m2);
             auto m12_with_diff = m1;
-            m12_with_diff.partition().apply(*s, m2.partition().difference(s, m1.partition()));
+            m12_with_diff.partition().apply(*s, m2.partition().difference(s, m1.partition()), app_stats);
             check_partitions_match(m12.partition(), m12_with_diff.partition(), *s);
             check_partitions_match(mutation_partition{s}, m1.partition().difference(s, m1.partition()), *s);
             check_partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{s}), *s);

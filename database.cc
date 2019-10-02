@@ -1339,7 +1339,7 @@ future<> memtable_list::request_flush() {
 }
 
 lw_shared_ptr<memtable> memtable_list::new_memtable() {
-    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, this, _compaction_scheduling_group);
+    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, _table_stats, this, _compaction_scheduling_group);
 }
 
 future<flush_permit> flush_permit::reacquire_sstable_write_permit() && {
