@@ -31,7 +31,6 @@
 #include <boost/version.hpp>
 #include <sys/sdt.h>
 #include "read_context.hh"
-#include "schema_upgrader.hh"
 #include "dirty_memory_manager.hh"
 #include "cache_flat_mutation_reader.hh"
 #include "real_dirty_memory_accounter.hh"
@@ -349,9 +348,7 @@ future<> read_context::create_underlying(bool skip_first_fragment, db::timeout_c
 
 static flat_mutation_reader read_directly_from_underlying(read_context& reader) {
     flat_mutation_reader res = make_delegating_reader(reader.underlying().underlying());
-    if (reader.schema()->version() != reader.underlying().underlying().schema()->version()) {
-        res = transform(std::move(res), schema_upgrader(reader.schema()));
-    }
+    res.upgrade_schema(reader.schema());
     return make_nonforwardable(std::move(res), true);
 }
 
@@ -1270,9 +1267,7 @@ flat_mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
     auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), _schema, &rc._tracker, reader.phase());
     auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
     auto r = make_cache_flat_mutation_reader(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
-    if (reader.schema()->version() != _schema->version()) {
-        r = transform(std::move(r), schema_upgrader(reader.schema()));
-    }
+    r.upgrade_schema(reader.schema());
     return r;
 }
 
