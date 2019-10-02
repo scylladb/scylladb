@@ -100,15 +100,44 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_
     return filtering_restrictions;
 }
 
+namespace {
+
+struct size_check {
+    // True iff size passes this check.
+    virtual bool operator()(rapidjson::SizeType size) const = 0;
+    // Check description, such that format("expected array {}", check.what()) is human-readable.
+    virtual sstring what() const = 0;
+};
+
+class exact_size : public size_check {
+    rapidjson::SizeType _expected;
+  public:
+    explicit exact_size(rapidjson::SizeType expected) : _expected(expected) {}
+    bool operator()(rapidjson::SizeType size) const override { return size == _expected; }
+    sstring what() const override { return format("of size {}", _expected); }
+};
+
+struct empty : public size_check {
+    bool operator()(rapidjson::SizeType size) const override { return size < 1; }
+    sstring what() const override { return "to be empty"; }
+};
+
+struct nonempty : public size_check {
+    bool operator()(rapidjson::SizeType size) const override { return size > 0; }
+    sstring what() const override { return "to be non-empty"; }
+};
+
+} // anonymous namespace
+
 // Check that array has the expected number of elements
-static void verify_operand_count(const rjson::value* array, rapidjson::SizeType expected, const rjson::value& op) {
+static void verify_operand_count(const rjson::value* array, const size_check& expected, const rjson::value& op) {
     if (!array || !array->IsArray()) {
         throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
     }
-    if (array->Size() != expected) {
+    if (!expected(array->Size())) {
         throw api_error("ValidationException",
-                        format("{} operator requires AttributeValueList of length {}, found {} instead",
-                               op, expected, array->Size()));
+                        format("{} operator requires AttributeValueList {}, instead found list size {}",
+                               op, expected.what(), array->Size()));
     }
 }
 
@@ -146,19 +175,13 @@ static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
     return val1.substr(0, val2.size()) == val2;
 }
 
-// Check if a JSON-encoded value equals any element of an array.
-static bool check_IN(const rjson::value* val, const rjson::value* array) {
-    if (!array || !array->IsArray()) {
-        throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
+// Check if a JSON-encoded value equals any element of an array, which must have at least one element.
+static bool check_IN(const rjson::value* val, const rjson::value& array) {
+    if (!array[0].IsObject() || array[0].MemberCount() != 1) {
+        throw api_error("ValidationException",
+                        format("IN operator encountered malformed AttributeValue: {}", array[0]));
     }
-    if (array->Size() < 1) {
-        throw api_error("ValidationException", "IN operator requires nonempty AttributeValueList");
-    }
-    const auto& elem0 = (*array)[0];
-    if (!elem0.IsObject() || elem0.MemberCount() != 1) {
-        throw api_error("ValidationException", format("IN operator encountered malformed AttributeValue: {}", elem0));
-    }
-    const auto& type = elem0.MemberBegin()->name;
+    const auto& type = array[0].MemberBegin()->name;
     if (type != "S" && type != "N" && type != "B") {
         throw api_error("ValidationException",
                         "IN operator requires AttributeValueList elements to be of type String, Number, or Binary ");
@@ -167,7 +190,7 @@ static bool check_IN(const rjson::value* val, const rjson::value* array) {
         return false;
     }
     bool have_match = false;
-    for (const auto& elem : array->GetArray()) {
+    for (const auto& elem : array.GetArray()) {
         if (!elem.IsObject() || elem.MemberCount() != 1 || elem.MemberBegin()->name != type) {
             throw api_error("ValidationException",
                             "IN operator requires all AttributeValueList elements to have the same type ");
@@ -180,25 +203,11 @@ static bool check_IN(const rjson::value* val, const rjson::value* array) {
     return have_match;
 }
 
-// Check if array is empty and val is null.
-static bool check_NULL(const rjson::value* val, const rjson::value* array) {
-    if (!array || !array->IsArray()) {
-        throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
-    }
-    if (array->Size() > 0) {
-        throw api_error("ValidationException", "NULL operator requires empty AttributeValueList");
-    }
+static bool check_NULL(const rjson::value* val) {
     return val == nullptr;
 }
 
-// Check if array is empty and val is not null.
-static bool check_NOT_NULL(const rjson::value* val, const rjson::value* array) {
-    if (!array || !array->IsArray()) {
-        throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
-    }
-    if (array->Size() > 0) {
-        throw api_error("ValidationException", "NOT_NULL operator requires empty AttributeValueList");
-    }
+static bool check_NOT_NULL(const rjson::value* val) {
     return val != nullptr;
 }
 
@@ -239,20 +248,23 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         comparison_operator_type op = get_comparison_operator(*comparison_operator);
         switch (op) {
         case comparison_operator_type::EQ:
-            verify_operand_count(attribute_value_list, 1, *comparison_operator);
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_EQ(got, (*attribute_value_list)[0]);
         case comparison_operator_type::NE:
-            verify_operand_count(attribute_value_list, 1, *comparison_operator);
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_NE(got, (*attribute_value_list)[0]);
         case comparison_operator_type::BEGINS_WITH:
-            verify_operand_count(attribute_value_list, 1, *comparison_operator);
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
         case comparison_operator_type::IN:
-            return check_IN(got, attribute_value_list);
+            verify_operand_count(attribute_value_list, nonempty(), *comparison_operator);
+            return check_IN(got, *attribute_value_list);
         case comparison_operator_type::IS_NULL:
-            return check_NULL(got, attribute_value_list);
+            verify_operand_count(attribute_value_list, empty(), *comparison_operator);
+            return check_NULL(got);
         case comparison_operator_type::NOT_NULL:
-            return check_NOT_NULL(got, attribute_value_list);
+            verify_operand_count(attribute_value_list, empty(), *comparison_operator);
+            return check_NOT_NULL(got);
         default:
             // FIXME: implement all the missing types, so there will be no default here.
             throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
