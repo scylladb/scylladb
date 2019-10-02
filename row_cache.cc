@@ -1157,8 +1157,8 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
     });
 }
 
-void row_cache::evict(const dht::partition_range& range) {
-    invalidate_unwrapped(range);
+void row_cache::evict() {
+    while (_tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) {}
 }
 
 void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
