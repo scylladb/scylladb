@@ -172,6 +172,9 @@ tombstone partition_entry::partition_tombstone() const {
 
 partition_snapshot::~partition_snapshot() {
     with_allocator(region().allocator(), [this] {
+        if (_locked) {
+            touch();
+        }
         if (_version && _version.is_unique_owner()) {
             auto v = &*_version;
             _version = {};
@@ -705,6 +708,7 @@ void partition_entry::evict(mutation_cleaner& cleaner) noexcept {
         return;
     }
     if (_snapshot) {
+        assert(!_snapshot->is_locked());
         _snapshot->_version = std::move(_version);
         _snapshot->_version.mark_as_unique_owner();
         _snapshot->_entry = nullptr;
@@ -733,5 +737,9 @@ void partition_snapshot::lock() noexcept {
 }
 
 void partition_snapshot::unlock() noexcept {
+    // Locked snapshots must always be latest, is_locked() assumes that.
+    // Also, touch() is only effective when this snapshot is latest. 
+    assert(at_latest_version());
     _locked = false;
+    touch(); // Make the entry evictable again in case it was fully unlinked by eviction attempt.
 }

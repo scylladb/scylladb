@@ -1245,8 +1245,11 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         partition_version& pv = partition_version::container_of(mutation_partition::container_of(
             mutation_partition::rows_type::container_of_only_member(*it)));
         if (pv.is_referenced_from_entry()) {
-            cache_entry& ce = cache_entry::container_of(partition_entry::container_of(pv));
-            ce.on_evicted(tracker);
+            partition_entry& pe = partition_entry::container_of(pv);
+            if (!pe.is_locked()) {
+                cache_entry& ce = cache_entry::container_of(pe);
+                ce.on_evicted(tracker);
+            }
         }
     }
 }

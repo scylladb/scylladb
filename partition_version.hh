@@ -330,6 +330,7 @@ public:
 
     // Tells whether the snapshot is locked.
     // Locking the snapshot prevents it from getting detached from the partition entry.
+    // It also prevents the partition entry from being evicted.
     bool is_locked() const {
         return _locked;
     }
