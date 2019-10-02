@@ -33,6 +33,7 @@
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
+#include "types/tuple.hh"
 
 using locator::snitch_ptr;
 using locator::token_metadata;
@@ -53,6 +54,9 @@ template<> struct hash<std::pair<net::inet_address, unsigned int>> {
 
 
 namespace cdc {
+
+using operation_native_type = std::underlying_type_t<operation>;
+using column_op_native_type = std::underlying_type_t<column_op>;
 
 sstring log_name(const sstring& table_name) {
     static constexpr auto cdc_log_suffix = "_scylla_cdc_log";
@@ -103,17 +107,21 @@ static future<> setup_log(db_context ctx, const schema& s) {
     b.with_column("stream_id", uuid_type, column_kind::partition_key);
     b.with_column("time", timeuuid_type, column_kind::clustering_key);
     b.with_column("batch_seq_no", int32_type, column_kind::clustering_key);
-    b.with_column("operation", int32_type);
+    b.with_column("operation", data_type_for<operation_native_type>());
     b.with_column("ttl", long_type);
-    auto add_columns = [&] (const schema::const_iterator_range_type& columns) {
+    auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
-            b.with_column("_" + column.name(), column.type);
+            auto type = column.type;
+            if (is_data_col) {
+                type = tuple_type_impl::get_instance({ /* op */ data_type_for<column_op_native_type>(), /* value */ type, /* ttl */long_type});
+            }
+            b.with_column("_" + column.name(), type);
         }
     };
     add_columns(s.partition_key_columns());
     add_columns(s.clustering_key_columns());
-    add_columns(s.static_columns());
-    add_columns(s.regular_columns());
+    add_columns(s.static_columns(), true);
+    add_columns(s.regular_columns(), true);
     return ctx._migration_manager.announce_new_column_family(b.build(), false);
 }
 
