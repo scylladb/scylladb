@@ -666,6 +666,18 @@ partition_snapshot::range_tombstones()
         position_in_partition_view::after_all_clustered_rows());
 }
 
+void partition_snapshot::touch() noexcept {
+    // Eviction assumes that older versions are evicted before newer so only the latest snapshot
+    // can be touched.
+    if (_tracker && at_latest_version()) {
+        auto&& rows = version()->partition().clustered_rows();
+        assert(!rows.empty());
+        rows_entry& last_dummy = *rows.rbegin();
+        assert(last_dummy.is_last_dummy());
+        _tracker->touch(last_dummy);
+    }
+}
+
 std::ostream& operator<<(std::ostream& out, const partition_entry::printer& p) {
     auto& e = p._partition_entry;
     out << "{";

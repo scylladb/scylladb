@@ -360,6 +360,9 @@ public:
     // to the latest version.
     stop_iteration slide_to_oldest() noexcept;
 
+    // Brings the snapshot to the front of the LRU.
+    void touch() noexcept;
+
     // Must be called after snapshot's original region is merged into a different region
     // before the original region is destroyed, unless the snapshot is destroyed earlier.
     void migrate(logalloc::region* region, mutation_cleaner* cleaner) noexcept {

@@ -208,10 +208,7 @@ future<> cache_flat_mutation_reader::process_static_row(db::timeout_clock::time_
 
 inline
 void cache_flat_mutation_reader::touch_partition() {
-    if (_snp->at_latest_version()) {
-        rows_entry& last_dummy = *_snp->version()->partition().clustered_rows().rbegin();
-        _snp->tracker()->touch(last_dummy);
-    }
+    _snp->touch();
 }
 
 inline
