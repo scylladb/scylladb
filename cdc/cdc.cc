@@ -20,6 +20,8 @@
  */
 
 #include <utility>
+#include <algorithm>
+
 #include <seastar/util/defer.hh>
 #include <seastar/core/thread.hh>
 
@@ -34,6 +36,9 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "types/tuple.hh"
+#include "cql3/statements/select_statement.hh"
+#include "cql3/multi_column_relation.hh"
+#include "cql3/tuples.hh"
 
 using locator::snitch_ptr;
 using locator::token_metadata;
@@ -52,6 +57,7 @@ template<> struct hash<std::pair<net::inet_address, unsigned int>> {
 
 }
 
+using namespace std::chrono_literals;
 
 namespace cdc {
 
@@ -322,6 +328,71 @@ public:
             }
         }
         return res;
+    }
+
+    static db::timeout_clock::time_point default_timeout() {
+        return db::timeout_clock::now() + 10s;
+    }
+
+    future<lw_shared_ptr<cql3::untyped_result_set>> pre_image_select(
+            service::storage_proxy& proxy,
+            service::client_state& client_state,
+            db::consistency_level cl,
+            const mutation& m)
+    {
+        auto& p = m.partition();
+        if (p.partition_tombstone() || !p.row_tombstones().empty() || p.clustered_rows().empty()) {
+            return make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>();
+        }
+
+        dht::partition_range_vector partition_ranges{dht::partition_range(m.decorated_key())};
+
+        auto&& pc = _schema->partition_key_columns();
+        auto&& cc = _schema->clustering_key_columns();
+
+        std::vector<query::clustering_range> bounds;
+        if (cc.empty()) {
+            bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+        } else {
+            for (const rows_entry& r : p.clustered_rows()) {
+                auto& ck = r.key();
+                bounds.push_back(query::clustering_range::make_singular(ck));
+            }
+        }
+
+        std::vector<const column_definition*> columns;
+        columns.reserve(_schema->all_columns().size());
+
+        std::transform(pc.begin(), pc.end(), std::back_inserter(columns), [](auto& c) { return &c; });
+        std::transform(cc.begin(), cc.end(), std::back_inserter(columns), [](auto& c) { return &c; });
+
+        query::column_id_vector static_columns, regular_columns;
+
+        auto sk = column_kind::static_column;
+        auto rk = column_kind::regular_column;
+        // TODO: this assumes all mutations touch the same set of columns. This might not be true, and we may need to do more horrible set operation here.
+        for (auto& [r, cids, kind] : { std::tie(p.static_row().get(), static_columns, sk), std::tie(p.clustered_rows().begin()->row().cells(), regular_columns, rk) }) {
+            r.for_each_cell([&](column_id id, const atomic_cell_or_collection&) {
+                auto& cdef =_schema->column_at(kind, id);
+                cids.emplace_back(id);
+                columns.emplace_back(&cdef);
+            });
+        }
+
+        auto selection = cql3::selection::selection::for_columns(_schema, std::move(columns));
+        auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), selection->get_query_options());
+        auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_partitions);
+
+        return proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+                [this, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
+                    cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
+                    query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *selection));
+                    auto result_set = builder.build();
+                    if (!result_set || result_set->empty()) {
+                        return {};
+                    }
+                    return make_lw_shared<cql3::untyped_result_set>(*result_set);
+        });
     }
 };
 
