@@ -392,6 +392,13 @@ int main(int argc, char** argv) {
             evictor.cancel();
             readers.get();
             scanning_readers.get();
+
+            t.cache.evict();
+            t.tracker.cleaner().drain().get();
+            t.tracker.memtable_cleaner().drain().get();
+
+            assert(t.tracker.get_stats().partitions == 0);
+            assert(t.tracker.get_stats().rows == 0);
         });
     });
 }
