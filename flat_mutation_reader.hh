@@ -331,6 +331,7 @@ private:
     flat_mutation_reader() = default;
     explicit operator bool() const noexcept { return bool(_impl); }
     friend class optimized_optional<flat_mutation_reader>;
+    void do_upgrade_schema(const schema_ptr&);
 public:
     // Documented in mutation_reader::forwarding in mutation_reader.hh.
     class partition_range_forwarding_tag;
@@ -519,6 +520,14 @@ public:
     // transformation to the fragment stream.
     void move_buffer_content_to(impl& other) {
         _impl->move_buffer_content_to(other);
+    }
+
+    // Causes this reader to conform to s.
+    // Multiple calls of upgrade_schema() compose, effects of prior calls on the stream are preserved.
+    void upgrade_schema(const schema_ptr& s) {
+        if (__builtin_expect(s != schema(), false)) {
+            do_upgrade_schema(s);
+        }
     }
 };
 
