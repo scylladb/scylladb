@@ -171,22 +171,6 @@ public:
         return {_timestamp - 1, _local_deletion_time};
     }
 
-#if 0
-    public RangeTombstone makeRangeTombstone(ColumnSlice slice) throws InvalidRequestException
-    {
-        QueryProcessor.validateComposite(slice.start, metadata.comparator);
-        QueryProcessor.validateComposite(slice.finish, metadata.comparator);
-        return new RangeTombstone(slice.start, slice.finish, timestamp, localDeletionTime);
-    }
-
-    public RangeTombstone makeTombstoneForOverwrite(ColumnSlice slice) throws InvalidRequestException
-    {
-        QueryProcessor.validateComposite(slice.start, metadata.comparator);
-        QueryProcessor.validateComposite(slice.finish, metadata.comparator);
-        return new RangeTombstone(slice.start, slice.finish, timestamp - 1, localDeletionTime);
-    }
-#endif
-
     gc_clock::duration ttl() const {
         return _ttl.count() > 0 ? _ttl : _schema->default_time_to_live();
     }
