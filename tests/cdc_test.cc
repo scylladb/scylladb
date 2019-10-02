@@ -25,6 +25,8 @@
 #include "tests/cql_assertions.hh"
 #include "tests/cql_test_env.hh"
 #include "transport/messages/result_message.hh"
+#include "types.hh"
+#include "types/tuple.hh"
 
 SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     do_with_cql_env_thread([](cql_test_env& e) {
@@ -87,6 +89,49 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     }).get();
 }
 
+static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
+    auto rs = rows.rs().result_set().rows();
+    std::vector<std::vector<bytes_opt>> results;
+    for (auto it = rs.begin(); it != rs.end(); ++it) {
+        results.push_back(*it);
+    }
+    return results;
+}
+
+static size_t column_index(const cql_transport::messages::result_message::rows& rows, const sstring& name) {
+    size_t res = 0;
+    for (auto& col : rows.rs().get_metadata().get_names()) {
+        if (col->name->text() == name) {
+            return res;
+        }
+        ++res;
+    }
+    throw std::invalid_argument("No such column: " + name);
+}
+
+template<typename Comp = std::equal_to<bytes_opt>>
+static std::vector<std::vector<bytes_opt>> to_bytes_filtered(const cql_transport::messages::result_message::rows& rows, cdc::operation op, const Comp& comp = {}) {
+    const auto op_type = data_type_for<std::underlying_type_t<cdc::operation>>();
+
+    auto results = to_bytes(rows);
+    auto op_index = column_index(rows, "operation");
+    auto op_bytes = op_type->decompose(std::underlying_type_t<cdc::operation>(op));
+
+    results.erase(std::remove_if(results.begin(), results.end(), [&](const std::vector<bytes_opt>& bo) {
+        return !comp(op_bytes, bo[op_index]);
+    }), results.end());
+
+    return results;
+}
+
+static void sort_by_time(const cql_transport::messages::result_message::rows& rows, std::vector<std::vector<bytes_opt>>& results) {
+    auto time_index = column_index(rows, "time");
+    std::sort(results.begin(), results.end(),
+            [time_index] (const std::vector<bytes_opt>& a, const std::vector<bytes_opt>& b) {
+                return timeuuid_type->as_less_comparator()(*a[time_index], *b[time_index]);
+            });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
@@ -100,18 +145,14 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444");
         cquery_nofail(e, "UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11");
-        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_pk2\", \"_ck\", \"_ck2\" FROM ks.{}", cdc::log_name("tbl"))).get0();
+        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_pk2\", \"_ck\", \"_ck2\", operation FROM ks.{}", cdc::log_name("tbl"))).get0();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
-        auto rs = rows->rs().result_set().rows();
-        std::vector<std::vector<bytes_opt>> results;
-        for (auto it = rs.begin(); it != rs.end(); ++it) {
-            results.push_back(*it);
-        }
-        std::sort(results.begin(), results.end(),
-                [] (const std::vector<bytes_opt>& a, const std::vector<bytes_opt>& b) {
-                    return timeuuid_type->as_less_comparator()(*a[0], *b[0]);
-                });
+
+        auto results = to_bytes_filtered(*rows, cdc::operation::pre_image, std::not_equal_to<bytes_opt>{});
+
+        sort_by_time(*rows, results);
+
         auto actual_i = results.begin();
         auto actual_end = results.end();
         auto assert_row = [&] (int pk, int pk2, int ck = -1, int ck2 = -1) {
@@ -155,5 +196,54 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11
         assert_row(1, 11);
         BOOST_REQUIRE(actual_i == actual_end);
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
+
+        auto select_log = [&] {
+            auto msg = e.execute_cql(format("SELECT * FROM ks.{}", cdc::log_name("tbl"))).get0();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+            return rows;
+        };
+
+        auto rows = select_log();
+
+        BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
+
+        auto first = to_bytes_filtered(*rows, cdc::operation::update);
+
+        auto ck2_index = column_index(*rows, "_ck2");
+        auto val_index = column_index(*rows, "_val");
+
+        auto val_type = tuple_type_impl::get_instance({ data_type_for<std::underlying_type_t<cdc::column_op>>(), int32_type, long_type});
+        auto val = *first[0][val_index];
+
+        BOOST_REQUIRE_EQUAL(int32_type->decompose(1111), first[0][ck2_index]);
+        BOOST_REQUIRE_EQUAL(data_value(11111), value_cast<tuple_type_impl::native_type>(val_type->deserialize(bytes_view(val))).at(1));
+
+        auto last = 11111;
+        for (auto i = 0u; i < 10; ++i) {
+            auto nv = last + 1;
+            cquery_nofail(e, "UPDATE ks.tbl SET val=" + std::to_string(nv) +" where pk=1 AND pk2=11 AND ck=111 AND ck2=1111");
+
+            rows = select_log();
+
+            auto pre_image = to_bytes_filtered(*rows, cdc::operation::pre_image);
+            auto second = to_bytes_filtered(*rows, cdc::operation::update);
+            sort_by_time(*rows, second);
+
+            BOOST_REQUIRE_EQUAL(pre_image.size(), i + 1);
+
+            val = *pre_image.back()[val_index];
+            BOOST_REQUIRE_EQUAL(int32_type->decompose(1111), pre_image[0][ck2_index]);
+            BOOST_REQUIRE_EQUAL(data_value(last), value_cast<tuple_type_impl::native_type>(val_type->deserialize(bytes_view(val))).at(1));
+
+            last = nv;
+        }
     }).get();
 }
