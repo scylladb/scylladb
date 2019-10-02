@@ -582,6 +582,9 @@ public:
     bool is_map() const { return _kind == kind::map; }
     bool is_set() const { return _kind == kind::set; }
     bool is_list() const { return _kind == kind::list; }
+    // Lists and sets are similar: they are both represented as std::vector<data_value>
+    // @sa listlike_collection_type_impl
+    bool is_listlike() const { return _kind == kind::list || _kind == kind::set; }
     bool is_multi_cell() const;
     bool is_atomic() const { return !is_multi_cell(); }
     bool is_reversed() const { return _kind == kind::reversed; }
@@ -671,7 +674,6 @@ public:
     data_value make_empty() const {
         return make_value(native_type(empty_t()));
     }
-protected:
     const native_type& from_value(const void* v) const {
         return *reinterpret_cast<const native_type*>(v);
     }

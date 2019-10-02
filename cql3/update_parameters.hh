@@ -49,8 +49,6 @@
 #include "exceptions/exceptions.hh"
 #include "cql3/query_options.hh"
 
-#include <unordered_map>
-
 namespace cql3 {
 
 /**
@@ -58,62 +56,55 @@ namespace cql3 {
  */
 class update_parameters final {
 public:
-    // Holder for data needed by CQL list updates which depend on current state of the list.
+    // Holder for data for
+    // 1) CQL list updates which depend on current state of the list
+    // 2) cells needed to check conditions of a CAS statement,
+    // 3) rows of CAS result set.
     struct prefetch_data {
         using key = std::pair<partition_key, clustering_key>;
-        using key_view = std::pair<partition_key_view, clustering_key_view>;
-        struct key_hashing {
-            partition_key::hashing pk_hash;
-            clustering_key::hashing ck_hash;
+        using key_view = std::pair<const partition_key&, const clustering_key&>;
+        struct key_less {
+            partition_key::tri_compare pk_cmp;
+            clustering_key::tri_compare ck_cmp;
 
-            key_hashing(const schema& s)
-                : pk_hash(s)
-                , ck_hash(s)
+            key_less(const schema& s)
+                : pk_cmp(s)
+                , ck_cmp(s)
             { }
+            int tri_compare(const partition_key& pk1, const clustering_key& ck1,
+                    const partition_key& pk2, const clustering_key& ck2) const {
 
-            size_t operator()(const key& k) const {
-                return pk_hash(k.first) ^ ck_hash(k.second);
+                int rc = pk_cmp(pk1, pk2);
+                return rc ? rc : ck_cmp(ck1, ck2);
             }
-
-            size_t operator()(const key_view& k) const {
-                return pk_hash(k.first) ^ ck_hash(k.second);
+            // Allow mixing std::pair<partition_key, clustering_key> and
+            // std::pair<const partition_key&, const clustering_key&> during lookup
+            template <typename Pair1, typename Pair2>
+            bool operator()(const Pair1& k1, const Pair2& k2) const {
+                return  tri_compare(k1.first, k1.second, k2.first, k2.second) < 0;
             }
         };
-        struct key_equality {
-            partition_key::equality pk_eq;
-            clustering_key::equality ck_eq;
-
-            key_equality(const schema& s)
-                : pk_eq(s)
-                , ck_eq(s)
-            { }
-
-            bool operator()(const key& k1, const key& k2) const {
-                return pk_eq(k1.first, k2.first) && ck_eq(k1.second, k2.second);
-            }
-            bool operator()(const key_view& k1, const key& k2) const {
-                return pk_eq(k1.first, k2.first) && ck_eq(k1.second, k2.second);
-            }
-            bool operator()(const key& k1, const key_view& k2) const {
-                return pk_eq(k1.first, k2.first) && ck_eq(k1.second, k2.second);
-            }
-        };
-        struct cell {
-            bytes key;
-            bytes value;
-        };
-        using cell_list = std::vector<cell>;
-        using row = std::unordered_map<column_id, cell_list>;
+        // Order CAS columns by ordinal column id.
+        using row = std::map<ordinal_column_id, data_value>;
+        // Use an ordered map since CAS result set must be naturally ordered
+        // when returned to the client.
+        using row_map = std::map<key, row, key_less>;
     public:
-        std::unordered_map<key, row, key_hashing, key_equality> rows;
+        row_map rows;
         schema_ptr schema;
     public:
         prefetch_data(schema_ptr schema);
+        // Find a row object for either static or regular subset of cells, depending
+        // on whether clustering key is empty or not.
+        // A particular cell within the row can then be found using a column id.
+        const row* find_row(const partition_key& pkey, const clustering_key& ckey) const;
     };
     // Note: value (mutation) only required to contain the rows we are interested in
 private:
     const gc_clock::duration _ttl;
-    const prefetch_data _prefetched; // For operation that require a read-before-write
+    // For operations that require a read-before-write, stores prefetched cell values.
+    // For CAS statements, stores values of conditioned columns.
+    const prefetch_data _prefetched;
 public:
     const api::timestamp_type _timestamp;
     const gc_clock::time_point _local_deletion_time;
@@ -183,11 +174,8 @@ public:
         return _timestamp;
     }
 
-    const prefetch_data::cell_list*
-    get_prefetched_list(
-        partition_key_view pkey,
-        clustering_key_view ckey,
-        const column_definition& column) const;
+    const std::vector<std::pair<data_value, data_value>>*
+    get_prefetched_list(const partition_key& pkey, const clustering_key& ckey, const column_definition& column) const;
 
     static prefetch_data build_prefetch_data(schema_ptr schema, const query::result& query_result,
             const query::partition_slice& slice);
