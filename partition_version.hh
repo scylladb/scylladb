@@ -303,6 +303,7 @@ private:
     mutation_cleaner* _cleaner;
     cache_tracker* _tracker;
     boost::intrusive::slist_member_hook<> _cleaner_hook;
+    bool _locked = false;
     friend class partition_entry;
     friend class mutation_cleaner_impl;
 public:
@@ -317,6 +318,21 @@ public:
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
     partition_snapshot& operator=(partition_snapshot&&) = delete;
+
+    // Makes the snapshot locked.
+    // See is_locked() for meaning.
+    // Can be called only when at_lastest_version(). The snapshot must remain latest as long as it's locked.
+    void lock() noexcept;
+
+    // Makes the snapshot no longer locked.
+    // See is_locked() for meaning.
+    void unlock() noexcept;
+
+    // Tells whether the snapshot is locked.
+    // Locking the snapshot prevents it from getting detached from the partition entry.
+    bool is_locked() const {
+        return _locked;
+    }
 
     static partition_snapshot& container_of(partition_version_ref* ref) {
         return *boost::intrusive::get_parent_from_member(ref, &partition_snapshot::_version);
@@ -503,9 +519,18 @@ public:
         return _version->all_elements_reversed();
     }
 
+    // Tells whether this entry is locked.
+    // Locked entries are undergoing an update and should not have their snapshots
+    // detached from the entry.
+    // Certain methods can only be called when !is_locked().
+    bool is_locked() const {
+        return _snapshot && _snapshot->is_locked();
+    }
+
     // Strong exception guarantees.
     // Assumes this instance and mp are fully continuous.
     // Use only on non-evictable entries.
+    // Must not be called when is_locked().
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
     void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema);
 
@@ -528,6 +553,8 @@ public:
     //
     // Returns a coroutine object representing the operation.
     // The coroutine must be resumed with the region being unlocked.
+    //
+    // The coroutine cannot run concurrently with other apply() calls.
     coroutine apply_to_incomplete(const schema& s,
         partition_entry&& pe,
         const schema& pe_schema,
@@ -539,6 +566,7 @@ public:
         real_dirty_memory_accounter&);
 
     // If this entry is evictable, cache_tracker must be provided.
+    // Must not be called when is_locked().
     partition_version& add_version(const schema& s, cache_tracker*);
 
     // Returns a reference to existing version with an active snapshot of given phase
@@ -568,9 +596,11 @@ public:
     tombstone partition_tombstone() const;
 
     // needs to be called with reclaiming disabled
+    // Must not be called when is_locked().
     void upgrade(schema_ptr from, schema_ptr to, mutation_cleaner&, cache_tracker*);
 
     // Snapshots with different values of phase will point to different partition_version objects.
+    // When is_locked(), read() can only be called with a phase which is <= the phase of the current snapshot.
     partition_snapshot_ptr read(logalloc::region& region,
         mutation_cleaner&,
         schema_ptr entry_schema,

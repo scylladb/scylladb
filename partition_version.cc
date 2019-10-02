@@ -268,6 +268,7 @@ partition_entry::~partition_entry() {
         return;
     }
     if (_snapshot) {
+        assert(!_snapshot->is_locked());
         _snapshot->_version = std::move(_version);
         _snapshot->_version.mark_as_unique_owner();
         _snapshot->_entry = nullptr;
@@ -284,6 +285,7 @@ stop_iteration partition_entry::clear_gently(cache_tracker* tracker) noexcept {
     }
 
     if (_snapshot) {
+        assert(!_snapshot->is_locked());
         _snapshot->_version = std::move(_version);
         _snapshot->_version.mark_as_unique_owner();
         _snapshot->_entry = nullptr;
@@ -311,6 +313,7 @@ stop_iteration partition_entry::clear_gently(cache_tracker* tracker) noexcept {
 void partition_entry::set_version(partition_version* new_version)
 {
     if (_snapshot) {
+        assert(!_snapshot->is_locked());
         _snapshot->_version = std::move(_version);
         _snapshot->_entry = nullptr;
     }
@@ -496,6 +499,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
         prev_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase - 1);
     }
     auto dst_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase);
+    dst_snp->lock();
 
     // Once we start updating the partition, we must keep all snapshots until the update completes,
     // otherwise partial writes would be published. So the scope of snapshots must enclose the scope
@@ -570,6 +574,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
                     auto has_next = src_cur.erase_and_advance();
                     acc.unpin_memory(size);
                     if (!has_next) {
+                        dst_snp->unlock();
                         return stop_iteration::yes;
                     }
                 } while (!preemptible || !need_preempt());
@@ -706,4 +711,15 @@ partition_snapshot_ptr::~partition_snapshot_ptr() {
             cleaner.merge_and_destroy(*snp.release());
         }
     }
+}
+
+void partition_snapshot::lock() noexcept {
+    // partition_entry::is_locked() assumes that if there is a locked snapshot,
+    // it can be found attached directly to it.
+    assert(at_latest_version());
+    _locked = true;
+}
+
+void partition_snapshot::unlock() noexcept {
+    _locked = false;
 }

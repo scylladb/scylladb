@@ -1267,6 +1267,7 @@ flat_mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
     auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), _schema, &rc._tracker, reader.phase());
     auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
     auto r = make_cache_flat_mutation_reader(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
+    r.upgrade_schema(rc.schema());
     r.upgrade_schema(reader.schema());
     return r;
 }
@@ -1276,7 +1277,7 @@ const schema_ptr& row_cache::schema() const {
 }
 
 void row_cache::upgrade_entry(cache_entry& e) {
-    if (e._schema != _schema) {
+    if (e._schema != _schema && !e.partition().is_locked()) {
         auto& r = _tracker.region();
         assert(!r.reclaiming_enabled());
         with_allocator(r.allocator(), [this, &e] {
