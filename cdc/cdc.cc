@@ -232,7 +232,7 @@ private:
     schema_ptr _log_schema;
     utils::UUID _time;
     bytes _decomposed_time;
-    const streams_type& _streams;
+    ::shared_ptr<const transformer::streams_type> _streams;
     const column_definition& _op_col;
 
     clustering_key set_pk_columns(const partition_key& pk, int batch_no, mutation& m) const {
@@ -257,24 +257,26 @@ private:
     }
 
     partition_key stream_id(const net::inet_address& ip, unsigned int shard_id) const {
-        auto it = _streams.find(std::make_pair(ip, shard_id));
-        if (it == std::end(_streams)) {
+        auto it = _streams->find(std::make_pair(ip, shard_id));
+        if (it == std::end(*_streams)) {
                 throw std::runtime_error(format("No stream found for node {} and shard {}", ip, shard_id));
         }
         return partition_key::from_exploded(*_log_schema, { uuid_type->decompose(it->second) });
     }
 public:
-    transformer(db_context ctx, schema_ptr s, const streams_type& streams)
+    transformer(db_context ctx, schema_ptr s, ::shared_ptr<const transformer::streams_type> streams)
         : _ctx(ctx)
         , _schema(std::move(s))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _time(utils::UUID_gen::get_time_UUID())
         , _decomposed_time(timeuuid_type->decompose(_time))
-        , _streams(streams)
+        , _streams(std::move(streams))
         , _op_col(*_log_schema->get_column_definition(to_bytes("operation")))
     {}
 
-    mutation transform(const mutation& m) const {
+    // TODO: is pre-image data based on query enough. We only have actual column data. Do we need 
+    // more details like tombstones/ttl? Probably not but keep in mind. 
+    mutation transform(const mutation& m, const cql3::untyped_result_set* rs = nullptr) const {
         auto& t = m.token();
         auto&& ep = _ctx._token_metadata.get_endpoint(
                 _ctx._token_metadata.first_token(t));
@@ -326,16 +328,45 @@ public:
             // should be update or deletion
             int batch_no = 0;
             for (const rows_entry& r : p.clustered_rows()) {
-                auto log_ck = set_pk_columns(m.key(), batch_no, res);
                 auto ck_value = r.key().explode(*_schema);
+
+                std::optional<clustering_key> pikey;
+                const cql3::untyped_result_set_row * pirow = nullptr;
+
+                if (rs) {
+                    for (auto& utr : *rs) {
+                        bool match = true;
+                        for (auto& c : _schema->clustering_key_columns()) {
+                            auto rv = utr.get_view(c.name_as_text());
+                            auto cv = r.key().get_component(*_schema, c.component_index());
+                            if (rv != cv) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            pikey = set_pk_columns(m.key(), batch_no, res);
+                            set_operation(*pikey, operation::pre_image, res);
+                            pirow = &utr;
+                            ++batch_no;
+                            break;
+                        }
+                    }
+                }
+
+                auto log_ck = set_pk_columns(m.key(), batch_no, res);
+
                 size_t pos = 0;
                 for (const auto& column : _schema->clustering_key_columns()) {
                     assert (pos < ck_value.size());
                     auto cdef = _log_schema->get_column_definition(to_bytes("_" + column.name()));
-                    auto value = atomic_cell::make_live(*column.type,
-                                                        _time.timestamp(),
-                                                        bytes_view(ck_value[pos]));
-                    res.set_cell(log_ck, *cdef, std::move(value));
+                    res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, _time.timestamp(), bytes_view(ck_value[pos])));
+
+                    if (pirow) {
+                        assert(pirow->has(column.name_as_text()));
+                        res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, _time.timestamp(), bytes_view(ck_value[pos])));
+                    }
+
                     ++pos;
                 }
 
@@ -362,15 +393,25 @@ public:
 
                         values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(op)));
                         res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, _time.timestamp(), tuple_type_impl::build_value(values)));
+
+                        if (pirow && pirow->has(cdef.name_as_text())) {
+                            values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(column_op::set)));
+                            values[1] = pirow->get_blob(cdef.name_as_text());
+                            values[2] = std::nullopt;
+
+                            assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
+                            assert(pikey->explode() != log_ck.explode());
+                            res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, _time.timestamp(), tuple_type_impl::build_value(values)));
+                        }
                     } else {
                         cdc_log.warn("Non-atomic cell ignored {}.{}:{}", _schema->ks_name(), _schema->cf_name(), cdef.name_as_text());
                     }
                 });
-
                 set_operation(log_ck, operation::update, res);
                 ++batch_no;
             }
         }
+
         return res;
     }
 
@@ -501,7 +542,7 @@ public:
     }
 };
 
-static future<transformer::streams_type> get_streams(
+static future<::shared_ptr<transformer::streams_type>> get_streams(
         db_context ctx,
         const sstring& ks_name,
         const sstring& cf_name,
@@ -526,7 +567,7 @@ static future<transformer::streams_type> get_streams(
                     .build();
             streams_builder builder{ *s };
             v.consume(slice, builder);
-            return builder.build();
+            return ::make_shared<transformer::streams_type>(builder.build());
         });
     });
 }
@@ -537,15 +578,20 @@ future<std::vector<mutation>> append_log_mutations(
         service::storage_proxy::clock_type::time_point timeout,
         service::query_state& qs,
         std::vector<mutation> muts) {
-    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then(
-            [ctx, s = std::move(s), muts = std::move(muts)]
-            (transformer::streams_type streams) mutable {
-        transformer trans(ctx, std::move(s), streams);
-        muts.reserve(2 * muts.size());
-        for(int i = 0, size = muts.size(); i < size; ++i) {
-            muts.push_back(trans.transform(muts[i]));
-        }
-        return std::move(muts);
+    auto mp = ::make_lw_shared<std::vector<mutation>>(std::move(muts));
+
+    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), mp, &qs](::shared_ptr<transformer::streams_type> streams) mutable {
+        mp->reserve(2 * mp->size());
+        auto trans = make_lw_shared<transformer>(ctx, s, std::move(streams));
+        auto i = mp->begin();
+        auto e = mp->end();
+        return parallel_for_each(i, e, [ctx, &qs, trans, mp](mutation& m) {
+            return trans->pre_image_select(ctx._proxy, qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then([trans, mp, &m](lw_shared_ptr<cql3::untyped_result_set> rs) {
+                mp->push_back(trans->transform(m, rs.get()));
+            });
+        }).then([mp] {
+            return std::move(*mp);
+        });
     });
 }
 
