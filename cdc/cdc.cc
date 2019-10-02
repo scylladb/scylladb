@@ -230,6 +230,7 @@ private:
     utils::UUID _time;
     bytes _decomposed_time;
     const streams_type& _streams;
+    const column_definition& _op_col;
 
     clustering_key set_pk_columns(const partition_key& pk, int batch_no, mutation& m) const {
         const auto log_ck = clustering_key::from_exploded(
@@ -247,6 +248,11 @@ private:
         }
         return log_ck;
     }
+
+    void set_operation(const clustering_key& ck, operation op, mutation& m) const {
+        m.set_cell(ck, _op_col, atomic_cell::make_live(*_op_col.type, _time.timestamp(), _op_col.type->decompose(operation_native_type(op))));
+    }
+
     partition_key stream_id(const net::inet_address& ip, unsigned int shard_id) const {
         auto it = _streams.find(std::make_pair(ip, shard_id));
         if (it == std::end(_streams)) {
@@ -262,7 +268,8 @@ public:
         , _time(utils::UUID_gen::get_time_UUID())
         , _decomposed_time(timeuuid_type->decompose(_time))
         , _streams(streams)
-    { }
+        , _op_col(*_log_schema->get_column_definition(to_bytes("operation")))
+    {}
 
     mutation transform(const mutation& m) const {
         auto& t = m.token();
@@ -276,7 +283,8 @@ public:
         auto& p = m.partition();
         if (p.partition_tombstone()) {
             // Partition deletion
-            set_pk_columns(m.key(), 0, res);
+            auto log_ck = set_pk_columns(m.key(), 0, res);
+            set_operation(log_ck, operation::partition_delete, res);
         } else if (!p.row_tombstones().empty()) {
             // range deletion
             int batch_no = 0;
@@ -299,11 +307,15 @@ public:
                 {
                     auto log_ck = set_pk_columns(m.key(), batch_no, res);
                     set_bound(log_ck, rt.start);
+                    // TODO: separate inclusive/exclusive range
+                    set_operation(log_ck, operation::range_delete_start, res);
                     ++batch_no;
                 }
                 {
                     auto log_ck = set_pk_columns(m.key(), batch_no, res);
                     set_bound(log_ck, rt.end);
+                    // TODO: separate inclusive/exclusive range
+                    set_operation(log_ck, operation::range_delete_end, res);
                     ++batch_no;
                 }
             }
@@ -324,6 +336,7 @@ public:
                     ++pos;
                 }
 
+                set_operation(log_ck, operation::update, res);
                 ++batch_no;
             }
         }
