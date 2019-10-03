@@ -1348,7 +1348,7 @@ with open(buildfile_tmp, 'w') as f:
                         local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                     if binary not in tests_not_using_seastar_test_framework:
                         pc_path = pc[mode].replace('seastar.pc', 'seastar-testing.pc')
-                        local_libs += ' ' + pkg_config(pc_path, '--libs', '--static')
+                        local_libs += ' ' + pkg_config(pc_path, '--libs')
                     if has_thrift:
                         local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
                     # Our code's debugging information is huge, and multiplied
