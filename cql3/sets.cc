@@ -38,12 +38,22 @@ shared_ptr<term>
 sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
     validate_assignable_to(db, keyspace, receiver);
 
-    // We've parsed empty maps as a set literal to break the ambiguity so
-    // handle that case now
-    if (_elements.empty() && dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
-        // use empty_type for comparator, set is empty anyway.
-        std::map<bytes, bytes, serialized_compare> m(empty_type->as_less_comparator());
-        return ::make_shared<maps::value>(std::move(m));
+    if (_elements.empty()) {
+
+        // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
+        // other words a non-frozen collection only exists if it has elements.  Return nullptr right
+        // away to simplify predicate evaluation.  See also
+        // https://issues.apache.org/jira/browse/CASSANDRA-5141
+        if (receiver->type->is_multi_cell()) {
+            return cql3::constants::null_literal::NULL_VALUE;
+        }
+        // We've parsed empty maps as a set literal to break the ambiguity so
+        // handle that case now. This branch works for frozen sets/maps only.
+        if (dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
+            // use empty_type for comparator, set is empty anyway.
+            std::map<bytes, bytes, serialized_compare> m(empty_type->as_less_comparator());
+            return ::make_shared<maps::value>(std::move(m));
+        }
     }
 
     auto value_spec = value_spec_of(receiver);

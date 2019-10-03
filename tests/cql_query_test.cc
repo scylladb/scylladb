@@ -1313,6 +1313,12 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
         }).then([&e, my_set_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
                     "set1", make_set_value(my_set_type, set_type_impl::native_type({})));
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, set1) values ('key1', {});").discard_result();
+        }).then([&e, my_set_type] {
+            // Empty non-frozen set is indistinguishable from NULL
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                    "set1", make_set_value(my_set_type, set_type_impl::native_type({})));
         });
     });
 }
@@ -1369,6 +1375,12 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, list1) values ('key1', null);").discard_result();
         }).then([&e, my_list_type] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({})));
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, list1) values ('key1', []);").discard_result();
+        }).then([&e, my_list_type] {
+            // Empty non-frozen list is indistinguishable from NULL
             return e.require_column_has_value("cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({})));
         });

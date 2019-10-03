@@ -54,6 +54,14 @@ shared_ptr<term>
 lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
     validate_assignable_to(db, keyspace, receiver);
 
+    // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
+    // other words a non-frozen collection only exists if it has elements. Return nullptr right
+    // away to simplify predicate evaluation. See also
+    // https://issues.apache.org/jira/browse/CASSANDRA-5141
+    if (receiver->type->is_multi_cell() &&  _elements.empty()) {
+        return cql3::constants::null_literal::NULL_VALUE;
+    }
+
     auto&& value_spec = value_spec_of(receiver);
     std::vector<shared_ptr<term>> values;
     values.reserve(_elements.size());
