@@ -52,7 +52,8 @@ progresses and compatibility continues to improve.
 
 ### API Server
 * Transport: HTTP mostly supported, but small features like CRC header and
-  compression are still missing. HTTPS not tested.
+  compression are still missing. HTTPS supported on top of HTTP, so small
+  features may still be missing.
 * Authorization (verifying the originator of the request): Not yet supported.
 * DNS server for load balancing: Not yet supported. Client needs to pick
   one of the live Scylla nodes and send a request to it.
