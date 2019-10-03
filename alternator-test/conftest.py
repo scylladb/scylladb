@@ -65,6 +65,10 @@ def dynamodb(request):
         local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
+        # Silencing the 'Unverified HTTPS request warning'
+        if request.config.getoption('https'):
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id='whatever', aws_secret_access_key='whatever')
 
