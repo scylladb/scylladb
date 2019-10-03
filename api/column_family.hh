@@ -109,9 +109,9 @@ future<json::json_return_type> map_reduce_cf(http_context& ctx, I init,
 }
 
 future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
-        int64_t column_family::stats::*f);
+        int64_t column_family_stats::*f);
 
 future<json::json_return_type>  get_cf_stats(http_context& ctx,
-        int64_t column_family::stats::*f);
+        int64_t column_family_stats::*f);
 
 }

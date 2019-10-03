@@ -312,8 +312,36 @@ struct cf_stats {
 
 class table;
 using column_family = table;
+struct table_stats;
+using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
+
+struct table_stats {
+    /** Number of times flush has resulted in the memtable being switched out. */
+    int64_t memtable_switch_count = 0;
+    /** Estimated number of tasks pending for this column family */
+    int64_t pending_flushes = 0;
+    int64_t live_disk_space_used = 0;
+    int64_t total_disk_space_used = 0;
+    int64_t live_sstable_count = 0;
+    /** Estimated number of compactions pending for this column family */
+    int64_t pending_compactions = 0;
+    utils::timed_rate_moving_average_and_histogram reads{256};
+    utils::timed_rate_moving_average_and_histogram writes{256};
+    utils::timed_rate_moving_average_and_histogram cas_prepare{256};
+    utils::timed_rate_moving_average_and_histogram cas_propose{256};
+    utils::timed_rate_moving_average_and_histogram cas_commit{256};
+    utils::estimated_histogram estimated_read;
+    utils::estimated_histogram estimated_write;
+    utils::estimated_histogram estimated_cas_prepare;
+    utils::estimated_histogram estimated_cas_propose;
+    utils::estimated_histogram estimated_cas_commit;
+    utils::estimated_histogram estimated_sstable_per_read{35};
+    utils::timed_rate_moving_average_and_histogram tombstone_scanned;
+    utils::timed_rate_moving_average_and_histogram live_scanned;
+    utils::estimated_histogram estimated_coordinator_read;
+};
 
 class table : public enable_lw_shared_from_this<table> {
 public:
@@ -345,31 +373,6 @@ public:
         db::data_listeners* data_listeners = nullptr;
     };
     struct no_commitlog {};
-    struct stats {
-        /** Number of times flush has resulted in the memtable being switched out. */
-        int64_t memtable_switch_count = 0;
-        /** Estimated number of tasks pending for this column family */
-        int64_t pending_flushes = 0;
-        int64_t live_disk_space_used = 0;
-        int64_t total_disk_space_used = 0;
-        int64_t live_sstable_count = 0;
-        /** Estimated number of compactions pending for this column family */
-        int64_t pending_compactions = 0;
-        utils::timed_rate_moving_average_and_histogram reads{256};
-        utils::timed_rate_moving_average_and_histogram writes{256};
-        utils::timed_rate_moving_average_and_histogram cas_prepare{256};
-        utils::timed_rate_moving_average_and_histogram cas_propose{256};
-        utils::timed_rate_moving_average_and_histogram cas_commit{256};
-        utils::estimated_histogram estimated_read;
-        utils::estimated_histogram estimated_write;
-        utils::estimated_histogram estimated_cas_prepare;
-        utils::estimated_histogram estimated_cas_propose;
-        utils::estimated_histogram estimated_cas_commit;
-        utils::estimated_histogram estimated_sstable_per_read{35};
-        utils::timed_rate_moving_average_and_histogram tombstone_scanned;
-        utils::timed_rate_moving_average_and_histogram live_scanned;
-        utils::estimated_histogram estimated_coordinator_read;
-    };
 
     struct snapshot_details {
         int64_t total;
@@ -382,7 +385,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    mutable stats _stats;
+    mutable table_stats _stats;
     mutable db::view::stats _view_stats;
     mutable row_locker::stats _row_locker_stats;
 
@@ -857,7 +860,7 @@ public:
         return _compaction_strategy;
     }
 
-    stats& get_stats() const {
+    table_stats& get_stats() const {
         return _stats;
     }
 
