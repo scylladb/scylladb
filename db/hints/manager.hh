@@ -276,7 +276,8 @@ public:
         manager& _shard_manager;
         hints_store_ptr _hints_store_anchor;
         seastar::gate _store_gate;
-        seastar::shared_mutex _file_update_mutex;
+        lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
+        seastar::shared_mutex& _file_update_mutex;
 
         enum class state {
             can_hint,               // hinting is currently allowed (used by the space_watchdog)
@@ -378,8 +379,20 @@ public:
             return _state.contains(state::stopped);
         }
 
-        seastar::shared_mutex& file_update_mutex() {
-            return _file_update_mutex;
+        /// \brief Safely runs a given functor under the file_update_mutex of \ref ep_man
+        ///
+        /// Runs a given functor under the file_update_mutex of the given end_point_hints_manager instance.
+        /// This function is safe even if \ref ep_man gets destroyed before the future this function returns resolves
+        /// (as long as the \ref func call itself is safe).
+        ///
+        /// \tparam Func Functor type.
+        /// \param ep_man end_point_hints_manager instance which file_update_mutex we want to lock.
+        /// \param func Functor to run under the lock.
+        /// \return Whatever \ref func returns.
+        template <typename Func>
+        friend inline auto with_file_update_mutex(end_point_hints_manager& ep_man, Func&& func) {
+            lw_shared_ptr<seastar::shared_mutex> lock_ptr = ep_man._file_update_mutex_ptr;
+            return with_lock(*lock_ptr, std::forward<Func>(func)).finally([lock_ptr] {});
         }
 
         const fs::path& hints_dir() const noexcept {
@@ -387,6 +400,10 @@ public:
         }
 
     private:
+        seastar::shared_mutex& file_update_mutex() noexcept {
+            return _file_update_mutex;
+        }
+
         /// \brief Creates a new hints store object.
         ///
         /// - Creates a hints store directory if doesn't exist: <shard_hints_dir>/<ep_key>
@@ -454,6 +471,7 @@ private:
     stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<ep_key_type> _eps_with_pending_hints;
+    seastar::semaphore _drain_lock = {1};
 
 public:
     manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
@@ -530,6 +548,10 @@ public:
 
     dev_t hints_dir_device_id() const {
         return _hints_dir_device_id;
+    }
+
+    seastar::semaphore& drain_lock() noexcept {
+        return _drain_lock;
     }
 
     void allow_hints();
