@@ -777,13 +777,19 @@ bool memtable::is_flushed() const {
     return bool(_underlying);
 }
 
+void memtable_entry::upgrade_schema(const schema_ptr& s, mutation_cleaner& cleaner) {
+    if (_schema != s) {
+        partition().upgrade(_schema, s, cleaner, no_cache_tracker);
+        _schema = s;
+    }
+}
+
 void memtable::upgrade_entry(memtable_entry& e) {
     if (e._schema != _schema) {
         assert(!reclaiming_enabled());
         with_allocator(allocator(), [this, &e] {
           with_linearized_managed_bytes([&] {
-            e.partition().upgrade(e._schema, _schema, cleaner(), no_cache_tracker);
-            e._schema = _schema;
+            e.upgrade_schema(_schema, cleaner());
           });
         });
     }
