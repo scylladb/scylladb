@@ -465,7 +465,6 @@ public:
 
 coroutine partition_entry::apply_to_incomplete(const schema& s,
     partition_entry&& pe,
-    const schema& pe_schema,
     mutation_cleaner& pe_cleaner,
     logalloc::allocating_section& alloc,
     logalloc::region& reg,
@@ -484,10 +483,6 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
     // segment compaction. This becomes especially significant for small
     // partitions where I saw 40% slow down.
     const bool preemptible = s.clustering_key_size() > 0;
-
-    if (s.version() != pe_schema.version()) {
-        pe.upgrade(pe_schema.shared_from_this(), s.shared_from_this(), pe_cleaner, no_cache_tracker);
-    }
 
     // When preemptible, later memtable reads could start using the snapshot before
     // snapshot's writes are made visible in cache, which would cause them to miss those writes.

@@ -555,13 +555,14 @@ public:
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
     //
+    // The schema of pe must conform to s.
+    //
     // Returns a coroutine object representing the operation.
     // The coroutine must be resumed with the region being unlocked.
     //
     // The coroutine cannot run concurrently with other apply() calls.
     coroutine apply_to_incomplete(const schema& s,
         partition_entry&& pe,
-        const schema& pe_schema,
         mutation_cleaner& pe_cleaner,
         logalloc::allocating_section&,
         logalloc::region&,
