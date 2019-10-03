@@ -35,13 +35,17 @@ static logging::logger clogger("alternator-conditions");
 comparison_operator_type get_comparison_operator(const rjson::value& comparison_operator) {
     static std::unordered_map<std::string, comparison_operator_type> ops = {
             {"EQ", comparison_operator_type::EQ},
+            {"NE", comparison_operator_type::NE},
             {"LE", comparison_operator_type::LE},
             {"LT", comparison_operator_type::LT},
             {"GE", comparison_operator_type::GE},
             {"GT", comparison_operator_type::GT},
+            {"IN", comparison_operator_type::IN},
+            {"NULL", comparison_operator_type::IS_NULL},
+            {"NOT_NULL", comparison_operator_type::NOT_NULL},
             {"BETWEEN", comparison_operator_type::BETWEEN},
             {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
-    }; //TODO(sarna): NE, IN, CONTAINS, NULL, NOT_NULL
+    }; //TODO: CONTAINS
     if (!comparison_operator.IsString()) {
         throw api_error("ValidationException", format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
@@ -96,20 +100,69 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_
     return filtering_restrictions;
 }
 
+namespace {
+
+struct size_check {
+    // True iff size passes this check.
+    virtual bool operator()(rapidjson::SizeType size) const = 0;
+    // Check description, such that format("expected array {}", check.what()) is human-readable.
+    virtual sstring what() const = 0;
+};
+
+class exact_size : public size_check {
+    rapidjson::SizeType _expected;
+  public:
+    explicit exact_size(rapidjson::SizeType expected) : _expected(expected) {}
+    bool operator()(rapidjson::SizeType size) const override { return size == _expected; }
+    sstring what() const override { return format("of size {}", _expected); }
+};
+
+struct empty : public size_check {
+    bool operator()(rapidjson::SizeType size) const override { return size < 1; }
+    sstring what() const override { return "to be empty"; }
+};
+
+struct nonempty : public size_check {
+    bool operator()(rapidjson::SizeType size) const override { return size > 0; }
+    sstring what() const override { return "to be non-empty"; }
+};
+
+} // anonymous namespace
+
+// Check that array has the expected number of elements
+static void verify_operand_count(const rjson::value* array, const size_check& expected, const rjson::value& op) {
+    if (!array || !array->IsArray()) {
+        throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
+    }
+    if (!expected(array->Size())) {
+        throw api_error("ValidationException",
+                        format("{} operator requires AttributeValueList {}, instead found list size {}",
+                               op, expected.what(), array->Size()));
+    }
+}
+
 // Check if two JSON-encoded values match with the EQ relation
-static bool check_EQ(const rjson::value& v1, const rjson::value& v2) {
-    return v1 == v2;
+static bool check_EQ(const rjson::value* v1, const rjson::value& v2) {
+    return v1 && *v1 == v2;
+}
+
+// Check if two JSON-encoded values match with the NE relation
+static bool check_NE(const rjson::value* v1, const rjson::value& v2) {
+    return !v1 || *v1 != v2; // null is unequal to anything.
 }
 
 // Check if two JSON-encoded values match with the BEGINS_WITH relation
-static bool check_BEGINS_WITH(const rjson::value& v1, const rjson::value& v2) {
+static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
+    if (!v1) {
+        return false;
+    }
     // BEGINS_WITH only supports comparing two strings or two binaries -
     // any other combinations of types, or other malformed values, return
     // false (no match).
-    if (!v1.IsObject() || v1.MemberCount() != 1 || !v2.IsObject() || v2.MemberCount() != 1) {
+    if (!v1->IsObject() || v1->MemberCount() != 1 || !v2.IsObject() || v2.MemberCount() != 1) {
         return false;
     }
-    auto it1 = v1.MemberBegin();
+    auto it1 = v1->MemberBegin();
     auto it2 = v2.MemberBegin();
     if (it1->name != it2->name) {
         return false;
@@ -120,6 +173,42 @@ static bool check_BEGINS_WITH(const rjson::value& v1, const rjson::value& v2) {
     std::string_view val1(it1->value.GetString(), it1->value.GetStringLength());
     std::string_view val2(it2->value.GetString(), it2->value.GetStringLength());
     return val1.substr(0, val2.size()) == val2;
+}
+
+// Check if a JSON-encoded value equals any element of an array, which must have at least one element.
+static bool check_IN(const rjson::value* val, const rjson::value& array) {
+    if (!array[0].IsObject() || array[0].MemberCount() != 1) {
+        throw api_error("ValidationException",
+                        format("IN operator encountered malformed AttributeValue: {}", array[0]));
+    }
+    const auto& type = array[0].MemberBegin()->name;
+    if (type != "S" && type != "N" && type != "B") {
+        throw api_error("ValidationException",
+                        "IN operator requires AttributeValueList elements to be of type String, Number, or Binary ");
+    }
+    if (!val) {
+        return false;
+    }
+    bool have_match = false;
+    for (const auto& elem : array.GetArray()) {
+        if (!elem.IsObject() || elem.MemberCount() != 1 || elem.MemberBegin()->name != type) {
+            throw api_error("ValidationException",
+                            "IN operator requires all AttributeValueList elements to have the same type ");
+        }
+        if (!have_match && *val == elem) {
+            // Can't return yet, must check types of all array elements. <sigh>
+            have_match = true;
+        }
+    }
+    return have_match;
+}
+
+static bool check_NULL(const rjson::value* val) {
+    return val == nullptr;
+}
+
+static bool check_NOT_NULL(const rjson::value* val) {
+    return val != nullptr;
 }
 
 // Verify one Expect condition on one attribute (whose content is "got")
@@ -142,7 +231,7 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         if (comparison_operator) {
             throw api_error("ValidationException", "Cannot combine Value with ComparisonOperator");
         }
-        return got && check_EQ(*got, *value);
+        return check_EQ(got, *value);
     } else if (exists) {
         if (comparison_operator) {
             throw api_error("ValidationException", "Cannot combine Exists with ComparisonOperator");
@@ -156,29 +245,26 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         if (!comparison_operator) {
             throw api_error("ValidationException", "Missing ComparisonOperator, Value or Exists");
         }
-        if (!attribute_value_list || !attribute_value_list->IsArray()) {
-            throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
-        }
         comparison_operator_type op = get_comparison_operator(*comparison_operator);
         switch (op) {
         case comparison_operator_type::EQ:
-            if (attribute_value_list->Size() != 1) {
-                throw api_error("ValidationException", "EQ operator requires one element in AttributeValueList");
-            }
-            if (got) {
-                const rjson::value& expected = (*attribute_value_list)[0];
-                return check_EQ(*got, expected);
-            }
-            return false;
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+            return check_EQ(got, (*attribute_value_list)[0]);
+        case comparison_operator_type::NE:
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+            return check_NE(got, (*attribute_value_list)[0]);
         case comparison_operator_type::BEGINS_WITH:
-            if (attribute_value_list->Size() != 1) {
-                throw api_error("ValidationException", "BEGINS_WITH operator requires one element in AttributeValueList");
-            }
-            if (got) {
-                const rjson::value& expected = (*attribute_value_list)[0];
-                return check_BEGINS_WITH(*got, expected);
-            }
-            return false;
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+            return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
+        case comparison_operator_type::IN:
+            verify_operand_count(attribute_value_list, nonempty(), *comparison_operator);
+            return check_IN(got, *attribute_value_list);
+        case comparison_operator_type::IS_NULL:
+            verify_operand_count(attribute_value_list, empty(), *comparison_operator);
+            return check_NULL(got);
+        case comparison_operator_type::NOT_NULL:
+            verify_operand_count(attribute_value_list, empty(), *comparison_operator);
+            return check_NOT_NULL(got);
         default:
             // FIXME: implement all the missing types, so there will be no default here.
             throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));

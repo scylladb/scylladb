@@ -127,7 +127,6 @@ def test_update_expected_1_eq_false(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1}
 
 # Tests for Expected with ComparisonOperator = "NE":
-@pytest.mark.xfail(reason="ComparisonOperator=NE in Expected not yet implemented")
 def test_update_expected_1_ne_true(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -160,7 +159,6 @@ def test_update_expected_1_ne_true(test_table_s):
     )
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1, 'b': 5}
 
-@pytest.mark.xfail(reason="ComparisonOperator=NE in Expected not yet implemented")
 def test_update_expected_1_ne_false(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -449,7 +447,6 @@ def test_update_expected_1_gt(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "NOT_NULL":
-@pytest.mark.xfail(reason="ComparisonOperator=NOT_NULL in Expected not yet implemented")
 def test_update_expected_1_not_null(test_table_s):
     # Note that despite its name, the "NOT_NULL" comparison operator doesn't check if
     # the attribute has the type "NULL", or an empty value. Rather it is explicitly
@@ -490,7 +487,6 @@ def test_update_expected_1_not_null(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "NULL":
-@pytest.mark.xfail(reason="ComparisonOperator=NULL in Expected not yet implemented")
 def test_update_expected_1_null(test_table_s):
     # Note that despite its name, the "NULL" comparison operator doesn't check if
     # the attribute has the type "NULL", or an empty value. Rather it is explicitly
@@ -528,7 +524,7 @@ def test_update_expected_1_null(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'b': {'Value': 17, 'Action': 'PUT'}},
-            Expected={'a': {'ComparisonOperator': 'NOT_NULL', 'AttributeValueList': [2]}}
+            Expected={'a': {'ComparisonOperator': 'NULL', 'AttributeValueList': [2]}}
         )
 
 # Tests for Expected with ComparisonOperator = "CONTAINS":
@@ -743,7 +739,6 @@ def test_update_expected_1_begins_with_false(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello'}
 
 # Tests for Expected with ComparisonOperator = "IN":
-@pytest.mark.xfail(reason="ComparisonOperator=IN in Expected not yet implemented")
 def test_update_expected_1_in(test_table_s):
     # Some copies of "IN"'s documentation are outright wrong: "IN" checks
     # whether the attribute value is in the give list of values. It does NOT
@@ -788,7 +783,13 @@ def test_update_expected_1_in(test_table_s):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
             Expected={'c': {'ComparisonOperator': 'IN', 'AttributeValueList': []}}
-    )
+        )
+    # Non-scalar attribute values are not allowed
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+            Expected={'c': {'ComparisonOperator': 'IN', 'AttributeValueList': [[1], [2]]}}
+        )
 
 # Tests for Expected with ComparisonOperator = "BETWEEN":
 @pytest.mark.xfail(reason="ComparisonOperator=BETWEEN in Expected not yet implemented")
