@@ -276,7 +276,10 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
             // those are eligible for major compaction.
             sstables::compaction_strategy cs = cf->get_compaction_strategy();
             sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(*cf, get_candidates(*cf));
-            auto compacting = compacting_sstable_registration(this, descriptor.sstables);
+            auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
+            descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+                compacting->release_compacting(exhausted_sstables);
+            };
 
             cmlog.info0("User initiated compaction started on behalf of {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
             compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
