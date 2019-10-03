@@ -3197,6 +3197,66 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
     });
 }
 
+SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
+    return seastar::async([] {
+        simple_schema ss;
+        memtable_snapshot_source underlying(ss.schema());
+        schema_ptr s = ss.schema();
+
+        auto pk = ss.make_pkey("pk");
+        mutation m(s, pk);
+        mutation m2(s, pk);
+        const int c_keys = 10000; // enough for update to be preempted
+        for (auto ck : ss.make_ckeys(c_keys)) {
+            ss.add_row(m, ck, "tag1");
+            ss.add_row(m2, ck, "tag2");
+        }
+
+        underlying.apply(m);
+
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+        auto pr = dht::partition_range::make_singular(m.decorated_key());
+
+        // Populate the cache so that update has an entry to update.
+        assert_that(cache.make_reader(s, pr)).produces(m);
+
+        auto mt2 = make_lw_shared<memtable>(s);
+        mt2->apply(m2);
+
+        // Alter the schema
+        auto s2 = schema_builder(s)
+            .with_column(to_bytes("_a"), byte_type)
+            .build();
+        cache.set_schema(s2);
+        mt2->set_schema(s2);
+
+        auto update_f = cache.update([&] () noexcept {
+            underlying.apply(m2);
+        }, *mt2);
+        auto wait_for_update = defer([&] { update_f.get(); });
+
+        // Wait for cache update to enter the partition
+        while (tracker.get_stats().partition_merges == 0) {
+            later().get();
+        }
+
+        auto mt2_reader = mt2->make_flat_reader(s, pr, s->full_slice(), default_priority_class(),
+            nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+        auto cache_reader = cache.make_reader(s, pr, s->full_slice(), default_priority_class(),
+            nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+
+        assert_that(std::move(mt2_reader)).produces(m2);
+        assert_that(std::move(cache_reader)).produces(m);
+
+        wait_for_update.cancel();
+        update_f.get();
+
+        assert_that(cache.make_reader(s)).produces(m + m2);
+    });
+}
+
 SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memtable_readers) {
     // Verifies that memtable readers created before memtable is moved to cache
     // are not affected by eviction in cache after their partition entries were moved to cache.
