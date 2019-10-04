@@ -783,6 +783,7 @@ alternator = [
        Antlr3Grammar('alternator/expressions.g'),
        'alternator/conditions.cc',
        'alternator/rjson.cc',
+       'alternator/auth.cc',
 ]
 
 idls = ['idl/gossip_digest.idl.hh',
