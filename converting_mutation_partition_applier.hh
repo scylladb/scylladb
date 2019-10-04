@@ -100,7 +100,7 @@ public:
         const column_mapping_entry& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
-            accept_cell(_p._static_row, column_kind::static_column, *def, col.type(), cell);
+            accept_cell(_p._static_row.maybe_create(), column_kind::static_column, *def, col.type(), cell);
         }
     }
 
@@ -108,7 +108,7 @@ public:
         const column_mapping_entry& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
-            accept_cell(_p._static_row, column_kind::static_column, *def, col.type(), collection);
+            accept_cell(_p._static_row.maybe_create(), column_kind::static_column, *def, col.type(), collection);
         }
     }
 

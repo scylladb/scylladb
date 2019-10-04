@@ -786,7 +786,7 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
     const auto wrapper = with_schema_wrapper{schema};
 
     BOOST_REQUIRE_EQUAL(result_mut.partition().static_row().empty(), !expected_part.has_static_row);
-    validate_static_row(schema, expected_part.dkey.key(), result_mut.partition().static_row());
+    validate_static_row(schema, expected_part.dkey.key(), result_mut.partition().static_row().get());
 
     const auto& res_rows = result_mut.partition().clustered_rows();
     auto res_it = res_rows.begin();

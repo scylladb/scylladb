@@ -876,13 +876,13 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
 
     if (!slice.static_columns.empty()) {
         if (pw.requested_result()) {
-            get_compacted_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, static_cells_wr);
+            get_compacted_row_slice(s, slice, column_kind::static_column, static_row().get(), slice.static_columns, static_cells_wr);
         }
         if (pw.requested_digest()) {
             auto pt = partition_tombstone();
             pw.digest().feed_hash(pt);
             max_ts.update(pt.timestamp);
-            pw.digest().feed_hash(static_row(), s, column_kind::static_column, slice.static_columns, max_ts);
+            pw.digest().feed_hash(static_row().get(), s, column_kind::static_column, slice.static_columns, max_ts);
         }
     }
 
@@ -937,7 +937,7 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
     // rows, or return nothing, since cql does not allow "is null".
     if (row_count == 0
             && (has_ck_selector(pw.ranges())
-                    || !has_any_live_data(s, column_kind::static_column, static_row()))) {
+                    || !has_any_live_data(s, column_kind::static_column, static_row().get()))) {
         pw.retract();
     } else {
         pw.row_count() += row_count ? : 1;
@@ -1021,7 +1021,7 @@ operator<<(std::ostream& os, const mutation_partition::printer& p) {
     if (!mp._row_tombstones.empty()) {
         os << "\n range_tombstones: {" << ::join(",", prefixed("\n    ", mp._row_tombstones)) << "},";
     }
-    os << "\n static: cont=" << int(mp._static_row_continuous) << " " << row::printer(p._schema, column_kind::static_column, mp._static_row) << ",";
+    os << "\n static: cont=" << int(mp._static_row_continuous) << " " << lazy_row::printer(p._schema, column_kind::static_column, mp._static_row) << ",";
     auto add_printer = [&] (const auto& re) {
         return rows_entry::printer(p._schema, re);
     };
@@ -1465,7 +1465,7 @@ row::is_live(const schema& s, column_kind kind, tombstone base_tombstone, gc_clo
 bool
 mutation_partition::is_static_row_live(const schema& s, gc_clock::time_point query_time) const {
     check_schema(s);
-    return has_any_live_data(s, column_kind::static_column, static_row(), _tombstone, query_time);
+    return has_any_live_data(s, column_kind::static_column, static_row().get(), _tombstone, query_time);
 }
 
 size_t
@@ -2300,7 +2300,7 @@ public:
     }
     void consume(tombstone) { }
     stop_iteration consume(static_row&& sr, tombstone, bool) {
-        _mutation->partition().static_row() = std::move(sr.cells());
+        _mutation->partition().static_row().maybe_create() = std::move(sr.cells());
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone,  bool) {

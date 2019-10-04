@@ -68,7 +68,7 @@ public:
     public:
         explicit iterator(const mutation_partition& mp)
             : _mp(mp)
-            , _current(position_in_partition_view(position_in_partition_view::static_row_tag_t()), mp.static_row())
+            , _current(position_in_partition_view(position_in_partition_view::static_row_tag_t()), mp.static_row().get())
         { }
 
         iterator(const mutation_partition& mp, mutation_partition::rows_type::const_iterator it)

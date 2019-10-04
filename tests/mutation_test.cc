@@ -237,7 +237,7 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         mt->apply(m2o);
 
         auto p = get_partition(*mt, key);
-        row& r = p.static_row();
+        lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
@@ -274,7 +274,7 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         mt->apply(m2o);
 
         auto p = get_partition(*mt, key);
-        row& r = p.static_row();
+        lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
@@ -312,7 +312,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         mt->apply(m2o);
 
         auto p = get_partition(*mt, key);
-        row& r = p.static_row();
+        lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
@@ -1007,7 +1007,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         mt->apply(std::move(m));
 
         auto p = get_partition(*mt, key);
-        row& r = p.static_row();
+        lazy_row& r = p.static_row();
         auto i = r.find_cell(s1_col.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_atomic_cell(s1_col);
@@ -1020,7 +1020,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         mt->apply(std::move(m2));
 
         auto p2 = get_partition(*mt, key);
-        row& r2 = p2.static_row();
+        lazy_row& r2 = p2.static_row();
         auto i2 = r2.find_cell(s1_col.id);
         BOOST_REQUIRE(i2);
         auto cell2 = i2->as_atomic_cell(s1_col);
@@ -2444,7 +2444,7 @@ partition_summary summarize_mutation(const mutation& m) {
             m.partition().partition_tombstone(),
             m.partition().static_row().empty() ?
                     std::nullopt :
-                    std::optional(static_row_summary{summarize_row(schema, column_kind::static_column, m.partition().static_row())}),
+                    std::optional(static_row_summary{summarize_row(schema, column_kind::static_column, m.partition().static_row().get())}),
             std::move(clustering_fragments));
 }
 

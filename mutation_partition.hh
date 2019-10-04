@@ -1200,7 +1200,7 @@ public:
     friend class size_calculator;
 private:
     tombstone _tombstone;
-    row _static_row;
+    lazy_row _static_row;
     bool _static_row_continuous = true;
     rows_type _rows;
     // Contains only strict prefixes so that we don't have to lookup full keys
@@ -1409,8 +1409,8 @@ public:
     deletable_row& clustered_row(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
 public:
     tombstone partition_tombstone() const { return _tombstone; }
-    row& static_row() { return _static_row; }
-    const row& static_row() const { return _static_row; }
+    lazy_row& static_row() { return _static_row; }
+    const lazy_row& static_row() const { return _static_row; }
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const { return _rows; }
     const range_tombstone_list& row_tombstones() const { return _row_tombstones; }

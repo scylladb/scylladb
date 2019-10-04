@@ -164,7 +164,7 @@ SEASTAR_THREAD_TEST_CASE(complex_sst1_k1) {
     generate_clustered<1>(env, "key1").then([] (auto&& mutation) {
         auto s = complex_schema();
 
-        auto& sr = mutation.partition().static_row();
+        auto& sr = mutation.partition().static_row().get();
         match_live_cell(sr, *s, "static_obj", data_value(to_bytes("static_value")));
 
         auto row1 = clustered_row(mutation, *s, {"cl1.1", "cl2.1"});
@@ -195,7 +195,7 @@ SEASTAR_THREAD_TEST_CASE(complex_sst1_k2) {
     generate_clustered<1>(env, "key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
-        auto& sr = mutation.partition().static_row();
+        auto& sr = mutation.partition().static_row().get();
         match_live_cell(sr, *s, "static_obj", data_value(to_bytes("static_value")));
         auto static_set = match_collection(sr, *s, "static_collection", tombstone(deletion_time{1431451390, 1431451390225257l}));
         match_collection_element<status::live>(static_set.cells[0], to_bytes("1"), bytes_opt{});
@@ -248,7 +248,7 @@ SEASTAR_THREAD_TEST_CASE(complex_sst2_k2) {
     generate_clustered<2>(env, "key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
-        auto& sr = mutation.partition().static_row();
+        auto& sr = mutation.partition().static_row().get();
         match_dead_cell(sr, *s, "static_obj");
         auto static_set = match_collection(sr, *s, "static_collection", tombstone(deletion_time{0, api::missing_timestamp}));
         match_collection_element<status::dead>(static_set.cells[0], to_bytes("1"), bytes_opt{});
@@ -279,7 +279,7 @@ SEASTAR_THREAD_TEST_CASE(complex_sst2_k3) {
     generate_clustered<2>(env, "key3").then([] (auto&& mutation) {
         auto s = complex_schema();
 
-        auto& sr = mutation.partition().static_row();
+        auto& sr = mutation.partition().static_row().get();
         match_expiring_cell(sr, *s, "static_obj", data_value(to_bytes("static_value_3")), 1431451394597062l, 1431537794);
 
         auto row1 = clustered_row(mutation, *s, {"tcl1.1", "tcl2.1"});
@@ -321,7 +321,7 @@ SEASTAR_THREAD_TEST_CASE(complex_sst3_k2) {
     generate_clustered<3>(env, "key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
-        auto& sr = mutation.partition().static_row();
+        auto& sr = mutation.partition().static_row().get();
         match_live_cell(sr, *s, "static_obj", data_value(to_bytes("final_static")));
 
         auto row = clustered_row(mutation, *s, {"kcl1.1", "kcl2.1"});

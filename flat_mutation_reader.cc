@@ -419,7 +419,7 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
                 if (!_static_row_done) {
                     _static_row_done = true;
                     if (!_cur->partition().static_row().empty()) {
-                        push_mutation_fragment(static_row(std::move(_cur->partition().static_row())));
+                        push_mutation_fragment(static_row(std::move(_cur->partition().static_row().get_existing())));
                     }
                 }
                 auto mfopt = read_next();

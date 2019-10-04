@@ -141,7 +141,7 @@ inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduc
                             if (digest_requested) {
                                 mp.static_row().prepare_hash(*_schema, column_kind::static_column);
                             }
-                            return mp.static_row();
+                            return mp.static_row().get();
                          },
                          [this] (const row& r) { return row(*_schema, column_kind::static_column, r); },
                          [this] (row& a, const row& b) { a.apply(*_schema, column_kind::static_column, b); }));
@@ -523,7 +523,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
                             + current->partition().static_row().external_memory_usage(s, column_kind::static_column);
                         dst.partition().apply(current->partition().partition_tombstone());
                         if (static_row_continuous) {
-                            row& static_row = dst.partition().static_row();
+                            lazy_row& static_row = dst.partition().static_row();
                             if (can_move) {
                                 static_row.apply(s, column_kind::static_column,
                                     std::move(current->partition().static_row()));
