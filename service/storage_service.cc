@@ -710,9 +710,11 @@ void storage_service::join_token_ring(int delay) {
             std::stringstream ss;
             ss << _bootstrap_tokens;
             set_mode(mode::JOINING, format("Replacing a node with token(s): {}", ss.str()), true);
+            // _bootstrap_tokens was previously set in prepare_to_join using tokens gossiped by the replaced node
         }
         maybe_start_sys_dist_ks();
         mark_existing_views_as_built();
+        db::system_keyspace::update_tokens(_bootstrap_tokens).get();
         bootstrap(_bootstrap_tokens);
         // bootstrap will block until finished
         if (_is_bootstrap_mode) {
@@ -740,6 +742,7 @@ void storage_service::join_token_ring(int delay) {
                 }
                 slogger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
             }
+            db::system_keyspace::update_tokens(_bootstrap_tokens).get();
         } else {
             if (_bootstrap_tokens.size() != num_tokens) {
                 throw std::runtime_error(format("Cannot change the number of tokens from {:d} to {:d}", _bootstrap_tokens.size(), num_tokens));
@@ -756,7 +759,6 @@ void storage_service::join_token_ring(int delay) {
 
     db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
-    db::system_keyspace::update_tokens(_bootstrap_tokens).get();
     _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
     replicate_to_all_cores().get();
     // start participating in the ring.
@@ -819,8 +821,6 @@ void storage_service::mark_existing_views_as_built() {
 // Runs inside seastar::async context
 void storage_service::bootstrap(std::unordered_set<token> tokens) {
     _is_bootstrap_mode = true;
-    // DON'T use set_token, that makes us part of the ring locally which is incorrect until we are done bootstrapping
-    db::system_keyspace::update_tokens(tokens).get();
     if (!db().local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
