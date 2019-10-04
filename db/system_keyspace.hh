@@ -162,7 +162,15 @@ future<> setup(distributed<database>& db,
                distributed<cql3::query_processor>& qp,
                distributed<service::storage_service>& ss);
 future<> update_schema_version(utils::UUID version);
+
+/*
+ * Save tokens used by this node in the LOCAL table.
+ */
 future<> update_tokens(const std::unordered_set<dht::token>& tokens);
+
+/**
+ * Record tokens being used by another node in the PEERS table.
+ */
 future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
@@ -500,6 +508,10 @@ enum class bootstrap_state {
      */
     future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
 
+    /*
+     * Read this node's tokens stored in the LOCAL table.
+     * Used to initialize a restarting node.
+     */
     future<std::unordered_set<dht::token>> get_saved_tokens();
 
     future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
