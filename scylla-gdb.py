@@ -78,7 +78,7 @@ class std_optional:
         self.ref = ref
 
     def get(self):
-        return self.ref['_M_payload']['_M_payload']
+        return self.ref['_M_payload']['_M_payload']['_M_value']
 
     def __bool__(self):
         return self.__nonzero__()
