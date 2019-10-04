@@ -26,6 +26,8 @@
 #include <seastarx.hh>
 #include "error.hh"
 #include "rjson.hh"
+#include "auth.hh"
+#include <cctype>
 
 static logging::logger slogger("alternator-server");
 
@@ -116,6 +118,79 @@ protected:
     sstring _type;
 };
 
+static void verify_signature(request& req) {
+    auto host_it = req._headers.find("Host");
+    if (host_it == req._headers.end()) {
+        throw api_error("InvalidSignatureException", "Host header is mandatory for signature verification");
+    }
+    auto authorization_it = req._headers.find("Authorization");
+    if (host_it == req._headers.end()) {
+        throw api_error("InvalidSignatureException", "Authorization header is mandatory for signature verification");
+    }
+    std::string_view host = host_it->second;
+    std::vector<std::string_view> credentials_raw = split(authorization_it->second, ' ');
+    std::string credential;
+    std::string user_signature;
+    std::string signed_headers_str;
+    std::vector<std::string_view> signed_headers;
+    for (std::string_view entry : credentials_raw) {
+        std::vector<std::string_view> entry_split = split(entry, '=');
+        if (entry_split.size() != 2) {
+            if (entry != "AWS4-HMAC-SHA256") {
+                throw api_error("InvalidSignatureException", format("Only AWS4-HMAC-SHA256 algorithm is supported. Found: {}", entry));
+            }
+            continue;
+        }
+        std::string_view auth_value = entry_split[1];
+        // Commas appear as an additional (quite redundant) delimiter
+        if (auth_value.back() == ',') {
+            auth_value.remove_suffix(1);
+        }
+        if (entry_split[0] == "Credential") {
+            credential = std::string(auth_value);
+        } else if (entry_split[0] == "Signature") {
+            user_signature = std::string(auth_value);
+        } else if (entry_split[0] == "SignedHeaders") {
+            signed_headers_str = std::string(auth_value);
+            signed_headers = split(auth_value, ';');
+            std::sort(signed_headers.begin(), signed_headers.end());
+        }
+    }
+    std::vector<std::string_view> credential_split = split(credential, '/');
+    if (credential_split.size() != 5) {
+        throw api_error("ValidationException", format("Incorrect credential information format: {}", credential));
+    }
+    std::string_view user(credential_split[0]);
+    //FIXME: use the datestamp to check if the authorization signature has not expired,
+    // the default expiration period seems to be 5min.
+    std::string_view datestamp(credential_split[1]);
+    std::string_view region(credential_split[2]);
+    std::string_view service(credential_split[3]);
+
+    std::map<std::string_view, std::string_view> signed_headers_map;
+    for (const auto& header : signed_headers) {
+        signed_headers_map.emplace(header, std::string_view());
+    }
+    for (auto& header : req._headers) {
+        std::string header_str;
+        header_str.resize(header.first.size());
+        std::transform(header.first.begin(), header.first.end(), header_str.begin(), ::tolower);
+        auto it = signed_headers_map.find(header_str);
+        if (it != signed_headers_map.end()) {
+            it->second = std::string_view(header.second);
+        }
+    }
+
+    //FIXME: We need a proper way of providing the secret access key
+    std::string secret_access_key = "whatever";
+    std::string signature = get_signature(user, secret_access_key, std::string_view(host), req._method,
+            signed_headers_str, signed_headers_map, req.content, region, service, "");
+
+    if (signature != std::string_view(user_signature)) {
+        throw api_error("UnrecognizedClientException", "The security token included in the request is invalid.");
+    }
+}
+
 void server::set_routes(routes& r) {
     using alternator_callback = std::function<future<json::json_return_type>(executor&, executor::client_state&, std::unique_ptr<request>)>;
     std::unordered_map<std::string_view, alternator_callback> routes{
@@ -143,6 +218,11 @@ void server::set_routes(routes& r) {
         //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
         std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
         slogger.trace("Request: {} {}", op, req->content);
+        if (_enforce_authorization) {
+            verify_signature(*req);
+        } else {
+            slogger.debug("Skipping authorization");
+        }
         auto callback_it = routes.find(op);
         if (callback_it == routes.end()) {
             _executor.local()._stats.unsupported_operations++;
@@ -162,7 +242,8 @@ void server::set_routes(routes& r) {
     r.add(operation_type::POST, url("/"), handler);
 }
 
-future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds) {
+future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization) {
+    _enforce_authorization = enforce_authorization;
     if (!port && !https_port) {
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
                 " must be specified in order to init an alternator HTTP server instance"));

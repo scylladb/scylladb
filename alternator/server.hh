@@ -33,10 +33,11 @@ class server {
     seastar::httpd::http_server_control _control;
     seastar::httpd::http_server_control _https_control;
     seastar::sharded<executor>& _executor;
+    bool _enforce_authorization;
 public:
     server(seastar::sharded<executor>& executor) : _executor(executor) {}
 
-    seastar::future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds);
+    seastar::future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization);
 private:
     void set_routes(seastar::httpd::routes& r);
 };

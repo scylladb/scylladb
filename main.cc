@@ -1109,7 +1109,7 @@ int main(int ac, char** av) {
                         creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
                     }
                 }
-                alternator_server.init(addr, alternator_port, alternator_https_port, creds).get();
+                alternator_server.init(addr, alternator_port, alternator_https_port, creds, cfg->alternator_enforce_authorization()).get();
             }
 
             if (cfg->defragment_memory_on_idle()) {
