@@ -1775,6 +1775,39 @@ bool row::compact_and_expire(
     return compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, m, collector);
 }
 
+bool lazy_row::compact_and_expire(
+        const schema& s,
+        column_kind kind,
+        row_tombstone tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before,
+        const row_marker& marker,
+        compaction_garbage_collector* collector) {
+    if (!_row) {
+        return false;
+    }
+    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, marker, collector);
+}
+
+bool lazy_row::compact_and_expire(
+        const schema& s,
+        column_kind kind,
+        row_tombstone tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before,
+        compaction_garbage_collector* collector) {
+    if (!_row) {
+        return false;
+    }
+    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, collector);
+}
+
+std::ostream& operator<<(std::ostream& os, const lazy_row::printer& p) {
+    return os << row::printer(p._schema, p._kind, p._row.get());
+}
+
 deletable_row deletable_row::difference(const schema& s, column_kind kind, const deletable_row& other) const
 {
     deletable_row dr;
