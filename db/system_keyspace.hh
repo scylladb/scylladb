@@ -486,17 +486,6 @@ enum class bootstrap_state {
 #endif
 
     /**
-     * Convenience method to update the list of tokens in the local system keyspace.
-     *
-     * @param addTokens tokens to add
-     * @param rmTokens tokens to remove
-     * @return the collection of persisted tokens
-     */
-    future<std::unordered_set<dht::token>> update_local_tokens(
-        const std::unordered_set<dht::token> add_tokens,
-        const std::unordered_set<dht::token> rm_tokens);
-
-    /**
      * Return a map of stored tokens to IP addresses
      *
      */
