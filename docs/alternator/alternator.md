@@ -54,7 +54,12 @@ progresses and compatibility continues to improve.
 * Transport: HTTP mostly supported, but small features like CRC header and
   compression are still missing. HTTPS supported on top of HTTP, so small
   features may still be missing.
-* Authorization (verifying the originator of the request): Not yet supported.
+* Authorization (verifying the originator of the request): minimal support
+  for testing purposes works - the secret key used to compute a cryptographic
+  signature is "whatever". A proper key store is not yet implemented.
+  By default, authorization is not enforced at all. It can be turned on
+  by providing an entry in Scylla configuration:
+    alternator\_enforce\_authorization: true
 * DNS server for load balancing: Not yet supported. Client needs to pick
   one of the live Scylla nodes and send a request to it.
 ### Table Operations
