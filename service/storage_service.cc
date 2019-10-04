@@ -713,7 +713,7 @@ void storage_service::join_token_ring(int delay) {
         maybe_start_sys_dist_ks();
         mark_existing_views_as_built();
         db::system_keyspace::update_tokens(_bootstrap_tokens).get();
-        bootstrap(_bootstrap_tokens);
+        bootstrap();
         // bootstrap will block until finished
         if (_is_bootstrap_mode) {
             auto err = format("We are not supposed in bootstrap mode any more");
@@ -817,21 +817,21 @@ void storage_service::mark_existing_views_as_built() {
 }
 
 // Runs inside seastar::async context
-void storage_service::bootstrap(std::unordered_set<token> tokens) {
+void storage_service::bootstrap() {
     _is_bootstrap_mode = true;
     if (!db().local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
         // if not an existing token then bootstrap
         _gossiper.add_local_application_state({
-            { gms::application_state::TOKENS, value_factory.tokens(tokens) },
-            { gms::application_state::STATUS, value_factory.bootstrapping(tokens) },
+            { gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens) },
+            { gms::application_state::STATUS, value_factory.bootstrapping(_bootstrap_tokens) },
         }).get();
         set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
         _gossiper.wait_for_range_setup().get();
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...
-        _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
+        _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
         replicate_to_all_cores().get();
         auto replace_addr = db().local().get_replace_address();
         if (replace_addr) {
@@ -843,9 +843,10 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     _gossiper.check_seen_seeds();
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), tokens, _token_metadata);
-    bs.bootstrap().get(); // handles token update
-    slogger.info("Bootstrap completed! for the tokens {}", tokens);
+    dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
+    // Does the actual streaming of newly replicated token ranges.
+    bs.bootstrap().get();
+    slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
 }
 
 sstring

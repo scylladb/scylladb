@@ -547,9 +547,13 @@ private:
     void set_mode(mode m, bool log);
     void set_mode(mode m, sstring msg, bool log);
     void mark_existing_views_as_built();
-public:
-    void bootstrap(std::unordered_set<token> tokens);
 
+    // Stream data for which we become a new replica.
+    // Before that, if we're not replacing another node, inform other nodes about our chosen tokens (_bootstrap_tokens)
+    // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
+    void bootstrap();
+
+public:
     bool is_bootstrap_mode() {
         return _is_bootstrap_mode;
     }
