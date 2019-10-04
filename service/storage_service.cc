@@ -707,9 +707,7 @@ void storage_service::join_token_ring(int delay) {
             } else {
                 sleep_abortable(get_ring_delay(), _abort_source).get();
             }
-            std::stringstream ss;
-            ss << _bootstrap_tokens;
-            set_mode(mode::JOINING, format("Replacing a node with token(s): {}", ss.str()), true);
+            set_mode(mode::JOINING, format("Replacing a node with token(s): {}", _bootstrap_tokens), true);
             // _bootstrap_tokens was previously set in prepare_to_join using tokens gossiped by the replaced node
         }
         maybe_start_sys_dist_ks();
