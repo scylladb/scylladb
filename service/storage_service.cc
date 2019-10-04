@@ -754,9 +754,15 @@ void storage_service::join_token_ring(int delay) {
         MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
 #endif
 
-    // start participating in the ring.
     db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
-    set_tokens(_bootstrap_tokens);
+    slogger.debug("Setting tokens to {}", _bootstrap_tokens);
+    db::system_keyspace::update_tokens(_bootstrap_tokens).get();
+    _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
+    replicate_to_all_cores().get();
+    // start participating in the ring.
+    set_gossip_tokens(_bootstrap_tokens);
+    set_mode(mode::NORMAL, "node is now in normal status", true);
+
     // remove the existing info about the replaced node.
     if (!current.empty()) {
         for (auto existing : current) {
@@ -1361,16 +1367,6 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
 }
 
 // Runs inside seastar::async context
-void storage_service::set_tokens(std::unordered_set<token> tokens) {
-    slogger.debug("Setting tokens to {}", tokens);
-    db::system_keyspace::update_tokens(tokens).get();
-    auto local_tokens = get_local_tokens().get0();
-    _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-    replicate_to_all_cores().get();
-    set_gossip_tokens(local_tokens);
-    set_mode(mode::NORMAL, "node is now in normal status", true);
-}
-
 void storage_service::set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens) {
     _gossiper.add_local_application_state({
         { gms::application_state::TOKENS, value_factory.tokens(local_tokens) },
