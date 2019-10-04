@@ -259,9 +259,6 @@ private:
 
     std::optional<inet_address> _removing_node;
 
-    /* Are we starting this node in bootstrap mode? */
-    bool _is_bootstrap_mode;
-
     bool _initialized;
 
     bool _joined = false;
@@ -346,10 +343,6 @@ private:
 public:
     sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
-
-    void finish_bootstrapping() {
-        _is_bootstrap_mode = false;
-    }
 
     void set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens);
 #if 0
@@ -554,10 +547,6 @@ private:
     void bootstrap();
 
 public:
-    bool is_bootstrap_mode() {
-        return _is_bootstrap_mode;
-    }
-
 #if 0
 
     public TokenMetadata getTokenMetadata()
