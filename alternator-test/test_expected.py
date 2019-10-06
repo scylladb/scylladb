@@ -720,23 +720,31 @@ def test_update_expected_1_begins_with_true(test_table_s):
 def test_update_expected_1_begins_with_false(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
-        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'}})
+        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'},
+                          'x': {'Value': 3, 'Action': 'PUT'}})
     with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
             Expected={'a': {'ComparisonOperator': 'BEGINS_WITH',
                             'AttributeValueList': ['dog']}}
         )
-    # Although BEGINS_WITH requires String or Binary type, giving it a
-    # number results not with a ValidationException but rather a
-    # failed condition (ConditionalCheckFailedException)
-    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+    # BEGINS_WITH requires String or Binary operand, giving it a number
+    # results with a ValidationException (not a normal failed condition):
+    with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
             Expected={'a': {'ComparisonOperator': 'BEGINS_WITH',
                             'AttributeValueList': [3]}}
         )
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello'}
+    # However, if we try to compare the attribute to a String or Binary, and
+    # the attribute value itself is a number, this is just a failed condition:
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
+            Expected={'x': {'ComparisonOperator': 'BEGINS_WITH',
+                            'AttributeValueList': ['dog']}}
+        )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello', 'x': 3}
 
 # Tests for Expected with ComparisonOperator = "IN":
 def test_update_expected_1_in(test_table_s):

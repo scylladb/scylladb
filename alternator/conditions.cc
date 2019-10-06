@@ -153,21 +153,23 @@ static bool check_NE(const rjson::value* v1, const rjson::value& v2) {
 
 // Check if two JSON-encoded values match with the BEGINS_WITH relation
 static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
-    if (!v1) {
-        return false;
+    // BEGINS_WITH requires that its single operand (v2) be a string or
+    // binary - otherwise it's a validation error. However, problems with
+    // the stored attribute (v1) will just return false (no match).
+    if (!v2.IsObject() || v2.MemberCount() != 1) {
+        throw api_error("ValidationException", format("BEGINS_WITH operator encountered malformed AttributeValue: {}", v2));
     }
-    // BEGINS_WITH only supports comparing two strings or two binaries -
-    // any other combinations of types, or other malformed values, return
-    // false (no match).
-    if (!v1->IsObject() || v1->MemberCount() != 1 || !v2.IsObject() || v2.MemberCount() != 1) {
+    auto it2 = v2.MemberBegin();
+    if (it2->name != "S" && it2->name != "B") {
+        throw api_error("ValidationException", format("BEGINS_WITH operator requires String or Binary in AttributeValue, got {}", it2->name));
+    }
+
+
+    if (!v1 || !v1->IsObject() || v1->MemberCount() != 1) {
         return false;
     }
     auto it1 = v1->MemberBegin();
-    auto it2 = v2.MemberBegin();
     if (it1->name != it2->name) {
-        return false;
-    }
-    if (it1->name != "S" && it1->name != "B") {
         return false;
     }
     std::string_view val1(it1->value.GetString(), it1->value.GetStringLength());
