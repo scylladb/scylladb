@@ -112,6 +112,9 @@ read_request_timeout_in_ms: 5000
 
 # How long the coordinator should wait for writes to complete
 write_request_timeout_in_ms: 2000
+# how long a coordinator should continue to retry a CAS operation
+# that contends with other proposals for the same row
+cas_contention_timeout_in_ms: 1000
 
 # phi value that must be reached for a host to be marked down.
 # most users should never need to adjust this.

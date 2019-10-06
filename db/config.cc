@@ -460,7 +460,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The time that the coordinator waits for read operations to complete")
     , counter_write_request_timeout_in_ms(this, "counter_write_request_timeout_in_ms", value_status::Used, 5000,
         "The time that the coordinator waits for counter writes to complete.")
-    , cas_contention_timeout_in_ms(this, "cas_contention_timeout_in_ms", value_status::Unused, 5000,
+    , cas_contention_timeout_in_ms(this, "cas_contention_timeout_in_ms", value_status::Used, 1000,
         "The time that the coordinator continues to retry a CAS (compare and set) operation that contends with other proposals for the same row.")
     , truncate_request_timeout_in_ms(this, "truncate_request_timeout_in_ms", value_status::Used, 10000,
         "The time that the coordinator waits for truncates (remove all data from a table) to complete. The long default value allows for a snapshot to be taken before removing the data. If auto_snapshot is disabled (not recommended), you can reduce this time.")
