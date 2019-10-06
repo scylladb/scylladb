@@ -217,4 +217,12 @@ void query_options::fill_value_views()
     }
 }
 
+db::consistency_level query_options::check_serial_consistency() const {
+
+    if (_options.serial_consistency.has_value()) {
+        return *_options.serial_consistency;
+    }
+    throw exceptions::protocol_exception("Consistency level for LWT is missing for a request with conditions");
+}
+
 }

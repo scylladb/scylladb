@@ -194,10 +194,13 @@ public:
         return get_specific_options().state;
     }
 
-    /**  Serial consistency for conditional updates. */
+    /** Serial consistency for conditional updates. */
     std::optional<db::consistency_level> get_serial_consistency() const {
         return get_specific_options().serial_consistency;
     }
+
+    /**  Return serial consistency for conditional updates. Throws if the consistency is not set. */
+    db::consistency_level check_serial_consistency() const;
 
     api::timestamp_type get_timestamp(service::query_state& state) const {
         auto tstamp = get_specific_options().timestamp;
