@@ -795,25 +795,25 @@ void set_column_family(http_context& ctx, routes& r) {
 
     });
 
-    cf::get_cas_prepare.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_cas_prepare.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+            return cf.get_stats().estimated_cas_prepare;
+        },
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
-    cf::get_cas_propose.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_cas_propose.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+            return cf.get_stats().estimated_cas_propose;
+        },
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
-    cf::get_cas_commit.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_cas_commit.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+            return cf.get_stats().estimated_cas_commit;
+        },
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_sstables_per_read_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
