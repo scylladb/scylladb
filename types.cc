@@ -572,6 +572,30 @@ int listlike_collection_type_impl::compare_with_map(const map_type_impl& map_typ
     return list_size == map_size ? 0 : (list_size < map_size ? -1 : 1);
 }
 
+bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type, const data_value& value) const
+{
+    assert((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
+    auto sf = cql_serialization_format::internal();
+    const std::vector<std::pair<data_value, data_value>>& map = map_type.from_value(value);
+    // Lists are represented as vector<pair<timeuuid, value>>, sets are vector<pair<value, empty>>
+    bool first = is_set();
+
+    size_t len = collection_size_len(sf);
+    size_t psz = collection_value_len(sf);
+    for (const std::pair<data_value, data_value>& entry : map) {
+        len += psz + (first ? entry.first : entry.second).serialized_size();
+    }
+
+    bytes b(bytes::initialized_later(), len);
+    bytes::iterator out = b.begin();
+
+    write_collection_size(out, map.size(), sf);
+    for (const std::pair<data_value, data_value>& entry : map) {
+        write_collection_value(out, sf, _elements, first ? entry.first : entry.second);
+    }
+    return b;
+}
+
 std::vector<atomic_cell>
 collection_type_impl::enforce_limit(std::vector<atomic_cell> cells, int version) const {
     assert(is_multi_cell());
