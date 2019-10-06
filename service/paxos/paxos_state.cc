@@ -46,10 +46,9 @@ void paxos_state::release_semaphore_for_key(const dht::token& key) {
 
 future<prepare_response> paxos_state::prepare_impl(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token,
         partition_key key, utils::UUID ballot, clock_type::time_point timeout) {
-#if 0
-    db::timeout_clock::time_point start = db::timeout_clock::now();
-#endif
-    return with_locked_key(token, timeout, [ballot, key = std::move(key), schema = std::move(schema), tr_state, timeout] () mutable {
+    utils::latency_counter lc;
+    lc.start();
+    return with_locked_key(token, timeout, [ballot, key = std::move(key), schema, tr_state, timeout] () mutable {
         // When preparing, we need to use the same time as "now" (that's the time we use to decide if something
         // is expired or not) across nodes, otherwise we may have a window where a Most Recent Decision shows up
         // on some replica and not others during a new proposal (in storage_proxy::begin_and_repair_paxos()), and no
@@ -57,7 +56,7 @@ future<prepare_response> paxos_state::prepare_impl(tracing::trace_state_ptr tr_s
         // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
         auto f = db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
-        return f.then([ballot, key = std::move(key), tr_state, schema = std::move(schema), timeout] (paxos_state state) {
+        return f.then([ballot, key = std::move(key), tr_state, schema, timeout] (paxos_state state) {
             // If received ballot is newer that the one we already accepted it has to be accepted as well,
             // but we will return the previously accepted proposal so that the new coordinator will use it instead of
             // its own.
@@ -77,14 +76,13 @@ future<prepare_response> paxos_state::prepare_impl(tracing::trace_state_ptr tr_s
                 return make_ready_future<prepare_response>(prepare_response(std::move(state._promised_ballot)));
             }
         });
+    }).finally([schema, lc] () mutable {
+        auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
+        stats.cas_prepare.mark(lc.stop().latency());
+        if (lc.is_start()) {
+            stats.estimated_cas_prepare.add(lc.latency(), stats.cas_prepare.hist.count);
+        }
     });
-#if 0
-    finally
-    {
-        auto elapsed = db::timeout_clock::now() - start;
-        keyspace.open(to_prepare.update.schema().keyspace).get_column_family_store(to_prepare.update.schema().id).metric.cas_prepare.add_nano(elapsed);
-    }
-#endif
 }
 
 // Invoke prepare on appropriate shard
@@ -104,14 +102,13 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
 
 future<bool> paxos_state::accept_impl(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token,
         proposal proposal, clock_type::time_point timeout) {
-#if 0
-    db::timeout_clock::time_point start = db::timeout_clock::now();
-#endif
-    return with_locked_key(token, timeout, [proposal = std::move(proposal), schema = std::move(schema), tr_state, timeout] () mutable {
+    utils::latency_counter lc;
+    lc.start();
+    return with_locked_key(token, timeout, [proposal = std::move(proposal), schema, tr_state, timeout] () mutable {
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
         auto f = db::system_keyspace::load_paxos_state(proposal.update.decorated_key(*schema).key(), schema,
                 gc_clock::time_point(now_in_sec), timeout);
-        return f.then([proposal = std::move(proposal), tr_state, schema = std::move(schema), timeout] (paxos_state state) {
+        return f.then([proposal = std::move(proposal), tr_state, schema, timeout] (paxos_state state) {
             // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
             // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
             if (proposal.ballot == state._promised_ballot || proposal.ballot.timestamp() > state._promised_ballot.timestamp()) {
@@ -126,14 +123,13 @@ future<bool> paxos_state::accept_impl(tracing::trace_state_ptr tr_state, schema_
                 return make_ready_future<bool>(false);
             }
         });
+    }).finally([schema, lc] () mutable {
+        auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
+        stats.cas_propose.mark(lc.stop().latency());
+        if (lc.is_start()) {
+            stats.estimated_cas_propose.add(lc.latency(), stats.cas_propose.hist.count);
+        }
     });
-#if 0
-    finally
-    {
-        auto elapsed = db::timeout_clock::now() - start;
-        keyspace.open(proposal.update.schema().keyspace).get_column_family_store(proposal.update.schema().id).metric.cas_propose.add_nano(elapsed);
-    }
-#endif
 }
 
 // Invoke accept on appropriate shard
@@ -150,11 +146,10 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
 
 future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
-#if 0
-    db::timeout_clock::time_point start = db::timeout_clock::now();
-#endif
+    utils::latency_counter lc;
+    lc.start();
 
-    return db::system_keyspace::get_truncated_at(schema->id()).then([tr_state = std::move(tr_state), schema = std::move(schema),
+    return db::system_keyspace::get_truncated_at(schema->id()).then([tr_state = std::move(tr_state), schema,
                                                       timeout, decision = std::move(decision)] (db_clock::time_point t) mutable {
         return do_with(std::move(decision), [tr_state = std::move(tr_state), schema = std::move(schema), timeout, t]
                                              (proposal& decision) {
@@ -184,14 +179,13 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
                 return db::system_keyspace::save_paxos_decision(*schema, decision, timeout);
             });
         });
+    }).finally([schema, lc] () mutable {
+        auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
+        stats.cas_commit.mark(lc.stop().latency());
+        if (lc.is_start()) {
+            stats.estimated_cas_commit.add(lc.latency(), stats.cas_commit.hist.count);
+        }
     });
-#if 0
-    finally
-    {
-        auto elapsed = db::timeout_clock::now() - start;
-        keyspace.open(proposal.update.schema().keyspace).get_column_family_store(proposal.update.schema().id).metric.cas_commit.add_nano(elapsed);
-    }
-#endif
 }
 
 } // end of namespace "service::paxos"
