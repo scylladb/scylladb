@@ -672,21 +672,6 @@
       ]
     },
     {
-      "path": "/storage_proxy/metrics/cas_read/condition_not_met",
-      "operations": [
-        {
-          "method": "GET",
-          "summary": "Get cas read metrics",
-          "type": "int",
-          "nickname": "get_cas_read_metrics_condition_not_met",
-          "produces": [
-            "application/json"
-          ],
-          "parameters": []
-        }
-      ]
-    },
-    {
       "path": "/storage_proxy/metrics/read/timeouts",
       "operations": [
         {

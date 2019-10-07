@@ -305,12 +305,6 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    sp::get_cas_read_metrics_condition_not_met.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
-    });
-
     sp::get_read_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
         return sum_timed_rate_as_long(ctx.sp, &proxy::stats::read_timeouts);
     });
