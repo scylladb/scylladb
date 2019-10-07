@@ -23,6 +23,7 @@
 #include "mutation_reader.hh"
 #include "seastar/util/reference_wrapper.hh"
 #include "clustering_ranges_walker.hh"
+#include "schema_upgrader.hh"
 #include <algorithm>
 
 #include <boost/range/adaptor/transformed.hpp>
@@ -907,4 +908,8 @@ public:
 
 flat_mutation_reader make_generating_reader(schema_ptr s, std::function<future<mutation_fragment_opt> ()> get_next_fragment) {
     return make_flat_mutation_reader<generating_reader>(std::move(s), std::move(get_next_fragment));
+}
+
+void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
+    *this = transform(std::move(*this), schema_upgrader(s));
 }

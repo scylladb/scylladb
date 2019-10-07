@@ -23,7 +23,6 @@
 #include "database.hh"
 #include "frozen_mutation.hh"
 #include "partition_snapshot_reader.hh"
-#include "schema_upgrader.hh"
 #include "partition_builder.hh"
 
 void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) {
@@ -429,11 +428,8 @@ public:
                         bool digest_requested = _slice.options.contains<query::partition_slice::option::with_digest>();
                         auto mpsr = make_partition_snapshot_flat_reader(snp_schema, std::move(key_and_snp->first), std::move(cr),
                                         std::move(key_and_snp->second), digest_requested, region(), read_section(), mtbl(), streamed_mutation::forwarding::no);
-                        if (snp_schema->version() != schema()->version()) {
-                            _delegate = transform(std::move(mpsr), schema_upgrader(schema()));
-                        } else {
-                            _delegate = std::move(mpsr);
-                        }
+                        mpsr.upgrade_schema(schema());
+                        _delegate = std::move(mpsr);
                     } else {
                         _end_of_stream = true;
                     }
@@ -588,11 +584,8 @@ private:
             auto snp_schema = key_and_snp->second->schema();
             auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_accounter>(snp_schema, std::move(key_and_snp->first), std::move(cr),
                             std::move(key_and_snp->second), false, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *snp_schema, _flushed_memory);
-            if (snp_schema->version() != schema()->version()) {
-                _partition_reader = transform(std::move(mpsr), schema_upgrader(schema()));
-            } else {
-                _partition_reader = std::move(mpsr);
-            }
+            mpsr.upgrade_schema(schema());
+            _partition_reader = std::move(mpsr);
         }
     }
 public:
@@ -668,11 +661,8 @@ memtable::make_flat_reader(schema_ptr s,
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
         auto rd = make_partition_snapshot_flat_reader(snp_schema, std::move(dk), std::move(cr), std::move(snp), digest_requested,
                                                       *this, _read_section, shared_from_this(), fwd);
-        if (snp_schema->version() != s->version()) {
-            return transform(std::move(rd), schema_upgrader(s));
-        } else {
-            return rd;
-        }
+        rd.upgrade_schema(s);
+        return rd;
     } else {
         auto res = make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), range, slice, pc, fwd_mr);
         if (fwd == streamed_mutation::forwarding::yes) {
@@ -787,13 +777,19 @@ bool memtable::is_flushed() const {
     return bool(_underlying);
 }
 
+void memtable_entry::upgrade_schema(const schema_ptr& s, mutation_cleaner& cleaner) {
+    if (_schema != s) {
+        partition().upgrade(_schema, s, cleaner, no_cache_tracker);
+        _schema = s;
+    }
+}
+
 void memtable::upgrade_entry(memtable_entry& e) {
     if (e._schema != _schema) {
         assert(!reclaiming_enabled());
         with_allocator(allocator(), [this, &e] {
           with_linearized_managed_bytes([&] {
-            e.partition().upgrade(e._schema, _schema, cleaner(), no_cache_tracker);
-            e._schema = _schema;
+            e.upgrade_schema(_schema, cleaner());
           });
         });
     }
