@@ -23,6 +23,7 @@
 #include "mutation_reader.hh"
 #include "seastar/util/reference_wrapper.hh"
 #include "clustering_ranges_walker.hh"
+#include "schema_upgrader.hh"
 #include <algorithm>
 
 #include <boost/range/adaptor/transformed.hpp>
@@ -870,4 +871,8 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, std::deque<mutation_
         }
     }
     return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(fragments), pr);
+}
+
+void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
+    *this = transform(std::move(*this), schema_upgrader(s));
 }

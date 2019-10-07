@@ -62,7 +62,7 @@ private:
         }
         auto count = _memtables.size();
         auto op = _apply.start();
-        auto new_mt = make_lw_shared<memtable>(_memtables.back()->schema());
+        auto new_mt = make_lw_shared<memtable>(_s);
         std::vector<flat_mutation_reader> readers;
         for (auto&& mt : _memtables) {
             readers.push_back(mt->make_flat_reader(new_mt->schema(),
@@ -100,6 +100,13 @@ public:
         _closed = true;
         _should_compact.broadcast();
         _compactor.get();
+    }
+    // Will cause subsequent apply() calls to accept writes conforming to given schema (or older).
+    // Without this, the writes will be upgraded to the old schema and snapshots will not reflect
+    // parts of writes which depend on the new schema.
+    void set_schema(schema_ptr s) {
+        pending()->set_schema(s);
+        _s = s;
     }
     // Must run in a seastar thread
     void clear() {

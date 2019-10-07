@@ -549,12 +549,12 @@ public:
     future<> invalidate(external_updater, const dht::partition_range& = query::full_partition_range);
     future<> invalidate(external_updater, dht::partition_range_vector&&);
 
-    // Evicts entries from given range in cache.
+    // Evicts entries from cache.
     //
     // Note that this does not synchronize with the underlying source,
     // it is assumed that the underlying source didn't change.
     // If it did, use invalidate() instead.
-    void evict(const dht::partition_range& = query::full_partition_range);
+    void evict();
 
     size_t partitions() const {
         return _partitions.size();
