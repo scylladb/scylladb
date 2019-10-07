@@ -169,6 +169,15 @@ private:
     std::set<sstring> _disabled_features;
     size_t _service_memory_total;
     semaphore _service_memory_limiter;
+
+    /* For unit tests only.
+     *
+     * Currently used when choosing the timestamp of the first CDC stream generation:
+     * normally we choose a timestamp in the future so other nodes have a chance to learn about it
+     * before it starts operating, but in the single-node-cluster case this is not necessary
+     * and would only slow down tests (by having them wait).
+     */
+    bool _for_testing;
 public:
     storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,/* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
     void isolate_on_error();
@@ -320,6 +329,14 @@ private:
 private:
     std::unordered_set<token> _bootstrap_tokens;
 
+    /* The timestamp of the CDC streams generation that this node has proposed when joining.
+     * This value is nullopt only when:
+     * 1. this node is being upgraded from a non-CDC version,
+     * 2. this node is starting for the first time or restarting with CDC previously disabled,
+     *    in which case the value should become populated before we leave the join_token_ring procedure.
+     */
+    std::optional<db_clock::time_point> _cdc_streams_ts;
+
     gms::feature _range_tombstones_feature;
     gms::feature _large_partitions_feature;
     gms::feature _materialized_views_feature;
@@ -359,7 +376,9 @@ public:
         _is_bootstrap_mode = false;
     }
 
-    void set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens);
+    /* Broadcasts the chosen tokens through gossip,
+     * together with a CDC streams timestamp (if we start a new CDC generation) and STATUS=NORMAL. */
+    void set_gossip_tokens(const std::unordered_set<dht::token>&, std::optional<db_clock::time_point>);
 #if 0
 
     public void registerDaemon(CassandraDaemon daemon)
