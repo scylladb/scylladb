@@ -1112,7 +1112,7 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
-    throw std::runtime_error(format("Move opeartion is not supported only more, endpoint={}", endpoint));
+    throw std::runtime_error(format("Move operation is not supported anymore, endpoint={}", endpoint));
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
