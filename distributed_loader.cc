@@ -41,6 +41,7 @@
 extern logging::logger dblog;
 
 sstables::sstable::version_types get_highest_supported_format();
+static future<> execute_futures(std::vector<future<>>& futures);
 
 static const std::unordered_set<sstring> system_keyspaces = {
                 db::system_keyspace::NAME, db::schema_tables::NAME
@@ -366,12 +367,18 @@ static std::vector<sstables::shared_sstable> sstables_for_shard(const std::vecto
 }
 
 static future<> populate(distributed<database>& db, sstring datadir) {
-    return lister::scan_dir(datadir, { directory_entry_type::directory }, [&db] (fs::path datadir, directory_entry de) {
-        auto& ks_name = de.name;
-        if (is_system_keyspace(ks_name)) {
+    return do_with(std::vector<future<>>(), [&db, datadir = std::move(datadir)] (std::vector<future<>>& futures) {
+        // push futures that populate keyspaces into array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        return lister::scan_dir(datadir, { directory_entry_type::directory }, [&db, &futures] (fs::path datadir, directory_entry de) {
+            if (!is_system_keyspace(de.name)) {
+                futures.emplace_back(distributed_loader::populate_keyspace(db, datadir.native(), de.name));
+            }
             return make_ready_future<>();
-        }
-        return distributed_loader::populate_keyspace(db, datadir.native(), ks_name);
+        }).then([&futures] {
+            return execute_futures(futures);
+        });
     });
 }
 
