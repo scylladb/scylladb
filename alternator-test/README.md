@@ -34,7 +34,7 @@ region = us-east-1
 ## HTTPS support
 
 In order to run tests with HTTPS, run pytest with `--https` parameter. Note that the Scylla cluster needs to be provided
-with alternator\_tls\_port configuration option in order to initialize a HTTPS server.
+with alternator\_https\_port configuration option in order to initialize a HTTPS server.
 Moreover, running an instance of a HTTPS server requires a certificate. Here's how to easily generate
 a key and a self-signed certificate, which is sufficient to run `--https` tests:
 
@@ -43,8 +43,8 @@ openssl genrsa 2048 > scylla.key
 openssl req -new -x509 -nodes -sha256 -days 365 -key scylla.key -out scylla.crt
 ```
 
-If this pair is put into `SCYLLA_DATA_DIR/conf/` directory, it will be enough
+If this pair is put into `conf/` directory, it will be enough
 to allow the alternator HTTPS server to think it's been authorized and properly certified.
 Still, boto3 library issues warnings that the certificate used for communication is self-signed,
-and thus should not be trusted. For the sake of running local tests this warning can be safely ignored.
+and thus should not be trusted. For the sake of running local tests this warning is explicitly ignored.
 
