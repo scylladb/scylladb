@@ -3760,8 +3760,8 @@ void storage_proxy::on_down(const gms::inet_address& endpoint) {
     auto it = _view_update_handlers_list->begin();
     while (it != _view_update_handlers_list->end()) {
         auto guard = it->shared_from_this();
-        if (it->get_targets().count(endpoint) > 0 && _response_handlers.find(it->id()) != _response_handlers.end()) {
-            it->timeout_cb();
+        if (it->get_targets().count(endpoint) > 0) {
+            got_failure_response(it->id(), endpoint, 1, {});
         }
         ++it;
         if (seastar::thread::should_yield()) {
