@@ -701,6 +701,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Maximum number of distinct clustering key restrictions per query. This limit places a bound on the size of IN tuples, "
             "especially when multiple clustering key columns have IN restrictions. Increasing this value can result in server instability.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port")
+    , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)

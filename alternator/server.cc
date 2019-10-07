@@ -153,19 +153,38 @@ void server::set_routes(routes& r) {
     r.add(operation_type::POST, url("/"), handler);
 }
 
-future<> server::init(net::inet_address addr, uint16_t port) {
-    return _executor.invoke_on_all([] (executor& e) {
-        return e.start();
-    }).then([this] {
-        return _control.start();
-    }).then([this] {
-        return _control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1));
-    }).then([this, addr, port] {
-        return _control.listen(socket_address{addr, port});
-    }).then([addr, port] {
-        slogger.info("Alternator HTTP server listening on {} port {}", addr, port);
-    }).handle_exception([addr, port] (std::exception_ptr e) {
-        slogger.warn("Failed to set up Alternator HTTP server on {} port {}: {}", addr, port, e);
+future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds) {
+    if (!port && !https_port) {
+        return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
+                " must be specified in order to init an alternator HTTP server instance"));
+    }
+    return seastar::async([this, addr, port, https_port, creds] {
+        try {
+            _executor.invoke_on_all([] (executor& e) {
+                return e.start();
+            }).get();
+
+            if (port) {
+                _control.start().get();
+                _control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1)).get();
+                _control.listen(socket_address{addr, *port}).get();
+                slogger.info("Alternator HTTP server listening on {} port {}", addr, *port);
+            }
+            if (https_port) {
+                _https_control.start().get();
+                _https_control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1)).get();
+                _https_control.server().invoke_on_all([creds] (http_server& serv) {
+                    return serv.set_tls_credentials(creds->build_server_credentials());
+                }).get();
+
+                _https_control.listen(socket_address{addr, *https_port}).get();
+                slogger.info("Alternator HTTPS server listening on {} port {}", addr, *https_port);
+            }
+        } catch (...) {
+            slogger.warn("Failed to set up Alternator HTTP server on {} port {}, TLS port {}: {}",
+                    addr, port ? std::to_string(*port) : "OFF", https_port ? std::to_string(*https_port) : "OFF", std::current_exception());
+            throw;
+        }
     });
 }
 

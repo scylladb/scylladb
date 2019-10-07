@@ -43,6 +43,9 @@ if (LooseVersion(botocore.__version__) < LooseVersion('1.12.54')):
 def pytest_addoption(parser):
     parser.addoption("--aws", action="store_true",
         help="run against AWS instead of a local Scylla installation")
+    parser.addoption("--https", action="store_true",
+        help="communicate via HTTPS protocol on port 8043 instead of HTTP when"
+            " running against a local Scylla installation")
 
 # "dynamodb" fixture: set up client object for communicating with the DynamoDB
 # API. Currently this chooses either Amazon's DynamoDB in the default region
@@ -59,7 +62,14 @@ def dynamodb(request):
         # requires us to specify dummy region and credential parameters,
         # otherwise the user is forced to properly configure ~/.aws even
         # for local runs.
-        return boto3.resource('dynamodb', endpoint_url='http://localhost:8000',
+        local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
+        # Disable verifying in order to be able to use self-signed TLS certificates
+        verify = not request.config.getoption('https')
+        # Silencing the 'Unverified HTTPS request warning'
+        if request.config.getoption('https'):
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id='whatever', aws_secret_access_key='whatever')
 
 # "test_table" fixture: Create and return a temporary table to be used in tests
