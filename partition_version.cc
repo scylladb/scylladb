@@ -172,6 +172,9 @@ tombstone partition_entry::partition_tombstone() const {
 
 partition_snapshot::~partition_snapshot() {
     with_allocator(region().allocator(), [this] {
+        if (_locked) {
+            touch();
+        }
         if (_version && _version.is_unique_owner()) {
             auto v = &*_version;
             _version = {};
@@ -268,6 +271,7 @@ partition_entry::~partition_entry() {
         return;
     }
     if (_snapshot) {
+        assert(!_snapshot->is_locked());
         _snapshot->_version = std::move(_version);
         _snapshot->_version.mark_as_unique_owner();
         _snapshot->_entry = nullptr;
@@ -284,6 +288,7 @@ stop_iteration partition_entry::clear_gently(cache_tracker* tracker) noexcept {
     }
 
     if (_snapshot) {
+        assert(!_snapshot->is_locked());
         _snapshot->_version = std::move(_version);
         _snapshot->_version.mark_as_unique_owner();
         _snapshot->_entry = nullptr;
@@ -311,6 +316,7 @@ stop_iteration partition_entry::clear_gently(cache_tracker* tracker) noexcept {
 void partition_entry::set_version(partition_version* new_version)
 {
     if (_snapshot) {
+        assert(!_snapshot->is_locked());
         _snapshot->_version = std::move(_version);
         _snapshot->_entry = nullptr;
     }
@@ -459,7 +465,6 @@ public:
 
 coroutine partition_entry::apply_to_incomplete(const schema& s,
     partition_entry&& pe,
-    const schema& pe_schema,
     mutation_cleaner& pe_cleaner,
     logalloc::allocating_section& alloc,
     logalloc::region& reg,
@@ -479,10 +484,6 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
     // partitions where I saw 40% slow down.
     const bool preemptible = s.clustering_key_size() > 0;
 
-    if (s.version() != pe_schema.version()) {
-        pe.upgrade(pe_schema.shared_from_this(), s.shared_from_this(), pe_cleaner, no_cache_tracker);
-    }
-
     // When preemptible, later memtable reads could start using the snapshot before
     // snapshot's writes are made visible in cache, which would cause them to miss those writes.
     // So we cannot allow erasing when preemptible.
@@ -496,6 +497,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
         prev_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase - 1);
     }
     auto dst_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase);
+    dst_snp->lock();
 
     // Once we start updating the partition, we must keep all snapshots until the update completes,
     // otherwise partial writes would be published. So the scope of snapshots must enclose the scope
@@ -570,6 +572,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
                     auto has_next = src_cur.erase_and_advance();
                     acc.unpin_memory(size);
                     if (!has_next) {
+                        dst_snp->unlock();
                         return stop_iteration::yes;
                     }
                 } while (!preemptible || !need_preempt());
@@ -661,6 +664,18 @@ partition_snapshot::range_tombstones()
         position_in_partition_view::after_all_clustered_rows());
 }
 
+void partition_snapshot::touch() noexcept {
+    // Eviction assumes that older versions are evicted before newer so only the latest snapshot
+    // can be touched.
+    if (_tracker && at_latest_version()) {
+        auto&& rows = version()->partition().clustered_rows();
+        assert(!rows.empty());
+        rows_entry& last_dummy = *rows.rbegin();
+        assert(last_dummy.is_last_dummy());
+        _tracker->touch(last_dummy);
+    }
+}
+
 std::ostream& operator<<(std::ostream& out, const partition_entry::printer& p) {
     auto& e = p._partition_entry;
     out << "{";
@@ -688,6 +703,7 @@ void partition_entry::evict(mutation_cleaner& cleaner) noexcept {
         return;
     }
     if (_snapshot) {
+        assert(!_snapshot->is_locked());
         _snapshot->_version = std::move(_version);
         _snapshot->_version.mark_as_unique_owner();
         _snapshot->_entry = nullptr;
@@ -706,4 +722,19 @@ partition_snapshot_ptr::~partition_snapshot_ptr() {
             cleaner.merge_and_destroy(*snp.release());
         }
     }
+}
+
+void partition_snapshot::lock() noexcept {
+    // partition_entry::is_locked() assumes that if there is a locked snapshot,
+    // it can be found attached directly to it.
+    assert(at_latest_version());
+    _locked = true;
+}
+
+void partition_snapshot::unlock() noexcept {
+    // Locked snapshots must always be latest, is_locked() assumes that.
+    // Also, touch() is only effective when this snapshot is latest. 
+    assert(at_latest_version());
+    _locked = false;
+    touch(); // Make the entry evictable again in case it was fully unlinked by eviction attempt.
 }

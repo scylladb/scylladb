@@ -31,7 +31,6 @@
 #include <boost/version.hpp>
 #include <sys/sdt.h>
 #include "read_context.hh"
-#include "schema_upgrader.hh"
 #include "dirty_memory_manager.hh"
 #include "cache_flat_mutation_reader.hh"
 #include "real_dirty_memory_accounter.hh"
@@ -349,9 +348,7 @@ future<> read_context::create_underlying(bool skip_first_fragment, db::timeout_c
 
 static flat_mutation_reader read_directly_from_underlying(read_context& reader) {
     flat_mutation_reader res = make_delegating_reader(reader.underlying().underlying());
-    if (reader.schema()->version() != reader.underlying().underlying().schema()->version()) {
-        res = transform(std::move(res), schema_upgrader(reader.schema()));
-    }
+    res.upgrade_schema(reader.schema());
     return make_nonforwardable(std::move(res), true);
 }
 
@@ -1007,8 +1004,10 @@ future<> row_cache::update(external_updater eu, memtable& m) {
         if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
             cache_entry& entry = *cache_i;
             upgrade_entry(entry);
+            assert(entry._schema == _schema);
             _tracker.on_partition_merge();
-            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.memtable_cleaner(),
+            mem_e.upgrade_schema(_schema, _tracker.memtable_cleaner());
+            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
         } else if (cache_i->continuous()
                    || with_allocator(standard_allocator(), [&] { return is_present(mem_e.key()); })
@@ -1020,7 +1019,8 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             entry->set_continuous(cache_i->continuous());
             _tracker.insert(*entry);
             _partitions.insert_before(cache_i, *entry);
-            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.memtable_cleaner(),
+            mem_e.upgrade_schema(_schema, _tracker.memtable_cleaner());
+            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
         } else {
             return make_empty_coroutine();
@@ -1160,8 +1160,8 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
     });
 }
 
-void row_cache::evict(const dht::partition_range& range) {
-    invalidate_unwrapped(range);
+void row_cache::evict() {
+    while (_tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) {}
 }
 
 void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
@@ -1248,8 +1248,11 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         partition_version& pv = partition_version::container_of(mutation_partition::container_of(
             mutation_partition::rows_type::container_of_only_member(*it)));
         if (pv.is_referenced_from_entry()) {
-            cache_entry& ce = cache_entry::container_of(partition_entry::container_of(pv));
-            ce.on_evicted(tracker);
+            partition_entry& pe = partition_entry::container_of(pv);
+            if (!pe.is_locked()) {
+                cache_entry& ce = cache_entry::container_of(pe);
+                ce.on_evicted(tracker);
+            }
         }
     }
 }
@@ -1270,9 +1273,8 @@ flat_mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
     auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), _schema, &rc._tracker, reader.phase());
     auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
     auto r = make_cache_flat_mutation_reader(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
-    if (reader.schema()->version() != _schema->version()) {
-        r = transform(std::move(r), schema_upgrader(reader.schema()));
-    }
+    r.upgrade_schema(rc.schema());
+    r.upgrade_schema(reader.schema());
     return r;
 }
 
@@ -1281,7 +1283,7 @@ const schema_ptr& row_cache::schema() const {
 }
 
 void row_cache::upgrade_entry(cache_entry& e) {
-    if (e._schema != _schema) {
+    if (e._schema != _schema && !e.partition().is_locked()) {
         auto& r = _tracker.region();
         assert(!r.reclaiming_enabled());
         with_allocator(r.allocator(), [this, &e] {

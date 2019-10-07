@@ -331,6 +331,7 @@ private:
     flat_mutation_reader() = default;
     explicit operator bool() const noexcept { return bool(_impl); }
     friend class optimized_optional<flat_mutation_reader>;
+    void do_upgrade_schema(const schema_ptr&);
 public:
     // Documented in mutation_reader::forwarding in mutation_reader.hh.
     class partition_range_forwarding_tag;
@@ -520,6 +521,14 @@ public:
     void move_buffer_content_to(impl& other) {
         _impl->move_buffer_content_to(other);
     }
+
+    // Causes this reader to conform to s.
+    // Multiple calls of upgrade_schema() compose, effects of prior calls on the stream are preserved.
+    void upgrade_schema(const schema_ptr& s) {
+        if (__builtin_expect(s != schema(), false)) {
+            do_upgrade_schema(s);
+        }
+    }
 };
 
 using flat_mutation_reader_opt = optimized_optional<flat_mutation_reader>;
@@ -622,8 +631,12 @@ class delegating_reader : public flat_mutation_reader::impl {
 public:
     delegating_reader(Underlying&& r) : impl(to_reference(r).schema()), _underlying(std::forward<Underlying>(r)) { }
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-        return fill_buffer_from(to_reference(_underlying), timeout).then([this] (bool underlying_finished) {
-            _end_of_stream = underlying_finished;
+        if (is_buffer_full()) {
+            return make_ready_future<>();
+        }
+        return to_reference(_underlying).fill_buffer(timeout).then([this] {
+            _end_of_stream = to_reference(_underlying).is_end_of_stream();
+            to_reference(_underlying).move_buffer_content_to(*this);
         });
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {

@@ -61,6 +61,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
         // - _last_row points at a direct predecessor of the next row which is going to be read.
         //   Used for populating continuity.
         // - _population_range_starts_before_all_rows is set accordingly
+        // - _underlying is engaged and fast-forwarded
         reading_from_underlying,
 
         end_of_stream
@@ -99,7 +100,13 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     // forward progress is not guaranteed in case iterators are getting constantly invalidated.
     bool _lower_bound_changed = false;
 
+    // Points to the underlying reader conforming to _schema,
+    // either to *_underlying_holder or _read_context->underlying().underlying().
+    flat_mutation_reader* _underlying = nullptr;
+    std::optional<flat_mutation_reader> _underlying_holder;
+
     future<> do_fill_buffer(db::timeout_clock::time_point);
+    future<> ensure_underlying(db::timeout_clock::time_point);
     void copy_from_cache_to_buffer();
     future<> process_static_row(db::timeout_clock::time_point);
     void move_to_end();
@@ -186,23 +193,22 @@ future<> cache_flat_mutation_reader::process_static_row(db::timeout_clock::time_
         return make_ready_future<>();
     } else {
         _read_context->cache().on_row_miss();
-        return _read_context->get_next_fragment(timeout).then([this] (mutation_fragment_opt&& sr) {
-            if (sr) {
-                assert(sr->is_static_row());
-                maybe_add_to_cache(sr->as_static_row());
-                push_mutation_fragment(std::move(*sr));
-            }
-            maybe_set_static_row_continuous();
+        return ensure_underlying(timeout).then([this, timeout] {
+            return (*_underlying)(timeout).then([this] (mutation_fragment_opt&& sr) {
+                if (sr) {
+                    assert(sr->is_static_row());
+                    maybe_add_to_cache(sr->as_static_row());
+                    push_mutation_fragment(std::move(*sr));
+                }
+                maybe_set_static_row_continuous();
+            });
         });
     }
 }
 
 inline
 void cache_flat_mutation_reader::touch_partition() {
-    if (_snp->at_latest_version()) {
-        rows_entry& last_dummy = *_snp->version()->partition().clustered_rows().rbegin();
-        _snp->tracker()->touch(last_dummy);
-    }
+    _snp->touch();
 }
 
 inline
@@ -233,13 +239,35 @@ future<> cache_flat_mutation_reader::fill_buffer(db::timeout_clock::time_point t
 }
 
 inline
+future<> cache_flat_mutation_reader::ensure_underlying(db::timeout_clock::time_point timeout) {
+    if (_underlying) {
+        return make_ready_future<>();
+    }
+    return _read_context->ensure_underlying(timeout).then([this, timeout] {
+        flat_mutation_reader& ctx_underlying = _read_context->underlying().underlying();
+        if (ctx_underlying.schema() != _schema) {
+            _underlying_holder = make_delegating_reader(ctx_underlying);
+            _underlying_holder->upgrade_schema(_schema);
+            _underlying = &*_underlying_holder;
+        } else {
+            _underlying = &ctx_underlying;
+        }
+    });
+}
+
+inline
 future<> cache_flat_mutation_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     if (_state == state::move_to_underlying) {
+        if (!_underlying) {
+            return ensure_underlying(timeout).then([this, timeout] {
+                return do_fill_buffer(timeout);
+            });
+        }
         _state = state::reading_from_underlying;
         _population_range_starts_before_all_rows = _lower_bound.is_before_all_clustered_rows(*_schema);
         auto end = _next_row_in_range ? position_in_partition(_next_row.position())
                                       : position_in_partition(_upper_bound);
-        return _read_context->fast_forward_to(position_range{_lower_bound, std::move(end)}, timeout).then([this, timeout] {
+        return _underlying->fast_forward_to(position_range{_lower_bound, std::move(end)}, timeout).then([this, timeout] {
             return read_from_underlying(timeout);
         });
     }
@@ -280,7 +308,7 @@ future<> cache_flat_mutation_reader::do_fill_buffer(db::timeout_clock::time_poin
 
 inline
 future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::time_point timeout) {
-    return consume_mutation_fragments_until(_read_context->underlying().underlying(),
+    return consume_mutation_fragments_until(*_underlying,
         [this] { return _state != state::reading_from_underlying || is_buffer_full(); },
         [this] (mutation_fragment mf) {
             _read_context->cache().on_row_miss();

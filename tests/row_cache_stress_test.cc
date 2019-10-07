@@ -65,6 +65,16 @@ struct table {
         c_keys = s.make_ckeys(rows);
     }
 
+    void set_schema(schema_ptr new_s) {
+        s.set_schema(new_s);
+        mt->set_schema(new_s);
+        if (prev_mt) {
+            prev_mt->set_schema(new_s);
+        }
+        cache.set_schema(new_s);
+        underlying.set_schema(new_s);
+    }
+
     size_t index_of_key(const dht::decorated_key& dk) {
         for (auto i : boost::irange<size_t>(0, p_keys.size())) {
             if (p_keys[i].equal(*s.schema(), dk)) {
@@ -125,16 +135,28 @@ struct table {
         flat_mutation_reader rd;
     };
 
+    void alter_schema() {
+        static thread_local int col_id = 0;
+        auto new_s = schema_builder(s.schema())
+            .with_column(to_bytes(format("_a{}", col_id++)), byte_type)
+            .build();
+        test_log.trace("changing schema to {}", *new_s);
+        set_schema(new_s);
+    }
+
     std::unique_ptr<reader> make_reader(dht::partition_range pr, query::partition_slice slice) {
         test_log.trace("making reader, pk={} ck={}", pr, slice);
         auto r = std::make_unique<reader>(reader{std::move(pr), std::move(slice), make_empty_flat_reader(s.schema())});
         std::vector<flat_mutation_reader> rd;
         if (prev_mt) {
-            rd.push_back(prev_mt->make_flat_reader(s.schema(), r->pr, r->slice));
+            rd.push_back(prev_mt->make_flat_reader(s.schema(), r->pr, r->slice, default_priority_class(), nullptr,
+                streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         }
-        rd.push_back(mt->make_flat_reader(s.schema(), r->pr, r->slice));
-        rd.push_back(cache.make_reader(s.schema(), r->pr, r->slice));
-        r->rd = make_combined_reader(s.schema(), std::move(rd), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+        rd.push_back(mt->make_flat_reader(s.schema(), r->pr, r->slice, default_priority_class(), nullptr,
+            streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
+        rd.push_back(cache.make_reader(s.schema(), r->pr, r->slice, default_priority_class(), nullptr,
+            streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
+        r->rd = make_combined_reader(s.schema(), std::move(rd), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
         return r;
     }
 
@@ -168,11 +190,13 @@ class validating_consumer {
     size_t _row_count = 0;
     size_t _key = 0;
     std::vector<api::timestamp_type> _writetimes;
+    schema_ptr _s;
 public:
-    validating_consumer(table& t, reader_id id)
+    validating_consumer(table& t, reader_id id, schema_ptr s)
         : _t(t)
         , _id(id)
         , _writetimes(t.p_writetime)
+        , _s(s)
     { }
 
     void consume_new_partition(const dht::decorated_key& key) {
@@ -190,8 +214,8 @@ public:
         ++_row_count;
         sstring value;
         api::timestamp_type t;
-        std::tie(value, t) = _t.s.get_value(row);
-        test_log.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_t.s.schema(), row));
+        std::tie(value, t) = _t.s.get_value(*_s, row);
+        test_log.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_s, row));
         if (_value && value != _value) {
             throw std::runtime_error(format("Saw values from two different writes in partition {:d}: {} and {}", _key, _value, value));
         }
@@ -305,7 +329,7 @@ int main(int argc, char** argv) {
                 while (!cancelled) {
                     test_log.trace("{}: starting read", id);
                     auto rd = t.make_single_key_reader(pk, ck_range);
-                    auto row_count = rd->rd.consume(validating_consumer(t, id), db::no_timeout).get0();
+                    auto row_count = rd->rd.consume(validating_consumer(t, id, t.s.schema()), db::no_timeout).get0();
                     if (row_count != len) {
                         throw std::runtime_error(format("Expected {:d} fragments, got {:d}", len, row_count));
                     }
@@ -317,7 +341,7 @@ int main(int argc, char** argv) {
                 while (!cancelled) {
                     test_log.trace("{}: starting read", id);
                     auto rd = t.make_scanning_reader();
-                    auto row_count = rd->rd.consume(validating_consumer(t, id), db::no_timeout).get0();
+                    auto row_count = rd->rd.consume(validating_consumer(t, id, t.s.schema()), db::no_timeout).get0();
                     if (row_count != expected_row_count) {
                         throw std::runtime_error(format("Expected {:d} fragments, got {:d}", expected_row_count, row_count));
                     }
@@ -352,6 +376,12 @@ int main(int argc, char** argv) {
             });
             evictor.arm_periodic(3s);
 
+            timer<> schema_changer;
+            schema_changer.set_callback([&] {
+                t.alter_schema();
+            });
+            schema_changer.arm_periodic(1s);
+
             // Mutator
             while (!cancelled) {
                 t.mutate_next_phase();
@@ -362,6 +392,13 @@ int main(int argc, char** argv) {
             evictor.cancel();
             readers.get();
             scanning_readers.get();
+
+            t.cache.evict();
+            t.tracker.cleaner().drain().get();
+            t.tracker.memtable_cleaner().drain().get();
+
+            assert(t.tracker.get_stats().partitions == 0);
+            assert(t.tracker.get_stats().rows == 0);
         });
     });
 }

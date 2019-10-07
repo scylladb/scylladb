@@ -40,12 +40,21 @@ class simple_schema {
 
     schema_ptr _s;
     api::timestamp_type _timestamp = api::min_timestamp;
-    const column_definition& _v_def;
+    const column_definition* _v_def = nullptr;
+    table_schema_version _v_def_version;
 
     simple_schema(schema_ptr s, api::timestamp_type timestamp)
         : _s(s)
         , _timestamp(timestamp)
-        , _v_def(*_s->get_column_definition(to_bytes("v"))) {
+    {}
+private:
+    const column_definition& get_v_def(const schema& s) {
+        if (_v_def_version == s.version() && _v_def) {
+            return *_v_def;
+        }
+        _v_def = s.get_column_definition(to_bytes("v"));
+        _v_def_version = s.version();
+        return *_v_def;
     }
 public:
     api::timestamp_type current_timestamp() {
@@ -66,7 +75,6 @@ public:
             .with_column("s1", utf8_type, ws ? column_kind::static_column : column_kind::regular_column)
             .with_column("v", utf8_type)
             .build())
-        , _v_def(*_s->get_column_definition(to_bytes("v")))
     { }
 
     sstring cql() const {
@@ -101,16 +109,18 @@ public:
         if (t == api::missing_timestamp) {
             t = new_timestamp();
         }
-        m.set_clustered_cell(key, _v_def, atomic_cell::make_live(*_v_def.type, t, data_value(v).serialize()));
+        const column_definition& v_def = get_v_def(*_s);
+        m.set_clustered_cell(key, v_def, atomic_cell::make_live(*v_def.type, t, data_value(v).serialize()));
         return t;
     }
 
-    std::pair<sstring, api::timestamp_type> get_value(const clustering_row& row) {
-        auto cell = row.cells().find_cell(_v_def.id);
+    std::pair<sstring, api::timestamp_type> get_value(const schema& s, const clustering_row& row) {
+        const column_definition& v_def = get_v_def(s);
+        auto cell = row.cells().find_cell(v_def.id);
         if (!cell) {
             throw std::runtime_error("cell not found");
         }
-        atomic_cell_view ac = cell->as_atomic_cell(_v_def);
+        atomic_cell_view ac = cell->as_atomic_cell(v_def);
         if (!ac.is_live()) {
             throw std::runtime_error("cell is dead");
         }
@@ -119,15 +129,20 @@ public:
 
     mutation_fragment make_row(const clustering_key& key, sstring v) {
         auto row = clustering_row(key);
-        row.cells().apply(*_s->get_column_definition(to_bytes(sstring("v"))),
-            atomic_cell::make_live(*_v_def.type, new_timestamp(), data_value(v).serialize()));
+        const column_definition& v_def = get_v_def(*_s);
+        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, new_timestamp(), data_value(v).serialize()));
         return mutation_fragment(std::move(row));
     }
 
     mutation_fragment make_row_from_serialized_value(const clustering_key& key, bytes_view v) {
         auto row = clustering_row(key);
-        row.cells().apply(_v_def, atomic_cell::make_live(*_v_def.type, new_timestamp(), v));
+        const column_definition& v_def = get_v_def(*_s);
+        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, new_timestamp(), v));
         return mutation_fragment(std::move(row));
+    }
+
+    void set_schema(schema_ptr s) {
+        _s = s;
     }
 
     api::timestamp_type add_static_row(mutation& m, sstring s1, api::timestamp_type t = api::missing_timestamp) {

@@ -187,7 +187,7 @@ public:
     const dht::decorated_key& key() const { return *_key; }
     void on_underlying_created() { ++_underlying_created; }
     bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
-private:
+public:
     future<> ensure_underlying(db::timeout_clock::time_point timeout) {
         if (_underlying_snapshot) {
             return create_underlying(true, timeout);
@@ -205,18 +205,6 @@ public:
         _phase = phase;
         _underlying_snapshot = {};
         _key = dk;
-    }
-    // Fast forwards the underlying streamed_mutation to given range.
-    future<> fast_forward_to(position_range range, db::timeout_clock::time_point timeout) {
-        return ensure_underlying(timeout).then([this, range = std::move(range), timeout] {
-            return _underlying.underlying().fast_forward_to(std::move(range), timeout);
-        });
-    }
-    // Gets the next fragment from the underlying reader
-    future<mutation_fragment_opt> get_next_fragment(db::timeout_clock::time_point timeout) {
-        return ensure_underlying(timeout).then([this, timeout] {
-            return _underlying.underlying()(timeout);
-        });
     }
 };
 
