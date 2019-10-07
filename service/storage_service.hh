@@ -65,6 +65,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
+#include "cdc/metadata.hh"
 
 namespace cql_transport {
     class cql_server;
@@ -229,6 +230,10 @@ private:
     }
     /* This abstraction maintains the token/endpoint metadata information */
     token_metadata _token_metadata;
+
+    // Maintains the set of known CDC generations used to pick streams for log writes (i.e., the partition keys of these log writes).
+    // Updated in response to certain gossip events (see the handle_cdc_generation function).
+    cdc::metadata _cdc_metadata;
 public:
     std::chrono::milliseconds get_ring_delay();
     gms::versioned_value::factory value_factory;
@@ -814,6 +819,24 @@ private:
     void do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
+
+    /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
+     * and start using it for CDC log writes if it's not obsolete.
+     */
+    void handle_cdc_generation(std::optional<db_clock::time_point>);
+    void do_handle_cdc_generation(db_clock::time_point);
+
+    /* If `handle_cdc_generation` fails, it schedules an asynchronous retry in the background
+     * using `async_handle_cdc_generation`.
+     */
+    void async_handle_cdc_generation(db_clock::time_point);
+
+    /* Scan CDC generation timestamps gossiped by other nodes and retrieve the latest one.
+     * This function should be called once at the end of the node startup procedure
+     * (after the node is started and running normally, it will retrieve generations on gossip events instead).
+     */
+    void scan_cdc_generations();
+
     future<> replicate_to_all_cores();
     future<> do_replicate_to_all_cores();
     serialized_action _replicate_action;
