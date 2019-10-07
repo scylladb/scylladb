@@ -19,6 +19,7 @@
  */
 
 #include <seastar/core/print.hh>
+#include <seastar/rpc/rpc.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/backtrace.hh>
 
@@ -82,4 +83,16 @@ void on_internal_error(seastar::logger& logger, const seastar::sstring& msg) {
     } else {
         seastar::throw_with_backtrace<std::runtime_error>(msg.c_str());
     }
+}
+
+bool is_timeout_exception(std::exception_ptr e) {
+    try {
+        std::rethrow_exception(e);
+    } catch (seastar::rpc::timeout_error& unused) {
+        return true;
+    } catch (seastar::semaphore_timed_out& unused) {
+        return true;
+    } catch (...) {
+    }
+    return false;
 }
