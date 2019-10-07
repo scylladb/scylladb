@@ -372,41 +372,47 @@ public:
 
                 std::vector<bytes_opt> values(3);
 
-                r.row().cells().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
-                    auto& cdef = _schema->column_at(column_kind::regular_column, id);
-                    auto* dst = _log_schema->get_column_definition(to_bytes("_" + cdef.name()));
-                    // todo: collections.
-                    if (cdef.is_atomic()) {
-                        column_op op;
+                auto process_cells = [&](const row& r, column_kind ckind) {
+                    r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
+                        auto& cdef = _schema->column_at(ckind, id);
+                        auto* dst = _log_schema->get_column_definition(to_bytes("_" + cdef.name()));
+                        // todo: collections.
+                        if (cdef.is_atomic()) {
+                            column_op op;
 
-                        values[1] = values[2] = std::nullopt;
-                        auto view = cell.as_atomic_cell(cdef);
-                        if (view.is_live()) {
-                            op = column_op::set;
-                            values[1] = view.value().linearize();
-                            if (view.is_live_and_has_ttl()) {
-                                values[2] = long_type->decompose(data_value(view.ttl().count()));
+                            values[1] = values[2] = std::nullopt;
+                            auto view = cell.as_atomic_cell(cdef);
+                            if (view.is_live()) {
+                                op = column_op::set;
+                                values[1] = view.value().linearize();
+                                if (view.is_live_and_has_ttl()) {
+                                    values[2] = long_type->decompose(data_value(view.ttl().count()));
+                                }
+                            } else {
+                                op = column_op::del;
+                            }
+
+                            values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(op)));
+                            res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, _time.timestamp(), tuple_type_impl::build_value(values)));
+
+                            if (pirow && pirow->has(cdef.name_as_text())) {
+                                values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(column_op::set)));
+                                values[1] = pirow->get_blob(cdef.name_as_text());
+                                values[2] = std::nullopt;
+
+                                assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
+                                assert(pikey->explode() != log_ck.explode());
+                                res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, _time.timestamp(), tuple_type_impl::build_value(values)));
                             }
                         } else {
-                            op = column_op::del;
+                            cdc_log.warn("Non-atomic cell ignored {}.{}:{}", _schema->ks_name(), _schema->cf_name(), cdef.name_as_text());
                         }
+                    });
+                };
 
-                        values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(op)));
-                        res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, _time.timestamp(), tuple_type_impl::build_value(values)));
+                process_cells(r.row().cells(), column_kind::regular_column);
+                process_cells(p.static_row().get(), column_kind::static_column);
 
-                        if (pirow && pirow->has(cdef.name_as_text())) {
-                            values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(column_op::set)));
-                            values[1] = pirow->get_blob(cdef.name_as_text());
-                            values[2] = std::nullopt;
-
-                            assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
-                            assert(pikey->explode() != log_ck.explode());
-                            res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, _time.timestamp(), tuple_type_impl::build_value(values)));
-                        }
-                    } else {
-                        cdc_log.warn("Non-atomic cell ignored {}.{}:{}", _schema->ks_name(), _schema->cf_name(), cdef.name_as_text());
-                    }
-                });
                 set_operation(log_ck, operation::update, res);
                 ++batch_no;
             }
