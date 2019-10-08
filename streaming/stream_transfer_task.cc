@@ -176,6 +176,13 @@ future<> send_mutations(lw_shared_ptr<send_info> si) {
 }
 
 future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
+ return si->reader.peek(db::no_timeout).then([si] (mutation_fragment* mfp) {
+  if (!mfp) {
+    // The reader contains no data
+    sslog.info("[Stream #{}] Skip sending ks={}, cf={}, reader contains no data, with new rpc streaming",
+        si->plan_id, si->cf.schema()->ks_name(), si->cf.schema()->cf_name());
+    return make_ready_future<>();
+  }
   return si->estimate_partitions().then([si] (size_t estimated_partitions) {
     sslog.info("[Stream #{}] Start sending ks={}, cf={}, estimated_partitions={}, with new rpc streaming", si->plan_id, si->cf.schema()->ks_name(), si->cf.schema()->cf_name(), estimated_partitions);
     return netw::get_local_messaging_service().make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->id).then([si] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd> sink, rpc::source<int32_t> source) mutable {
@@ -233,6 +240,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         });
     });
   });
+ });
 }
 
 future<> stream_transfer_task::execute() {
