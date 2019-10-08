@@ -300,18 +300,15 @@ static auto visit_lua_value(lua_State* l, int index, Func&& f) {
             if (v2 == v) {
                 return (*this)(v2);
             }
+            // FIXME: We could use frexp to produce a decimal instead of a double
             return f(v);
         }
         auto operator()(const std::string_view& v) {
-            if (v.empty()) {
-                // boost::multiprecision::cpp_int's constructor parses "" as 0. Avoid that.
-                return f(v);
-            }
-            boost::multiprecision::cpp_int v2;
+            big_decimal v2;
             try {
-                v2 = boost::multiprecision::cpp_int(v);
-            } catch (std::runtime_error&) {
-                // The string is not a valid integer. Let Lua try to convert it to a double.
+                v2 = big_decimal(v);
+            } catch (marshal_exception&) {
+                // The string is not a valid big_decimal. Let Lua try to convert it to a double.
                 int isnum;
                 double d = lua_tonumberx(l, index, &isnum);
                 if (isnum) {
@@ -319,7 +316,7 @@ static auto visit_lua_value(lua_State* l, int index, Func&& f) {
                 }
                 return f(v);
             }
-            return f(v2);
+            return (*this)(v2);
         }
         auto operator()(const big_decimal& v) {
             struct visitor {
@@ -347,6 +344,13 @@ static auto visit_lua_number(lua_State* l, int index, Func&& f) {
                    throw exceptions::invalid_request_exception("value is not a number");
                },
                std::forward<Func>(f)
+           ));
+}
+
+template <typename Func> static auto visit_lua_decimal(lua_State* l, int index, Func&& f) {
+    return visit_lua_number(l, index, make_visitor(
+               [&f](const boost::multiprecision::cpp_int& v) { return f(big_decimal(0, v)); },
+               [&f](const auto& v) { return f(v); }
            ));
 }
 
@@ -547,7 +551,15 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const decimal_type_impl& t) {
-        assert(0 && "not implemented");
+        struct visitor {
+            big_decimal operator()(const double& b) {
+                throw exceptions::invalid_request_exception("value is not a decimal");
+            }
+            big_decimal operator()(const big_decimal& b) {
+                return b;
+            }
+        };
+        return visit_lua_decimal(l, 1, visitor{});
     }
 
     data_value operator()(const varint_type_impl& t) {
