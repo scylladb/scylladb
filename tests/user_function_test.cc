@@ -283,6 +283,12 @@ SEASTAR_TEST_CASE(test_user_function_double_return) {
         e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return 0/0';").get();
         res = e.execute_cql("SELECT my_func4(val) FROM my_table;").get0();
         assert_that(res).is_rows().with_rows({{serialized(std::nan(""))}});
+
+        e.execute_cql("CREATE TABLE my_table2 (key text PRIMARY KEY, val decimal);").get();
+        e.execute_cql("INSERT INTO my_table2 (key, val) VALUES ('foo', 5.1);").get();
+        e.execute_cql("CREATE FUNCTION my_func5(val decimal) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return val';").get();
+        res = e.execute_cql("SELECT my_func5(val) FROM my_table2;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(double(5.1))}});
     });
 }
 

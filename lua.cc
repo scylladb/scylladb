@@ -280,6 +280,7 @@ template <typename Func>
 concept bool CanHandleLuaTypes = requires(Func f) {
     { f(*static_cast<const double*>(nullptr)) }                         -> lua_visit_ret_type<Func>;
     { f(*static_cast<const boost::multiprecision::cpp_int*>(nullptr)) } -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const big_decimal*>(nullptr)) }                    -> lua_visit_ret_type<Func>;
     { f(*static_cast<const std::string_view*>(nullptr)) }               -> lua_visit_ret_type<Func>;
     { f(*static_cast<const lua_table*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
 };
@@ -324,7 +325,7 @@ static auto visit_lua_value(lua_State* l, int index, Func&& f) {
             struct visitor {
                 Func& f;
                 const big_decimal &d;
-                auto operator()(const double&) -> std::invoke_result_t<Func, double> { assert(0 && "not implemented"); }
+                auto operator()(const double&) { return f(d); }
                 auto operator()(const boost::multiprecision::cpp_int& v) { return f(v); }
             };
             return visit_decimal(v, visitor{f, v});
@@ -352,6 +353,10 @@ static auto visit_lua_number(lua_State* l, int index, Func&& f) {
 static int decimal_gc(lua_State *l) {
     std::destroy_at(get_decimal(l, 1));
     return 0;
+}
+
+static double decimal_to_double(const big_decimal &d) {
+    return visit_decimal(d, [] (auto&& v) { return double(v); });
 }
 
 static const struct luaL_Reg decimal_methods[] {
@@ -418,6 +423,10 @@ static sstring get_string(lua_State *l, int index) {
 }
 
 static data_value convert_from_lua(lua_slice_state &l, const data_type& type);
+
+std::ostream& operator<<(std::ostream& os, const big_decimal& p) {
+    assert(0 && "not implemented");
+}
 
 namespace {
 struct lua_date_table {
@@ -760,7 +769,10 @@ struct from_lua_visitor {
     }
 
     template <typename T> data_value operator()(const floating_type_impl<T>& t) {
-        return visit_lua_number(l, -1, [] (const auto& v) { return T(v); });
+        return visit_lua_number(l, -1, make_visitor(
+                   [] (const big_decimal& v) -> T { return decimal_to_double(v); },
+                   [] (const auto& v) { return T(v); }
+               ));
     }
 
     int64_t get_integer() {
