@@ -856,7 +856,7 @@ struct to_lua_visitor {
     }
 
     void operator()(const decimal_type_impl& t, const emptyable<big_decimal>* v) {
-        assert(0 && "not implemented");
+        push_big_decimal(l, *v);
     }
 
     void operator()(const counter_type_impl& t, const void* v) {
