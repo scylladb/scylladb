@@ -396,9 +396,15 @@ static int decimal_add(lua_State* l) {
     return 1;
 }
 
+static int decimal_sub(lua_State* l) {
+    visit_decimal_bin_op(l, [](auto&& a, auto&& b) { return a - b; });
+    return 1;
+}
+
 static const struct luaL_Reg decimal_methods[] {
     {"__gc", decimal_gc},
     {"__add", decimal_add},
+    {"__sub", decimal_sub},
     {nullptr, nullptr}
 };
 
