@@ -1280,6 +1280,7 @@ private:
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     utils::UUID _version;
+    uint32_t _schema_change_count = 0;
     // compaction_manager object is referenced by all column families of a database.
     std::unique_ptr<compaction_manager> _compaction_manager;
     seastar::metrics::metric_groups _metrics;

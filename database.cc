@@ -531,6 +531,12 @@ database::setup_metrics() {
         sm::make_total_operations("total_view_updates_failed_remote", _cf_stats.total_view_updates_failed_remote,
                 sm::description("Total number of view updates generated for tables and failed to be sent to remote replicas.")),
     });
+    if (engine().cpu_id() == 0) {
+        _metrics.add_group("database", {
+                sm::make_derive("schema_changed", _schema_change_count,
+                        sm::description("The number of times the schema changed")),
+        });
+    }
 }
 
 database::~database() {
@@ -540,6 +546,9 @@ database::~database() {
 }
 
 void database::update_version(const utils::UUID& version) {
+    if (_version != version) {
+        _schema_change_count++;
+    }
     _version = version;
 }
 
