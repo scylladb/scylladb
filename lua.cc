@@ -47,6 +47,8 @@ struct lua_closer {
     }
 };
 
+static const char scylla_varint_metatable_name[] = "Scylla.varint";
+
 class lua_slice_state {
     std::unique_ptr<alloc_state> a_state;
     std::unique_ptr<lua_State, lua_closer> _l;
@@ -178,6 +180,43 @@ sstring lua::compile(const runtime_config& cfg, const std::vector<sstring>& arg_
     return sstring(p, len);
 }
 
+static boost::multiprecision::cpp_int* get_cpp_int(lua_State* l, int arg) {
+    constexpr size_t alignment = alignof(boost::multiprecision::cpp_int);
+    char* p = reinterpret_cast<char*>(luaL_testudata(l, arg, scylla_varint_metatable_name));
+    if (p) {
+        return reinterpret_cast<boost::multiprecision::cpp_int*>(align_up(p, alignment));
+    }
+    return nullptr;
+}
+
+template <typename T>
+static T* aligned_used_data(lua_State* l) {
+    constexpr size_t alignment = alignof(T);
+    // We know lua_newuserdata aligns allocations to 8, so we need a
+    // padding of at most alignment - 8 to find a sufficiently aligned
+    // address.
+    static_assert(alignment>= 8);
+    constexpr size_t pad = alignment - 8;
+    char* p = reinterpret_cast<char*>(lua_newuserdata(l, sizeof(T) + pad));
+    return reinterpret_cast<T*>(align_up(p, alignment));
+}
+
+static void push_cpp_int(lua_State* l, const boost::multiprecision::cpp_int& v) {
+    auto* p = aligned_used_data<boost::multiprecision::cpp_int>(l);
+    new (p) boost::multiprecision::cpp_int(v);
+    luaL_setmetatable(l, scylla_varint_metatable_name);
+}
+
+static int varint_gc(lua_State *l) {
+    std::destroy_at(get_cpp_int(l, 1));
+    return 0;
+}
+
+static const struct luaL_Reg varint_methods[] {
+    {"__gc", varint_gc},
+    {nullptr, nullptr}
+};
+
 static int load_script_l(lua_State* l) {
     const auto& bitcode = *reinterpret_cast<lua::bitcode_view*>(lua_touserdata(l, 1));
     const auto& binary = bitcode.bitcode;
@@ -186,6 +225,11 @@ static int load_script_l(lua_State* l) {
         luaL_requiref(l, lib->name, lib->func, 1);
         lua_pop(l, 1);
     }
+
+    luaL_newmetatable(l, scylla_varint_metatable_name);
+    lua_pushvalue(l, -1);
+    lua_setfield(l, -2, "__index");
+    luaL_setfuncs(l, varint_methods, 0);
 
     if (luaL_loadbufferx(l, binary.data(), binary.size(), "<internal>", "b")) {
         lua_error(l);
@@ -239,7 +283,7 @@ struct to_lua_visitor {
     lua_slice_state& l;
 
     void operator()(const varint_type_impl& t, const emptyable<boost::multiprecision::cpp_int>* v) {
-        assert(0 && "not implemented");
+        push_cpp_int(l, *v);
     }
 
     void operator()(const decimal_type_impl& t, const emptyable<big_decimal>* v) {

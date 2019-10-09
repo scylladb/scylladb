@@ -123,6 +123,11 @@ SEASTAR_TEST_CASE(test_user_function_int_return) {
         e.execute_cql("INSERT INTO my_table3 (key, val) VALUES ('foo', 4.2);").get();
         auto fut = e.execute_cql("SELECT my_func3(val) FROM my_table3;");
         BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not an integer"));
+
+        e.execute_cql("CREATE TABLE my_table4 (key text PRIMARY KEY, val varint);").get();
+        e.execute_cql("INSERT INTO my_table4 (key, val) VALUES ('foo', 4);").get();
+        e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 42';").get();
+        res = e.execute_cql("SELECT my_func4(val) FROM my_table4;").get0();
     });
 }
 
