@@ -111,6 +111,7 @@ static const sstring UNBOUNDED_RANGE_TOMBSTONES_FEATURE = "UNBOUNDED_RANGE_TOMBS
 static const sstring VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
 static const sstring DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
 static const sstring COMPUTED_COLUMNS_FEATURE = "COMPUTED_COLUMNS";
+static const sstring CDC_FEATURE = "CDC";
 
 static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
@@ -169,6 +170,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _view_virtual_columns(_feature_service, VIEW_VIRTUAL_COLUMNS)
         , _digest_insensitive_to_expiry(_feature_service, DIGEST_INSENSITIVE_TO_EXPIRY)
         , _computed_columns(_feature_service, COMPUTED_COLUMNS_FEATURE)
+        , _cdc_feature(_feature_service, CDC_FEATURE)
         , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
         , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
@@ -226,6 +228,7 @@ void storage_service::enable_all_features() {
         std::ref(_view_virtual_columns),
         std::ref(_digest_insensitive_to_expiry),
         std::ref(_computed_columns),
+        std::ref(_cdc_feature)
     })
     {
         if (features.count(f.name())) {
@@ -343,6 +346,7 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
         }
         if (config.experimental()) {
             // push additional experimental features
+            features.insert(CDC_FEATURE);
         }
     }
     if (!sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
