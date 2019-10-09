@@ -546,7 +546,43 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const duration_type_impl& t) {
-        assert(0 && "not implemented");
+        return visit_lua_value(l, -1, make_visitor(
+            [] (const auto&) -> cql_duration {
+                throw exceptions::invalid_request_exception("a duration must be of the form { months = v1, days = v2, nanoseconds = v3 }");
+            },
+            [] (const std::string_view& v) {
+                return cql_duration(v);
+            },
+            [this] (const lua_table&) {
+                int32_t months = 0;
+                int32_t days = 0;
+                int64_t nanoseconds = 0;
+                lua_pushnil(l);
+                while (lua_next(l, -2) != 0) {
+                    auto k = get_string(l, -2);
+                    auto v = get_varint(l, -1);
+                    lua_pop(l, 1);
+                    if (k == "months") {
+                        months = int32_t(v);
+                        if (v != months) {
+                            throw exceptions::invalid_request_exception(format("{} months doesn't fit in a 32 bit integer", v));
+                        }
+                    } else if (k == "days") {
+                        days = int32_t(v);
+                        if (v != days) {
+                            throw exceptions::invalid_request_exception(format("{} days doesn't fit in a 32 bit integer", v));
+                        }
+                    } else if (k == "nanoseconds") {
+                        nanoseconds = int64_t(v);
+                        if (v != nanoseconds) {
+                            throw exceptions::invalid_request_exception(format("{} nanoseconds doesn't fit in a 64 bit integer", v));
+                        }
+                    } else {
+                        throw exceptions::invalid_request_exception(format("invalid duration field: '{}'", k));
+                    }
+                }
+                return cql_duration(months_counter(months), days_counter(days), nanoseconds_counter(nanoseconds));
+            }));
     }
 
     data_value operator()(const set_type_impl& t) {

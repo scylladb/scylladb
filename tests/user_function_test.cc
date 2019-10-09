@@ -656,6 +656,37 @@ SEASTAR_TEST_CASE(test_user_function_nested_types) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_duration_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return {months = 1, days = 2147483647, nanoseconds = 3}';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({
+            {serialized(cql_duration(months_counter(1), days_counter(2147483647), nanoseconds_counter(3)))}
+        });
+
+        e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return {months = 1, days = 2147483648, nanoseconds = 3}';").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func2(val) FROM my_table;").get(), ire, message_equals("2147483648 days doesn't fit in a 32 bit integer"));
+        e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return {months = 2147483648, days = 2, nanoseconds = 3}';").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func3(val) FROM my_table;").get(), ire, message_equals("2147483648 months doesn't fit in a 32 bit integer"));
+        e.execute_cql("CREATE FUNCTION my_func4(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return {months = 1, days = 2, nanoseconds = \"9223372036854775808\"}';").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func4(val) FROM my_table;").get(), ire, message_equals("9223372036854775808 nanoseconds doesn't fit in a 64 bit integer"));
+
+        e.execute_cql("CREATE FUNCTION my_func5(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return \"1mo2d3ns\"';").get();
+        res = e.execute_cql("SELECT my_func5(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({
+            {serialized(cql_duration(months_counter(1), days_counter(2), nanoseconds_counter(3)))}
+        });
+
+        e.execute_cql("CREATE FUNCTION my_func6(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return 42.2';").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func6(val) FROM my_table;").get(), ire, message_equals("a duration must be of the form { months = v1, days = v2, nanoseconds = v3 }"));
+
+        e.execute_cql("CREATE FUNCTION my_func7(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return {foo = 42}';").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func7(val) FROM my_table;").get(), ire, message_equals("invalid duration field: 'foo'"));
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_map_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
