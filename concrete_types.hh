@@ -142,6 +142,7 @@ struct varint_type_impl final : public concrete_type<boost::multiprecision::cpp_
 struct inet_addr_type_impl final : public concrete_type<seastar::net::inet_address> {
     inet_addr_type_impl();
     static sstring to_sstring(const seastar::net::inet_address& addr);
+    static seastar::net::inet_address from_sstring(sstring_view s);
 };
 
 struct uuid_type_impl final : public concrete_type<utils::UUID> {

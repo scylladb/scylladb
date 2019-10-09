@@ -687,7 +687,7 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const inet_addr_type_impl& t) {
-        assert(0 && "not implemented");
+        return t.from_sstring(get_string(l, -1));
     }
 
     data_value operator()(const uuid_type_impl&) {

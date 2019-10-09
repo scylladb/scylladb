@@ -2298,6 +2298,14 @@ static bytes serialize_value(const T& t, const typename T::native_type& v) {
     return b;
 }
 
+seastar::net::inet_address inet_addr_type_impl::from_sstring(sstring_view s) {
+    try {
+        return inet_address(std::string(s.data(), s.size()));
+    } catch (...) {
+        throw marshal_exception(format("Failed to parse inet_addr from '{}'", s));
+    }
+}
+
 utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
     static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
     if (!std::regex_match(s.begin(), s.end(), re)) {
@@ -2425,12 +2433,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        try {
-            auto ip = inet_address(std::string(s.data(), s.size()));
-            return serialize_value(t, ip);
-        } catch (...) {
-            throw marshal_exception(format("Failed to parse inet_addr from '{}'", s));
-        }
+        return serialize_value(t, t.from_sstring(s));
     }
     bytes operator()(const tuple_type_impl& t) {
         std::vector<sstring_view> field_strings = split_field_strings(s);

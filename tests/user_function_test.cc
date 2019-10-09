@@ -379,6 +379,24 @@ SEASTAR_TEST_CASE(test_user_function_date_return) {
   });
 }
 
+SEASTAR_TEST_CASE(test_user_function_inet_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS inet LANGUAGE Lua AS 'return \"1.2.3.4\"';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(seastar::net::inet_address("1.2.3.4"))}});
+
+        e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS inet LANGUAGE Lua AS 'return \"abc\"';").get();
+        auto fut = e.execute_cql("SELECT my_func2(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), marshal_exception, message_equals("marshaling error: Failed to parse inet_addr from 'abc'"));
+
+        e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS inet LANGUAGE Lua AS 'return \"\"';").get();
+        fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), marshal_exception, message_equals("marshaling error: Failed to parse inet_addr from ''"));
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_boolean_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
