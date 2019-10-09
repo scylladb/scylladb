@@ -62,6 +62,10 @@
 #include "db/config.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
+#include "xx_hasher.hh"
+#include "gms/inet_address_serializer.hh"
+#include "bytes_ostream.hh"
+#include "serializer_impl.hh"
 
 namespace gms {
 
@@ -421,6 +425,120 @@ future<> gossiper::handle_echo_msg() {
     return make_ready_future<>();
 }
 
+// Must run inside a seastar thread
+uint64_t gossiper::get_gossip_status_token_hash() const {
+    auto nodes = boost::copy_range<std::set<gms::inet_address>>(endpoint_state_map | boost::adaptors::map_keys);
+    if (nodes.empty()) {
+        return 0;
+    }
+    xx_hasher h;
+    bytes_ostream out;
+    for (const auto& node : nodes) {
+        thread::maybe_yield();
+        out.clear();
+        auto state = get_application_state_ptr(node, application_state::TOKENS);
+        auto tokens = state ? state->value : "";
+        ser::serialize(out, tokens);
+        ser::serialize(out, get_gossip_status(node));
+        ser::serialize(out, node);
+        feed_hash(h, out.linearize());
+    }
+    return h.finalize_uint64();
+}
+
+static future<cluster_ring_status_response>
+get_cluster_ring_status(gossiper& g) {
+    using response = cluster_ring_status_response;
+    return g.container().map([] (gossiper& g) -> future<response> {
+        return seastar::async([&g] {
+            auto& tm = service::get_local_storage_service().get_token_metadata();
+            cluster_ring_status_response resp = {{
+                {response::nr_known_nodes, format("{}", g.endpoint_state_map.size())},
+                {response::status_token_hash, format("{}", g.get_gossip_status_token_hash())},
+                {response::normal_token_hash, format("{}", tm.get_normal_token_hash())},
+                {response::bootstrap_token_hash, format("{}", tm.get_bootstrap_token_hash())},
+                {response::leaving_nodes_hash, format("{}", tm.get_leaving_endpoints_hash())},
+                {response::pending_ranges_hash, format("{}", tm.get_pending_ranges_hash())}
+            }};
+            return resp;
+        });
+    }).then([] (std::vector<cluster_ring_status_response> results) {
+        bool same_results = std::adjacent_find(results.begin(), results.end(),
+                std::not_equal_to<cluster_ring_status_response>()) == results.end();
+        results.front().status[response::same_on_all_shards] = same_results ?
+                response::same_on_all_shards_yes : response::same_on_all_shards_no;
+        return results.front();
+    });
+}
+
+// Send CLUSTER_RING_STATUS RPC verb to remote nodes to query the cluster
+// status. If local node has the same cluster ring status as the remote nodes,
+// it means the cluster has the same view on the cluster ring status.
+static future<> wait_for_cluster_ring_status_to_match(gossiper& g) {
+    return seastar::async([&g] {
+        while (true) {
+            auto local = get_cluster_ring_status(g).get0();
+            auto myip = g.get_broadcast_address();
+            if (!local.is_same_on_all_shards()) {
+                logger.debug("Node {}, status = {}, wait for all the shards have the same hashes", myip, local.status);
+                sleep_abortable(std::chrono::milliseconds(100)).get();
+                continue;
+            }
+            auto nodes_to_check = boost::copy_range<std::set<gms::inet_address>>(g.endpoint_state_map | boost::adaptors::map_keys);
+            for (auto& seed : g.get_seeds()) {
+                nodes_to_check.insert(seed);
+            }
+            nodes_to_check.erase(myip);
+            auto node_to_be_replaced = g.get_node_to_be_replaced();
+            if (node_to_be_replaced) {
+                nodes_to_check.erase(*node_to_be_replaced);
+            }
+            size_t nodes_down = 0;
+            std::unordered_map<gms::inet_address, cluster_ring_status_response> queries;
+            parallel_for_each(nodes_to_check, [&nodes_down, &queries] (const auto& node) {
+                return netw::get_local_messaging_service().send_cluster_ring_status(netw::msg_addr(node)).then([node, &nodes_down, &queries] (cluster_ring_status_response result) {
+                    queries[node] = std::move(result);
+                }).handle_exception([node, &nodes_down] (std::exception_ptr ep) {
+                    try {
+                        std::rethrow_exception(ep);
+                    } catch (seastar::rpc::unknown_verb_error& e) {
+                        logger.info("Node {} does not support cluster_ring_status: {}", node, e);
+                        throw e;
+                    } catch (seastar::rpc::closed_error& e) {
+                        nodes_down++;
+                    } catch (...) {
+                        logger.info("Failed to send cluster_ring_status to {}: ", node, std::current_exception());
+                        throw;
+                    }
+                });
+            }).get();
+            size_t matched = 0;
+            logger.debug("Node {}, status = {}", myip, local.status);
+            for (auto& query : queries) {
+                cluster_ring_status_response& remote = query.second;
+                logger.debug("Node {}, status = {}", query.first, remote.status);
+                if (remote == local) {
+                    matched++;
+                }
+            }
+            size_t needed = nodes_to_check.size();
+            if (nodes_down) {
+                logger.info("Wait for cluster_ring_status, matched={}, needed={}, nodes_down={}, nodes_to_check={}, gave up due to nodes down",
+                        matched, needed, nodes_down, nodes_to_check);
+                throw std::runtime_error("Gave up wait for gossip with query becasue nodes are down");
+            }
+            if (matched == needed) {
+                logger.info("Wait for cluster_ring_status, matched={}, needed={}, nodes_down={}, nodes_to_check={}, done",
+                        matched, needed, nodes_down, nodes_to_check);
+                return;
+            }
+            logger.debug("Wait for cluster_ring_status, matched={}, needed={}, nodes_down={}, nodes_to_check={}, try again",
+                    matched, needed, nodes_down, nodes_to_check);
+            sleep_abortable(std::chrono::milliseconds(200)).get();
+        }
+    });
+}
+
 future<> gossiper::handle_shutdown_msg(inet_address from) {
     set_last_processed_message_at();
     if (!is_enabled()) {
@@ -482,6 +600,12 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
         return messaging_service::no_wait();
     });
+    ms().register_cluster_ring_status([] (const rpc::client_info& cinfo) {
+        auto from = netw::messaging_service::get_source(cinfo);
+        return smp::submit_to(0, [from] {
+            return get_cluster_ring_status(gms::get_local_gossiper());
+        });
+    });
 
     // Start listening messaging_service after gossip message handlers are registered
     if (do_bind) {
@@ -496,7 +620,8 @@ future<> gossiper::uninit_messaging_service_handler() {
         ms.unregister_gossip_shutdown(),
         ms.unregister_gossip_digest_syn(),
         ms.unregister_gossip_digest_ack(),
-        ms.unregister_gossip_digest_ack2()
+        ms.unregister_gossip_digest_ack2(),
+        ms.unregister_cluster_ring_status()
     ).then([this] {
         _ms_registered = false;
     });
@@ -2150,8 +2275,7 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 }
 
 future<> gossiper::wait_for_gossip_to_settle() {
-    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
-    auto force_after = _cfg.skip_wait_for_gossip_to_settle();
+    logger.info("Waiting for gossip to settle with query...");
     auto do_enable_features = [this] {
         return async([this] {
             if (!std::exchange(_gossip_settled, true)) {
@@ -2159,18 +2283,30 @@ future<> gossiper::wait_for_gossip_to_settle() {
             }
         });
     };
+    auto force_after = _cfg.skip_wait_for_gossip_to_settle();
     if (force_after == 0) {
         return do_enable_features();
     }
-    return wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after).then([this, do_enable_features] {
+    return wait_for_cluster_ring_status_to_match(*this).then([do_enable_features] {
         return do_enable_features();
+    }).handle_exception([this, do_enable_features] (std::exception_ptr ep) {
+        logger.debug("Failed to run wait_for_cluster_ring_status_to_match: {}", ep);
+        static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
+        logger.info("Waiting for gossip to settle without query...");
+        return wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS).then([this, do_enable_features] {
+            return do_enable_features();
+        });
     });
 }
 
 future<> gossiper::wait_for_range_setup() {
-    logger.info("Waiting for pending range setup...");
-    auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
-    return wait_for_gossip(ring_delay);
+    logger.info("Waiting for pending range setup with query...");
+    return wait_for_cluster_ring_status_to_match(*this).handle_exception([this] (std::exception_ptr ep) {
+        logger.debug("Failed to run wait_for_cluster_ring_status_to_match: {}", ep);
+        auto ring_delay = service::get_local_storage_service().get_ring_delay();
+        logger.info("Waiting for pending range setup without query...");
+        return wait_for_gossip(ring_delay);
+    });
 }
 
 void gossiper::set_node_to_be_replaced(gms::inet_address node) {

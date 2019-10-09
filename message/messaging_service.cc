@@ -461,6 +461,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GOSSIP_DIGEST_ACK2:
     case messaging_verb::GOSSIP_SHUTDOWN:
     case messaging_verb::GOSSIP_ECHO:
+    case messaging_verb::CLUSTER_RING_STATUS:
     case messaging_verb::GET_SCHEMA_VERSION:
         return 1;
     case messaging_verb::PREPARE_MESSAGE:
@@ -920,6 +921,19 @@ future<> messaging_service::unregister_gossip_echo() {
 }
 future<> messaging_service::send_gossip_echo(msg_addr id) {
     return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), 3000ms);
+}
+
+// CLUSTER_RING_STATUS
+void messaging_service::register_cluster_ring_status(std::function<future<gms::cluster_ring_status_response> (const rpc::client_info& cinfo)>&& func) {
+    register_handler(this, messaging_verb::CLUSTER_RING_STATUS, std::move(func));
+}
+
+future<> messaging_service::unregister_cluster_ring_status() {
+    return _rpc->unregister_handler(netw::messaging_verb::CLUSTER_RING_STATUS);
+}
+
+future<gms::cluster_ring_status_response> messaging_service::send_cluster_ring_status(msg_addr id) {
+    return send_message_timeout<gms::cluster_ring_status_response>(this, messaging_verb::CLUSTER_RING_STATUS, std::move(id), 5000ms);
 }
 
 void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {
