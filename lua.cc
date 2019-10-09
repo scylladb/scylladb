@@ -542,7 +542,7 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const varint_type_impl& t) {
-        assert(0 && "not implemented");
+        return get_varint(l, 1);
     }
 
     data_value operator()(const duration_type_impl& t) {
