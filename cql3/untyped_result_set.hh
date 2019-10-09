@@ -143,6 +143,8 @@ public:
     }
 };
 
+class result_set;
+
 class untyped_result_set {
 public:
     using row = untyped_result_set_row;
@@ -151,6 +153,7 @@ public:
     using iterator = rows_type::const_iterator;
 
     untyped_result_set(::shared_ptr<cql_transport::messages::result_message>);
+    untyped_result_set(const cql3::result_set&);
     untyped_result_set(untyped_result_set&&) = default;
 
     const_iterator begin() const {
