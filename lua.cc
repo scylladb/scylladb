@@ -363,8 +363,42 @@ static double decimal_to_double(const big_decimal &d) {
     return visit_decimal(d, [] (auto&& v) { return double(v); });
 }
 
+static const big_decimal& get_decimal_in_binary_op(lua_State* l) {
+    auto* a = get_decimal(l, 1);
+    if (a == nullptr) {
+        lua_insert(l, 1);
+        a = get_decimal(l, 1);
+        assert(a);
+    }
+    return *a;
+}
+
+template<typename Func>
+static void visit_decimal_bin_op(lua_State* l, Func&& F) {
+    const auto& a = get_decimal_in_binary_op(l);
+    struct bin_op_visitor {
+        const big_decimal& a;
+        Func& F;
+        lua_State* l;
+        void operator()(const double& b) {
+            lua_pushnumber(l, F(decimal_to_double(a), b));
+        }
+        void operator()(const big_decimal& b) {
+            push_big_decimal(l, F(a, b));
+        }
+    };
+
+    visit_lua_decimal(l, 2, bin_op_visitor{a, F, l});
+}
+
+static int decimal_add(lua_State* l) {
+    visit_decimal_bin_op(l, [](auto&& a, auto&& b) { return a + b; });
+    return 1;
+}
+
 static const struct luaL_Reg decimal_methods[] {
     {"__gc", decimal_gc},
+    {"__add", decimal_add},
     {nullptr, nullptr}
 };
 
