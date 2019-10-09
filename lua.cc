@@ -922,7 +922,18 @@ struct to_lua_visitor {
     }
 
     void operator()(const duration_type_impl& t, const emptyable<cql_duration>* v) {
-        assert(0 && "not implemented");
+        // returns the table { months = v1, days = v2, nanoseconds = v3 }
+        const cql_duration& d = v->get();
+        lua_createtable(l, 3, 0);
+
+        lua_pushinteger(l, d.months);
+        lua_setfield(l, -2, "months");
+
+        lua_pushinteger(l, d.days);
+        lua_setfield(l, -2, "days");
+
+        lua_pushinteger(l, d.nanoseconds);
+        lua_setfield(l, -2, "nanoseconds");
     }
 
     void operator()(const inet_addr_type_impl& t, const emptyable<seastar::net::inet_address>* v) {
