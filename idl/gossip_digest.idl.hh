@@ -74,4 +74,8 @@ class gossip_digest_ack2 {
     std::map<gms::inet_address, gms::endpoint_state> get_endpoint_state_map();
 };
 
+class gossip_query_token_status_response {
+    std::map<sstring, sstring> status;
+};
+
 }

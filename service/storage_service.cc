@@ -852,13 +852,15 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     db::system_keyspace::update_tokens(tokens).get();
     if (!db().local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
+        set_mode(mode::JOINING, sprint("Wait until local node knows tokens of peer nodes"), true);
         _gossiper.wait_for_range_setup().get();
+        set_mode(mode::JOINING, sprint("Announce bootstrap tokens of local node"), true);
         // if not an existing token then bootstrap
         _gossiper.add_local_application_state({
             { gms::application_state::TOKENS, value_factory.tokens(tokens) },
             { gms::application_state::STATUS, value_factory.bootstrapping(tokens) },
         }).get();
-        set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
+        set_mode(mode::JOINING, format("Wait until peer nodes know the bootstrap tokens of local node"), true);
         _gossiper.wait_for_range_setup().get();
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...

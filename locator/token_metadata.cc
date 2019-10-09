@@ -30,6 +30,14 @@
 #include <algorithm>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
+#include "xx_hasher.hh"
+#include "bytes_ostream.hh"
+#include "gms/inet_address_serializer.hh"
+#include "serializer_impl.hh"
+#include "idl/token.dist.hh"
+#include "idl/token.dist.impl.hh"
+#include "idl/range.dist.hh"
+#include "idl/range.dist.impl.hh"
 
 namespace locator {
 
@@ -621,6 +629,90 @@ std::multimap<inet_address, token> token_metadata::get_endpoint_to_token_map_for
     return cloned;
 }
 
+// Must run inside a seastar thread
+static uint64_t get_hash_for_map(const std::unordered_map<dht::token, gms::inet_address>& unordered) {
+    if (unordered.empty()) {
+        return 0;
+    }
+    std::map<dht::token, gms::inet_address> map(unordered.begin(), unordered.end());
+    xx_hasher h;
+    bytes_ostream out;
+    for (auto& x : map) {
+        thread::maybe_yield();
+        out.clear();
+        ser::serialize(out, x.first);
+        ser::serialize(out, x.second);
+        feed_hash(h, out.linearize());
+    }
+    return h.finalize_uint64();
+}
+
+// Must run inside a seastar thread
+static uint64_t get_hash_for_set(const std::unordered_set<gms::inet_address>& unordered) {
+    if (unordered.empty()) {
+        return 0;
+    }
+    std::set<gms::inet_address> nodes(unordered.begin(), unordered.end());
+    xx_hasher h;
+    bytes_ostream out;
+    for (auto& node: nodes) {
+        thread::maybe_yield();
+        out.clear();
+        ser::serialize(out, node);
+        feed_hash(h, out.linearize());
+    }
+    return h.finalize_uint64();
+}
+
+// Must run inside a seastar thread
+uint64_t token_metadata::get_normal_token_hash() {
+    return get_hash_for_map(get_token_to_endpoint());
+}
+
+// Must run inside a seastar thread
+uint64_t token_metadata::get_bootstrap_token_hash() {
+    return get_hash_for_map(get_bootstrap_tokens());
+}
+
+// Must run inside a seastar thread
+uint64_t token_metadata::get_leaving_endpoints_hash() {
+    return get_hash_for_set(get_leaving_endpoints());
+}
+
+// Must run inside a seastar thread
+uint64_t token_metadata::get_pending_ranges_hash() {
+    if (_pending_ranges_map.empty()) {
+        return 0;
+    }
+    std::map<sstring, uint64_t> keyspace_hash_map;
+    bytes_ostream out;
+    for (auto& x : _pending_ranges_map) {
+        struct less {
+            bool operator()(const range<token>& l, const range<token>& r) const {
+                return format("{}", l) < format("{}", r);
+            }
+        };
+        std::map<range<token>, std::unordered_set<inet_address>, less> map(x.second.begin(), x.second.end());
+        xx_hasher h;
+        for (auto& y : map) {
+            thread::maybe_yield();
+            out.clear();
+            ser::serialize(out, y.first);
+            ser::serialize(out, get_hash_for_set(y.second));
+            feed_hash(h, out.linearize());
+        }
+        keyspace_hash_map[x.first] = h.finalize_uint64();
+    }
+    xx_hasher h;
+    for (auto& x : keyspace_hash_map) {
+        thread::maybe_yield();
+        out.clear();
+        ser::serialize(out, x.first);
+        ser::serialize(out, x.second);
+        feed_hash(h, out.linearize());
+    }
+    return h.finalize_uint64();
+}
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {

@@ -1015,6 +1015,14 @@ public:
         ++_ring_version;
         //cachedTokenMap.set(null);
     }
+
+    uint64_t get_normal_token_hash();
+
+    uint64_t get_bootstrap_token_hash();
+
+    uint64_t get_leaving_endpoints_hash();
+
+    uint64_t get_pending_ranges_hash();
 };
 
 }

@@ -64,6 +64,10 @@
 #include "db/config.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
+#include "xx_hasher.hh"
+#include "gms/inet_address_serializer.hh"
+#include "bytes_ostream.hh"
+#include "serializer_impl.hh"
 
 namespace gms {
 
@@ -321,6 +325,56 @@ future<> gossiper::handle_echo_msg() {
     return make_ready_future<>();
 }
 
+// Must run inside a seastar thread
+uint64_t gossiper::get_gossip_status_token_hash() const {
+    auto nodes = boost::copy_range<std::set<gms::inet_address>>(endpoint_state_map | boost::adaptors::map_keys);
+    if (nodes.empty()) {
+        return 0;
+    }
+    xx_hasher h;
+    bytes_ostream out;
+    for (const auto& node : nodes) {
+        thread::maybe_yield();
+        out.clear();
+        auto state = get_application_state_ptr(node, application_state::TOKENS);
+        auto tokens = state ? state->value : "";
+        ser::serialize(out, tokens);
+        ser::serialize(out, get_gossip_status(node));
+        ser::serialize(out, node);
+        feed_hash(h, out.linearize());
+    }
+    return h.finalize_uint64();
+}
+
+static future<gossip_query_token_status_response>
+get_gossip_query_token_status_response() {
+    using response = gossip_query_token_status_response;
+    return _the_gossiper.map([] (gossiper& g) -> future<gossip_query_token_status_response> {
+        return seastar::async([&g] {
+            auto& tm = service::get_local_storage_service().get_token_metadata();
+            gossip_query_token_status_response resp = {{
+                {response::nr_known_nodes, format("{}", g.endpoint_state_map.size())},
+                {response::status_token_hash, format("{}", g.get_gossip_status_token_hash())},
+                {response::normal_token_hash, format("{}", tm.get_normal_token_hash())},
+                {response::bootstrap_token_hash, format("{}", tm.get_bootstrap_token_hash())},
+                {response::leaving_nodes_hash, format("{}", tm.get_leaving_endpoints_hash())},
+                {response::pending_ranges_hash, format("{}", tm.get_pending_ranges_hash())}
+            }};
+            return resp;
+        });
+    }).then([] (std::vector<gossip_query_token_status_response> results) {
+        bool same_results = std::adjacent_find(results.begin(), results.end(),
+                std::not_equal_to<gossip_query_token_status_response>()) == results.end();
+        results.front().status[response::same_on_all_shards] = same_results ?
+                response::same_on_all_shards_yes : response::same_on_all_shards_no;
+        return results.front();
+    });
+}
+
+future<gossip_query_token_status_response> gossiper::handle_query_msg(msg_addr from) {
+    return get_gossip_query_token_status_response();
+}
+
 future<> gossiper::handle_shutdown_msg(inet_address from) {
     set_last_processed_message_at();
     if (!is_enabled()) {
@@ -382,6 +436,12 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
         return messaging_service::no_wait();
     });
+    ms().register_gossip_query_token_status([] (const rpc::client_info& cinfo) {
+        auto from = netw::messaging_service::get_source(cinfo);
+        return smp::submit_to(0, [from] {
+            return gms::get_local_gossiper().handle_query_msg(from);
+        });
+    });
 
     // Start listening messaging_service after gossip message handlers are registered
     if (do_bind) {
@@ -396,6 +456,7 @@ void gossiper::uninit_messaging_service_handler() {
     ms.unregister_gossip_digest_syn();
     ms.unregister_gossip_digest_ack();
     ms.unregister_gossip_digest_ack2();
+    ms.unregister_gossip_query_token_status();
     _ms_registered = false;
 }
 
@@ -2039,8 +2100,7 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 }
 
 future<> gossiper::wait_for_gossip_to_settle() {
-    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
-    auto force_after = _cfg.skip_wait_for_gossip_to_settle();
+    logger.info("Waiting for gossip to settle with gossip query...");
     auto do_enable_features = [this] {
         return async([this] {
             if (!std::exchange(_gossip_settled, true)) {
@@ -2048,18 +2108,96 @@ future<> gossiper::wait_for_gossip_to_settle() {
             }
         });
     };
+    auto force_after = _cfg.skip_wait_for_gossip_to_settle();
     if (force_after == 0) {
         return do_enable_features();
     }
-    return wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after).then([this, do_enable_features] {
+    return wait_for_gossip_with_query().then([do_enable_features] {
         return do_enable_features();
+    }).handle_exception([this, do_enable_features] (std::exception_ptr ep) {
+        logger.debug("Failed to run wait_for_gossip_with_query failed: {}", ep);
+        static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
+        logger.info("Waiting for gossip to settle without gossip query...");
+        return wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS).then([this, do_enable_features] {
+            return do_enable_features();
+        });
     });
 }
 
 future<> gossiper::wait_for_range_setup() {
-    logger.info("Waiting for pending range setup...");
-    auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
-    return wait_for_gossip(ring_delay);
+    logger.info("Waiting for pending range setup with gossip query...");
+    return gossiper::wait_for_gossip_with_query().handle_exception([this] (std::exception_ptr ep) {
+        logger.debug("Failed to run wait_for_gossip_with_query failed: {}", ep);
+        auto ring_delay = service::get_local_storage_service().get_ring_delay();
+        logger.info("Waiting for pending range setup without gossip query...");
+        return wait_for_gossip(ring_delay);
+    });
+}
+
+// Wait for gossip to settle with a rpc verb to query status of remote nodes
+// directly. If a node does not support the rpc verb or a node is down, we
+// will fall back to the old method, i.e., wait_for_gossip().
+future<> gossiper::wait_for_gossip_with_query() {
+    return seastar::async([this] {
+        while (true) {
+            auto local = get_gossip_query_token_status_response().get0();
+            if (!local.is_same_on_all_shards()) {
+                logger.debug("Node {}, status = {}, wait for all the shards have the same hashes", get_broadcast_address(), local.status);
+                sleep_abortable(std::chrono::milliseconds(100)).get();
+                continue;
+            }
+            auto nodes_to_check = boost::copy_range<std::set<gms::inet_address>>(endpoint_state_map | boost::adaptors::map_keys);
+            for (auto& seed : _seeds) {
+                nodes_to_check.insert(seed);
+            }
+            nodes_to_check.erase(get_broadcast_address());
+            if (_node_to_be_replaced) {
+                nodes_to_check.erase(*_node_to_be_replaced);
+            }
+            size_t nodes_down = 0;
+            std::unordered_map<gms::inet_address, gossip_query_token_status_response> gossip_queries;
+            parallel_for_each(nodes_to_check, [this, &nodes_down, &gossip_queries] (const auto& node) {
+                return ms().send_gossip_query_token_status(get_msg_addr(node)).then([node, &nodes_down, &gossip_queries] (gossip_query_token_status_response result) {
+                    gossip_queries[node] = std::move(result);
+                }).handle_exception([node, &nodes_down] (std::exception_ptr ep) {
+                    try {
+                        std::rethrow_exception(ep);
+                    } catch (seastar::rpc::unknown_verb_error& e) {
+                        logger.info("Node {} does not support gossip query: {}", node, e);
+                        throw e;
+                    } catch (seastar::rpc::closed_error& e) {
+                        nodes_down++;
+                    } catch (...) {
+                        logger.info("Failed to send gossip query to {}", std::current_exception());
+                        throw;
+                    }
+                });
+            }).get();
+            size_t matched = 0;
+            logger.debug("Node {}, status = {}", get_broadcast_address(), local.status);
+            for (auto& query : gossip_queries) {
+                gossip_query_token_status_response& remote = query.second;
+                logger.debug("Node {}, status = {}", query.first, remote.status);
+                if (remote == local) {
+                    matched++;
+                }
+            }
+            size_t needed = nodes_to_check.size();
+            if (nodes_down) {
+                logger.info("Wait for gossip matched={}, needed={}, nodes_down={}, nodes_to_check={}, gave up due to nodes down",
+                        matched, needed, nodes_down, nodes_to_check);
+                throw std::runtime_error("Gave up wait for gossip with query becasue nodes are down");
+            }
+            if (matched == needed) {
+                logger.info("Wait for gossip matched={}, needed={}, nodes_down={}, nodes_to_check={}, done",
+                        matched, needed, nodes_down, nodes_to_check);
+                return;
+            }
+            logger.debug("Wait for gossip matched={}, needed={}, nodes_down={}, nodes_to_check={}, try again",
+                    matched, needed, nodes_down, nodes_to_check);
+            sleep_abortable(std::chrono::milliseconds(200)).get();
+        }
+    });
 }
 
 void gossiper::set_node_to_be_replaced(gms::inet_address node) {

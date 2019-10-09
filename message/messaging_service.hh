@@ -53,6 +53,7 @@ namespace gms {
     class gossip_digest_syn;
     class gossip_digest_ack;
     class gossip_digest_ack2;
+    class gossip_query_token_status_response;
 }
 
 namespace utils {
@@ -134,7 +135,8 @@ enum class messaging_verb : int32_t {
     REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM = 36,
     REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM = 37,
     REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM = 38,
-    LAST = 39,
+    GOSSIP_QUERY_TOKEN_STATUS = 39,
+    LAST = 40,
 };
 
 } // namespace netw
@@ -362,6 +364,11 @@ public:
     void register_gossip_echo(std::function<future<> ()>&& func);
     void unregister_gossip_echo();
     future<> send_gossip_echo(msg_addr id);
+
+    // Wrapper for GOSSIP_QUERY_TOKEN_STATUS verb
+    void register_gossip_query_token_status(std::function<future<gms::gossip_query_token_status_response> (const rpc::client_info& cinfo)>&& func);
+    void unregister_gossip_query_token_status();
+    future<gms::gossip_query_token_status_response> send_gossip_query_token_status(msg_addr id);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);

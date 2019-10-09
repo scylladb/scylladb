@@ -58,6 +58,7 @@
 #include <algorithm>
 #include <chrono>
 #include <set>
+#include <map>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/metrics_registration.hh>
 
@@ -75,6 +76,45 @@ class inet_address;
 class i_endpoint_state_change_subscriber;
 
 class feature_service;
+
+class gossip_query_token_status_response {
+public:
+    // The keys can be:
+    // - nr_known_nodes : Number of nodes this node knows about
+    // - status_token_hash: The hash of the gossip status and tokens for nodes
+    // - normal_token_hash: The hash of the tokens for nodes in NORMAL status
+    // - bootstrap_token_hash: The hash of the tokens for nodes in BOOTSTRAPPING status
+    // - leaving_nodes_hash: The hash of the nodes that are leaving the cluster
+    // - pending_ranges_hash: The hash of pending ranges
+    // - same_on_all_shards: If all the shards have the same hashes
+    static constexpr const char* nr_known_nodes = "nr_known_nodes";
+    static constexpr const char* status_token_hash = "status_token_hash";
+    static constexpr const char* normal_token_hash = "normal_token_hash";
+    static constexpr const char* bootstrap_token_hash = "bootstrap_token_hash";
+    static constexpr const char* leaving_nodes_hash = "leaving_nodes_hash";
+    static constexpr const char* pending_ranges_hash = "pending_ranges_hash";
+    static constexpr const char* same_on_all_shards = "same_on_all_shards";
+
+    // The values for same_on_all_shard
+    static constexpr const char* same_on_all_shards_yes = "yes";
+    static constexpr const char* same_on_all_shards_no = "no";
+
+    std::map<sstring, sstring> status;
+
+    bool operator!=(const gossip_query_token_status_response& x) const {
+        return x.status != status;
+    }
+    bool operator==(const gossip_query_token_status_response& x) const {
+        return x.status == status;
+    }
+    bool is_same_on_all_shards() const {
+        auto it = status.find(same_on_all_shards);
+        if (it != status.end()) {
+            return it->second == same_on_all_shards_yes;
+        }
+        return false;
+    }
+};
 
 struct bind_messaging_port_tag {};
 using bind_messaging_port = bool_class<bind_messaging_port_tag>;
@@ -108,6 +148,7 @@ private:
     future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
     future<> handle_ack2_msg(gossip_digest_ack2 msg);
     future<> handle_echo_msg();
+    future<gms::gossip_query_token_status_response> handle_query_msg(msg_addr from);
     future<> handle_shutdown_msg(inet_address from);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to);
@@ -560,6 +601,7 @@ public:
 public:
     sstring get_gossip_status(const endpoint_state& ep_state) const;
     sstring get_gossip_status(const inet_address& endpoint) const;
+    uint64_t get_gossip_status_token_hash() const;
 public:
     future<> wait_for_gossip_to_settle();
     future<> wait_for_range_setup();
@@ -567,6 +609,7 @@ public:
     void set_node_to_be_replaced(gms::inet_address node);
 private:
     future<> wait_for_gossip(std::chrono::milliseconds, std::optional<int32_t> = {});
+    future<> wait_for_gossip_with_query();
 
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
