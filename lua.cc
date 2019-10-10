@@ -636,7 +636,9 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const counter_type_impl&) {
-        assert(0 && "not implemented");
+        // No data_value ever has a counter type, it is represented
+        // with long_type instead.
+        return get_integer();
     }
 
     template <typename T> data_value operator()(const integer_type_impl<T>& t) {
