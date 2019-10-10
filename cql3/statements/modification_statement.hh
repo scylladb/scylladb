@@ -105,6 +105,12 @@ private:
     std::vector<::shared_ptr<column_condition>> _column_conditions;
     std::vector<::shared_ptr<column_condition>> _static_conditions;
 
+    // True if has _if_exists or _if_not_exists or other conditions.
+    // Pre-computed during statement prepare.
+    bool _has_conditions = false;
+    // True if any of update operations requires a prefetch.
+    // Pre-computed during statement prepare.
+    bool _requires_read = false;
     bool _if_not_exists = false;
     bool _if_exists = false;
 
@@ -193,7 +199,9 @@ private:
         return _sets_static_columns && !_sets_regular_columns;
     }
 public:
-    bool requires_read();
+    // True if any of update operations of this statement requires
+    // a prefetch of the old cell.
+    bool requires_read() const { return _requires_read; }
 
     // Columns used in this statement conditions or operations.
     const column_mask& columns_to_read() const { return _columns_to_read; }
@@ -215,7 +223,8 @@ private:
     do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
     friend class modification_statement_executor;
 public:
-    bool has_conditions();
+    // True if the statement has IF conditions. Pre-computed during prepare.
+    bool has_conditions() const { return _has_conditions; }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;

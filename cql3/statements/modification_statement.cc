@@ -469,6 +469,7 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
         _sets_a_collection |= op->column.type->is_collection();
     }
     if (op->requires_read()) {
+        _requires_read = true;
         _columns_to_read.set(op->column.ordinal_id);
     }
 
@@ -492,10 +493,12 @@ void modification_statement::add_condition(::shared_ptr<column_condition> cond) 
         _sets_a_collection |= cond->column.type->is_collection();
         _column_conditions.emplace_back(std::move(cond));
     }
+    _has_conditions = true;
 }
 
 void modification_statement::set_if_not_exist_condition() {
     _if_not_exists = true;
+    _has_conditions = true;
 }
 
 bool modification_statement::has_if_not_exist_condition() const {
@@ -504,21 +507,13 @@ bool modification_statement::has_if_not_exist_condition() const {
 
 void modification_statement::set_if_exist_condition() {
     _if_exists = true;
+    _has_conditions = true;
 }
 
 bool modification_statement::has_if_exist_condition() const {
     return _if_exists;
 }
 
-bool modification_statement::requires_read() {
-    return std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
-        return op->requires_read();
-    });
-}
-
-bool modification_statement::has_conditions() {
-    return _if_not_exists || _if_exists || !_column_conditions.empty() || !_static_conditions.empty();
-}
 
 void modification_statement::validate_where_clause_for_conditions() {
     //  no-op by default
