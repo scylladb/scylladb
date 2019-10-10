@@ -893,7 +893,8 @@ struct to_lua_visitor {
     }
 
     void operator()(const time_type_impl& t, const emptyable<int64_t>* v) {
-        assert(0 && "not implemented");
+        // nanoseconds since midnight
+        lua_pushinteger(l, *v);
     }
 
     void operator()(const timestamp_date_base_class& t, const timestamp_date_base_class::native_type* v) {
