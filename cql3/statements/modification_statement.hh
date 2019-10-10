@@ -84,7 +84,16 @@ public:
 
 private:
     const uint32_t _bound_terms;
-
+    // If we have operation on list entries, such as adding or
+    // removing an entry, the modification statement must prefetch
+    // the old values of the list to create an idempotent mutation.
+    // If the statement has conditions, conditional columns must
+    // also be prefetched, to evaluate conditions. If the
+    // statement has IF EXISTS/IF NOT EXISTS, we prefetch all
+    // columns, to match Cassandra behaviour.
+    // This bitset contains a mask of ordinal_id identifiers
+    // of the required columns.
+    column_mask _columns_to_read;
 public:
     const schema_ptr s;
     const std::unique_ptr<attributes> attrs;
@@ -185,6 +194,9 @@ private:
     }
 public:
     bool requires_read();
+
+    // Columns used in this statement conditions or operations.
+    const column_mask& columns_to_read() const { return _columns_to_read; }
 
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.

@@ -47,7 +47,6 @@
 #include "db/consistency_level_validations.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "service/storage_service.hh"
@@ -216,22 +215,8 @@ modification_statement::read_command(query::clustering_row_ranges ranges, db::co
     } catch (exceptions::invalid_request_exception& e) {
         throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
-
-    static auto is_collection = [] (const column_definition& def) {
-        return def.type->is_collection();
-    };
-
-    // FIXME: we read all collection columns, but could be enhanced just to read the list(s) being RMWed
-    auto static_cols = boost::copy_range<query::column_id_vector>(s->static_columns()
-        | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
-    auto regular_cols = boost::copy_range<query::column_id_vector>(s->regular_columns()
-        | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
-    query::partition_slice ps(
-            std::move(ranges),
-            std::move(static_cols),
-            std::move(regular_cols),
-            update_parameters::options);
-    return make_lw_shared<query::read_command>(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
+    query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
+    return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps));
 }
 
 std::vector<query::clustering_range>
@@ -482,6 +467,9 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
     } else {
         _sets_regular_columns = true;
         _sets_a_collection |= op->column.type->is_collection();
+    }
+    if (op->requires_read()) {
+        _columns_to_read.set(op->column.ordinal_id);
     }
 
     if (op->column.is_counter()) {
