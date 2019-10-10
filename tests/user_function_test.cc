@@ -430,6 +430,32 @@ SEASTAR_TEST_CASE(test_user_function_counter_return) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_time_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 9223372036854775807);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS time LANGUAGE Lua AS 'return val';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(time_native_type{int64_t(9223372036854775807)})}});
+
+        e.execute_cql("CREATE FUNCTION my_func2(val varint) CALLED ON NULL INPUT RETURNS time LANGUAGE Lua AS 'return \"08:12:54.123\"';").get();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(time_native_type{int64_t(29574123000000)})}});
+
+        e.execute_cql("CREATE FUNCTION my_func3(val varint) CALLED ON NULL INPUT RETURNS time LANGUAGE Lua AS 'return \"abc\"';").get();
+        auto fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), marshal_exception, message_equals("marshaling error: Timestamp format must be hh:mm:ss[.fffffffff]"));
+
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 9223372036854775808);").get();
+        fut = e.execute_cql("SELECT my_func(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("time value must fit in signed 64 bits"));
+
+        e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS time LANGUAGE Lua AS 'return 42.2';").get();
+        fut = e.execute_cql("SELECT my_func4(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("time must be a string or an integer"));
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_timestamp_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();

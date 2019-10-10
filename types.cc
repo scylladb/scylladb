@@ -371,7 +371,7 @@ uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
 
 time_type_impl::time_type_impl() : simple_type_impl{kind::time, time_type_name, {}} {}
 
-static int64_t parse_time(sstring_view s) {
+int64_t time_type_impl::from_sstring(sstring_view s) {
     static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
     auto hours_end = s.find(':');
     if (hours_end == std::string::npos) {
@@ -2362,7 +2362,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, parse_time(s));
+        return serialize_value(t, time_type_impl::from_sstring(s));
     }
     bytes operator()(const uuid_type_impl&) {
         if (s.empty()) {

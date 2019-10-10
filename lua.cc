@@ -736,7 +736,21 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const time_type_impl& t) {
-        assert(0 && "not implemented");
+        return time_native_type{visit_lua_value(l, -1, make_visitor(
+                   [] (const auto&) -> int64_t {
+                       throw exceptions::invalid_request_exception("time must be a string or an integer");
+                   },
+                   [] (const boost::multiprecision::cpp_int& v) {
+                       int64_t v2 = int64_t(v);
+                       if (v2 == v) {
+                           return v2;
+                       }
+                       throw exceptions::invalid_request_exception("time value must fit in signed 64 bits");
+                   },
+                   [] (const std::string_view& v) {
+                       return time_type_impl::from_sstring(v);
+                   }
+               ))};
     }
 
     data_value operator()(const counter_type_impl&) {
