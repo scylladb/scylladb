@@ -1,7 +1,7 @@
 # Performance Isolation in Scylla
-A Scylla shard does many different things in parallel. For example, as a coordinator it processes the user's CQL requests and sends them to replicas. As a replica, it executes read and write requests. Write requests are stored in memory (memtables) which are eventually flushed to sstables as a background process. When these sstables become to numerous, we compact them. And there are various other background operations, such as repair, gossip, etc.
+A Scylla shard does many different things in parallel. For example, as a coordinator it processes the user's CQL requests and sends them to replicas. As a replica, it executes read and write requests. Write requests are stored in memory (memtables) which is eventually flushed to sstables in a background process. When these sstables become too numerous, we compact them. And there are various other background operations, such as repair, gossip, etc.
 
-The performance isolation mechanisms described in this document have two goals. The first goal is to **isolate** the performance of each component from the others. In other words, the throughput and latency of one component should not depend on implementation details of another component such as its degree of parallelism or the amount of I/O it does. The second goal is that Scylla be able to **control** this isolation, and determine how big a share of the resources is given to each of these component.
+The performance isolation mechanisms described in this document have two goals. The first goal is to **isolate** the performance of each component from the others. In other words, the throughput and latency of one component should not depend on implementation details of another component such as its degree of parallelism or the amount of I/O it does. The second goal is that Scylla be able to **control** this isolation, and determine how big a share of the resources is given to each of these components.
 
 As an example of such control consider compaction. Scylla wants to ensure that the background compaction work receives enough resources to complete previous compaction tasks before new ones appear (as additional data gets written). On the other hand, it doesn't want to do compactions faster than necessary, because this will cause performance fluctuations for user queries (query performance is low while a compaction is proceeding quickly, and then becomes high when there is nothing left to compact).
 
@@ -61,4 +61,4 @@ See also: [compaction_controller.md]
 TODO
 
 ## Multi-tenancy
-We do not yet support multi-tenancy, in the sense that different tenants of the same server get isolated performance guarantees. When we do support this, it will need to be relected here.
+We do not yet support multi-tenancy, in the sense that different tenants of the same server get isolated performance guarantees. When we do support this, it will need to be documented here.
