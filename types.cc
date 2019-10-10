@@ -1910,7 +1910,9 @@ struct deserialize_visitor {
     data_value operator()(const bytes_type_impl& t) {
         return t.make_value(std::make_unique<bytes_type_impl::native_type>(v.begin(), v.end()));
     }
-    data_value operator()(const counter_type_impl& t) { fail(unimplemented::cause::COUNTERS); }
+    data_value operator()(const counter_type_impl& t) {
+        return static_cast<const long_type_impl&>(*long_type).make_value(read_simple_exactly<int64_t>(v));
+    }
     data_value operator()(const list_type_impl& t) {
         return t.deserialize(v, cql_serialization_format::internal());
     }

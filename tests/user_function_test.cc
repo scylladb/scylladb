@@ -110,6 +110,16 @@ SEASTAR_TEST_CASE(test_user_function_boolean_argument) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_counter_argument) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val counter);").get();
+        e.execute_cql("UPDATE my_table SET val = val + 1 WHERE key = 'foo';").get();
+        e.execute_cql("CREATE FUNCTION my_func(val counter) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val * 2';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(2)}});
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_utf8_argument) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val text);").get();
