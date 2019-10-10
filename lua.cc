@@ -695,7 +695,7 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const timeuuid_type_impl&) {
-        assert(0 && "not implemented");
+        return timeuuid_native_type{timeuuid_type_impl::from_sstring(get_string(l, -1))};
     }
 
     data_value operator()(const bytes_type_impl& t) {

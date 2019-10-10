@@ -2306,6 +2306,18 @@ utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
     return utils::UUID(s);
 }
 
+utils::UUID timeuuid_type_impl::from_sstring(sstring_view s) {
+    static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+    if (!std::regex_match(s.begin(), s.end(), re)) {
+        throw marshal_exception(format("Invalid UUID format ({})", s));
+    }
+    utils::UUID v(s);
+    if (v.version() != 1) {
+        throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
+    }
+    return v;
+}
+
 namespace {
 struct from_string_visitor {
     sstring_view s;
@@ -2332,15 +2344,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-        if (!std::regex_match(s.begin(), s.end(), re)) {
-            throw marshal_exception(format("Invalid UUID format ({})", s));
-        }
-        utils::UUID v(s);
-        if (v.version() != 1) {
-            throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
-        }
-        return v.serialize();
+        return timeuuid_type_impl::from_sstring(s).serialize();
     }
     bytes operator()(const timestamp_date_base_class& t) {
         if (s.empty()) {

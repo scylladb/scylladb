@@ -131,6 +131,7 @@ using timestamp_date_base_class = concrete_type<db_clock::time_point>;
 
 struct timeuuid_type_impl final : public concrete_type<utils::UUID> {
     timeuuid_type_impl();
+    static utils::UUID from_sstring(sstring_view s);
 };
 
 struct varint_type_impl final : public concrete_type<boost::multiprecision::cpp_int> {

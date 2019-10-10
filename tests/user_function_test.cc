@@ -471,6 +471,22 @@ SEASTAR_TEST_CASE(test_user_function_uuid_return) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_timeuuid_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS timeuuid LANGUAGE Lua AS 'return \"d18648bc-cf83-11e9-9820-107b4493b787\"';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({
+            {serialized(timeuuid_native_type{utils::UUID("d18648bc-cf83-11e9-9820-107b4493b787")})}
+        });
+
+        e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS timeuuid LANGUAGE Lua AS 'return \"d18648bc-cf83-21e9-9820-107b4493b787\"';").get();
+        auto fut = e.execute_cql("SELECT my_func2(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), marshal_exception, message_equals("marshaling error: Unsupported UUID version (2)"));
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_tuple_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
