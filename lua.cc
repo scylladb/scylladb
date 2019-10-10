@@ -464,7 +464,22 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const map_type_impl& t) {
-        assert(0 && "not implemented");
+        const data_type& key_type = t.get_keys_type();
+        const data_type& value_type = t.get_values_type();
+        using map_pair = std::pair<data_value, data_value>;
+        std::vector<map_pair> elements;
+        lua_pushnil(l);
+        while (lua_next(l, -2) != 0) {
+            auto v = convert_from_lua(l, value_type);
+            lua_pop(l, 1);
+            auto k = convert_from_lua(l, key_type);
+            elements.push_back({k, v});
+        }
+        std::sort(elements.begin(), elements.end(), [&](const map_pair& a, const map_pair& b) {
+            // FIXME: this is madness, we have to be able to compare without serializing!
+            return key_type->less(a.first.serialize(), b.first.serialize());
+        });
+        return make_map_value(t.shared_from_this(), std::move(elements));
     }
 
     data_value operator()(const list_type_impl& t) {
