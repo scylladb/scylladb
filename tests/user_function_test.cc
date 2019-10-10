@@ -110,6 +110,16 @@ SEASTAR_TEST_CASE(test_user_function_boolean_argument) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_timestamp_argument) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val timestamp);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', '2011-03-02 04:05+0000');").get();
+        e.execute_cql("CREATE FUNCTION my_func(val timestamp) CALLED ON NULL INPUT RETURNS bigint LANGUAGE Lua AS 'return val';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(int64_t(1299038700000))}});
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_counter_argument) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val counter);").get();

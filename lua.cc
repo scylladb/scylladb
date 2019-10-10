@@ -774,7 +774,8 @@ struct to_lua_visitor {
     }
 
     void operator()(const timestamp_date_base_class& t, const timestamp_date_base_class::native_type* v) {
-        assert(0 && "not implemented");
+        // milliseconds since epoch
+        lua_pushinteger(l, v->get().time_since_epoch().count());
     }
 
     void operator()(const simple_date_type_impl& t, const emptyable<uint32_t>* v) {
