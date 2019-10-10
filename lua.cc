@@ -446,7 +446,21 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const set_type_impl& t) {
-        assert(0 && "not implemented");
+        std::vector<data_value> elements;
+        const data_type& element_type = t.get_elements_type();
+        lua_pushnil(l);
+        while (lua_next(l, -2) != 0) {
+            if (!lua_toboolean(l, -1)) {
+                throw exceptions::invalid_request_exception("sets are represented with tables with true values");
+            }
+            lua_pop(l, 1);
+            elements.push_back(convert_from_lua(l, element_type));
+        }
+        std::sort(elements.begin(), elements.end(), [&](const data_value& a, const data_value& b) {
+            // FIXME: this is madness, we have to be able to compare without serializing!
+            return element_type->less(a.serialize(), b.serialize());
+        });
+        return make_set_value(t.shared_from_this(), std::move(elements));
     }
 
     data_value operator()(const map_type_impl& t) {
