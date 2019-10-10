@@ -149,6 +149,16 @@ SEASTAR_TEST_CASE(test_user_function_udt_argument) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_set_argument) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val set<int>);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', {1, 2, 3});").get();
+        e.execute_cql("CREATE FUNCTION my_func(val set<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'local ret = 0; for k in pairs(val) do ret = ret + k; end return ret';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(6)}});
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_double_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();

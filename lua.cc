@@ -687,7 +687,13 @@ struct to_lua_visitor {
     }
 
     void operator()(const set_type_impl& t, const std::vector<data_value>* v) {
-        assert(0 && "not implemented");
+        // returns the table { v1 = true, v2 = true, ...}
+        lua_createtable(l, 0, v->size());
+        for (const data_value& dv : *v) {
+            push_argument(l, dv);
+            lua_pushboolean(l, true);
+            lua_rawset(l, -3);
+        }
     }
 
     template <typename T>
