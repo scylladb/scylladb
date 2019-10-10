@@ -90,7 +90,7 @@ sstring boolean_to_string(const bool b) {
     return b ? "true" : "false";
 }
 
-sstring inet_to_string(const seastar::net::inet_address& addr) {
+sstring inet_addr_type_impl::to_sstring(const seastar::net::inet_address& addr) {
     std::ostringstream out;
     out << addr;
     return out.str();
@@ -2515,7 +2515,7 @@ struct to_string_impl_visitor {
     }
     sstring operator()(const empty_type_impl&, const void*) { return sstring(); }
     sstring operator()(const inet_addr_type_impl& a, const inet_addr_type_impl::native_type* v) {
-        return format_if_not_empty(a, v, inet_to_string);
+        return format_if_not_empty(a, v, inet_addr_type_impl::to_sstring);
     }
     sstring operator()(const list_type_impl& l, const list_type_impl::native_type* v) {
         return format_if_not_empty(
@@ -3585,7 +3585,7 @@ std::function<data_value(data_value)> make_castas_fctn_from_boolean_to_string() 
 
 std::function<data_value(data_value)> make_castas_fctn_from_inet_to_string() {
     return [](data_value from) -> data_value {
-        return inet_to_string(value_cast<inet_address>(from));
+        return inet_addr_type_impl::to_sstring(value_cast<inet_address>(from));
     };
 }
 

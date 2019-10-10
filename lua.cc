@@ -926,7 +926,9 @@ struct to_lua_visitor {
     }
 
     void operator()(const inet_addr_type_impl& t, const emptyable<seastar::net::inet_address>* v) {
-        assert(0 && "not implemented");
+        // returns a string
+        sstring s = inet_addr_type_impl::to_sstring(v->get());
+        push_sstring(l, s);
     }
 
     void operator()(const concrete_type<utils::UUID>&, const emptyable<utils::UUID>* v) {
