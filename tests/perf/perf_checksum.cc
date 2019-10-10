@@ -24,7 +24,7 @@
 #include "tests/make_random_string.hh"
 #include "utils/gz/crc_combine.hh"
 
-#include <seastar/tests/perf/perf_tests.hh>
+#include "seastar/include/seastar/testing/perf_tests.hh"
 
 struct crc_test {
     const sstring data = make_random_string(64*1024);

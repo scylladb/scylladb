@@ -61,6 +61,7 @@
 #include "message/messaging_service.hh"
 #include <seastar/net/dns.hh>
 #include <seastar/core/memory.hh>
+#include <seastar/core/io_queue.hh>
 #include <seastar/util/log-cli.hh>
 
 #include "db/view/view_update_generator.hh"

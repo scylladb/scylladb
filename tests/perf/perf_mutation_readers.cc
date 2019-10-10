@@ -23,7 +23,7 @@
 #include <boost/range/adaptors.hpp>
 
 #include <seastar/core/sleep.hh>
-#include <seastar/tests/perf/perf_tests.hh>
+#include "seastar/include/seastar/testing/perf_tests.hh"
 
 #include "tests/simple_schema.hh"
 

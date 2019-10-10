@@ -20,7 +20,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <seastar/tests/perf/perf_tests.hh>
+#include "seastar/include/seastar/testing/perf_tests.hh"
 #include <seastar/testing/test_runner.hh>
 
 #include <random>
