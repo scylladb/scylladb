@@ -687,7 +687,13 @@ struct to_lua_visitor {
     }
 
     void operator()(const map_type_impl& t, const std::vector<std::pair<data_value, data_value>>* v) {
-        assert(0 && "not implemented");
+        // returns the table { k1 = v1, k2 = v2, ...}
+        lua_createtable(l, 0, v->size());
+        for (const auto& p : *v) {
+            push_argument(l, p.first);
+            push_argument(l, p.second);
+            lua_rawset(l, -3);
+        }
     }
 
     void operator()(const user_type_impl& t, const std::vector<data_value>* v) {
