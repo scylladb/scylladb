@@ -140,6 +140,16 @@ SEASTAR_TEST_CASE(test_user_function_counter_argument) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_uuid_argument) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val uuid);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 5375ddb6-d5a5-4cce-9aa1-b10c3fea36a3);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val uuid) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return val';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized("5375ddb6-d5a5-4cce-9aa1-b10c3fea36a3")}});
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_utf8_argument) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val text);").get();
