@@ -86,6 +86,12 @@ public:
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats) = 0;
+
+    // Helper function used by child classes to prepare conditions for a prepared statement.
+    // Must be called before processing WHERE clause, because to perform sanity checks there
+    // we need to know what kinds of conditions (static, regular) the statement has.
+    void prepare_conditions(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
+            cql3::statements::modification_statement& stmt);
 };
 
 }

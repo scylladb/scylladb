@@ -342,6 +342,7 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
             stmt->add_operation(std::move(operation));
         };
     }
+    prepare_conditions(db, schema, bound_names, *stmt);
     stmt->process_where_clause(db, relations, std::move(bound_names));
     return stmt;
 }
@@ -366,7 +367,9 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = _json_value->prepare(db, "", ::make_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     prepared_json_value->collect_marker_specification(bound_names);
-    return ::make_shared<cql3::statements::insert_prepared_json_statement>(bound_names->size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
+    auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(bound_names->size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
+    prepare_conditions(db, schema, bound_names, *stmt);
+    return stmt;
 }
 
 update_statement::update_statement(            ::shared_ptr<cf_name> name,
@@ -400,7 +403,7 @@ update_statement::prepare_internal(database& db, schema_ptr schema,
         }
         stmt->add_operation(std::move(operation));
     }
-
+    prepare_conditions(db, schema, bound_names, *stmt);
     stmt->process_where_clause(db, _where_clause, std::move(bound_names));
     return stmt;
 }

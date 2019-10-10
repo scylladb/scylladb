@@ -534,6 +534,9 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
         auto& col = s->column_at(column_kind::partition_key, _restrictions->get_partition_key_restrictions()->size());
         throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", col.name_as_text()));
     }
+    if (has_conditions()) {
+        validate_where_clause_for_conditions();
+    }
 }
 
 namespace raw {
@@ -554,9 +557,15 @@ modification_statement::prepare(database& db, ::shared_ptr<variable_specificatio
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepared_attributes->collect_marker_specification(bound_names);
 
-    ::shared_ptr<cql3::statements::modification_statement> stmt = prepare_internal(db, schema, bound_names, std::move(prepared_attributes), stats);
+    return prepare_internal(db, schema, bound_names, std::move(prepared_attributes), stats);
+}
+
+void
+modification_statement::prepare_conditions(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
+        cql3::statements::modification_statement& stmt)
+{
     if (_if_not_exists || _if_exists || !_conditions.empty()) {
-        if (stmt->is_counter()) {
+        if (stmt.is_counter()) {
             throw exceptions::invalid_request_exception("Conditional updates are not supported on counter tables");
         }
         if (_attrs->timestamp) {
@@ -568,11 +577,11 @@ modification_statement::prepare(database& db, ::shared_ptr<variable_specificatio
             // So far this is enforced by the parser, but let's assert it for sanity if ever the parse changes.
             assert(_conditions.empty());
             assert(!_if_exists);
-            stmt->set_if_not_exist_condition();
+            stmt.set_if_not_exist_condition();
         } else if (_if_exists) {
             assert(_conditions.empty());
             assert(!_if_not_exists);
-            stmt->set_if_exist_condition();
+            stmt.set_if_exist_condition();
         } else {
             for (auto&& entry : _conditions) {
                 auto id = entry.first->prepare_column_identifier(schema);
@@ -587,13 +596,11 @@ modification_statement::prepare(database& db, ::shared_ptr<variable_specificatio
                 if (def->is_primary_key()) {
                     throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", *id));
                 }
-                stmt->add_condition(condition);
+                stmt.add_condition(condition);
             }
         }
-        stmt->validate_where_clause_for_conditions();
-        stmt->build_cas_result_set_metadata();
+        stmt.build_cas_result_set_metadata();
     }
-    return stmt;
 }
 
 }
