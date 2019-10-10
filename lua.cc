@@ -873,7 +873,8 @@ struct to_lua_visitor {
     }
 
     void operator()(const simple_date_type_impl& t, const emptyable<uint32_t>* v) {
-        assert(0 && "not implemented");
+        // number of days since epoch + 2^31
+        lua_pushinteger(l, *v);
     }
 
     void operator()(const duration_type_impl& t, const emptyable<cql_duration>* v) {
