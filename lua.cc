@@ -643,7 +643,13 @@ struct to_lua_visitor {
     }
 
     void operator()(const user_type_impl& t, const std::vector<data_value>* v) {
-        assert(0 && "not implemented");
+        // returns the table { field1 = v1, field2 = v2, ...}
+        lua_createtable(l, 0, v->size());
+        for (int i = 0, n = v->size(); i < n; ++i) {
+            push_sstring(l, t.field_name_as_string(i));
+            push_argument(l, (*v)[i]);
+            lua_rawset(l, -3);
+        }
     }
 
     void operator()(const set_type_impl& t, const std::vector<data_value>* v) {
