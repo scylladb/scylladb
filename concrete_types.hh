@@ -143,6 +143,7 @@ struct inet_addr_type_impl final : public concrete_type<seastar::net::inet_addre
 
 struct uuid_type_impl final : public concrete_type<utils::UUID> {
     uuid_type_impl();
+    static utils::UUID from_sstring(sstring_view s);
 };
 
 template <typename Func> using visit_ret_type = std::invoke_result_t<Func, const ascii_type_impl&>;

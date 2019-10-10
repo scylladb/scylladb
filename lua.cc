@@ -691,7 +691,7 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const uuid_type_impl&) {
-        assert(0 && "not implemented");
+        return uuid_type_impl::from_sstring(get_string(l, -1));
     }
 
     data_value operator()(const timeuuid_type_impl&) {

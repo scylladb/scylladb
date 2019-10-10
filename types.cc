@@ -2298,6 +2298,14 @@ static bytes serialize_value(const T& t, const typename T::native_type& v) {
     return b;
 }
 
+utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
+    static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+    if (!std::regex_match(s.begin(), s.end(), re)) {
+        throw marshal_exception(format("Cannot parse uuid from '{}'", s));
+    }
+    return utils::UUID(s);
+}
+
 namespace {
 struct from_string_visitor {
     sstring_view s;
@@ -2356,12 +2364,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-        if (!std::regex_match(s.begin(), s.end(), re)) {
-            throw marshal_exception(format("Cannot parse uuid from '{}'", s));
-        }
-        utils::UUID v(s);
-        return v.serialize();
+        return uuid_type_impl::from_sstring(s).serialize();
     }
     template <typename T> bytes operator()(const floating_type_impl<T>& t) {
         if (s.empty()) {
