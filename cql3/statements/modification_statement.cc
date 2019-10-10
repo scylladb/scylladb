@@ -663,10 +663,8 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
 
 void modification_statement::add_condition(::shared_ptr<column_condition> cond) {
     if (cond->column.is_static()) {
-        _sets_static_columns = true;
         _static_conditions.emplace_back(std::move(cond));
     } else {
-        _sets_regular_columns = true;
         _sets_a_collection |= cond->column.type->is_collection();
         _column_conditions.emplace_back(std::move(cond));
     }
