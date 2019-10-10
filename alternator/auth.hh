@@ -21,26 +21,15 @@
 
 #pragma once
 
-#include "alternator/executor.hh"
-#include <seastar/core/future.hh>
-#include <seastar/http/httpd.hh>
-#include <seastar/net/tls.hh>
-#include <optional>
+#include <string>
+#include <string_view>
+#include <array>
 
 namespace alternator {
 
-class server {
-    seastar::httpd::http_server_control _control;
-    seastar::httpd::http_server_control _https_control;
-    seastar::sharded<executor>& _executor;
-    bool _enforce_authorization;
-public:
-    server(seastar::sharded<executor>& executor) : _executor(executor) {}
+using hmac_sha256_digest = std::array<char, 32>;
 
-    seastar::future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization);
-private:
-    void set_routes(seastar::httpd::routes& r);
-};
+std::string get_signature(std::string_view access_key_id, std::string_view secret_access_key, std::string_view host, std::string_view method, std::string_view signed_headers_str,
+        const std::map<std::string_view, std::string_view>& signed_headers_map, std::string_view body_content, std::string_view region, std::string_view service, std::string_view query_string);
 
 }
-
