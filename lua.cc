@@ -516,7 +516,41 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const user_type_impl& t) {
-        assert(0 && "not implemented");
+        size_t num_fields = t.field_types().size();
+
+        std::unordered_map<sstring, std::pair<unsigned, data_type>> field_types;
+        field_types.reserve(num_fields);
+        for (unsigned i = 0; i < num_fields; ++i) {
+            field_types.insert({t.field_name_as_string(i), {i, t.field_type(i)}});
+        }
+
+        std::vector<std::optional<data_value>> opt_elements(num_fields);
+        lua_pushnil(l);
+        while (lua_next(l, -2) != 0) {
+            auto s = get_string(l, -2);
+            auto iter = field_types.find(s);
+            if (iter == field_types.end()) {
+                throw exceptions::invalid_request_exception(format("invalid UDT field '{}'", s));
+            }
+
+            const auto &p = iter->second;
+            auto v = convert_from_lua(l, p.second);
+            lua_pop(l, 1);
+
+            opt_elements[p.first] = std::move(v);
+        }
+
+        std::vector<data_value> elements;
+        elements.reserve(num_fields);
+        for (size_t i = 0; i < num_fields; ++i) {
+            if (!opt_elements[i]) {
+                throw exceptions::invalid_request_exception(
+                        format("key {} missing in udt {}", t.field_name_as_string(i), t.get_name_as_string()));
+            }
+            elements.push_back(*opt_elements[i]);
+        }
+
+        return make_user_value(t.shared_from_this(), std::move(elements));
     }
 
     data_value operator()(const inet_addr_type_impl& t) {

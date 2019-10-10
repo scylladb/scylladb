@@ -26,6 +26,7 @@
 #include "types/list.hh"
 #include "transport/messages/result_message.hh"
 #include "types/tuple.hh"
+#include "types/user.hh"
 #include "db/config.hh"
 #include "tmpdir.hh"
 #include "exception_utils.hh"
@@ -343,6 +344,44 @@ SEASTAR_TEST_CASE(test_user_function_list_return) {
         e.execute_cql("CREATE FUNCTION my_func5(val int) CALLED ON NULL INPUT RETURNS list<int> LANGUAGE Lua AS 'return {[1] = 42, [3] = 43}';").get();
         fut = e.execute_cql("SELECT my_func5(val) FROM my_table;");
         BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("table is not a sequence"));
+    });
+}
+
+SEASTAR_TEST_CASE(test_user_function_udt_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TYPE my_type (my_int int, my_double double);").get();
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
+
+        // FIXME: Maybe instead of coercing tables to UDTs we should
+        // require that the user constructs a corresponding usertype
+        // explicitly:
+        //   v = my_type:new()
+        //   v.field1 = val1
+        //   v.field2 = val2
+        //   return v
+        // or:
+        //  return my_type:new({field1 = val1, field2 = val2})
+
+        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS my_type LANGUAGE Lua AS 'return {my_int = 1, my_double = 2.5}';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto user_type =
+                user_type_impl::get_instance("ks", "my_type", {"my_int", "my_double"}, {int32_type, double_type}, false);
+        assert_that(res).is_rows().with_rows({
+            {make_user_value(user_type, {1, 2.5}).serialize()}
+        });
+
+        e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS my_type LANGUAGE Lua AS 'return {my_int = 1, my_float = 2.5}';").get();
+        auto fut = e.execute_cql("SELECT my_func2(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get0(), ire, message_equals("invalid UDT field 'my_float'"));
+
+        e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS my_type LANGUAGE Lua AS 'return {[true] = 2.5}';").get();
+        fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get0(), ire, message_equals("unexpected value"));
+
+        e.execute_cql("CREATE FUNCTION my_func4(val int) CALLED ON NULL INPUT RETURNS my_type LANGUAGE Lua AS 'return {my_int = 1}';").get();
+        fut = e.execute_cql("SELECT my_func4(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get0(), ire, message_equals("key my_double missing in udt my_type"));
     });
 }
 
