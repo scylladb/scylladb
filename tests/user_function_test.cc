@@ -116,6 +116,28 @@ SEASTAR_TEST_CASE(test_user_function_blob_argument) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_double_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return val';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(double(3))}});
+
+        e.execute_cql("CREATE FUNCTION my_func2(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return 1/0';").get();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(std::numeric_limits<double>::infinity())}});
+
+        e.execute_cql("CREATE FUNCTION my_func3(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return -1/0';").get();
+        res = e.execute_cql("SELECT my_func3(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(-std::numeric_limits<double>::infinity())}});
+
+        e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return 0/0';").get();
+        res = e.execute_cql("SELECT my_func4(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(std::nan(""))}});
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_tinyint_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();

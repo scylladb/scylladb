@@ -501,7 +501,7 @@ struct from_lua_visitor {
     }
 
     template <typename T> data_value operator()(const floating_type_impl<T>& t) {
-        assert(0 && "not implemented");
+        return visit_lua_number(l, -1, [] (const auto& v) { return T(v); });
     }
 
     int64_t get_integer() {
