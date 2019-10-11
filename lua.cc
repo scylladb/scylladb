@@ -497,7 +497,7 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const boolean_type_impl& t) {
-        assert(0 && "not implemented");
+        return bool(lua_toboolean(l, -1));
     }
 
     template <typename T> data_value operator()(const floating_type_impl<T>& t) {
