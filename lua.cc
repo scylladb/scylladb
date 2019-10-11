@@ -598,7 +598,7 @@ struct to_lua_visitor {
     }
 
     void operator()(const boolean_type_impl& t, const emptyable<bool>* v) {
-        assert(0 && "not implemented");
+        lua_pushboolean(l, *v);
     }
 
     template <typename T>
