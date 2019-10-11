@@ -249,36 +249,6 @@ modification_statement::read_command(query::clustering_row_ranges ranges, db::co
 
 std::vector<query::clustering_range>
 modification_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) {
-    // If the only updated/deleted columns are static, then we don't need clustering columns.
-    // And in fact, unless it is an INSERT, we reject if clustering columns are provided as that
-    // suggest something unintended. For instance, given:
-    //   CREATE TABLE t (k int, v int, s int static, PRIMARY KEY (k, v))
-    // it can make sense to do:
-    //   INSERT INTO t(k, v, s) VALUES (0, 1, 2)
-    // but both
-    //   UPDATE t SET s = 3 WHERE k = 0 AND v = 1
-    //   DELETE v FROM t WHERE k = 0 AND v = 1
-    // sounds like you don't really understand what your are doing.
-    if (applies_only_to_static_columns()) {
-        // If we set no non-static columns, then it's fine not to have clustering columns
-        if (!_restrictions->has_clustering_columns_restriction()) {
-            return { query::clustering_range::make_open_ended_both_sides() };
-        }
-
-        // If we do have clustering columns however, then either it's an INSERT and the query is valid
-        // but we still need to build a proper prefix, or it's not an INSERT, and then we want to reject
-        // (see above)
-        if (!type.is_insert()) {
-            if (_restrictions->has_clustering_columns_restriction()) {
-                throw exceptions::invalid_request_exception(format("Invalid restriction on clustering column {} since the {} statement modifies only static columns",
-                    _restrictions->get_clustering_columns_restrictions()->get_column_defs().front()->name_as_text(), type));
-            }
-
-            // we should get there as it contradicts !_restrictions->has_clustering_columns_restriction()
-            throw std::logic_error("contradicts !_restrictions->has_clustering_columns_restriction()");
-        }
-    }
-
     return _restrictions->get_clustering_bounds(options);
 }
 
