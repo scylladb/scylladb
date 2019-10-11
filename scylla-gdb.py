@@ -2095,12 +2095,11 @@ class scylla_fiber(gdb.Command):
     """ Walk the continuation chain starting from the given task
 
     Example (cropped for brevity):
-    (gdb) scylla fiber this
-    #0  (task*) 0x0000600000550360 0x000000000468ac40 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
-    #1  (task*) 0x0000600000550300 0x00000000046c3778 vtable for seastar::continuation<seastar::future<seastar::optimized_optional<mutation_fragment> >::then_impl<>()::{lambda(auto:2)#1}, seastar::optimized_optional<mutation_fragment> > + 16
-    #2  (task*) 0x00006000018af600 0x00000000046c37a0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
-    #3  (task*) 0x00006000005502a0 0x00000000046c37f0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
-    #4  (task*) 0x0000600001a65e10 0x00000000046c6b10 vtable for seastar::continuation<seastar::future<boost::iterator_range<mutation_fragment*> >::then_impl<...>(...)::{lambda(auto:1)#1}, boost::iterator_range<mutation_fragment*> > + 16
+    (gdb) scylla fiber 0x60001a305910
+    Starting task: (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
+    #0  (task*) 0x0000600016217c80 0x0000000004aa5288 vtable for seastar::continuation<...> + 16
+    #1  (task*) 0x000060000ac42940 0x0000000004aa2aa0 vtable for seastar::continuation<...> + 16
+    #2  (task*) 0x0000600023f59a50 0x0000000004ac1b30 vtable for seastar::continuation<...> + 16
      ^          ^                  ^                  ^
     (1)        (2)                (3)                (4)
 
@@ -2228,16 +2227,14 @@ class scylla_fiber(gdb.Command):
 
     def _walk(self, ptr, max_depth, scanned_region_size, force_fallback_mode, verbose):
         using_seastar_allocator = not force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
-        if using_seastar_allocator:
-            ptr_meta = scylla_ptr.analyze(int(ptr))
-            if not ptr_meta.is_managed_by_seastar():
-                gdb.write("Task pointer 0x{:016x} is not an object managed by seastar\n")
-                return []
-        else:
+        if not using_seastar_allocator:
             gdb.write("Not using the seastar allocator, falling back to scanning a fixed-size region of memory\n")
-            ptr_meta = pointer_metadata(int(ptr), scanned_region_size)
 
-        return reversed(self._do_walk(ptr_meta, 0, max_depth, scanned_region_size, using_seastar_allocator, verbose))
+        this_task = self._probe_pointer(ptr, scanned_region_size, using_seastar_allocator, verbose)
+        if this_task is None:
+            gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
+
+        return this_task, reversed(self._do_walk(this_task[0], 0, max_depth, scanned_region_size, using_seastar_allocator, verbose))
 
     def invoke(self, arg, for_tty):
         parser = argparse.ArgumentParser(description="scylla fiber")
@@ -2260,7 +2257,10 @@ class scylla_fiber(gdb.Command):
             return
 
         try:
-            fiber = self._walk(gdb.parse_and_eval(args.task), args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
+            this_task, fiber = self._walk(int(gdb.parse_and_eval(args.task)), args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
+
+            tptr, vptr, name = this_task
+            gdb.write("Starting task: (task*) 0x{:016x} 0x{:016x} {}\n".format(tptr.ptr, int(vptr), name))
 
             for i, (tptr, vptr, name) in enumerate(fiber):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
