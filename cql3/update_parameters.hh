@@ -90,13 +90,14 @@ public:
                 return  tri_compare(k1.first, k1.second, k2.first, k2.second) < 0;
             }
         };
-        // Order CAS columns by ordinal column id.
-        using row = std::map<ordinal_column_id, data_value>;
+    public:
+        struct row {
+            // Order CAS columns by ordinal column id.
+            std::map<ordinal_column_id, data_value> cells;
+        };
         // Use an ordered map since CAS result set must be naturally ordered
         // when returned to the client.
-        using row_map = std::map<key, row, key_less>;
-    public:
-        row_map rows;
+        std::map<key, row, key_less> rows;
         schema_ptr schema;
     public:
         prefetch_data(schema_ptr schema);

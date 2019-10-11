@@ -206,8 +206,8 @@ bool modification_statement::applies_to(const update_parameters::prefetch_data::
     auto condition_applies = [&row, &options](const shared_ptr<column_condition>& cond) {
         const data_value* value = nullptr;
         if (row != nullptr) {
-            auto it = row->find(cond->column.ordinal_id);
-            if (it != row->end()) {
+            auto it = row->cells.find(cond->column.ordinal_id);
+            if (it != row->cells.end()) {
                 value = &it->second;
             }
         }
@@ -380,8 +380,8 @@ modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata>
         row.reserve(metadata->value_count());
         row.emplace_back(boolean_type->decompose(is_applied));
         for (ordinal_column_id id = columns.find_first(); id != column_mask::npos; id = columns.find_next(id)) {
-            const auto it = cell_map.find(id);
-            if (it == cell_map.end()) {
+            const auto it = cell_map.cells.find(id);
+            if (it == cell_map.cells.end()) {
                 row.emplace_back(bytes_opt{});
             } else {
                 const data_value& cell = it->second;
