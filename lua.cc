@@ -551,6 +551,8 @@ static void push_sstring(lua_slice_state& l, const sstring& v) {
     lua_pushlstring(l, v.c_str(), v.size());
 }
 
+static void push_argument(lua_slice_state& l, const data_value& arg);
+
 namespace {
 struct to_lua_visitor {
     lua_slice_state& l;
@@ -594,7 +596,13 @@ struct to_lua_visitor {
 
     template <typename T>
     void operator()(const concrete_type<std::vector<data_value>, T>& t, const std::vector<data_value>* v) {
-        assert(0 && "not implemented");
+        // returns the table {v1, v2, ...}
+        lua_createtable(l, v->size(), 0);
+        int i = 0;
+        for (const data_value& dv : *v) {
+            push_argument(l, dv);
+            lua_rawseti(l, -2, ++i);
+        }
     }
 
     void operator()(const boolean_type_impl& t, const emptyable<bool>* v) {
