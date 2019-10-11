@@ -416,6 +416,8 @@ static sstring get_string(lua_State *l, int index) {
         }));
 }
 
+static data_value convert_from_lua(lua_slice_state &l, const data_type& type);
+
 namespace {
 struct from_lua_visitor {
     lua_slice_state& l;
@@ -456,7 +458,35 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const tuple_type_impl& t) {
-        assert(0 && "not implemented");
+        if (!lua_istable(l, -1)) {
+            throw exceptions::invalid_request_exception("value is not a table");
+        }
+
+        size_t num_elements = t.size();
+        std::vector<std::optional<data_value>> opt_elements(num_elements);
+
+        lua_pushnil(l);
+        while (lua_next(l, -2) != 0) {
+            auto k_varint = get_varint(l, -2);
+            if (k_varint > num_elements || k_varint < 1) {
+                throw exceptions::invalid_request_exception(
+                        format("key {} is not valid for a sequence of size {}", k_varint, num_elements));
+            }
+            size_t k = size_t(k_varint);
+            opt_elements[k - 1] = convert_from_lua(l, t.type(k - 1));
+            lua_pop(l, 1);
+        }
+
+        std::vector<data_value> elements;
+        elements.reserve(num_elements);
+        for (size_t i = 0; i < num_elements; ++i) {
+            if (!opt_elements[i]) {
+                throw exceptions::invalid_request_exception(
+                        format("key {} missing in sequence of size {}", i + 1, num_elements));
+            }
+            elements.push_back(*opt_elements[i]);
+        }
+        return make_tuple_value(t.shared_from_this(), std::move(elements));
     }
 
     data_value operator()(const user_type_impl& t) {

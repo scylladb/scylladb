@@ -25,6 +25,7 @@
 #include "tests/cql_test_env.hh"
 #include "types/list.hh"
 #include "transport/messages/result_message.hh"
+#include "types/tuple.hh"
 #include "db/config.hh"
 #include "tmpdir.hh"
 #include "exception_utils.hh"
@@ -277,6 +278,31 @@ SEASTAR_TEST_CASE(test_user_function_blob_return) {
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS blob LANGUAGE Lua AS 'return \"foó\"';").get();
         auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
         assert_that(res).is_rows().with_rows({{serialized(bytes("foó"))}});
+    });
+}
+
+SEASTAR_TEST_CASE(test_user_function_tuple_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS tuple<int, double, text> LANGUAGE Lua AS 'return {1,2.4,\"foo\"}';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto tuple_type = tuple_type_impl::get_instance({int32_type, double_type, utf8_type});
+        assert_that(res).is_rows().with_rows({
+            {make_tuple_value(tuple_type, {1, 2.4, "foo"}).serialize()}
+        });
+
+        e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS tuple<int, double, text> LANGUAGE Lua AS 'return {1.2, 1.2, \"foo\"}';").get();
+        auto fut = e.execute_cql("SELECT my_func2(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not an integer"));
+
+        e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS tuple<int, double, text> LANGUAGE Lua AS 'return {1,2.4,\"foo\", 42}';").get();
+        fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("key 4 is not valid for a sequence of size 3"));
+
+        e.execute_cql("CREATE FUNCTION my_func4(val int) CALLED ON NULL INPUT RETURNS tuple<int, double, text> LANGUAGE Lua AS 'return {[1] = 1, [3] = \"foo\"}';").get();
+        fut = e.execute_cql("SELECT my_func4(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("key 2 missing in sequence of size 3"));
     });
 }
 
