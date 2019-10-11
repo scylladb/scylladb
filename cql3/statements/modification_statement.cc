@@ -387,6 +387,9 @@ modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata>
     auto result_set = std::make_unique<cql3::result_set>(metadata);
     for (const auto& it : rows.rows) {
         const update_parameters::prefetch_data::row& cell_map = it.second;
+        if (!cell_map.is_in_cas_result_set) {
+            continue;
+        }
         std::vector<bytes_opt> row;
         row.reserve(metadata->value_count());
         row.emplace_back(boolean_type->decompose(is_applied));

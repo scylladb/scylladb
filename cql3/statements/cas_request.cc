@@ -120,9 +120,10 @@ bool cas_request::applies_to() const {
 
     const partition_key& pkey = _key.front().start()->value().key().value();
     const clustering_key empty_ckey = clustering_key::make_empty();
-    return std::all_of(_updates.begin(), _updates.end(), [this, &pkey, &empty_ckey] (const cas_row_update& op) {
+    bool applies = true;
+    for (const cas_row_update& op: _updates) {
         if (op.statement.has_conditions() == false) {
-            return true;
+            continue;
         }
         // If a statement has only static columns conditions, we must ignore its clustering columns
         // restriction when choosing a row to check the conditions, i.e. choose any partition row,
@@ -139,8 +140,18 @@ bool cas_request::applies_to() const {
         const auto& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
             op.ranges.front().start()->value() : empty_ckey;
         const auto* row = _rows->find_row(pkey, ckey);
-        return op.statement.applies_to(row, op.options);
-    });
+        if (row) {
+            row->is_in_cas_result_set = true;
+        }
+        if (!applies) {
+            // No need to check this condition as we have already failed a previous one.
+            // Continuing the loop just to set is_in_cas_result_set flag for all involved
+            // statements, which is necessary to build the CAS result set.
+            continue;
+        }
+        applies = op.statement.applies_to(row, op.options);
+    }
+    return applies;
 }
 
 std::optional<mutation> cas_request::apply(query::result& qr,
