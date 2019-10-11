@@ -160,6 +160,10 @@ private:
             no_write_on_close,
             write_on_close
         };
+    public:
+        const socket_address& get_server_addr() const { return _server_addr; }
+        const cql_protocol_version_type get_protocol_version() const { return _version; }
+        const service::client_state& get_client_state() const { return _client_state; }
     private:
         using execution_stage_type = inheriting_concrete_execution_stage<
                 future<std::unique_ptr<cql_server::response>>,
@@ -229,6 +233,8 @@ private:
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _connections_being_accepted = 0;
+public:
+    const boost::intrusive::list<connection>& get_connections_list() const { return _connections_list; }
 private:
     void maybe_idle() {
         if (_stopping && !_connections_being_accepted && !_current_connections) {

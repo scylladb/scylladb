@@ -52,6 +52,7 @@
 #include "db_clock.hh"
 #include "db/commitlog/replay_position.hh"
 #include "mutation_query.hh"
+#include "service/client_state.hh"
 #include <map>
 #include <seastar/core/distributed.hh>
 
@@ -87,6 +88,7 @@ static constexpr auto RANGE_XFERS = "range_xfers";
 static constexpr auto COMPACTIONS_IN_PROGRESS = "compactions_in_progress";
 static constexpr auto COMPACTION_HISTORY = "compaction_history";
 static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
+static constexpr auto CLIENTS = "clients";
 static constexpr auto SIZE_ESTIMATES = "size_estimates";
 static constexpr auto LARGE_PARTITIONS = "large_partitions";
 static constexpr auto LARGE_ROWS = "large_rows";
@@ -121,6 +123,22 @@ static constexpr auto USERTYPES = "schema_usertypes";
 static constexpr auto FUNCTIONS = "schema_functions";
 static constexpr auto AGGREGATES = "schema_aggregates";
 }
+
+// Representation of a row in `system.clients'. std::optionals are for nullable cells.
+struct client_data {
+    net::inet_address ip;
+    int32_t port;
+    service::client_state::auth_state connection_stage;
+    std::optional<sstring> driver_name;
+    std::optional<sstring> driver_version;
+    std::optional<sstring> hostname;
+    int32_t protocol_version;
+    std::optional<int64_t> request_count;
+    std::optional<sstring> ssl_cipher_suite;
+    std::optional<bool> ssl_enabled;
+    std::optional<sstring> ssl_protocol;
+    std::optional<sstring> username;
+};
 
 // Partition estimates for a given range of tokens.
 struct range_estimates {
@@ -598,6 +616,10 @@ future<> set_bootstrap_state(bootstrap_state state);
 
     api::timestamp_type schema_creation_timestamp();
 
+/**
+ * Builds a mutation for system.clients containing provided connections.
+ */
+mutation make_client_mutation(client_data&& cd);
 /**
  * Builds a mutation for SIZE_ESTIMATES_CF containing the specified estimates.
  */

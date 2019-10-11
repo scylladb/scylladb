@@ -75,6 +75,7 @@
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
 #include "db/size_estimates_virtual_reader.hh"
+#include "db/clientlist_virtual_reader.hh"
 #include "db/timeout_clock.hh"
 #include "sstables/sstables.hh"
 #include "db/view/build_progress_virtual_reader.hh"
@@ -425,6 +426,41 @@ schema_ptr built_indexes() {
        return builder.build(schema_builder::compact_storage::no);
     }();
     return sstable_activity;
+}
+
+/// Layout based on C*-4.0.0
+schema_ptr clients() {
+    thread_local auto clients = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, CLIENTS), NAME, CLIENTS,
+            // partition key
+            {{"address", inet_addr_type},},
+            // clustering key
+            {{"port", int32_type}},
+            // regular columns
+            {
+                {"connection_stage", utf8_type},
+                {"driver_name", utf8_type},
+                {"driver_version", utf8_type},
+                {"hostname", utf8_type},
+                {"protocol_version", int32_type},
+                {"request_count", long_type},
+                {"ssl_cipher_suite", utf8_type},
+                {"ssl_enabled", boolean_type},
+                {"ssl_protocol", utf8_type},
+                {"username", utf8_type}
+            },
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "list of connected CQL clients"
+            )));
+        builder.set_gc_grace_seconds(0);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build(schema_builder::compact_storage::no);
+    }();
+    return clients;
 }
 
 schema_ptr size_estimates() {
@@ -1758,7 +1794,7 @@ std::vector<schema_ptr> all_tables() {
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
-                    sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
+                    sstable_activity(), clients(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     scylla_local(), v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
@@ -1777,6 +1813,9 @@ std::vector<schema_ptr> all_tables() {
 static void maybe_add_virtual_reader(schema_ptr s, database& db) {
     if (s.get() == size_estimates().get()) {
         db.find_column_family(s).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader()));
+    }
+    if (s.get() == clients().get()) {
+        db.find_column_family(s).set_virtual_reader(mutation_source(db::clientlist::virtual_reader()));
     }
     if (s.get() == v3::views_builds_in_progress().get()) {
         db.find_column_family(s).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
@@ -1995,6 +2034,60 @@ future<int> increment_and_get_generation() {
             return make_ready_future<int>(generation);
         });
     });
+}
+
+mutation make_client_mutation(client_data&& cd) {
+    auto&& schema = db::system_keyspace::clients();
+    auto timestamp = api::new_timestamp();
+    auto pk = partition_key::from_single_value(*schema, inet_addr_type->decompose(cd.ip));
+
+    mutation m_to_apply{schema, pk};
+    const auto ck = clustering_key_prefix(std::vector<bytes>{int32_type->decompose(cd.port)});
+
+    sstring connection_stage_str;
+    switch (cd.connection_stage) {
+    case service::client_state::auth_state::UNINITIALIZED:
+        connection_stage_str = "established";  // This is C* convention
+        break;
+    case service::client_state::auth_state::AUTHENTICATION:
+        connection_stage_str = "authenticating";
+        break;
+    case service::client_state::auth_state::READY:
+        connection_stage_str = "ready";
+        break;
+    default:
+        connection_stage_str = to_sstring((uint8_t)cd.connection_stage);
+    }
+    m_to_apply.set_clustered_cell(ck, to_bytes("connection_stage"), std::move(connection_stage_str), timestamp);
+
+    if (cd.driver_name) {
+        m_to_apply.set_clustered_cell(ck, to_bytes("driver_name"), std::move(*cd.driver_name), timestamp);
+    }
+    if (cd.driver_version) {
+        m_to_apply.set_clustered_cell(ck, to_bytes("driver_version"), std::move(*cd.driver_version), timestamp);
+    }
+    if (cd.hostname) {
+        m_to_apply.set_clustered_cell(ck, to_bytes("hostname"), std::move(*cd.hostname), timestamp);
+    }
+
+    m_to_apply.set_clustered_cell(ck, to_bytes("protocol_version"), cd.protocol_version, timestamp);
+
+    if (cd.request_count) {
+        m_to_apply.set_clustered_cell(ck, to_bytes("request_count"), *cd.request_count, timestamp);
+    }
+    if (cd.ssl_cipher_suite) {
+        m_to_apply.set_clustered_cell(ck, to_bytes("ssl_cipher_suite"), std::move(*cd.ssl_cipher_suite), timestamp);
+    }
+    if (cd.ssl_enabled) {
+        m_to_apply.set_clustered_cell(ck, to_bytes("ssl_enabled"), *cd.ssl_enabled, timestamp);
+    }
+    if (cd.ssl_protocol) {
+        m_to_apply.set_clustered_cell(ck, to_bytes("ssl_protocol"), std::move(*cd.ssl_protocol), timestamp);
+    }
+
+    m_to_apply.set_clustered_cell(ck, to_bytes("username"), std::move(cd.username.value_or("anonymous")), timestamp);
+
+    return m_to_apply;
 }
 
 mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates) {
