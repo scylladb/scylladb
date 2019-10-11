@@ -454,7 +454,33 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const list_type_impl& t) {
-        assert(0 && "not implemented");
+        if (!lua_istable(l, -1)) {
+            throw exceptions::invalid_request_exception("value is not a table");
+        }
+
+        const data_type& elements_type = t.get_elements_type();
+        using table_pair = std::pair<boost::multiprecision::cpp_int, data_value>;
+        std::vector<table_pair> pairs;
+        lua_pushnil(l);
+        while (lua_next(l, -2) != 0) {
+            auto v = convert_from_lua(l, elements_type);
+            lua_pop(l, 1);
+            pairs.push_back({get_varint(l, -1), v});
+        }
+
+        std::sort(pairs.begin(), pairs.end(), [] (const table_pair& a, const table_pair& b) {
+            return a.first < b.first;
+        });
+
+        size_t num_elements = pairs.size();
+        std::vector<data_value> elements;
+        for (size_t i = 0; i < num_elements; ++i) {
+            if (i + 1 != pairs[i].first) {
+                throw exceptions::invalid_request_exception("table is not a sequence");
+            }
+            elements.push_back(pairs[i].second);
+        }
+        return make_list_value(t.shared_from_this(), std::move(elements));
     }
 
     data_value operator()(const tuple_type_impl& t) {
