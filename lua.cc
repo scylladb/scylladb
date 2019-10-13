@@ -24,6 +24,7 @@
 #include "concrete_types.hh"
 #include "utils/utf8.hh"
 #include "utils/ascii.hh"
+#include "utils/date.h"
 #include <lua.hpp>
 
 using namespace seastar;
@@ -485,6 +486,24 @@ static lua_date_table get_lua_date_table(lua_State* l, int index) {
 
 struct from_lua_visitor;
 
+struct simple_date_return_visitor {
+    from_lua_visitor &outer;
+    template <typename T>
+    uint32_t operator()(const T&) {
+        throw exceptions::invalid_request_exception("date must be a string, integer or date table");
+    }
+    uint32_t operator()(const boost::multiprecision::cpp_int& v) {
+        if (v > std::numeric_limits<uint32_t>::max()) {
+            throw exceptions::invalid_request_exception("date value must fit in 32 bits");
+        }
+        return uint32_t(v);
+    }
+    uint32_t operator()(const std::string_view& v) {
+        return simple_date_type_impl::from_sstring(v);
+    }
+    uint32_t operator()(const lua_table&);
+};
+
 struct timestamp_return_visitor {
     from_lua_visitor &outer;
     template <typename T>
@@ -731,9 +750,19 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const simple_date_type_impl& t) {
-        assert(0 && "not implemented");
+        return simple_date_native_type{visit_lua_value(l, -1, simple_date_return_visitor{*this})};
     }
 };
+
+uint32_t simple_date_return_visitor::operator()(const lua_table&) {
+    auto table = get_lua_date_table(outer.l, -1);
+    if (table.hour || table.minute || table.second) {
+        throw exceptions::invalid_request_exception("date type has no hour, minute or second");
+    }
+    date::year_month_day ymd{date::year{table.year}, date::month{table.month}, date::day{table.day}};
+    int64_t days = date::local_days(ymd).time_since_epoch().count() + (1UL << 31);
+    return (*this)(boost::multiprecision::cpp_int(days));
+}
 
 db_clock::time_point timestamp_return_visitor::operator()(const lua_table&) {
     auto table = get_lua_date_table(outer.l, -1);

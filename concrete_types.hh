@@ -97,6 +97,7 @@ struct timestamp_type_impl final : public simple_type_impl<db_clock::time_point>
 
 struct simple_date_type_impl final : public simple_type_impl<uint32_t> {
     simple_date_type_impl();
+    static uint32_t from_sstring(sstring_view s);
 };
 
 struct time_type_impl final : public simple_type_impl<int64_t> {

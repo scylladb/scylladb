@@ -351,7 +351,7 @@ static uint32_t serialize(const std::string& input, int64_t days) {
     days += 1UL << 31;
     return static_cast<uint32_t>(days);
 }
-static uint32_t days_from_string(sstring_view s) {
+uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
     std::string str;
     str.resize(s.size());
     std::transform(s.begin(), s.end(), str.begin(), ::tolower);
@@ -2344,7 +2344,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, days_from_string(s));
+        return serialize_value(t, simple_date_type_impl::from_sstring(s));
     }
     bytes operator()(const time_type_impl& t) {
         if (s.empty()) {

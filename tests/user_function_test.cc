@@ -294,6 +294,60 @@ SEASTAR_TEST_CASE(test_user_function_int_return) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_date_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return val';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(simple_date_native_type{uint32_t(3)})}});
+
+        e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return \"2019-10-01\"';").get();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(simple_date_native_type{uint32_t(2147501818)})}});
+
+        e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return 4294967296';").get();
+        auto fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("date value must fit in 32 bits"));
+
+        e.execute_cql("CREATE FUNCTION my_func4(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2019, month = 10, day = 1}';").get();
+        res = e.execute_cql("SELECT my_func4(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(simple_date_native_type{uint32_t(2147501818)})}});
+
+        e.execute_cql("CREATE FUNCTION my_func5(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2147483648, month = 10, day = 1}';").get();
+        fut = e.execute_cql("SELECT my_func5(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("year is too large: '2147483648'"));
+
+        e.execute_cql("CREATE FUNCTION my_func6(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2019, month = 256, day = 1}';").get();
+        fut = e.execute_cql("SELECT my_func6(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("month is too large: '256'"));
+
+        e.execute_cql("CREATE FUNCTION my_func7(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2019, month = 10, day = 256}';").get();
+        fut = e.execute_cql("SELECT my_func7(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("day is too large: '256'"));
+
+        e.execute_cql("CREATE FUNCTION my_func8(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2019, month = 10, day = 1, abc = 42}';").get();
+        fut = e.execute_cql("SELECT my_func8(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("invalid date table field: 'abc'"));
+
+        e.execute_cql("CREATE FUNCTION my_func9(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2019, month = 10}';").get();
+        fut = e.execute_cql("SELECT my_func9(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("date table must have year, month and day"));
+
+        e.execute_cql("CREATE FUNCTION my_func10(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2147483647, month = 10, day = 1}';").get();
+        fut = e.execute_cql("SELECT my_func10(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("date value must fit in 32 bits"));
+
+        e.execute_cql("CREATE FUNCTION my_func11(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return 42.2';").get();
+        fut = e.execute_cql("SELECT my_func11(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("date must be a string, integer or date table"));
+
+        e.execute_cql("CREATE FUNCTION my_func12(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2019, month = 10, day = 1, hour = 4}';").get();
+        fut = e.execute_cql("SELECT my_func12(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("date type has no hour, minute or second"));
+  });
+}
+
 SEASTAR_TEST_CASE(test_user_function_boolean_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
