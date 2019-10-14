@@ -286,7 +286,8 @@ struct to_lua_visitor {
 
     template <typename T>
     void operator()(const floating_type_impl<T>& t, const emptyable<T>* v) {
-        assert(0 && "not implemented");
+        // floats are converted to double
+        lua_pushnumber(l, *v);
     }
 
     template <typename T>

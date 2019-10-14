@@ -113,6 +113,16 @@ SEASTAR_TEST_CASE(test_user_function_int_return) {
         e.execute_cql("CREATE FUNCTION my_func2(val tinyint) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
         res = e.execute_cql("SELECT my_func2(val) FROM my_table2;").get0();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(4))}});
+
+        e.execute_cql("CREATE TABLE my_table3 (key text PRIMARY KEY, val double);").get();
+        e.execute_cql("INSERT INTO my_table3 (key, val) VALUES ('foo', 4);").get();
+        e.execute_cql("CREATE FUNCTION my_func3(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
+        res = e.execute_cql("SELECT my_func3(val) FROM my_table3;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(int32_t(4))}});
+
+        e.execute_cql("INSERT INTO my_table3 (key, val) VALUES ('foo', 4.2);").get();
+        auto fut = e.execute_cql("SELECT my_func3(val) FROM my_table3;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not an integer"));
     });
 }
 
