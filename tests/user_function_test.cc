@@ -107,6 +107,12 @@ SEASTAR_TEST_CASE(test_user_function_int_return) {
         e.execute_cql("CREATE OR REPLACE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
         res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(3))}});
+
+        e.execute_cql("CREATE TABLE my_table2 (key text PRIMARY KEY, val tinyint);").get();
+        e.execute_cql("INSERT INTO my_table2 (key, val) VALUES ('foo', 4);").get();
+        e.execute_cql("CREATE FUNCTION my_func2(val tinyint) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table2;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(int32_t(4))}});
     });
 }
 

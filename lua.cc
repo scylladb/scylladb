@@ -21,6 +21,7 @@
 
 #include "lua.hh"
 #include "exceptions/exceptions.hh"
+#include "concrete_types.hh"
 #include <lua.hpp>
 
 using namespace seastar;
@@ -233,12 +234,107 @@ static bytes convert_return(lua_slice_state &l, const data_type& return_type) {
     return convert_from_lua(l, return_type).serialize();
 }
 
+namespace {
+struct to_lua_visitor {
+    lua_slice_state& l;
+
+    void operator()(const varint_type_impl& t, const emptyable<boost::multiprecision::cpp_int>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const decimal_type_impl& t, const emptyable<big_decimal>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const counter_type_impl& t, const void* v) {
+        // This is unreachable since deserialize_visitor for
+        // counter_type_impl return a long.
+        abort();
+    }
+
+    void operator()(const empty_type_impl& t, const void* v) {
+        // This is unreachable since empty types are not user visible.
+        abort();
+    }
+
+    void operator()(const reversed_type_impl& t, const void* v) {
+        // This is unreachable since reversed_type_impl is used only
+        // in the tables. The function gets the underlying type.
+        abort();
+    }
+
+    void operator()(const map_type_impl& t, const std::vector<std::pair<data_value, data_value>>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const user_type_impl& t, const std::vector<data_value>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const set_type_impl& t, const std::vector<data_value>* v) {
+        assert(0 && "not implemented");
+    }
+
+    template <typename T>
+    void operator()(const concrete_type<std::vector<data_value>, T>& t, const std::vector<data_value>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const boolean_type_impl& t, const emptyable<bool>* v) {
+        assert(0 && "not implemented");
+    }
+
+    template <typename T>
+    void operator()(const floating_type_impl<T>& t, const emptyable<T>* v) {
+        assert(0 && "not implemented");
+    }
+
+    template <typename T>
+    void operator()(const integer_type_impl<T>& t, const emptyable<T>* v) {
+        // Integers are converted to 64 bits
+        lua_pushinteger(l, *v);
+    }
+
+    void operator()(const bytes_type_impl& t, const bytes* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const string_type_impl& t, const sstring* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const time_type_impl& t, const emptyable<int64_t>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const timestamp_date_base_class& t, const timestamp_date_base_class::native_type* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const simple_date_type_impl& t, const emptyable<uint32_t>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const duration_type_impl& t, const emptyable<cql_duration>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const inet_addr_type_impl& t, const emptyable<seastar::net::inet_address>* v) {
+        assert(0 && "not implemented");
+    }
+
+    void operator()(const concrete_type<utils::UUID>&, const emptyable<utils::UUID>* v) {
+        assert(0 && "not implemented");
+    }
+};
+}
+
 static void push_argument(lua_slice_state& l, const data_value& arg) {
     if (arg.is_null()) {
         lua_pushnil(l);
         return;
     }
-    lua_pushinteger(l, value_cast<int32_t>(arg));
+    ::visit(arg, to_lua_visitor{l});
 }
 
 lua::runtime_config lua::make_runtime_config(const db::config& config) {
