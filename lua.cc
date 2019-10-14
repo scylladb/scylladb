@@ -526,6 +526,10 @@ static bytes convert_return(lua_slice_state &l, const data_type& return_type) {
     return convert_from_lua(l, return_type).serialize();
 }
 
+static void push_sstring(lua_slice_state& l, const sstring& v) {
+    lua_pushlstring(l, v.c_str(), v.size());
+}
+
 namespace {
 struct to_lua_visitor {
     lua_slice_state& l;
@@ -593,7 +597,7 @@ struct to_lua_visitor {
     }
 
     void operator()(const string_type_impl& t, const sstring* v) {
-        assert(0 && "not implemented");
+        push_sstring(l, *v);
     }
 
     void operator()(const time_type_impl& t, const emptyable<int64_t>* v) {
