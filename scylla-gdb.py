@@ -12,6 +12,9 @@ import sys
 import struct
 import random
 import bisect
+import os
+import subprocess
+import time
 
 
 def template_arguments(gdb_type):
@@ -2554,6 +2557,161 @@ class scylla_memtables(gdb.Command):
                 gdb.write('  (memtable*) 0x%x: total=%d, used=%d, free=%d, flushed=%d\n' % (mt, reg.total(), reg.used(), reg.free(), mt['_flushed_memory']))
 
 
+class scylla_generate_object_graph(gdb.Command):
+    """Generate an object graph for an object.
+
+    The object graph is a directed graph, where vertices are objects and edges
+    are references between them, going from referrers to the referee. The
+    vertices contain information, like the address of the object, its size,
+    whether it is a live or not and if applies, the address and symbol name of
+    its vtable. The edges contain the list of offsets the referrer has references
+    at. The generated graph is an image, which allows the visual inspection of the
+    object graph.
+
+    The graph is generated with the help of `graphwiz`. The command
+    generates `.dot` files which can be converted to images with the help of
+    the `dot` utility. The command can do this if the output file is one of
+    the supported image formats (e.g. `png`), otherwise only the `.dot` file
+    is generated, leaving the actual image generation to the user. When that is
+    the case, the generated `.dot` file can be converted to an image with the
+    following command:
+
+        dot -Tpng graph.dot -o graph.png
+
+    The `.dot` file is always generated, regardless of the specified output. This
+    file will contain the full name of vtable symbols. The graph will only contain
+    cropped versions of those to keep the size reasonable.
+
+    See `scylla generate_object_graph --help` for more details on usage.
+    Also see `man dot` for more information on supported output formats.
+
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla generate-object-graph', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    @staticmethod
+    def _traverse_object_graph_breadth_first(address, max_depth, max_vertices, timeout_seconds):
+        vertices = dict() # addr -> obj info (ptr metadata, vtable symbol)
+        edges = defaultdict(set) # (referrer, referee) -> {offset1, offset2...}
+
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+
+        current_objects = [address]
+        next_objects = []
+        depth = 0
+        start_time = time.time()
+        stop = False
+
+        while not stop:
+            depth += 1
+            for current_obj in current_objects:
+                for next_obj, next_off in scylla_find.find(current_obj):
+                    if timeout_seconds > 0:
+                        current_time = time.time()
+                        if current_time - start_time > timeout_seconds:
+                            stop = True
+                            break
+
+                    edges[(next_obj, address)].add(next_off)
+                    if next_obj in vertices:
+                        continue
+
+                    ptr_meta = scylla_ptr.analyze(next_obj)
+                    symbol_name = resolve(gdb.Value(next_obj).reinterpret_cast(vptr_type).dereference(), cache=False)
+                    vertices[next_obj] = (ptr_meta, symbol_name)
+
+                    next_objects.append(next_obj)
+
+                    if max_vertices > 0 and len(vertices) >= max_vertices:
+                        stop = True
+                        break;
+
+            if max_depth > 0 and depth == max_depth:
+                stop = True
+                break
+
+            current_objects = next_objects
+            next_objects = []
+
+        return edges, vertices
+
+    @staticmethod
+    def _do_generate_object_graph(address, output_file, max_depth, max_vertices, timeout_seconds):
+        edges, vertices = scylla_generate_object_graph._traverse_object_graph_breadth_first(address, max_depth,
+                max_vertices, timeout_seconds)
+
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        prefix_len = len('vtable for ')
+        vertices[address] = (scylla_ptr.analyze(address),
+                resolve(gdb.Value(address).reinterpret_cast(vptr_type).dereference(), cache=False))
+
+        for addr, obj_info in vertices.items():
+            ptr_meta, vtable_symbol_name = obj_info
+            size = ptr_meta.size
+            state = "L" if ptr_meta.is_live else "F"
+
+            if vtable_symbol_name:
+                symbol_name = vtable_symbol_name[prefix_len:] if len(vtable_symbol_name) > prefix_len else vtable_symbol_name
+                output_file.write('{} [label="0x{:x} ({}, {}) {}"]; // {}\n'.format(addr, addr, size, state,
+                    symbol_name[:16], vtable_symbol_name))
+            else:
+                output_file.write('{} [label="0x{:x} ({}, {})"];\n'.format(addr, addr, size, state, ptr_meta))
+
+        for edge, offsets in edges.items():
+            a, b = edge
+            output_file.write('{} -> {} [label="{}"];\n'.format(a, b, offsets))
+
+    @staticmethod
+    def generate_object_graph(address, output_file, max_depth, max_vertices, timeout_seconds):
+        with open(output_file, 'w') as f:
+            f.write('digraph G {\n')
+            scylla_generate_object_graph._do_generate_object_graph(address, f, max_depth, max_vertices, timeout_seconds)
+            f.write('}')
+
+    def invoke(self, arg, from_tty):
+        parser = argparse.ArgumentParser(description="scylla generate-object-graph")
+        parser.add_argument("-o", "--output-file", action="store", type=str, default="graph.dot",
+                help="Output file. Supported extensions are: dot, png, jpg, jpeg, svg and pdf."
+                " Regardless of the extension, a `.dot` file will always be generated."
+                " If the output is one of the graphic formats the command will convert the `.dot` file using the `dot` utility."
+                " In this case the dot utility from the graphwiz suite has to be installed on the machine."
+                " To manually convert the `.dot` file do: `dot -Tpng graph.dot -o graph.png`.")
+        parser.add_argument("-d", "--max-depth", action="store", type=int, default=5,
+                help="Maximum depth to traverse the object graph. Set to -1 for unlimited depth. Default is 5.")
+        parser.add_argument("-v", "--max-vertices", action="store", type=int, default=-1,
+                help="Maximum amount of vertices (objects) to add to the object graph. Set to -1 to unlimited. Default is -1 (unlimited).")
+        parser.add_argument("-t", "--timeout", action="store", type=int, default=-1,
+                help="Maximum amount of seconds to spend building the graph. Set to -1 for no timeout. Default is -1 (unlimited).")
+        parser.add_argument("object", action="store", help="The object that is the starting point of the graph.")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        supported_extensions = {'dot', 'png', 'jpg', 'jpeg', 'svg', 'pdf'}
+        head, tail = os.path.split(args.output_file)
+        filename, extension = tail.split('.')
+
+        if not extension in supported_extensions:
+            raise ValueError("The output file `{}' has unsupported extension `{}'. Supported extensions are: {}".format(
+                args.output_file, extension, supported_extensions))
+
+        if extension != 'dot':
+            dot_file = os.path.join(head, filename + '.dot')
+        else:
+            dot_file = args.output_file
+
+        if args.max_depth == -1 and args.max_vertices == -1 and args.timeout == -1:
+            raise ValueError("The search has to be limited by at least one of: MAX_DEPTH, MAX_VERTICES or TIMEOUT")
+
+        scylla_generate_object_graph.generate_object_graph(int(gdb.parse_and_eval(args.object)), dot_file,
+                args.max_depth, args.max_vertices, args.timeout)
+
+        if extension != 'dot':
+            subprocess.check_call(['dot', '-T' + extension, dot_file, '-o', args.output_file])
+
+
 class scylla_gdb_func_dereference_lw_shared_ptr(gdb.Function):
     """Dereference the pointer guarded by the `seastar::lw_shared_ptr` instance.
 
@@ -2661,6 +2819,7 @@ scylla_gms()
 scylla_cache()
 scylla_sstables()
 scylla_memtables()
+scylla_generate_object_graph()
 
 
 # Convenience functions
