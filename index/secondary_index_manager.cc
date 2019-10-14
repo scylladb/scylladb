@@ -181,4 +181,10 @@ bool secondary_index_manager::is_index(const schema& s) const {
     });
 }
 
+bool secondary_index_manager::is_global_index(const schema& s) const {
+    return boost::algorithm::any_of(_indices | boost::adaptors::map_values, [&s] (const index& i) {
+        return !i.metadata().local() && s.cf_name() == index_table_name(i.metadata().name());
+    });
+}
+
 }
