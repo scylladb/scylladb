@@ -89,6 +89,12 @@ public:
     virtual int get_shard_count(inet_address endpoint) = 0;
 
     /**
+     * returns an unsigned representing the value of ignore_msb_bits this
+     * endpoint has
+     */
+    virtual unsigned get_ignore_msb_bits(inet_address endpoint) = 0;
+
+    /**
      * returns a new <tt>List</tt> sorted by proximity to the given endpoint
      */
     virtual std::vector<inet_address> get_sorted_list_by_proximity(
@@ -416,6 +422,8 @@ public:
     //
 
     virtual int get_shard_count(inet_address endpoint) override;
+
+    virtual unsigned get_ignore_msb_bits(inet_address endpoint) override;
 
     virtual std::vector<inet_address> get_sorted_list_by_proximity(
         inet_address address,
