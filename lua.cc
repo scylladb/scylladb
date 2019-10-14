@@ -22,6 +22,7 @@
 #include "lua.hh"
 #include "exceptions/exceptions.hh"
 #include "concrete_types.hh"
+#include "utils/utf8.hh"
 #include <lua.hpp>
 
 using namespace seastar;
@@ -404,6 +405,16 @@ static boost::multiprecision::cpp_int get_varint(lua_State* l, int index) {
            ));
 }
 
+static sstring get_string(lua_State *l, int index) {
+    return visit_lua_value(l, index,  make_visitor(
+        [] (const lua_table&) -> sstring {
+            throw exceptions::invalid_request_exception("unexpected value");
+        },
+        [] (const auto& v) {
+            return format("{}", v);
+        }));
+}
+
 namespace {
 struct from_lua_visitor {
     lua_slice_state& l;
@@ -468,7 +479,11 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const utf8_type_impl& t) {
-        assert(0 && "not implemented");
+        sstring s = get_string(l, -1);
+        if (utils::utf8::validate(reinterpret_cast<uint8_t*>(s.data()), s.size())) {
+            return std::move(s);
+        }
+        throw exceptions::invalid_request_exception("value is not valid utf8");
     }
 
     data_value operator()(const ascii_type_impl& t) {
