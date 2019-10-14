@@ -23,6 +23,7 @@
 #include "exceptions/exceptions.hh"
 #include "concrete_types.hh"
 #include "utils/utf8.hh"
+#include "utils/ascii.hh"
 #include <lua.hpp>
 
 using namespace seastar;
@@ -487,7 +488,11 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const ascii_type_impl& t) {
-        assert(0 && "not implemented");
+        sstring s = get_string(l, -1);
+        if (utils::ascii::validate(reinterpret_cast<uint8_t*>(s.data()), s.size())) {
+            return ascii_native_type{std::move(s)};
+        }
+        throw exceptions::invalid_request_exception("value is not valid ascii");
     }
 
     data_value operator()(const boolean_type_impl& t) {
