@@ -2284,42 +2284,67 @@ class scylla_find(gdb.Command):
     """ Finds live objects on seastar heap of current shard which contain given value.
     Prints results in 'scylla ptr' format.
 
+    See `scylla find --help` for more details on usage.
+
     Example:
 
       (gdb) scylla find 0x600005321900
       thread 1, small (size <= 512), live (0x6000000f3800 +48)
       thread 1, small (size <= 56), live (0x6000008a1230 +32)
     """
+    _vptr_type = gdb.lookup_type('uintptr_t').pointer()
 
     def __init__(self):
         gdb.Command.__init__(self, 'scylla find', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     @staticmethod
-    def find(value):
+    def find(value, size_selector='g'):
         mem_start, mem_size = get_seastar_memory_start_and_size()
-        for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
+        for obj, off in find_in_live(mem_start, mem_size, value, size_selector):
             yield (obj, off)
 
     def invoke(self, arg, for_tty):
-        args = arg.split(' ')
+        parser = argparse.ArgumentParser(description="scylla find")
+        parser.add_argument("-s", "--size", action="store", choices=['b', 'h', 'w', 'g', '8', '16', '32', '64'],
+                default='g',
+                help="Size of the searched value."
+                    " Accepted values are the size expressed in number of bits: 8, 16, 32 and 64."
+                    " GDB's size classes are also accepted: b(byte), h(half-word), w(word) and g(giant-word)."
+                    " Defaults to g (64 bits).")
+        parser.add_argument("-r", "--resolve", action="store_true",
+                help="Attempt to resolve the first pointer in the found objects as vtable pointer. "
+                " If the resolve is successful the vtable pointer as well as the vtable symbol name will be printed in the listing.")
+        parser.add_argument("value", action="store", help="The value to be searched.")
 
-        def print_usage():
-            gdb.write("Usage: scylla find [ -w | -g ] <value>\n")
-
-        if len(args) < 1 or not args[0]:
-            print_usage()
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
             return
 
-        if args[0] in ['-w', '-g']:
-            args = args[1:]
+        size_arg_to_size_char = {
+            'b': 'b',
+            '8': 'b',
+            'h': 'h',
+            '16': 'h',
+            'w': 'w',
+            '32': 'w',
+            'g': 'g',
+            '64': 'g',
+        }
 
-        if len(args) != 1:
-            print_usage()
-            return
-        value = int(args[0], 0)
+        size_char = size_arg_to_size_char[args.size]
 
-        for obj, off in scylla_find.find(value):
-            gdb.execute("scylla ptr 0x%x" % (obj + off))
+        for obj, off in scylla_find.find(int(gdb.parse_and_eval(args.value)), size_char):
+            ptr_meta = scylla_ptr.analyze(obj + off)
+            if args.resolve:
+                maybe_vptr = int(gdb.Value(obj).reinterpret_cast(scylla_find._vptr_type).dereference())
+                symbol = resolve(maybe_vptr, cache=False)
+                if symbol is None:
+                    gdb.write('{}\n'.format(ptr_meta))
+                else:
+                    gdb.write('{} 0x{:016x} {}\n'.format(ptr_meta, maybe_vptr, symbol))
+            else:
+                gdb.write('{}\n'.format(ptr_meta))
 
 
 class std_unique_ptr:
