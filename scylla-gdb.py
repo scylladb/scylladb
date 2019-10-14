@@ -546,6 +546,19 @@ def list_unordered_set(map, cache=True):
         p = p['_M_nxt']
 
 
+def get_text_range():
+    sections = gdb.execute('info files', False, True).split('\n')
+    for line in sections:
+        # vptrs are in .rodata section
+        if line.endswith("is .rodata"):
+            items = line.split()
+            text_start = int(items[0], 16)
+            text_end = int(items[2], 16)
+            return text_start, text_end
+
+    raise Exception("Failed to find text start and end")
+
+
 class scylla(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND, True)
@@ -641,14 +654,7 @@ class scylla_task_histogram(gdb.Command):
         nr_pages = int(cpu_mem['nr_pages'])
         page_samples = range(0, nr_pages) if args.all else random.sample(range(0, nr_pages), nr_pages)
 
-        sections = gdb.execute('info files', False, True).split('\n')
-        for line in sections:
-            # vptrs are in .rodata section
-            if line.find("is .rodata") > -1:
-                items = line.split()
-                text_start = int(items[0], 16)
-                text_end = int(items[2], 16)
-                break
+        text_start, text_end = get_text_range()
 
         sc = span_checker()
         vptr_count = defaultdict(int)
@@ -687,15 +693,7 @@ def find_vptrs():
     pages = cpu_mem['pages']
     nr_pages = int(cpu_mem['nr_pages'])
 
-    sections = gdb.execute('info files', False, True).split('\n')
-    for line in sections:
-        # vptrs are in .rodata section
-        if line.find("is .rodata") > -1:
-            items = line.split()
-            text_start = int(items[0], 16)
-            text_end = int(items[2], 16)
-            break
-
+    text_start, text_end = get_text_range()
     def is_vptr(addr):
         return addr >= text_start and addr <= text_end
 
