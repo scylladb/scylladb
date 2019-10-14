@@ -476,7 +476,8 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const bytes_type_impl& t) {
-        assert(0 && "not implemented");
+        sstring v = get_string(l, -1);
+        return data_value(bytes(reinterpret_cast<const int8_t*>(v.data()), v.size()));
     }
 
     data_value operator()(const utf8_type_impl& t) {
