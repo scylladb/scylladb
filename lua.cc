@@ -207,6 +207,119 @@ static void push_cpp_int(lua_State* l, const boost::multiprecision::cpp_int& v) 
     luaL_setmetatable(l, scylla_varint_metatable_name);
 }
 
+struct lua_table {
+};
+
+template <typename Func>
+using lua_visit_ret_type = std::invoke_result_t<Func, const double&>;
+
+GCC6_CONCEPT(
+template <typename Func>
+concept bool CanHandleRawLuaTypes = requires(Func f) {
+    { f(*static_cast<const long long*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const double*>(nullptr)) }                         -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const boost::multiprecision::cpp_int*>(nullptr)) } -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const std::string_view*>(nullptr)) }               -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const lua_table*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
+};
+)
+
+template <typename Func>
+GCC6_CONCEPT(requires CanHandleRawLuaTypes<Func>)
+static auto visit_lua_raw_value(lua_State* l, int index, Func&& f) {
+    switch (lua_type(l, index)) {
+    case LUA_TNONE:
+        assert(0 && "Invalid index");
+    case LUA_TNUMBER:
+        if (lua_isinteger(l, index)) {
+            return f(lua_tointeger(l, index));
+        }
+        return f(lua_tonumber(l, index));
+    case LUA_TSTRING: {
+        size_t len;
+        const char* s = lua_tolstring(l, index, &len);
+        return f(std::string_view{s, len});
+    }
+    case LUA_TTABLE:
+        return f(lua_table{});
+    case LUA_TBOOLEAN:
+    case LUA_TFUNCTION:
+    case LUA_TNIL:
+        throw exceptions::invalid_request_exception("unexpected value");
+    case LUA_TUSERDATA:
+        return f(*get_cpp_int(l, index));
+    case LUA_TTHREAD:
+    case LUA_TLIGHTUSERDATA:
+        assert(0 && "We never make thread or light user data visible to scripts");
+    }
+    assert(0 && "invalid lua type");
+}
+
+GCC6_CONCEPT(
+template <typename Func>
+concept bool CanHandleLuaTypes = requires(Func f) {
+    { f(*static_cast<const double*>(nullptr)) }                         -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const boost::multiprecision::cpp_int*>(nullptr)) } -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const std::string_view*>(nullptr)) }               -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const lua_table*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
+};
+)
+
+template <typename Func>
+GCC6_CONCEPT(requires CanHandleLuaTypes<Func>)
+static auto visit_lua_value(lua_State* l, int index, Func&& f) {
+    struct visitor {
+        lua_State* l;
+        int index;
+        Func& f;
+        auto operator()(const long long& v) { return f(boost::multiprecision::cpp_int(v)); }
+        auto operator()(const boost::multiprecision::cpp_int& v) { return f(v); }
+        auto operator()(const double& v) {
+            long long v2 = v;
+            if (v2 == v) {
+                return (*this)(v2);
+            }
+            return f(v);
+        }
+        auto operator()(const std::string_view& v) {
+            if (v.empty()) {
+                // boost::multiprecision::cpp_int's constructor parses "" as 0. Avoid that.
+                return f(v);
+            }
+            boost::multiprecision::cpp_int v2;
+            try {
+                v2 = boost::multiprecision::cpp_int(v);
+            } catch (std::runtime_error&) {
+                // The string is not a valid integer. Let Lua try to convert it to a double.
+                int isnum;
+                double d = lua_tonumberx(l, index, &isnum);
+                if (isnum) {
+                    return (*this)(d);
+                }
+                return f(v);
+            }
+            return f(v2);
+        }
+        auto operator()(const lua_table& v) {
+            return f(v);
+        }
+    };
+    return visit_lua_raw_value(l, index, visitor{l, index, f});
+}
+
+template <typename Func>
+static auto visit_lua_number(lua_State* l, int index, Func&& f) {
+    return visit_lua_value(l, index, make_visitor(
+               [] (const std::string_view& v) -> std::invoke_result_t<Func, double> {
+                   throw exceptions::invalid_request_exception("value is not a number");
+               },
+               [] (const lua_table&) -> std::invoke_result_t<Func, double> {
+                   throw exceptions::invalid_request_exception("value is not a number");
+               },
+               std::forward<Func>(f)
+           ));
+}
+
 static int varint_gc(lua_State *l) {
     std::destroy_at(get_cpp_int(l, 1));
     return 0;
@@ -256,13 +369,17 @@ static lua_slice_state load_script(const lua::runtime_config& cfg, lua::bitcode_
 using millisecond = std::chrono::duration<double, std::milli>;
 static auto now() { return std::chrono::system_clock::now(); }
 
+static boost::multiprecision::cpp_int get_varint(lua_State* l, int index) {
+    return visit_lua_number(l, index, make_visitor(
+               [](const boost::multiprecision::cpp_int& v) { return v; },
+               [](const auto& v) -> boost::multiprecision::cpp_int{
+                   throw exceptions::invalid_request_exception("value is not an integer");
+               }
+           ));
+}
+
 static data_value convert_from_lua(lua_slice_state &l, const data_type& type) {
-    int isnum;
-    int64_t ret = lua_tointegerx(l, -1, &isnum);
-    if (!isnum) {
-        throw exceptions::invalid_request_exception("value is not an integer");
-    }
-    return int32_t(ret);
+    return int32_t(uint32_t(get_varint(l, -1)));
 }
 
 static bytes convert_return(lua_slice_state &l, const data_type& return_type) {

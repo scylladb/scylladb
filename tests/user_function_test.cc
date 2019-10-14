@@ -126,8 +126,33 @@ SEASTAR_TEST_CASE(test_user_function_int_return) {
 
         e.execute_cql("CREATE TABLE my_table4 (key text PRIMARY KEY, val varint);").get();
         e.execute_cql("INSERT INTO my_table4 (key, val) VALUES ('foo', 4);").get();
-        e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 42';").get();
+        e.execute_cql("INSERT INTO my_table4 (key, val) VALUES ('bar', 2147483648);").get();
+        e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
         res = e.execute_cql("SELECT my_func4(val) FROM my_table4;").get0();
+        assert_that(res).is_rows().with_rows_ignore_order({
+            {serialized(int32_t(4))},
+            {serialized(int32_t(-2147483648))}
+        });
+
+        e.execute_cql("CREATE FUNCTION my_func5(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return \"foo\"';").get();
+        fut = e.execute_cql("SELECT my_func5(val) FROM my_table3;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not a number"));
+
+        e.execute_cql("CREATE FUNCTION my_func6(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return \"123\"';").get();
+        res = e.execute_cql("SELECT my_func6(val) FROM my_table3;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(int32_t(123))}});
+
+        e.execute_cql("CREATE FUNCTION my_func7(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return \"0x123p+1\"';").get();
+        res = e.execute_cql("SELECT my_func7(val) FROM my_table3;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(int32_t(0x246))}});
+
+        e.execute_cql("CREATE FUNCTION my_func8(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return false';").get();
+        fut = e.execute_cql("SELECT my_func8(val) FROM my_table3;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("unexpected value"));
+
+        e.execute_cql("CREATE FUNCTION my_func9(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return \"\"';").get();
+        fut = e.execute_cql("SELECT my_func9(val) FROM my_table3;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not a number"));
     });
 }
 
