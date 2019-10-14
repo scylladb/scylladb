@@ -205,11 +205,12 @@ public:
     /// schema and `n` will map to the same generated value.
     data_model::mutation_description::key make_ckey(uint32_t n);
 
-    /// Make n clustering keys.
+    /// Make up to n clustering keys.
     ///
     /// Key are in clustering order.
     /// This method is deterministic, the pair of the seed used to generate the
     /// schema and `n` will map to the same generated values.
+    /// Fewer than n keys may be returned if the schema limits the clustering keys space.
     std::vector<data_model::mutation_description::key> make_ckeys(size_t n);
 
     data_model::mutation_description new_mutation(data_model::mutation_description::key pkey);
