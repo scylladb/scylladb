@@ -1684,7 +1684,8 @@ future<> storage_service::gossip_snitch_info() {
     return _gossiper.add_local_application_state({
         { gms::application_state::DC, value_factory.datacenter(dc) },
         { gms::application_state::RACK, value_factory.rack(rack) },
-        { gms::application_state::SHARD_COUNT, value_factory.shard_count(smp::count) }
+        { gms::application_state::SHARD_COUNT, value_factory.shard_count(smp::count) },
+        { gms::application_state::IGNORE_MSB_BITS, value_factory.ignore_msb_bits(dht::global_partitioner().sharding_ignore_msb()) },
     });
 }
 
