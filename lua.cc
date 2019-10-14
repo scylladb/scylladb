@@ -404,8 +404,113 @@ static boost::multiprecision::cpp_int get_varint(lua_State* l, int index) {
            ));
 }
 
+namespace {
+struct from_lua_visitor {
+    lua_slice_state& l;
+
+    data_value operator()(const reversed_type_impl& t) {
+        // This is unreachable since reversed_type_impl is used only
+        // in the tables. The function return the underlying type.
+        abort();
+    }
+
+    data_value operator()(const empty_type_impl& t) {
+        // This is unreachable since empty types are not user visible.
+        abort();
+    }
+
+    data_value operator()(const decimal_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const varint_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const duration_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const set_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const map_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const list_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const tuple_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const user_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const inet_addr_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const uuid_type_impl&) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const timeuuid_type_impl&) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const bytes_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const utf8_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const ascii_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const boolean_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    template <typename T> data_value operator()(const floating_type_impl<T>& t) {
+        assert(0 && "not implemented");
+    }
+
+    int64_t get_integer() {
+        return uint64_t(get_varint(l, -1));
+    }
+
+    data_value operator()(const timestamp_date_base_class& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const time_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+
+    data_value operator()(const counter_type_impl&) {
+        assert(0 && "not implemented");
+    }
+
+    template <typename T> data_value operator()(const integer_type_impl<T>& t) {
+        return T(get_integer());
+    }
+
+    data_value operator()(const simple_date_type_impl& t) {
+        assert(0 && "not implemented");
+    }
+};
+}
+
 static data_value convert_from_lua(lua_slice_state &l, const data_type& type) {
-    return int32_t(uint32_t(get_varint(l, -1)));
+    return ::visit(*type, from_lua_visitor{l});
 }
 
 static bytes convert_return(lua_slice_state &l, const data_type& return_type) {
