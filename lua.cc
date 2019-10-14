@@ -613,7 +613,8 @@ struct to_lua_visitor {
     }
 
     void operator()(const bytes_type_impl& t, const bytes* v) {
-        assert(0 && "not implemented");
+        // lua strings can hold arbitrary blobs
+        lua_pushlstring(l, reinterpret_cast<const char*>(v->c_str()), v->size());
     }
 
     void operator()(const string_type_impl& t, const sstring* v) {
