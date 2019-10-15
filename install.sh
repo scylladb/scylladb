@@ -179,7 +179,6 @@ if [ -z "$pkg" ] || [ "$pkg" = "server" ]; then
 
     install -d -m755 "$rdoc"/scylla
     install -m644 README.md -Dt "$rdoc"/scylla/
-    install -m644 README-DPDK.md -Dt "$rdoc"/scylla
     install -m644 NOTICE.txt -Dt "$rdoc"/scylla/
     install -m644 ORIGIN -Dt "$rdoc"/scylla/
     install -d -m755 -d "$rdoc"/scylla/licenses/
