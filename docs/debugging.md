@@ -54,13 +54,11 @@ soon as you leave or enter an asynchronous function.
 That said GDB is an indispensable tool in debugging coredumps and when
 used right can be of great help.
 
-Over the years we have collected a set of tools for helping with
- debugging scylla. These are collected in
- [scylla-gdb.py](../scylla-gdb.py) and are in the form of
-[commands](https://sourceware.org/gdb/onlinedocs/gdb/Commands.html#Commands),
+Over the years we have collected a set of tools for helping with debugging
+scylla. These are collected in [scylla-gdb.py](../scylla-gdb.py) and are in
+the form of [commands](https://sourceware.org/gdb/onlinedocs/gdb/Commands.html#Commands),
 [conveninence functions](https://sourceware.org/gdb/onlinedocs/gdb/Convenience-Funs.html#Convenience-Funs)
-and [pretty
-printers](https://sourceware.org/gdb/onlinedocs/gdb/Pretty-Printing.html#Pretty-Printing).
+and [pretty printers](https://sourceware.org/gdb/onlinedocs/gdb/Pretty-Printing.html#Pretty-Printing).
 To load the file issue the following command (inside gdb):
 
     (gdb) source /path/to/scylla-gdb.py
@@ -121,8 +119,7 @@ Often you find yourself debugging an executable, whose internal source
 paths don't match those where they can be found on your machine. There
  is an easy workaround for this:
 
-    (gdb) set substitute-path /path/to/src/in/executable
-    /path/to/src/on/your/machine
+    (gdb) set substitute-path /path/to/src/in/executable /path/to/src/on/your/machine
 
 Note that the pattern that you supply to `set substitute-path` just has
 to be a common prefix of the paths. Example: if the source location
@@ -130,7 +127,7 @@ inside the executable to some file is `/opt/src/scylla/database.hh` and
 on your machine it is `/home/joe/work/scylla/database.hh`, you can make
 GDB find the sources on your machine via:
 
-   (gdb) set substitute-path /opt/src/scylla /home/joe/work/scylla
+    (gdb) set substitute-path /opt/src/scylla /home/joe/work/scylla
 
 #### .gdbinit
 
