@@ -92,12 +92,27 @@ lw_shared_ptr<query::read_command> cas_request::read_command() const {
             continue;
         }
         columns_to_read.union_with(op.statement.columns_to_read());
+        if (op.statement.has_only_static_column_conditions() && !op.statement.requires_read()) {
+            // If a statement has only static column conditions and doesn't have operations that
+            // require read, it doesn't matter what clustering key range to query - any partition
+            // row will do for the check.
+            continue;
+        }
         ranges.reserve(op.ranges.size());
         std::copy(op.ranges.begin(), op.ranges.end(), std::back_inserter(ranges));
     }
-    ranges = query::clustering_range::deoverlap(std::move(ranges), clustering_key::tri_compare(*_schema));
-
+    uint32_t max_rows = query::max_rows;
+    if (ranges.empty()) {
+        // With only a static condition, we still want to make the distinction between
+        // a non-existing partition and one that exists (has some live data) but has not
+        // static content. So we query the first live row of the partition.
+        ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+        max_rows = 1;
+    } else {
+        ranges = query::clustering_range::deoverlap(std::move(ranges), clustering_key::tri_compare(*_schema));
+    }
     query::partition_slice ps(std::move(ranges), *_schema, columns_to_read, update_parameters::options);
+    ps.set_partition_row_limit(max_rows);
     return make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(ps));
 }
 
@@ -109,11 +124,21 @@ bool cas_request::applies_to() const {
         if (op.statement.has_conditions() == false) {
             return true;
         }
-        // If primary key contains only one column, there is no clustering key, so clustering key restrictions may be empty
-        // (open ended on both sides of the range). Another case when clustering key may be missing is when CAS update applies
-        // only to static columns.
-        const clustering_key& ckey = op.ranges.front().start() ? op.ranges.front().start()->value() : empty_ckey;
-        const update_parameters::prefetch_data::row *row = _rows->find_row(pkey, ckey);
+        // If a statement has only static columns conditions, we must ignore its clustering columns
+        // restriction when choosing a row to check the conditions, i.e. choose any partition row,
+        // because any of them must have static columns and that's all we need to know if the
+        // statement applies. For example, the following update must successfully apply (effectively
+        // turn into INSERT), because, although the table doesn't have any regular rows matching the
+        // statement clustering column restriction, the static row matches the statement condition:
+        //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
+        //   INSERT INTO t(p, s) VALUES(1, 1);
+        //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
+        // Another case when we pass an empty clustering key prefix is apparently when the table
+        // doesn't have any clustering key columns and the clustering key range is empty (open
+        // ended on both sides).
+        const auto& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
+            op.ranges.front().start()->value() : empty_ckey;
+        const auto* row = _rows->find_row(pkey, ckey);
         return op.statement.applies_to(row, op.options);
     });
 }
