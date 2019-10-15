@@ -425,7 +425,7 @@ static sstring get_string(lua_State *l, int index) {
 static data_value convert_from_lua(lua_slice_state &l, const data_type& type);
 
 std::ostream& operator<<(std::ostream& os, const big_decimal& p) {
-    assert(0 && "not implemented");
+    return os << p.to_string();
 }
 
 namespace {
