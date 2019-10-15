@@ -116,7 +116,7 @@ class reconcilable_result_builder {
     utils::chunked_vector<partition> _result;
     uint32_t _live_rows{};
 
-    bool _has_ck_selector{};
+    bool _return_static_content_on_partition_with_no_rows{};
     bool _static_row_is_alive{};
     uint32_t _total_live_rows = 0;
     query::result_memory_accounter _memory_accounter;

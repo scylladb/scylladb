@@ -2590,7 +2590,8 @@ private:
         const auto& m = m_a_rc.mut;
         auto mp = mutation_partition(s, m.partition());
         auto&& ranges = cmd.slice.row_ranges(s, m.key());
-        mp.compact_for_query(s, cmd.timestamp, ranges, is_reversed, limit);
+        bool always_return_static_content = cmd.slice.options.contains<query::partition_slice::option::always_return_static_content>();
+        mp.compact_for_query(s, cmd.timestamp, ranges, always_return_static_content, is_reversed, limit);
 
         std::optional<clustering_key> ck;
         if (!mp.clustered_rows().empty()) {
@@ -2621,6 +2622,7 @@ private:
                                                       const primary_key& last_reconciled_row, std::vector<mutation_and_live_row_count>& rp,
                                                       const std::vector<std::vector<version>>& versions, bool is_reversed) {
         bool short_reads_allowed = cmd.slice.options.contains<query::partition_slice::option::allow_short_read>();
+        bool always_return_static_content = cmd.slice.options.contains<query::partition_slice::option::always_return_static_content>();
         primary_key::less_compare cmp(s, is_reversed);
         std::optional<primary_key> shortest_read;
         auto num_replicas = versions[0].size();
@@ -2656,7 +2658,8 @@ private:
                     std::vector<query::clustering_range> ranges;
                     ranges.emplace_back(is_reversed ? query::clustering_range::make_starting_with(std::move(*shortest_read->clustering))
                                                     : query::clustering_range::make_ending_with(std::move(*shortest_read->clustering)));
-                    it->live_row_count = it->mut.partition().compact_for_query(s, cmd.timestamp, ranges, is_reversed, query::max_rows);
+                    it->live_row_count = it->mut.partition().compact_for_query(s, cmd.timestamp, ranges, always_return_static_content,
+                            is_reversed, query::max_rows);
                 }
             }
 

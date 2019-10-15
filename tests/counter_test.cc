@@ -261,7 +261,7 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         m = m1;
         m.apply(m4);
         m.partition().compact_for_query(*s, gc_clock::now(), { query::clustering_range::make_singular(ck) },
-                                        false, query::max_rows);
+                                        false, false, query::max_rows);
         BOOST_REQUIRE_EQUAL(m.partition().clustered_rows().calculate_size(), 0);
         BOOST_REQUIRE(m.partition().static_row().empty());
 

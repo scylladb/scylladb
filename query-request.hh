@@ -123,8 +123,23 @@ constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
 // Schema-dependent.
 class partition_slice {
 public:
-    enum class option { send_clustering_key, send_partition_key, send_timestamp, send_expiry, reversed, distinct, collections_as_maps, send_ttl,
-                        allow_short_read, with_digest, bypass_cache };
+    enum class option {
+        send_clustering_key,
+        send_partition_key,
+        send_timestamp,
+        send_expiry,
+        reversed,
+        distinct,
+        collections_as_maps,
+        send_ttl,
+        allow_short_read,
+        with_digest,
+        bypass_cache,
+        // Normally, we don't return static row if the request has clustering
+        // key restrictions and the partition doesn't have any rows matching
+        // the restrictions, see #589. This flag overrides this behavior.
+        always_return_static_content,
+    };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
         option::send_partition_key,
@@ -136,7 +151,8 @@ public:
         option::send_ttl,
         option::allow_short_read,
         option::with_digest,
-        option::bypass_cache>>;
+        option::bypass_cache,
+        option::always_return_static_content>>;
     clustering_row_ranges _row_ranges;
 public:
     column_id_vector static_columns; // TODO: consider using bitmap

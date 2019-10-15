@@ -1527,11 +1527,11 @@ SEASTAR_TEST_CASE(test_trim_rows) {
 
         auto compact_and_expect_empty = [&] (mutation m, std::vector<query::clustering_range> ranges) {
             mutation m2 = m;
-            m.partition().compact_for_query(*s, now, ranges, false, query::max_rows);
+            m.partition().compact_for_query(*s, now, ranges, false, false, query::max_rows);
             BOOST_REQUIRE(m.partition().clustered_rows().empty());
 
             std::reverse(ranges.begin(), ranges.end());
-            m2.partition().compact_for_query(*s, now, ranges, true, query::max_rows);
+            m2.partition().compact_for_query(*s, now, ranges, false, true, query::max_rows);
             BOOST_REQUIRE(m2.partition().clustered_rows().empty());
         };
 

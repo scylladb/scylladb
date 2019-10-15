@@ -932,8 +932,11 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
     // #589
     // If ck:s exist, and we do a restriction on them, we either have maching
     // rows, or return nothing, since cql does not allow "is null".
+    bool return_static_content_on_partition_with_no_rows =
+        pw.slice().options.contains(query::partition_slice::option::always_return_static_content) ||
+        !has_ck_selector(pw.ranges());
     if (row_count == 0
-            && (has_ck_selector(pw.ranges())
+            && (!return_static_content_on_partition_with_no_rows
                     || !has_any_live_data(s, column_kind::static_column, static_row().get()))) {
         pw.retract();
     } else {
@@ -1349,6 +1352,7 @@ void mutation_partition::trim_rows(const schema& s,
 uint32_t mutation_partition::do_compact(const schema& s,
     gc_clock::time_point query_time,
     const std::vector<query::clustering_range>& row_ranges,
+    bool always_return_static_content,
     bool reverse,
     uint32_t row_limit,
     can_gc_fn& can_gc)
@@ -1395,7 +1399,8 @@ uint32_t mutation_partition::do_compact(const schema& s,
 
     // #589 - Do not add extra row for statics unless we did a CK range-less query.
     // See comment in query
-    if (row_count == 0 && static_row_live && !has_ck_selector(row_ranges)) {
+    bool return_static_content_on_partition_with_no_rows = always_return_static_content || !has_ck_selector(row_ranges);
+    if (row_count == 0 && static_row_live && return_static_content_on_partition_with_no_rows) {
         ++row_count;
     }
 
@@ -1416,11 +1421,12 @@ mutation_partition::compact_for_query(
     const schema& s,
     gc_clock::time_point query_time,
     const std::vector<query::clustering_range>& row_ranges,
+    bool always_return_static_content,
     bool reverse,
     uint32_t row_limit)
 {
     check_schema(s);
-    return do_compact(s, query_time, row_ranges, reverse, row_limit, always_gc);
+    return do_compact(s, query_time, row_ranges, always_return_static_content, reverse, row_limit, always_gc);
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
@@ -1431,7 +1437,7 @@ void mutation_partition::compact_for_compaction(const schema& s,
         query::clustering_range::make_open_ended_both_sides()
     };
 
-    do_compact(s, compaction_time, all_rows, false, query::max_rows, can_gc);
+    do_compact(s, compaction_time, all_rows, true, false, query::max_rows, can_gc);
 }
 
 // Returns true if the mutation_partition represents no writes.
@@ -2067,8 +2073,10 @@ uint32_t mutation_querier::consume_end_of_stream() {
     // #589
     // If ck:s exist, and we do a restriction on them, we either have maching
     // rows, or return nothing, since cql does not allow "is null".
-    if (!_live_clustering_rows
-        && (has_ck_selector(_pw.ranges()) || !_live_data_in_static_row)) {
+    bool return_static_content_on_partition_with_no_rows =
+        _pw.slice().options.contains(query::partition_slice::option::always_return_static_content) ||
+        !has_ck_selector(_pw.ranges());
+    if (!_live_clustering_rows && (!return_static_content_on_partition_with_no_rows || !_live_data_in_static_row)) {
         _pw.retract();
         return 0;
     } else {
@@ -2163,7 +2171,9 @@ future<> data_query(
 }
 
 void reconcilable_result_builder::consume_new_partition(const dht::decorated_key& dk) {
-    _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, dk.key()));
+    _return_static_content_on_partition_with_no_rows =
+        _slice.options.contains(query::partition_slice::option::always_return_static_content) ||
+        !has_ck_selector(_slice.row_ranges(_schema, dk.key()));
     _static_row_is_alive = false;
     _live_rows = 0;
     auto is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
@@ -2200,7 +2210,7 @@ stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
 }
 
 stop_iteration reconcilable_result_builder::consume_end_of_partition() {
-    if (_live_rows == 0 && _static_row_is_alive && !_has_ck_selector) {
+    if (_live_rows == 0 && _static_row_is_alive && _return_static_content_on_partition_with_no_rows) {
         ++_live_rows;
         // Normally we count only live clustering rows, to guarantee that
         // the next page fetch won't ask for the same range. However,
