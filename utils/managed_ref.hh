@@ -95,6 +95,10 @@ struct managed_ref {
     explicit operator bool() const {
         return _ptr != nullptr;
     }
+
+    size_t external_memory_usage() const {
+        return _ptr ? current_allocator().object_memory_size_in_allocator(_ptr) : 0;
+    }
 };
 
 template<typename T>
