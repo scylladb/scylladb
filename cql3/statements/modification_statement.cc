@@ -459,6 +459,19 @@ void
 modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
     _restrictions = ::make_shared<restrictions::statement_restrictions>(
             db, s, type, where_clause, std::move(names), applies_only_to_static_columns(), _sets_a_collection, false);
+    /*
+     * If there's no clustering columns restriction, we may assume that EXISTS
+     * check only selects static columns and hence we can use any row from the
+     * partition to check conditions.
+     */
+    if (_if_exists || _if_not_exists) {
+        assert(!_has_static_column_conditions && !_has_regular_column_conditions);
+        if (s->has_static_columns() && !_restrictions->has_clustering_columns_restriction()) {
+            _has_static_column_conditions = true;
+        } else {
+            _has_regular_column_conditions = true;
+        }
+    }
     if (_restrictions->get_partition_key_restrictions()->is_on_token()) {
         throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
                 _restrictions->get_partition_key_restrictions()->to_string()));
@@ -633,17 +646,21 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
 
 void modification_statement::add_condition(::shared_ptr<column_condition> cond) {
     if (cond->column.is_static()) {
+        _has_static_column_conditions = true;
         _static_conditions.emplace_back(std::move(cond));
     } else {
+        _has_regular_column_conditions = true;
         _sets_a_collection |= cond->column.type->is_collection();
         _column_conditions.emplace_back(std::move(cond));
     }
-    _has_conditions = true;
 }
 
 void modification_statement::set_if_not_exist_condition() {
+    // We don't know yet if we need to select only static columns to check this
+    // condition or we need regular columns as well. So we postpone setting
+    // _has_regular_column_conditions/_has_static_column_conditions flag until
+    // we process WHERE clause, see process_where_clause().
     _if_not_exists = true;
-    _has_conditions = true;
 }
 
 bool modification_statement::has_if_not_exist_condition() const {
@@ -651,8 +668,8 @@ bool modification_statement::has_if_not_exist_condition() const {
 }
 
 void modification_statement::set_if_exist_condition() {
+    // See a comment in set_if_not_exist_condition().
     _if_exists = true;
-    _has_conditions = true;
 }
 
 bool modification_statement::has_if_exist_condition() const {
