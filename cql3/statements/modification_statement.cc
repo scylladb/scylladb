@@ -196,6 +196,17 @@ modification_statement::get_mutations(service::storage_proxy& proxy, const query
 bool modification_statement::applies_to(const update_parameters::prefetch_data::row* row,
         const query_options& options) const {
 
+    // Assume the row doesn't exist if it has no static columns and the statement is only interested
+    // in static column values. Needed for EXISTS checks to work correctly. For example, the following
+    // conditional INSERT must apply, because there's no static row in the partition although there's
+    // a regular row, which is fetched by the read:
+    //   CREATE TABLE t(p int, c int, s int static, PRIMARY KEY(p, c));
+    //   INSERT INTO t(p, c) VALUES(1, 1);
+    //   INSERT INTO t(p, s) VALUES(1, 1) IF NOT EXISTS;
+    if (has_only_static_column_conditions() && row && !row->has_static_columns(s)) {
+        row = nullptr;
+    }
+
     if (_if_exists) {
         return row != nullptr;
     }

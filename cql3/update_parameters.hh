@@ -94,6 +94,20 @@ public:
         struct row {
             // Order CAS columns by ordinal column id.
             std::map<ordinal_column_id, data_value> cells;
+            // Return true if this row has at least one static column set.
+            bool has_static_columns(schema_ptr schema) const {
+                if (!schema->has_static_columns()) {
+                    return false;
+                }
+                // Static columns use a continuous range of ids so to efficiently check
+                // if a row has a static cell, we can look up the first cell with id >=
+                // first static column id and check if it's static.
+                auto it = cells.lower_bound(schema->static_begin()->ordinal_id);
+                if (it == cells.end() || !schema->column_at(it->first).is_static()) {
+                    return false;
+                }
+                return true;
+            }
         };
         // Use an ordered map since CAS result set must be naturally ordered
         // when returned to the client.
