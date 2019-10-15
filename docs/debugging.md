@@ -328,6 +328,72 @@ $ ln -s /lib64/ld-linux-x86-64.so.2 /opt/scylladb/libreloc/ld.so
 $ gdb --core=/path/to/scylla.core /path/to/scylla -ex 'set solib-search-path /lib64'
 ```
 
+### Troubleshooting
+
+#### Namespace issues
+
+GDB complaints that it can't find `namespace seastar` or some other Scylla
+or Seastar symbol that you know exists. This usually happens when GDB is in
+the wrong context i.e. a frame is selected which is not in the Scylla executable
+but in some other library. A typical situation is opening a coredump and
+attempting to access Scylla symbols when the initial frame is in libc.
+Move up the stack, or select a frame which is a Scylla or Seastar function to
+fix.
+
+#### No thread debugging
+
+Unable to access thread-local variables. Example:
+
+    (gdb) p seastar::local_engine
+    Cannot find thread-local storage for LWP 22604, executable file /usr/lib/debug/usr/bin/scylla.debug:
+    Cannot find thread-local variables on this target
+
+The usual cause is that GDB failed to find some libraries or that the library
+versions of those libraries GDB loaded don't match those the core was generated
+with. To see which libraries GDB found do:
+
+    (gdb) info sharedlibraries
+
+The listing will contain the path of the loaded libraries. If a library wasn't
+found by GDB that will also be visible in the listing. You can then use the
+`file` utility to obtain the build-id of the libraries:
+
+    file /path/to/libsomething.so
+
+This build-id must match the one obtained from the core. The library build-ids
+from the core can be obtained with:
+
+    eu-unstrip -n --core=/path/to/core
+
+In general you can get away some non-core libraries missing or having the wrong
+version, but the core libraries `libc`, `libgcc`, etc. must have the correct
+version. Best to ensure all libraries are correct to minimize the chance of
+something not working. Also, make sure the build-id of the executable matches
+that the core was generated with. Again, you can use `file` to obtain the
+build-id of the executable, then compare it with the build-id obtained from the
+`eu-unstrip` listing.
+For more information on how to obtain the correct version of libraries and how
+to override the path GDB loads them from, see [Collecting
+libraries](#collecting-libraries) and [Opening the core on another
+OS](#opening-the-core-on-another-os).
+
+It is also possible to make GDB print additional information about why thread
+debugging is not working. To enable execute:
+
+    (gdb) set debug libthread 1
+
+Right after starting GDB, *before* the core and the executable are loaded.
+
+#### GDB crashes when priting the backtrace or some variable
+
+See [Avoid (some) symbol parsing related
+crashes](#avoid-some-symbol-parsing-related-crashes).
+
+#### GDB keeps stopping on some signals
+
+See [Tell GDB to not stop on signals used by
+seastar](#tell-gdb-to-not-stop-on-signals-used-by-seastar).
+
 ### Advanced guides
 
 TODO: write guides for typical flows for debugging an OOM situation and
