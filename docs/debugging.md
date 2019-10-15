@@ -9,7 +9,7 @@ post-mortem inspection of chrashed programs.
 You can attach GDB to a running process, run a process inside GDB or
 examine a coredump.
 
-## Starting GDB
+### Starting GDB
 
 The two most common usages of GDB for scylla is running a process inside
 it (e.g. a unit test):
@@ -32,7 +32,7 @@ You can also attach it to an already running process:
 Where `$pid` is the PID of the running process you wish to attach GDB
 to.
 
-## Using GDB
+### Using GDB
 
 GDB has excellent online documentation that you can find
 [here](https://sourceware.org/gdb/onlinedocs/gdb/index.html).
