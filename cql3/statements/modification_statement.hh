@@ -263,6 +263,8 @@ private:
 public:
     // True if the statement has IF conditions. Pre-computed during prepare.
     bool has_conditions() const { return _has_regular_column_conditions || _has_static_column_conditions; }
+    // True if the statement has IF conditions that apply to static columns.
+    bool has_static_column_conditions() const { return _has_static_column_conditions; }
     // True if this statement needs to read only static column values to check if it can be applied.
     bool has_only_static_column_conditions() const { return !_has_regular_column_conditions && _has_static_column_conditions; }
 

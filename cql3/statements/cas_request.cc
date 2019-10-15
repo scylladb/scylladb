@@ -121,9 +121,14 @@ bool cas_request::applies_to() const {
     const partition_key& pkey = _key.front().start()->value().key().value();
     const clustering_key empty_ckey = clustering_key::make_empty();
     bool applies = true;
+    bool is_cas_result_set_empty = true;
+    bool has_static_column_conditions = false;
     for (const cas_row_update& op: _updates) {
         if (op.statement.has_conditions() == false) {
             continue;
+        }
+        if (op.statement.has_static_column_conditions()) {
+            has_static_column_conditions = true;
         }
         // If a statement has only static columns conditions, we must ignore its clustering columns
         // restriction when choosing a row to check the conditions, i.e. choose any partition row,
@@ -142,6 +147,7 @@ bool cas_request::applies_to() const {
         const auto* row = _rows->find_row(pkey, ckey);
         if (row) {
             row->is_in_cas_result_set = true;
+            is_cas_result_set_empty = false;
         }
         if (!applies) {
             // No need to check this condition as we have already failed a previous one.
@@ -150,6 +156,19 @@ bool cas_request::applies_to() const {
             continue;
         }
         applies = op.statement.applies_to(row, op.options);
+    }
+    if (has_static_column_conditions && is_cas_result_set_empty) {
+        // If none of the fetched rows matches clustering key restrictions and hence none of them is
+        // included into the CAS result set, but there is a static column condition in the CAS batch,
+        // we must still include the static row into the result set. Consider the following example:
+        //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
+        //   INSERT INTO t(p, s) VALUES(1, 1);
+        //   DELETE v FROM t WHERE p=1 AND c=1 IF v=1 AND s=1;
+        // In this case the conditional DELETE must return [applied=False, v=null, s=1].
+        const auto* row = _rows->find_row(pkey, empty_ckey);
+        if (row) {
+            row->is_in_cas_result_set = true;
+        }
     }
     return applies;
 }
