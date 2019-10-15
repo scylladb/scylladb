@@ -78,7 +78,7 @@ class std_optional:
         self.ref = ref
 
     def get(self):
-        return self.ref['_M_payload']['_M_payload']
+        return self.ref['_M_payload']['_M_payload']['_M_value']
 
     def __bool__(self):
         return self.__nonzero__()
@@ -127,6 +127,35 @@ class boost_variant:
 
     def get(self):
         return self.ref['storage_'].address.cast(self.type().pointer())
+
+
+class std_variant:
+    """Wrapper around and std::variant.
+
+    Call get() to access the current value.
+    """
+    def __init__(self, ref):
+        self.ref = ref
+        self.member_types = list(template_arguments(self.ref.type))
+
+    def index(self):
+        return int(self.ref['_M_index'])
+
+    def _get_next(self, variadic_union, index):
+        current_type = self.member_types[index].strip_typedefs()
+        if index > 0:
+            return self._get_next(variadic_union['_M_rest'], index - 1)
+
+        wrapper = variadic_union['_M_first']['_M_storage']
+        # literal types are stored directly in `_M_storage`.
+        if wrapper.type.strip_typedefs() == current_type:
+            return wrapper
+
+        # non-literal types are stored via a __gnu_cxx::__aligned_membuf
+        return wrapper['_M_storage'].reinterpret_cast(current_type.pointer()).dereference()
+
+    def get(self):
+        return self._get_next(self.ref['_M_u'], self.index())
 
 
 class std_map:
@@ -249,6 +278,71 @@ class static_vector:
 
     def __bool__(self):
         return self.__nonzero__()
+
+
+class std_list:
+    """Make `std::list` usable in python as a read-only container."""
+
+    @staticmethod
+    def _make_dereference_func(value_type):
+        list_node_type = gdb.lookup_type('std::_List_node<{}>'.format(str(value_type))).pointer()
+        def deref(node):
+            list_node = node.cast(list_node_type)
+            return list_node['_M_storage']['_M_storage'].cast(value_type.pointer()).dereference()
+
+        return deref
+
+    def __init__(self, ref):
+        self.ref = ref
+        self._dereference_node = std_list._make_dereference_func(self.ref.type.strip_typedefs().template_argument(0))
+
+    def __len__(self):
+        return int(self.ref['_M_impl']['_M_node']['_M_size'])
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+    def __getitem__(self, item):
+        if not isinstance(item, int):
+            raise ValueError("Invalid index: expected `{}`, got: `{}`".format(int, type(item)))
+
+        if item >= len(self):
+            raise ValueError("Index out of range: expected < {}, got {}".format(len(self), item))
+
+        i = 0
+        it = iter(self)
+        val = next(it)
+        while i != item:
+            i += 1
+            val = next(it)
+
+        return val
+
+    def __iter__(self):
+        class std_list_iterator:
+            def __init__(self, lst):
+                self._list = lst
+                node_header = self._list.ref['_M_impl']['_M_node']
+                self._node = node_header['_M_next']
+                self._end = node_header['_M_next']['_M_prev']
+
+            def __next__(self):
+                if self._node == self._end:
+                    raise StopIteration()
+
+                val = self._list._dereference_node(self._node)
+                self._node = self._node['_M_next']
+                return val
+
+        return std_list_iterator(self)
+
+    @staticmethod
+    def dereference_iterator(it):
+        deref = std_list._make_dereference_func(it.type.strip_typedefs().template_argument(0))
+        return deref(it['_M_node'])
 
 
 def uint64_t(val):
@@ -496,20 +590,47 @@ class scylla_column_families(gdb.Command):
 
 
 class scylla_task_histogram(gdb.Command):
+    """Print a histogram of the virtual objects found in memory.
+
+    Sample the virtual objects in memory and create a histogram with the results.
+    By default up to 20000 samples will be collected and the top 30 items will
+    be shown. The number of collected samples, as well as number of items shown
+    can be customized by command line arguments. The sampling can also be
+    constrained to objects of a certain size. For more details invoke:
+
+        scylla task_histogram --help
+
+    Example:
+     12280: 0x4bc5878 vtable for seastar::file_data_source_impl + 16
+      9352: 0x4be2cf0 vtable for seastar::continuation<seastar::future<seasta...
+      9352: 0x4bc59a0 vtable for seastar::continuation<seastar::future<seasta...
+     (1)    (2)       (3)
+
+     Where:
+     (1): Number of objects of this type.
+     (2): The address of the class's vtable.
+     (3): The name of the class's vtable symbol.
+    """
     def __init__(self):
         gdb.Command.__init__(self, 'scylla task_histogram', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def invoke(self, arg, from_tty):
-        args = arg.split(' ')
-
-        def print_usage():
-            gdb.write("Usage: scylla task_histogram [object size]\n")
-
-        if len(args) > 1:
-            print_usage()
+        parser = argparse.ArgumentParser(description="scylla task_histogram")
+        parser.add_argument("-m", "--samples", action="store", type=int, default=20000,
+                help="The number of samples to collect. Defaults to 20000. Set to 0 to sample all objects. Ignored when `--all` is used."
+                " Note that due to this limit being checked only after scanning an entire page, in practice it will always be overshot.")
+        parser.add_argument("-c", "--count", action="store", type=int, default=30,
+                help="Show only the top COUNT elements of the histogram. Defaults to 30. Set to 0 to show all items. Ignored when `--all` is used.")
+        parser.add_argument("-a", "--all", action="store_true", default=False,
+                help="Sample all pages and show all results. Equivalent to -m=0 -c=0.")
+        parser.add_argument("-s", "--size", action="store", default=0,
+                help="The size of objects to sample. When set, only objects of this size will be sampled. A size of 0 (the default value) means no size restrictions.")
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
             return
 
-        size = int(args[0]) if args[0] != '' else 0
+        size = args.size
         cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
         page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
         mem_start = cpu_mem['memory']
@@ -518,6 +639,7 @@ class scylla_task_histogram(gdb.Command):
 
         pages = cpu_mem['pages']
         nr_pages = int(cpu_mem['nr_pages'])
+        page_samples = range(0, nr_pages) if args.all else random.sample(range(0, nr_pages), nr_pages)
 
         sections = gdb.execute('info files', False, True).split('\n')
         for line in sections:
@@ -531,8 +653,7 @@ class scylla_task_histogram(gdb.Command):
         sc = span_checker()
         vptr_count = defaultdict(int)
         scanned_pages = 0
-        limit = 20000
-        for idx in random.sample(range(0, nr_pages), nr_pages):
+        for idx in page_samples:
             span = sc.get_span(mem_start + idx * page_size)
             if not span or span.index != idx or not span.is_small():
                 continue
@@ -547,10 +668,12 @@ class scylla_task_histogram(gdb.Command):
                 addr = gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference()
                 if addr >= text_start and addr <= text_end:
                     vptr_count[int(addr)] += 1
-            if scanned_pages >= limit or len(vptr_count) >= limit:
+            if (not args.all or args.samples > 0) and (scanned_pages >= args.samples or len(vptr_count) >= args.samples):
                 break
 
-        for vptr, count in sorted(vptr_count.items(), key=lambda e: -e[1])[:30]:
+        sorted_counts = sorted(vptr_count.items(), key=lambda e: -e[1])
+        to_show = sorted_counts if args.all or args.count == 0 else sorted_counts[:args.count]
+        for vptr, count in to_show:
             sym = resolve(vptr)
             if sym:
                 gdb.write('%10d: 0x%x %s\n' % (count, vptr, sym))
@@ -622,6 +745,14 @@ class schema_ptr:
     def __init__(self, ptr):
         schema_ptr_type = gdb.lookup_type('schema').pointer()
         self.ptr = ptr['_p'].reinterpret_cast(schema_ptr_type)
+
+    @property
+    def ks_name(self):
+        return self.ptr['_raw']['_ks_name']
+
+    @property
+    def cf_name(self):
+        return self.ptr['_raw']['_cf_name']
 
     def table_name(self):
         return '%s.%s' % (self.ptr['_raw']['_ks_name'], self.ptr['_raw']['_cf_name'])
@@ -2165,6 +2296,12 @@ class scylla_find(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla find', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
+    @staticmethod
+    def find(value):
+        mem_start, mem_size = get_seastar_memory_start_and_size()
+        for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
+            yield (obj, off)
+
     def invoke(self, arg, for_tty):
         args = arg.split(' ')
 
@@ -2183,8 +2320,7 @@ class scylla_find(gdb.Command):
             return
         value = int(args[0], 0)
 
-        mem_start, mem_size = get_seastar_memory_start_and_size()
-        for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
+        for obj, off in scylla_find.find(value):
             gdb.execute("scylla ptr 0x%x" % (obj + off))
 
 
@@ -2298,6 +2434,29 @@ class scylla_sstables(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla sstables', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
+    @staticmethod
+    def filename(sst):
+        """The name of the sstable.
+
+        Should mirror `sstables::sstable::component_basename()`.
+        """
+        version_to_str = ['ka', 'la', 'mc']
+        format_to_str = ['big']
+        formats = [
+                '{keyspace}-{table}-{version}-{generation}-Data.db',
+                '{version}-{generation}-{format}-Data.db',
+                '{version}-{generation}-{format}-Data.db',
+            ]
+        schema = schema_ptr(sst['_schema'])
+        int_type = gdb.lookup_type('int')
+        return formats[sst['_version']].format(
+                keyspace=str(schema.ks_name)[1:-1],
+                table=str(schema.cf_name)[1:-1],
+                version=version_to_str[int(sst['_version'].cast(int_type))],
+                generation=sst['_generation'],
+                format=format_to_str[int(sst['_format'].cast(int_type))],
+            )
+
     def invoke(self, arg, from_tty):
         filter_type = gdb.lookup_type('utils::filter::murmur3_bloom_filter')
         cpu_id = current_shard()
@@ -2344,8 +2503,8 @@ class scylla_sstables(gdb.Command):
 
             data_file_size = sst['_data_file_size']
             schema = schema_ptr(sst['_schema'])
-            gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d) %s\n'
-                      % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size, schema.table_name()))
+            gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d) %s filename=%s\n'
+                      % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size, schema.table_name(), scylla_sstables.filename(sst)))
 
             if local:
                 total_size += size
@@ -2372,6 +2531,83 @@ class scylla_memtables(gdb.Command):
                 gdb.write('  (memtable*) 0x%x: total=%d, used=%d, free=%d, flushed=%d\n' % (mt, reg.total(), reg.used(), reg.free(), mt['_flushed_memory']))
 
 
+class scylla_gdb_func_dereference_lw_shared_ptr(gdb.Function):
+    """Dereference the pointer guarded by the `seastar::lw_shared_ptr` instance.
+
+    Usage:
+    $dereference_lw_shared_ptr($ptr)
+
+    Where:
+    $lst - a convenience variable or any gdb expression that evaluates
+        to an `seastar::lw_shared_ptr` instance.
+
+    Returns:
+    The value pointed to by the guarded pointer.
+
+    Example:
+    (gdb) p $1._read_context
+    $2 = {_p = 0x60b00b068600}
+    (gdb) p $dereference_lw_shared_ptr($1._read_context)
+    $3 = {<seastar::enable_lw_shared_from_this<cache::read_context>> = {<seastar::lw_shared_ptr_counter_base> = {_count = 1}, ...
+    """
+
+    def __init__(self):
+        super(scylla_gdb_func_dereference_lw_shared_ptr, self).__init__('dereference_lw_shared_ptr')
+
+    def invoke(self, expr):
+        if isinstance(expr, gdb.Value):
+            ptr = seastar_lw_shared_ptr(expr)
+        else:
+            ptr = seastar_lw_shared_ptr(gdb.parse_and_eval(expr))
+        return ptr.get().dereference()
+
+
+class scylla_gdb_func_downcast_vptr(gdb.Function):
+    """Downcast a ptr to a virtual object to a ptr of the actual object
+
+    Usage:
+    $downcast_vptr($ptr)
+
+    Where:
+    $ptr - an integer literal, a convenience variable or any gdb
+        expression that evaluates to an pointer, which points to an
+        virtual object.
+
+    Returns:
+    The pointer to the actual concrete object.
+
+    Example:
+    (gdb) p $1
+    $2 = (flat_mutation_reader::impl *) 0x60b03363b900
+    (gdb) p $downcast_vptr(0x60b03363b900)
+    $3 = (combined_mutation_reader *) 0x60b03363b900
+    # The return value can also be dereferenced on the spot.
+    (gdb) p *$downcast_vptr($1)
+    $4 = {<flat_mutation_reader::impl> = {_vptr.impl = 0x46a3ea8 <vtable for combined_mutation_reader+16>, _buffer = {_impl = {<std::allocator<mutation_fragment>> = ...
+    """
+
+    def __init__(self):
+        super(scylla_gdb_func_downcast_vptr, self).__init__('downcast_vptr')
+        self._symbol_pattern = re.compile('vtable for (.*) \+ 16.*')
+        self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
+
+    def invoke(self, ptr):
+        if not isinstance(ptr, gdb.Value):
+            ptr = gdb.parse_and_eval(ptr)
+
+        symbol_name = resolve(ptr.reinterpret_cast(self._vptr_type).dereference(), cache=False)
+        if symbol_name is None:
+            raise ValueError("Failed to resolve first word of virtual object @ {} as a vtable symbol".format(int(ptr)))
+
+        m = re.match(self._symbol_pattern, symbol_name)
+        if m is None:
+            raise ValueError("Failed to extract type name from symbol name `{}'".format(symbol_name))
+
+        actual_type = gdb.lookup_type(m[1]).pointer()
+        return ptr.reinterpret_cast(actual_type)
+
+
+# Commands
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -2402,3 +2638,14 @@ scylla_gms()
 scylla_cache()
 scylla_sstables()
 scylla_memtables()
+
+
+# Convenience functions
+#
+# List them inside `gdb` with
+#   (gdb) help function
+#
+# To get the usage of an individual function:
+#   (gdb) help function $function_name
+scylla_gdb_func_dereference_lw_shared_ptr()
+scylla_gdb_func_downcast_vptr()
