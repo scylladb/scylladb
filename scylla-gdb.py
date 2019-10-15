@@ -12,6 +12,9 @@ import sys
 import struct
 import random
 import bisect
+import os
+import subprocess
+import time
 
 
 def template_arguments(gdb_type):
@@ -546,6 +549,19 @@ def list_unordered_set(map, cache=True):
         p = p['_M_nxt']
 
 
+def get_text_range():
+    sections = gdb.execute('info files', False, True).split('\n')
+    for line in sections:
+        # vptrs are in .rodata section
+        if line.endswith("is .rodata"):
+            items = line.split()
+            text_start = int(items[0], 16)
+            text_end = int(items[2], 16)
+            return text_start, text_end
+
+    raise Exception("Failed to find text start and end")
+
+
 class scylla(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND, True)
@@ -641,14 +657,7 @@ class scylla_task_histogram(gdb.Command):
         nr_pages = int(cpu_mem['nr_pages'])
         page_samples = range(0, nr_pages) if args.all else random.sample(range(0, nr_pages), nr_pages)
 
-        sections = gdb.execute('info files', False, True).split('\n')
-        for line in sections:
-            # vptrs are in .rodata section
-            if line.find("is .rodata") > -1:
-                items = line.split()
-                text_start = int(items[0], 16)
-                text_end = int(items[2], 16)
-                break
+        text_start, text_end = get_text_range()
 
         sc = span_checker()
         vptr_count = defaultdict(int)
@@ -687,15 +696,7 @@ def find_vptrs():
     pages = cpu_mem['pages']
     nr_pages = int(cpu_mem['nr_pages'])
 
-    sections = gdb.execute('info files', False, True).split('\n')
-    for line in sections:
-        # vptrs are in .rodata section
-        if line.find("is .rodata") > -1:
-            items = line.split()
-            text_start = int(items[0], 16)
-            text_end = int(items[2], 16)
-            break
-
+    text_start, text_end = get_text_range()
     def is_vptr(addr):
         return addr >= text_start and addr <= text_end
 
@@ -2097,12 +2098,11 @@ class scylla_fiber(gdb.Command):
     """ Walk the continuation chain starting from the given task
 
     Example (cropped for brevity):
-    (gdb) scylla fiber this
-    #0  (task*) 0x0000600000550360 0x000000000468ac40 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
-    #1  (task*) 0x0000600000550300 0x00000000046c3778 vtable for seastar::continuation<seastar::future<seastar::optimized_optional<mutation_fragment> >::then_impl<>()::{lambda(auto:2)#1}, seastar::optimized_optional<mutation_fragment> > + 16
-    #2  (task*) 0x00006000018af600 0x00000000046c37a0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
-    #3  (task*) 0x00006000005502a0 0x00000000046c37f0 vtable for seastar::continuation<seastar::future<>::then_impl<...>(...)::{lambda(auto:1)#1}> + 16
-    #4  (task*) 0x0000600001a65e10 0x00000000046c6b10 vtable for seastar::continuation<seastar::future<boost::iterator_range<mutation_fragment*> >::then_impl<...>(...)::{lambda(auto:1)#1}, boost::iterator_range<mutation_fragment*> > + 16
+    (gdb) scylla fiber 0x60001a305910
+    Starting task: (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
+    #0  (task*) 0x0000600016217c80 0x0000000004aa5288 vtable for seastar::continuation<...> + 16
+    #1  (task*) 0x000060000ac42940 0x0000000004aa2aa0 vtable for seastar::continuation<...> + 16
+    #2  (task*) 0x0000600023f59a50 0x0000000004ac1b30 vtable for seastar::continuation<...> + 16
      ^          ^                  ^                  ^
     (1)        (2)                (3)                (4)
 
@@ -2230,16 +2230,14 @@ class scylla_fiber(gdb.Command):
 
     def _walk(self, ptr, max_depth, scanned_region_size, force_fallback_mode, verbose):
         using_seastar_allocator = not force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
-        if using_seastar_allocator:
-            ptr_meta = scylla_ptr.analyze(int(ptr))
-            if not ptr_meta.is_managed_by_seastar():
-                gdb.write("Task pointer 0x{:016x} is not an object managed by seastar\n")
-                return []
-        else:
+        if not using_seastar_allocator:
             gdb.write("Not using the seastar allocator, falling back to scanning a fixed-size region of memory\n")
-            ptr_meta = pointer_metadata(int(ptr), scanned_region_size)
 
-        return reversed(self._do_walk(ptr_meta, 0, max_depth, scanned_region_size, using_seastar_allocator, verbose))
+        this_task = self._probe_pointer(ptr, scanned_region_size, using_seastar_allocator, verbose)
+        if this_task is None:
+            gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
+
+        return this_task, reversed(self._do_walk(this_task[0], 0, max_depth, scanned_region_size, using_seastar_allocator, verbose))
 
     def invoke(self, arg, for_tty):
         parser = argparse.ArgumentParser(description="scylla fiber")
@@ -2262,7 +2260,10 @@ class scylla_fiber(gdb.Command):
             return
 
         try:
-            fiber = self._walk(gdb.parse_and_eval(args.task), args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
+            this_task, fiber = self._walk(int(gdb.parse_and_eval(args.task)), args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
+
+            tptr, vptr, name = this_task
+            gdb.write("Starting task: (task*) 0x{:016x} 0x{:016x} {}\n".format(tptr.ptr, int(vptr), name))
 
             for i, (tptr, vptr, name) in enumerate(fiber):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
@@ -2286,42 +2287,67 @@ class scylla_find(gdb.Command):
     """ Finds live objects on seastar heap of current shard which contain given value.
     Prints results in 'scylla ptr' format.
 
+    See `scylla find --help` for more details on usage.
+
     Example:
 
       (gdb) scylla find 0x600005321900
       thread 1, small (size <= 512), live (0x6000000f3800 +48)
       thread 1, small (size <= 56), live (0x6000008a1230 +32)
     """
+    _vptr_type = gdb.lookup_type('uintptr_t').pointer()
 
     def __init__(self):
         gdb.Command.__init__(self, 'scylla find', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     @staticmethod
-    def find(value):
+    def find(value, size_selector='g'):
         mem_start, mem_size = get_seastar_memory_start_and_size()
-        for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
+        for obj, off in find_in_live(mem_start, mem_size, value, size_selector):
             yield (obj, off)
 
     def invoke(self, arg, for_tty):
-        args = arg.split(' ')
+        parser = argparse.ArgumentParser(description="scylla find")
+        parser.add_argument("-s", "--size", action="store", choices=['b', 'h', 'w', 'g', '8', '16', '32', '64'],
+                default='g',
+                help="Size of the searched value."
+                    " Accepted values are the size expressed in number of bits: 8, 16, 32 and 64."
+                    " GDB's size classes are also accepted: b(byte), h(half-word), w(word) and g(giant-word)."
+                    " Defaults to g (64 bits).")
+        parser.add_argument("-r", "--resolve", action="store_true",
+                help="Attempt to resolve the first pointer in the found objects as vtable pointer. "
+                " If the resolve is successful the vtable pointer as well as the vtable symbol name will be printed in the listing.")
+        parser.add_argument("value", action="store", help="The value to be searched.")
 
-        def print_usage():
-            gdb.write("Usage: scylla find [ -w | -g ] <value>\n")
-
-        if len(args) < 1 or not args[0]:
-            print_usage()
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
             return
 
-        if args[0] in ['-w', '-g']:
-            args = args[1:]
+        size_arg_to_size_char = {
+            'b': 'b',
+            '8': 'b',
+            'h': 'h',
+            '16': 'h',
+            'w': 'w',
+            '32': 'w',
+            'g': 'g',
+            '64': 'g',
+        }
 
-        if len(args) != 1:
-            print_usage()
-            return
-        value = int(args[0], 0)
+        size_char = size_arg_to_size_char[args.size]
 
-        for obj, off in scylla_find.find(value):
-            gdb.execute("scylla ptr 0x%x" % (obj + off))
+        for obj, off in scylla_find.find(int(gdb.parse_and_eval(args.value)), size_char):
+            ptr_meta = scylla_ptr.analyze(obj + off)
+            if args.resolve:
+                maybe_vptr = int(gdb.Value(obj).reinterpret_cast(scylla_find._vptr_type).dereference())
+                symbol = resolve(maybe_vptr, cache=False)
+                if symbol is None:
+                    gdb.write('{}\n'.format(ptr_meta))
+                else:
+                    gdb.write('{} 0x{:016x} {}\n'.format(ptr_meta, maybe_vptr, symbol))
+            else:
+                gdb.write('{}\n'.format(ptr_meta))
 
 
 class std_unique_ptr:
@@ -2531,6 +2557,161 @@ class scylla_memtables(gdb.Command):
                 gdb.write('  (memtable*) 0x%x: total=%d, used=%d, free=%d, flushed=%d\n' % (mt, reg.total(), reg.used(), reg.free(), mt['_flushed_memory']))
 
 
+class scylla_generate_object_graph(gdb.Command):
+    """Generate an object graph for an object.
+
+    The object graph is a directed graph, where vertices are objects and edges
+    are references between them, going from referrers to the referee. The
+    vertices contain information, like the address of the object, its size,
+    whether it is a live or not and if applies, the address and symbol name of
+    its vtable. The edges contain the list of offsets the referrer has references
+    at. The generated graph is an image, which allows the visual inspection of the
+    object graph.
+
+    The graph is generated with the help of `graphwiz`. The command
+    generates `.dot` files which can be converted to images with the help of
+    the `dot` utility. The command can do this if the output file is one of
+    the supported image formats (e.g. `png`), otherwise only the `.dot` file
+    is generated, leaving the actual image generation to the user. When that is
+    the case, the generated `.dot` file can be converted to an image with the
+    following command:
+
+        dot -Tpng graph.dot -o graph.png
+
+    The `.dot` file is always generated, regardless of the specified output. This
+    file will contain the full name of vtable symbols. The graph will only contain
+    cropped versions of those to keep the size reasonable.
+
+    See `scylla generate_object_graph --help` for more details on usage.
+    Also see `man dot` for more information on supported output formats.
+
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla generate-object-graph', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    @staticmethod
+    def _traverse_object_graph_breadth_first(address, max_depth, max_vertices, timeout_seconds):
+        vertices = dict() # addr -> obj info (ptr metadata, vtable symbol)
+        edges = defaultdict(set) # (referrer, referee) -> {offset1, offset2...}
+
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+
+        current_objects = [address]
+        next_objects = []
+        depth = 0
+        start_time = time.time()
+        stop = False
+
+        while not stop:
+            depth += 1
+            for current_obj in current_objects:
+                for next_obj, next_off in scylla_find.find(current_obj):
+                    if timeout_seconds > 0:
+                        current_time = time.time()
+                        if current_time - start_time > timeout_seconds:
+                            stop = True
+                            break
+
+                    edges[(next_obj, address)].add(next_off)
+                    if next_obj in vertices:
+                        continue
+
+                    ptr_meta = scylla_ptr.analyze(next_obj)
+                    symbol_name = resolve(gdb.Value(next_obj).reinterpret_cast(vptr_type).dereference(), cache=False)
+                    vertices[next_obj] = (ptr_meta, symbol_name)
+
+                    next_objects.append(next_obj)
+
+                    if max_vertices > 0 and len(vertices) >= max_vertices:
+                        stop = True
+                        break;
+
+            if max_depth > 0 and depth == max_depth:
+                stop = True
+                break
+
+            current_objects = next_objects
+            next_objects = []
+
+        return edges, vertices
+
+    @staticmethod
+    def _do_generate_object_graph(address, output_file, max_depth, max_vertices, timeout_seconds):
+        edges, vertices = scylla_generate_object_graph._traverse_object_graph_breadth_first(address, max_depth,
+                max_vertices, timeout_seconds)
+
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        prefix_len = len('vtable for ')
+        vertices[address] = (scylla_ptr.analyze(address),
+                resolve(gdb.Value(address).reinterpret_cast(vptr_type).dereference(), cache=False))
+
+        for addr, obj_info in vertices.items():
+            ptr_meta, vtable_symbol_name = obj_info
+            size = ptr_meta.size
+            state = "L" if ptr_meta.is_live else "F"
+
+            if vtable_symbol_name:
+                symbol_name = vtable_symbol_name[prefix_len:] if len(vtable_symbol_name) > prefix_len else vtable_symbol_name
+                output_file.write('{} [label="0x{:x} ({}, {}) {}"]; // {}\n'.format(addr, addr, size, state,
+                    symbol_name[:16], vtable_symbol_name))
+            else:
+                output_file.write('{} [label="0x{:x} ({}, {})"];\n'.format(addr, addr, size, state, ptr_meta))
+
+        for edge, offsets in edges.items():
+            a, b = edge
+            output_file.write('{} -> {} [label="{}"];\n'.format(a, b, offsets))
+
+    @staticmethod
+    def generate_object_graph(address, output_file, max_depth, max_vertices, timeout_seconds):
+        with open(output_file, 'w') as f:
+            f.write('digraph G {\n')
+            scylla_generate_object_graph._do_generate_object_graph(address, f, max_depth, max_vertices, timeout_seconds)
+            f.write('}')
+
+    def invoke(self, arg, from_tty):
+        parser = argparse.ArgumentParser(description="scylla generate-object-graph")
+        parser.add_argument("-o", "--output-file", action="store", type=str, default="graph.dot",
+                help="Output file. Supported extensions are: dot, png, jpg, jpeg, svg and pdf."
+                " Regardless of the extension, a `.dot` file will always be generated."
+                " If the output is one of the graphic formats the command will convert the `.dot` file using the `dot` utility."
+                " In this case the dot utility from the graphwiz suite has to be installed on the machine."
+                " To manually convert the `.dot` file do: `dot -Tpng graph.dot -o graph.png`.")
+        parser.add_argument("-d", "--max-depth", action="store", type=int, default=5,
+                help="Maximum depth to traverse the object graph. Set to -1 for unlimited depth. Default is 5.")
+        parser.add_argument("-v", "--max-vertices", action="store", type=int, default=-1,
+                help="Maximum amount of vertices (objects) to add to the object graph. Set to -1 to unlimited. Default is -1 (unlimited).")
+        parser.add_argument("-t", "--timeout", action="store", type=int, default=-1,
+                help="Maximum amount of seconds to spend building the graph. Set to -1 for no timeout. Default is -1 (unlimited).")
+        parser.add_argument("object", action="store", help="The object that is the starting point of the graph.")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        supported_extensions = {'dot', 'png', 'jpg', 'jpeg', 'svg', 'pdf'}
+        head, tail = os.path.split(args.output_file)
+        filename, extension = tail.split('.')
+
+        if not extension in supported_extensions:
+            raise ValueError("The output file `{}' has unsupported extension `{}'. Supported extensions are: {}".format(
+                args.output_file, extension, supported_extensions))
+
+        if extension != 'dot':
+            dot_file = os.path.join(head, filename + '.dot')
+        else:
+            dot_file = args.output_file
+
+        if args.max_depth == -1 and args.max_vertices == -1 and args.timeout == -1:
+            raise ValueError("The search has to be limited by at least one of: MAX_DEPTH, MAX_VERTICES or TIMEOUT")
+
+        scylla_generate_object_graph.generate_object_graph(int(gdb.parse_and_eval(args.object)), dot_file,
+                args.max_depth, args.max_vertices, args.timeout)
+
+        if extension != 'dot':
+            subprocess.check_call(['dot', '-T' + extension, dot_file, '-o', args.output_file])
+
+
 class scylla_gdb_func_dereference_lw_shared_ptr(gdb.Function):
     """Dereference the pointer guarded by the `seastar::lw_shared_ptr` instance.
 
@@ -2638,6 +2819,7 @@ scylla_gms()
 scylla_cache()
 scylla_sstables()
 scylla_memtables()
+scylla_generate_object_graph()
 
 
 # Convenience functions
