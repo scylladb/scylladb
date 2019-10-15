@@ -120,9 +120,14 @@ private:
     bool _if_not_exists = false;
     bool _if_exists = false;
 
+    // True if this statement has column operations that apply to static/regular
+    // columns, respectively.
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
-    bool _sets_a_collection = false;
+    // True if this statement has column operations or conditions for a column
+    // that stores a collection.
+    bool _selects_a_collection = false;
+
     std::optional<bool> _is_raw_counter_shard_write;
 
     const std::function<const column_definition&(::shared_ptr<column_condition>)> get_column_for_condition =

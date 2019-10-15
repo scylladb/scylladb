@@ -472,7 +472,7 @@ void modification_statement::build_cas_result_set_metadata() {
 void
 modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
     _restrictions = ::make_shared<restrictions::statement_restrictions>(
-            db, s, type, where_clause, std::move(names), applies_only_to_static_columns(), _sets_a_collection, false);
+            db, s, type, where_clause, std::move(names), applies_only_to_static_columns(), _selects_a_collection, false);
     /*
      * If there's no clustering columns restriction, we may assume that EXISTS
      * check only selects static columns and hence we can use any row from the
@@ -634,7 +634,7 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
         _sets_static_columns = true;
     } else {
         _sets_regular_columns = true;
-        _sets_a_collection |= op->column.type->is_collection();
+        _selects_a_collection |= op->column.type->is_collection();
     }
     if (op->requires_read()) {
         _requires_read = true;
@@ -664,7 +664,7 @@ void modification_statement::add_condition(::shared_ptr<column_condition> cond) 
         _static_conditions.emplace_back(std::move(cond));
     } else {
         _has_regular_column_conditions = true;
-        _sets_a_collection |= cond->column.type->is_collection();
+        _selects_a_collection |= cond->column.type->is_collection();
         _regular_conditions.emplace_back(std::move(cond));
     }
 }
