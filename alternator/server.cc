@@ -28,6 +28,7 @@
 #include "rjson.hh"
 #include "auth.hh"
 #include <cctype>
+#include "cql3/query_processor.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -131,7 +132,7 @@ future<> server::verify_signature(const request& req) {
     if (host_it == req._headers.end()) {
         throw api_error("InvalidSignatureException", "Authorization header is mandatory for signature verification");
     }
-    std::string_view host = host_it->second;
+    std::string host = host_it->second;
     std::vector<std::string_view> credentials_raw = split(authorization_it->second, ' ');
     std::string credential;
     std::string user_signature;
@@ -164,12 +165,12 @@ future<> server::verify_signature(const request& req) {
     if (credential_split.size() != 5) {
         throw api_error("ValidationException", format("Incorrect credential information format: {}", credential));
     }
-    std::string_view user(credential_split[0]);
+    std::string user(credential_split[0]);
     //FIXME: use the datestamp to check if the authorization signature has not expired,
     // the default expiration period seems to be 5min.
     std::string_view datestamp(credential_split[1]);
-    std::string_view region(credential_split[2]);
-    std::string_view service(credential_split[3]);
+    std::string region(credential_split[2]);
+    std::string service(credential_split[3]);
 
     std::map<std::string_view, std::string_view> signed_headers_map;
     for (const auto& header : signed_headers) {
@@ -185,15 +186,22 @@ future<> server::verify_signature(const request& req) {
         }
     }
 
-    //FIXME: We need a proper way of providing the secret access key
-    std::string secret_access_key = "whatever";
-    std::string signature = get_signature(user, secret_access_key, std::string_view(host), req._method,
-            signed_headers_str, signed_headers_map, req.content, region, service, "");
+    //TODO: cache credentials instead of querying the database for each request; flush on failed verification
+    return get_key_from_roles(cql3::get_query_processor().local(), user).then([&req,
+                                                                               user = std::move(user),
+                                                                               host = std::move(host),
+                                                                               signed_headers_str = std::move(signed_headers_str),
+                                                                               signed_headers_map = std::move(signed_headers_map),
+                                                                               region = std::move(region),
+                                                                               service = std::move(service),
+                                                                               user_signature = std::move(user_signature)] (std::string secret_access_key) {
+        std::string signature = get_signature(user, secret_access_key, std::string_view(host), req._method,
+                signed_headers_str, signed_headers_map, req.content, region, service, "");
 
-    if (signature != std::string_view(user_signature)) {
-        throw api_error("UnrecognizedClientException", "The security token included in the request is invalid.");
-    }
-    return make_ready_future<>();
+        if (signature != std::string_view(user_signature)) {
+            throw api_error("UnrecognizedClientException", "The security token included in the request is invalid.");
+        }
+    });
 }
 
 future<json::json_return_type> server::handle_api_request(std::unique_ptr<request>&& req) {
