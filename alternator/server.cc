@@ -166,7 +166,7 @@ future<> server::verify_signature(const request& req) {
         throw api_error("ValidationException", format("Incorrect credential information format: {}", credential));
     }
     std::string user(credential_split[0]);
-    std::string_view datestamp(credential_split[1]);
+    std::string datestamp(credential_split[1]);
     std::string region(credential_split[2]);
     std::string service(credential_split[3]);
 
@@ -190,13 +190,14 @@ future<> server::verify_signature(const request& req) {
     return _key_cache.get_ptr(user, cache_getter).then([this, &req,
                                                     user = std::move(user),
                                                     host = std::move(host),
+                                                    datestamp = std::move(datestamp),
                                                     signed_headers_str = std::move(signed_headers_str),
                                                     signed_headers_map = std::move(signed_headers_map),
                                                     region = std::move(region),
                                                     service = std::move(service),
                                                     user_signature = std::move(user_signature)] (key_cache::value_ptr key_ptr) {
         std::string signature = get_signature(user, *key_ptr, std::string_view(host), req._method,
-                signed_headers_str, signed_headers_map, req.content, region, service, "");
+                datestamp, signed_headers_str, signed_headers_map, req.content, region, service, "");
 
         if (signature != std::string_view(user_signature)) {
             _key_cache.remove(user);
