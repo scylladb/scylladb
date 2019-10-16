@@ -46,9 +46,7 @@
 #include "validation.hh"
 #include "db/consistency_level_validations.hh"
 #include <seastar/core/shared_ptr.hh>
-#include "query-result-reader.hh"
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
@@ -202,76 +200,7 @@ modification_statement::make_update_parameters(
             });
 }
 
-
-// Implements ResultVisitor concept from query.hh
-class prefetch_data_builder {
-    update_parameters::prefetch_data& _data;
-    const query::partition_slice& _ps;
-    schema_ptr _schema;
-    std::optional<partition_key> _pkey;
-private:
-    void add_cell(update_parameters::prefetch_data::row& cells, const column_definition& def, const std::optional<query::result_bytes_view>& cell) {
-        if (cell) {
-            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
-            if (!ctype->is_multi_cell()) {
-                throw std::logic_error(format("cannot prefetch frozen collection: {}", def.name_as_text()));
-            }
-            auto map_type = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
-            update_parameters::prefetch_data::cell_list list;
-            // FIXME: Iterate over a range instead of fully exploded collection
-          cell->with_linearized([&] (bytes_view cell_view) {
-            auto dv = map_type->deserialize(cell_view);
-            for (auto&& el : value_cast<map_type_impl::native_type>(dv)) {
-                list.emplace_back(update_parameters::prefetch_data::cell{el.first.serialize(), el.second.serialize()});
-            }
-            cells.emplace(def.id, std::move(list));
-          });
-        }
-    };
-public:
-    prefetch_data_builder(schema_ptr s, update_parameters::prefetch_data& data, const query::partition_slice& ps)
-        : _data(data)
-        , _ps(ps)
-        , _schema(std::move(s))
-    { }
-
-    void accept_new_partition(const partition_key& key, uint32_t row_count) {
-        _pkey = key;
-    }
-
-    void accept_new_partition(uint32_t row_count) {
-        assert(0);
-    }
-
-    void accept_new_row(const clustering_key& key, const query::result_row_view& static_row,
-                    const query::result_row_view& row) {
-        update_parameters::prefetch_data::row cells;
-
-        auto row_iterator = row.iterator();
-        for (auto&& id : _ps.regular_columns) {
-            add_cell(cells, _schema->regular_column_at(id), row_iterator.next_collection_cell());
-        }
-
-        _data.rows.emplace(std::make_pair(*_pkey, key), std::move(cells));
-    }
-
-    void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
-        assert(0);
-    }
-
-    void accept_partition_end(const query::result_row_view& static_row) {
-        update_parameters::prefetch_data::row cells;
-
-        auto static_row_iterator = static_row.iterator();
-        for (auto&& id : _ps.static_columns) {
-            add_cell(cells, _schema->static_column_at(id), static_row_iterator.next_collection_cell());
-        }
-
-        _data.rows.emplace(std::make_pair(*_pkey, clustering_key_prefix::make_empty()), std::move(cells));
-    }
-};
-
-future<update_parameters::prefetched_rows_type>
+future<update_parameters::prefetch_data>
 modification_statement::read_required_rows(
         service::storage_proxy& proxy,
         dht::partition_range_vector keys,
@@ -281,8 +210,7 @@ modification_statement::read_required_rows(
         db::timeout_clock::time_point timeout,
         service::query_state& qs) {
     if (!requires_read()) {
-        return make_ready_future<update_parameters::prefetched_rows_type>(
-                update_parameters::prefetched_rows_type{});
+        return make_ready_future<update_parameters::prefetch_data>(s);
     }
     auto cl = options.get_consistency();
     try {
@@ -312,11 +240,7 @@ modification_statement::read_required_rows(
     // FIXME: ignoring "local"
     return proxy.query(s, make_lw_shared(std::move(cmd)), std::move(keys),
             cl, {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then([this, ps] (auto qr) {
-        return query::result_view::do_with(*qr.query_result, [&] (query::result_view v) {
-            auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
-            v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
-            return prefetched_rows;
-        });
+        return update_parameters::build_prefetch_data(s, *qr.query_result, ps);
     });
 }
 

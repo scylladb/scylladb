@@ -46,6 +46,12 @@ using column_count_type = uint32_t;
 // Column ID, unique within column_kind
 using column_id = column_count_type;
 
+// Column ID unique within a schema. Enum class to avoid
+// mixing wtih column id.
+enum class ordinal_column_id: column_count_type {};
+
+std::ostream& operator<<(std::ostream& os, ordinal_column_id id);
+
 // Cluster-wide identifier of schema version of particular table.
 //
 // The version changes the value not only on structural changes but also
@@ -244,6 +250,9 @@ public:
     // equivalent to component index.
     column_id id;
 
+    // Unique within schema instance
+    ordinal_column_id ordinal_id;
+
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
 
@@ -261,6 +270,7 @@ public:
             , _thrift_bits(other._thrift_bits)
             , type(other.type)
             , id(other.id)
+            , ordinal_id(other.ordinal_id)
             , kind(other.kind)
             , column_specification(other.column_specification)
         {}
@@ -740,6 +750,8 @@ public:
 
     const column_definition* get_column_definition(const bytes& name) const;
     const column_definition& column_at(column_kind, column_id) const;
+    // Find a column definition given column ordinal id in the schema
+    const column_definition& column_at(ordinal_column_id ordinal_id) const;
     const_iterator regular_begin() const;
     const_iterator regular_end() const;
     const_iterator regular_lower_bound(const bytes& name) const;
