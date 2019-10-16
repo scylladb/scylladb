@@ -54,9 +54,10 @@ progresses and compatibility continues to improve.
 * Transport: HTTP mostly supported, but small features like CRC header and
   compression are still missing. HTTPS supported on top of HTTP, so small
   features may still be missing.
-* Authorization (verifying the originator of the request): minimal support
-  for testing purposes works - the secret key used to compute a cryptographic
-  signature is "whatever". A proper key store is not yet implemented.
+* Authorization (verifying the originator of the request): implemented
+  on top of system\_auth.roles table. The secret key used for authorization
+  is the salted\_hash column from the roles table, selected with:
+  SELECT salted\_hash from system\_auth.roles WHERE role = USERNAME;
   By default, authorization is not enforced at all. It can be turned on
   by providing an entry in Scylla configuration:
     alternator\_enforce\_authorization: true
