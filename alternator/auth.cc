@@ -29,6 +29,11 @@
 #include "bytes.hh"
 #include "alternator/auth.hh"
 #include <fmt/format.h>
+#include "auth/common.hh"
+#include "auth/password_authenticator.hh"
+#include "auth/roles-metadata.hh"
+#include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 
 namespace alternator {
 
@@ -83,6 +88,26 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
     hmac_sha256_digest signature = hmac_sha256(std::string_view(signing_key.data(), signing_key.size()), string_to_sign);
 
     return to_hex(bytes_view(reinterpret_cast<const int8_t*>(signature.data()), signature.size()));
+}
+
+future<std::string> get_key_from_roles(cql3::query_processor& qp, std::string username) {
+    static const sstring query = format("SELECT salted_hash FROM {} WHERE {} = ?",
+            auth::meta::roles_table::qualified_name(), auth::meta::roles_table::role_col_name);
+
+    auto cl = auth::password_authenticator::consistency_for_user(username);
+    auto timeout = auth::internal_distributed_timeout_config();
+    return qp.process(query, cl, timeout, {sstring(username)}, true).then_wrapped([username = std::move(username)] (future<::shared_ptr<cql3::untyped_result_set>> f) {
+        auto res = f.get0();
+        auto salted_hash = std::optional<sstring>();
+        if (res->empty()) {
+            throw api_error("UnrecognizedClientException", fmt::format("User not found: {}", username));
+        }
+        salted_hash = res->one().get_opt<sstring>("salted_hash");
+        if (!salted_hash) {
+            throw api_error("UnrecognizedClientException", fmt::format("No password found for user: {}", username));
+        }
+        return make_ready_future<std::string>(*salted_hash);
+    });
 }
 
 }
