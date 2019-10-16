@@ -166,8 +166,6 @@ future<> server::verify_signature(const request& req) {
         throw api_error("ValidationException", format("Incorrect credential information format: {}", credential));
     }
     std::string user(credential_split[0]);
-    //FIXME: use the datestamp to check if the authorization signature has not expired,
-    // the default expiration period seems to be 5min.
     std::string_view datestamp(credential_split[1]);
     std::string region(credential_split[2]);
     std::string service(credential_split[3]);
