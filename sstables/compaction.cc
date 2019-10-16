@@ -788,6 +788,25 @@ private:
         }
     }
 
+    void backlog_tracker_incrementally_adjust_charges(std::vector<shared_sstable> exhausted_sstables) {
+        //
+        // Notify backlog tracker of an early sstable replacement triggered by incremental compaction approach.
+        // Backlog tracker will be told that the exhausted sstables aren't being compacted anymore, and the
+        // new sstables, which replaced the exhausted ones, are not partially written sstables and they can
+        // be added to tracker like any other regular sstable in the table's set.
+        // This way we prevent bogus calculation of backlog due to lack of charge adjustment whenever there's
+        // an early sstable replacement.
+        //
+
+        for (auto& sst : exhausted_sstables) {
+            _monitor_generator.remove_sstable(_info->tracking, sst);
+        }
+        for (auto& wm : _active_write_monitors) {
+            wm.add_sstable();
+        }
+        _active_write_monitors.clear();
+    }
+
     void maybe_replace_exhausted_sstables() {
         // Skip earlier replacement of exhausted sstables if compaction works with only single-fragment runs,
         // meaning incremental compaction is disabled for this compaction.
@@ -807,10 +826,11 @@ private:
                 _compacting_for_max_purgeable_func.erase(sst);
                 // Fully expired sstable is not actually compacted, therefore it's not present in the compacting set.
                 _compacting->erase(sst);
-                _monitor_generator.remove_sstable(_info->tracking, sst);
             });
-            _replacer(std::vector<shared_sstable>(exhausted, _sstables.end()), std::move(_new_unused_sstables));
+            auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
+            _replacer(exhausted_ssts, std::move(_new_unused_sstables));
             _sstables.erase(exhausted, _sstables.end());
+            backlog_tracker_incrementally_adjust_charges(std::move(exhausted_ssts));
         }
     }
 
