@@ -186,19 +186,22 @@ future<> server::verify_signature(const request& req) {
         }
     }
 
-    //TODO: cache credentials instead of querying the database for each request; flush on failed verification
-    return get_key_from_roles(cql3::get_query_processor().local(), user).then([&req,
-                                                                               user = std::move(user),
-                                                                               host = std::move(host),
-                                                                               signed_headers_str = std::move(signed_headers_str),
-                                                                               signed_headers_map = std::move(signed_headers_map),
-                                                                               region = std::move(region),
-                                                                               service = std::move(service),
-                                                                               user_signature = std::move(user_signature)] (std::string secret_access_key) {
-        std::string signature = get_signature(user, secret_access_key, std::string_view(host), req._method,
+    auto cache_getter = [] (std::string username) {
+        return get_key_from_roles(cql3::get_query_processor().local(), std::move(username));
+    };
+    return _key_cache.get_ptr(user, cache_getter).then([this, &req,
+                                                    user = std::move(user),
+                                                    host = std::move(host),
+                                                    signed_headers_str = std::move(signed_headers_str),
+                                                    signed_headers_map = std::move(signed_headers_map),
+                                                    region = std::move(region),
+                                                    service = std::move(service),
+                                                    user_signature = std::move(user_signature)] (key_cache::value_ptr key_ptr) {
+        std::string signature = get_signature(user, *key_ptr, std::string_view(host), req._method,
                 signed_headers_str, signed_headers_map, req.content, region, service, "");
 
         if (signature != std::string_view(user_signature)) {
+            _key_cache.remove(user);
             throw api_error("UnrecognizedClientException", "The security token included in the request is invalid.");
         }
     });
@@ -252,6 +255,12 @@ void server::set_routes(routes& r) {
     });
 
     r.add(operation_type::POST, url("/"), handler);
+}
+
+//FIXME: A way to immediately invalidate the cache should be considered,
+// e.g. when the system table which stores the keys is changed.
+// For now, this propagation may take up to 1 minute.
+server::server(seastar::sharded<executor>& executor) : _executor(executor), _key_cache(1024, 1min, slogger), _enforce_authorization(false) {
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization) {
