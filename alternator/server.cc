@@ -118,7 +118,11 @@ protected:
     sstring _type;
 };
 
-static void verify_signature(request& req) {
+future<> server::verify_signature(const request& req) {
+    if (!_enforce_authorization) {
+        slogger.debug("Skipping authorization");
+        return make_ready_future<>();
+    }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
         throw api_error("InvalidSignatureException", "Host header is mandatory for signature verification");
@@ -189,6 +193,7 @@ static void verify_signature(request& req) {
     if (signature != std::string_view(user_signature)) {
         throw api_error("UnrecognizedClientException", "The security token included in the request is invalid.");
     }
+    return make_ready_future<>();
 }
 
 void server::set_routes(routes& r) {
@@ -218,24 +223,21 @@ void server::set_routes(routes& r) {
         //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
         std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
         slogger.trace("Request: {} {}", op, req->content);
-        if (_enforce_authorization) {
-            verify_signature(*req);
-        } else {
-            slogger.debug("Skipping authorization");
-        }
-        auto callback_it = routes.find(op);
-        if (callback_it == routes.end()) {
-            _executor.local()._stats.unsupported_operations++;
-            throw api_error("UnknownOperationException",
-                    format("Unsupported operation {}", op));
-        }
-        //FIXME: Client state can provide more context, e.g. client's endpoint address
-        // We use unique_ptr because client_state cannot be moved or copied
-        return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
-            client_state->set_raw_keyspace(executor::KEYSPACE_NAME);
-            executor::maybe_trace_query(*client_state, op, req->content);
-            tracing::trace(client_state->get_trace_state(), op);
-            return callback_it->second(_executor.local(), *client_state, std::move(req));
+        return verify_signature(*req).then([this, routes = std::move(routes), op, req = std::move(req)] () mutable {
+            auto callback_it = routes.find(op);
+            if (callback_it == routes.end()) {
+                _executor.local()._stats.unsupported_operations++;
+                throw api_error("UnknownOperationException",
+                        format("Unsupported operation {}", op));
+            }
+            //FIXME: Client state can provide more context, e.g. client's endpoint address
+            // We use unique_ptr because client_state cannot be moved or copied
+            return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
+                client_state->set_raw_keyspace(executor::KEYSPACE_NAME);
+                executor::maybe_trace_query(*client_state, op, req->content);
+                tracing::trace(client_state->get_trace_state(), op);
+                return callback_it->second(_executor.local(), *client_state, std::move(req));
+            });
         });
     });
 

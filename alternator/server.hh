@@ -40,6 +40,7 @@ public:
     seastar::future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization);
 private:
     void set_routes(seastar::httpd::routes& r);
+    future<> verify_signature(const seastar::httpd::request& r);
 };
 
 }
