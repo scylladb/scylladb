@@ -63,7 +63,7 @@ if __name__ == '__main__':
         run('ip link set dev {TAP} master {BRIDGE}'.format(TAP=tap, BRIDGE=bridge))
         run('chown {USER}.{GROUP} /dev/vhost-net'.format(USER=user, GROUP=group))
     elif mode == 'dpdk':
-        ethpcciid = cfg.get('ETHPCIID')
+        ethpciid = cfg.get('ETHPCIID')
         nr_hugepages = cfg.get('NR_HUGEPAGES')
         run('modprobe uio')
         run('modprobe uio_pci_generic')
@@ -73,7 +73,6 @@ if __name__ == '__main__':
                 f.write(nr_hugepages)
         if dist_name() == 'Ubuntu':
             run('hugeadm --create-mounts')
-        fi
     else:
         if create_perftune_conf(cfg):
             run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()))
