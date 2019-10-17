@@ -1027,12 +1027,18 @@ int main(int ac, char** av) {
                 lb->stop_broadcasting().get();
             });
             supervisor::notify("starting cf cache hit rate calculator");
-            cf_cache_hitrate_calculator.start(std::ref(db), std::ref(cf_cache_hitrate_calculator)).get();
-            auto stop_cache_hitrate_calculator = defer_with_log_on_error([&cf_cache_hitrate_calculator] {
+
+            auto stop_cache_hitrate_calculator = defer_with_log_on_error([&cf_cache_hitrate_calculator, &db] {
+                if (!db.local().get_config().cache_hit_rate_read_balancing()) {
+                    return;
+                }
                 startlog.info("stopping cf cache hit rate calculator");
-                return cf_cache_hitrate_calculator.stop().get();
+                cf_cache_hitrate_calculator.stop().get();
             });
-            cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
+            if (db.local().get_config().cache_hit_rate_read_balancing()) {
+                cf_cache_hitrate_calculator.start(std::ref(db), std::ref(cf_cache_hitrate_calculator)).get();
+                cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
+            }
 
             supervisor::notify("starting view update backlog broker");
             static sharded<service::view_update_backlog_broker> view_backlog_broker;
