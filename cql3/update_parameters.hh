@@ -56,6 +56,12 @@ namespace cql3 {
  */
 class update_parameters final {
 public:
+    // Option set for partition_slice to be used when fetching prefetch_data
+    static constexpr query::partition_slice::option_set options = query::partition_slice::option_set::of<
+        query::partition_slice::option::send_partition_key,
+        query::partition_slice::option::send_clustering_key,
+        query::partition_slice::option::collections_as_maps>();
+
     // Holder for data for
     // 1) CQL list updates which depend on current state of the list
     // 2) cells needed to check conditions of a CAS statement,

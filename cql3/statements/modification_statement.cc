@@ -47,7 +47,6 @@
 #include "db/consistency_level_validations.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "service/storage_service.hh"
@@ -162,86 +161,62 @@ future<> modification_statement::check_access(const service::client_state& state
 future<std::vector<mutation>>
 modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) {
     auto json_cache = maybe_prepare_json_cache(options);
-    auto keys = make_lw_shared(build_partition_keys(options, json_cache));
-    auto ranges = make_lw_shared(create_clustering_ranges(options, json_cache));
-    return make_update_parameters(proxy, keys, ranges, options, timeout, local, now, qs).then(
-            [this, keys, ranges, now, json_cache = std::move(json_cache)] (auto params_ptr) {
-                std::vector<mutation> mutations;
-                mutations.reserve(keys->size());
-                for (auto key : *keys) {
-                    // We know key.start() must be defined since we only allow EQ relations on the partition key.
-                    mutations.emplace_back(s, std::move(*key.start()->value().key()));
-                    auto& m = mutations.back();
-                    for (auto&& r : *ranges) {
-                        this->add_update_for_key(m, r, *params_ptr, json_cache);
-                    }
-                }
-                return make_ready_future<decltype(mutations)>(std::move(mutations));
-            });
-}
+    auto keys = build_partition_keys(options, json_cache);
+    auto ranges = create_clustering_ranges(options, json_cache);
+    auto f = make_ready_future<update_parameters::prefetch_data>(s);
 
-future<std::unique_ptr<update_parameters>>
-modification_statement::make_update_parameters(
-        service::storage_proxy& proxy,
-        lw_shared_ptr<dht::partition_range_vector> keys,
-        lw_shared_ptr<query::clustering_row_ranges> ranges,
-        const query_options& options,
-        db::timeout_clock::time_point timeout,
-        bool local,
-        int64_t now,
-        service::query_state& qs) {
-    return read_required_rows(proxy, *keys, std::move(ranges), local, options, timeout, qs).then(
-            [this, &options, now] (auto rows) {
-                return make_ready_future<std::unique_ptr<update_parameters>>(
-                        std::make_unique<update_parameters>(s, options,
-                                this->get_timestamp(now, options),
-                                this->get_time_to_live(options),
-                                std::move(rows)));
-            });
-}
+    if (requires_read()) {
+        lw_shared_ptr<query::read_command> cmd = read_command(ranges, options.get_consistency());
+        // FIXME: ignoring "local"
+        f = proxy.query(s, cmd, dht::partition_range_vector(keys), options.get_consistency(),
+                {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
 
-future<update_parameters::prefetch_data>
-modification_statement::read_required_rows(
-        service::storage_proxy& proxy,
-        dht::partition_range_vector keys,
-        lw_shared_ptr<query::clustering_row_ranges> ranges,
-        bool local,
-        const query_options& options,
-        db::timeout_clock::time_point timeout,
-        service::query_state& qs) {
-    if (!requires_read()) {
-        return make_ready_future<update_parameters::prefetch_data>(s);
+                [this, cmd] (auto cqr) {
+
+            return update_parameters::build_prefetch_data(s, *cqr.query_result, cmd->slice);
+        });
     }
-    auto cl = options.get_consistency();
+
+    return f.then([this, keys = std::move(keys), ranges = std::move(ranges), json_cache = std::move(json_cache), &options, now]
+            (auto rows) {
+
+        update_parameters params(s, options, this->get_timestamp(now, options),
+                this->get_time_to_live(options), std::move(rows));
+
+        std::vector<mutation> mutations = apply_updates(keys, ranges, params, json_cache);
+
+        return make_ready_future<std::vector<mutation>>(std::move(mutations));
+    });
+}
+
+std::vector<mutation> modification_statement::apply_updates(
+        const std::vector<dht::partition_range>& keys,
+        const std::vector<query::clustering_range>& ranges,
+        const update_parameters& params,
+        const json_cache_opt& json_cache) {
+
+    std::vector<mutation> mutations;
+    mutations.reserve(keys.size());
+    for (auto key : keys) {
+        // We know key.start() must be defined since we only allow EQ relations on the partition key.
+        mutations.emplace_back(s, std::move(*key.start()->value().key()));
+        auto& m = mutations.back();
+        for (auto&& r : ranges) {
+            this->add_update_for_key(m, r, params, json_cache);
+        }
+    }
+    return mutations;
+}
+
+lw_shared_ptr<query::read_command>
+modification_statement::read_command(query::clustering_row_ranges ranges, db::consistency_level cl) const {
     try {
         validate_for_read(cl);
     } catch (exceptions::invalid_request_exception& e) {
         throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
-
-    static auto is_collection = [] (const column_definition& def) {
-        return def.type->is_collection();
-    };
-
-    // FIXME: we read all collection columns, but could be enhanced just to read the list(s) being RMWed
-    auto static_cols = boost::copy_range<query::column_id_vector>(s->static_columns()
-        | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
-    auto regular_cols = boost::copy_range<query::column_id_vector>(s->regular_columns()
-        | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
-    query::partition_slice ps(
-            *ranges,
-            std::move(static_cols),
-            std::move(regular_cols),
-            query::partition_slice::option_set::of<
-                query::partition_slice::option::send_partition_key,
-                query::partition_slice::option::send_clustering_key,
-                query::partition_slice::option::collections_as_maps>());
-    query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
-    // FIXME: ignoring "local"
-    return proxy.query(s, make_lw_shared(std::move(cmd)), std::move(keys),
-            cl, {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then([this, ps] (auto qr) {
-        return update_parameters::build_prefetch_data(s, *qr.query_result, ps);
-    });
+    query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
+    return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps));
 }
 
 std::vector<query::clustering_range>
@@ -493,6 +468,10 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
         _sets_regular_columns = true;
         _sets_a_collection |= op->column.type->is_collection();
     }
+    if (op->requires_read()) {
+        _requires_read = true;
+        _columns_to_read.set(op->column.ordinal_id);
+    }
 
     if (op->column.is_counter()) {
         auto is_raw_counter_shard_write = op->is_raw_counter_shard_write();
@@ -514,10 +493,12 @@ void modification_statement::add_condition(::shared_ptr<column_condition> cond) 
         _sets_a_collection |= cond->column.type->is_collection();
         _column_conditions.emplace_back(std::move(cond));
     }
+    _has_conditions = true;
 }
 
 void modification_statement::set_if_not_exist_condition() {
     _if_not_exists = true;
+    _has_conditions = true;
 }
 
 bool modification_statement::has_if_not_exist_condition() const {
@@ -526,21 +507,13 @@ bool modification_statement::has_if_not_exist_condition() const {
 
 void modification_statement::set_if_exist_condition() {
     _if_exists = true;
+    _has_conditions = true;
 }
 
 bool modification_statement::has_if_exist_condition() const {
     return _if_exists;
 }
 
-bool modification_statement::requires_read() {
-    return std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
-        return op->requires_read();
-    });
-}
-
-bool modification_statement::has_conditions() {
-    return _if_not_exists || _if_exists || !_column_conditions.empty() || !_static_conditions.empty();
-}
 
 void modification_statement::validate_where_clause_for_conditions() {
     //  no-op by default

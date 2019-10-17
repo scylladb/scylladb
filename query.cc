@@ -125,6 +125,20 @@ partition_slice::partition_slice(clustering_row_ranges row_ranges,
     , _partition_row_limit(partition_row_limit)
 {}
 
+partition_slice::partition_slice(clustering_row_ranges ranges, const schema& s, const column_mask& mask, option_set options)
+    : partition_slice(ranges, query::column_id_vector{}, query::column_id_vector{}, options)
+{
+    regular_columns.reserve(mask.count());
+    for (ordinal_column_id id = mask.find_first(); id != column_mask::npos; id = mask.find_next(id)) {
+        const column_definition& def = s.column_at(id);
+        if (def.is_static()) {
+            static_columns.push_back(def.id);
+        } else if (def.is_regular()) {
+            regular_columns.push_back(def.id);
+        } // else clustering or partition key column - skip, these are controlled by options
+    }
+}
+
 partition_slice::partition_slice(partition_slice&&) = default;
 
 partition_slice& partition_slice::operator=(partition_slice&& other) noexcept = default;

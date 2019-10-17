@@ -84,7 +84,16 @@ public:
 
 private:
     const uint32_t _bound_terms;
-
+    // If we have operation on list entries, such as adding or
+    // removing an entry, the modification statement must prefetch
+    // the old values of the list to create an idempotent mutation.
+    // If the statement has conditions, conditional columns must
+    // also be prefetched, to evaluate conditions. If the
+    // statement has IF EXISTS/IF NOT EXISTS, we prefetch all
+    // columns, to match Cassandra behaviour.
+    // This bitset contains a mask of ordinal_id identifiers
+    // of the required columns.
+    column_mask _columns_to_read;
 public:
     const schema_ptr s;
     const std::unique_ptr<attributes> attrs;
@@ -96,6 +105,12 @@ private:
     std::vector<::shared_ptr<column_condition>> _column_conditions;
     std::vector<::shared_ptr<column_condition>> _static_conditions;
 
+    // True if has _if_exists or _if_not_exists or other conditions.
+    // Pre-computed during statement prepare.
+    bool _has_conditions = false;
+    // True if any of update operations requires a prefetch.
+    // Pre-computed during statement prepare.
+    bool _requires_read = false;
     bool _if_not_exists = false;
     bool _if_exists = false;
 
@@ -175,7 +190,7 @@ public:
 
     void process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
 
-protected:
+public:
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache);
     virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache);
 
@@ -184,23 +199,32 @@ private:
         return _sets_static_columns && !_sets_regular_columns;
     }
 public:
-    bool requires_read();
+    // True if any of update operations of this statement requires
+    // a prefetch of the old cell.
+    bool requires_read() const { return _requires_read; }
 
-protected:
-    future<update_parameters::prefetch_data> read_required_rows(
-                service::storage_proxy& proxy,
-                dht::partition_range_vector keys,
-                lw_shared_ptr<query::clustering_row_ranges> ranges,
-                bool local,
-                const query_options& options,
-                db::timeout_clock::time_point now,
-                service::query_state& qs);
+    // Columns used in this statement conditions or operations.
+    const column_mask& columns_to_read() const { return _columns_to_read; }
+
+    // Build a read_command instance to fetch the previous mutation from storage. The mutation is
+    // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
+    lw_shared_ptr<query::read_command> read_command(query::clustering_row_ranges ranges, db::consistency_level cl) const;
+    // Create a mutation object for the update operation represented by this modification statement.
+    // A single mutation object for lightweight transactions, which can only span one partition, or a vector
+    // of mutations, one per partition key, for statements which affect multiple partition keys,
+    // e.g. DELETE FROM table WHERE pk  IN (1, 2, 3).
+    std::vector<mutation> apply_updates(
+            const std::vector<dht::partition_range>& keys,
+            const std::vector<query::clustering_range>& ranges,
+            const update_parameters& params,
+            const json_cache_opt& json_cache);
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
     friend class modification_statement_executor;
 public:
-    bool has_conditions();
+    // True if the statement has IF conditions. Pre-computed during prepare.
+    bool has_conditions() const { return _has_conditions; }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
@@ -224,17 +248,6 @@ public:
      * @throws invalid_request_exception on invalid requests
      */
     future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs);
-
-public:
-    future<std::unique_ptr<update_parameters>> make_update_parameters(
-                service::storage_proxy& proxy,
-                lw_shared_ptr<dht::partition_range_vector> keys,
-                lw_shared_ptr<query::clustering_row_ranges> ranges,
-                const query_options& options,
-                db::timeout_clock::time_point timeout,
-                bool local,
-                int64_t now,
-                service::query_state& qs);
 
 protected:
     /**

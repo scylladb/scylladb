@@ -152,6 +152,7 @@ public:
         std::unique_ptr<specific_ranges> specific_ranges = nullptr,
         cql_serialization_format = cql_serialization_format::internal(),
         uint32_t partition_row_limit = max_rows);
+    partition_slice(clustering_row_ranges ranges, const schema& schema, const column_mask& mask, option_set options);
     partition_slice(const partition_slice&);
     partition_slice(partition_slice&&);
     ~partition_slice();
