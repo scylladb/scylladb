@@ -40,6 +40,7 @@
 
 #include "load_broadcaster.hh"
 #include "cache_hitrate_calculator.hh"
+#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "gms/application_state.hh"
 #include "service/storage_service.hh"
