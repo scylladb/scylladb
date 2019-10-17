@@ -750,9 +750,15 @@ void storage_service::join_token_ring(int delay) {
         MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
 #endif
 
+    // At this point our local tokens are chosen (_bootstrap_tokens) and will not be changed unless we bootstrap again.
     db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
+    // This node must know about its chosen tokens before other nodes do
+    // since they may start sending writes to this node after it gossips status = NORMAL.
+    // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
     _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
+
     replicate_to_all_cores().get();
     // start participating in the ring.
     set_gossip_tokens(_bootstrap_tokens);
