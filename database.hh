@@ -876,7 +876,7 @@ public:
     }
 
     void set_hit_rate(gms::inet_address addr, cache_temperature rate);
-    cache_hit_rate get_hit_rate(gms::inet_address addr);
+    std::optional<cache_hit_rate> get_hit_rate(gms::inet_address addr);
     void drop_hit_rate(gms::inet_address addr);
 
     future<> run_with_compaction_disabled(std::function<future<> ()> func);
