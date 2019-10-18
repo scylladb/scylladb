@@ -383,9 +383,10 @@ public:
                         const query::partition_slice& slice,
                         const io_priority_class& pc,
                         reader_resource_tracker resource_tracker,
+                        tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
-        : row_consumer(std::move(resource_tracker), pc)
+        : row_consumer(std::move(resource_tracker), std::move(trace_state), pc)
         , _reader(reader)
         , _schema(schema)
         , _slice(slice)
@@ -398,9 +399,10 @@ public:
                         const schema_ptr schema,
                         const io_priority_class& pc,
                         reader_resource_tracker resource_tracker,
+                        tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
-        : mp_row_consumer_k_l(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd, sst) { }
+        : mp_row_consumer_k_l(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), std::move(trace_state), fwd, sst) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (!_is_mutation_end) {
@@ -971,10 +973,11 @@ public:
                         const schema_ptr schema,
                         const query::partition_slice& slice,
                         const io_priority_class& pc,
-                            reader_resource_tracker resource_tracker,
+                        reader_resource_tracker resource_tracker,
+                        tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
-        : consumer_m(resource_tracker, pc)
+        : consumer_m(resource_tracker, std::move(trace_state), pc)
         , _reader(reader)
         , _schema(schema)
         , _slice(slice)
@@ -988,10 +991,11 @@ public:
     mp_row_consumer_m(mp_row_consumer_reader* reader,
                         const schema_ptr schema,
                         const io_priority_class& pc,
-                            reader_resource_tracker resource_tracker,
+                        reader_resource_tracker resource_tracker,
+                        tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
-    : mp_row_consumer_m(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd, sst)
+    : mp_row_consumer_m(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), std::move(trace_state), fwd, sst)
     { }
 
     virtual ~mp_row_consumer_m() {}

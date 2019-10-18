@@ -76,6 +76,7 @@
 #include "utils/UUID_gen.hh"
 #include "database.hh"
 #include <boost/algorithm/string/predicate.hpp>
+#include "tracing/traced_file.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -2764,14 +2765,18 @@ component_type sstable::component_from_sstring(version_types v, sstring &s) {
     }
 }
 
-input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc, reader_resource_tracker resource_tracker, lw_shared_ptr<file_input_stream_history> history) {
+input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
+        reader_resource_tracker resource_tracker, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
 
-    auto f = resource_tracker.track(_data_file);
+    file f = resource_tracker.track(_data_file);
+    if (trace_state) {
+        f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
+    }
 
     input_stream<char> stream;
     if (_components->compression) {
@@ -2788,7 +2793,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 }
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
-    return do_with(data_stream(pos, len, pc, no_resource_tracking(), {}), [len] (auto& stream) {
+    return do_with(data_stream(pos, len, pc, no_resource_tracking(), tracing::trace_state_ptr(), {}), [len] (auto& stream) {
         return stream.read_exactly(len).finally([&stream] {
             return stream.close();
         });
@@ -3405,7 +3410,7 @@ mutation_source sstable::as_mutation_source() {
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
-            tracing::trace_state_ptr trace_ptr,
+            tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) mutable {
         // CAVEAT: if as_mutation_source() is called on a single partition
@@ -3413,9 +3418,9 @@ mutation_source sstable::as_mutation_source() {
         // consequence, fast_forward_to() will *NOT* work on the result,
         // regardless of what the fwd_mr parameter says.
         if (range.is_singular() && range.start()->value().has_key()) {
-            return sst->read_row_flat(s, range.start()->value(), slice, pc, no_resource_tracking(), fwd);
+            return sst->read_row_flat(s, range.start()->value(), slice, pc, no_resource_tracking(), std::move(trace_state), fwd);
         } else {
-            return sst->read_range_rows_flat(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr);
+            return sst->read_range_rows_flat(s, range, slice, pc, no_resource_tracking(), std::move(trace_state), fwd, fwd_mr);
         }
     });
 }

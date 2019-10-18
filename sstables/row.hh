@@ -30,6 +30,7 @@
 #include "consumer.hh"
 #include "sstables/types.hh"
 #include "reader_concurrency_semaphore.hh"
+#include "tracing/trace_state.hh"
 #include "liveness_info.hh"
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/sstring.hh>
@@ -65,6 +66,7 @@
 // is called.]
 class row_consumer {
     reader_resource_tracker _resource_tracker;
+    tracing::trace_state_ptr _trace_state;
     const io_priority_class& _pc;
 
 public:
@@ -76,8 +78,9 @@ public:
      */
     constexpr static bool is_setting_range_tombstone_start_supported = false;
 
-    row_consumer(reader_resource_tracker resource_tracker, const io_priority_class& pc)
+    row_consumer(reader_resource_tracker resource_tracker, tracing::trace_state_ptr trace_state, const io_priority_class& pc)
         : _resource_tracker(resource_tracker)
+        , _trace_state(std::move(trace_state))
         , _pc(pc) {
     }
 
@@ -134,10 +137,15 @@ public:
     reader_resource_tracker resource_tracker() const {
         return _resource_tracker;
     }
+
+    tracing::trace_state_ptr trace_state() const {
+        return _trace_state;
+    }
 };
 
 class consumer_m {
     reader_resource_tracker _resource_tracker;
+    tracing::trace_state_ptr _trace_state;
     const io_priority_class& _pc;
 public:
     using proceed = data_consumer::proceed;
@@ -154,8 +162,9 @@ public:
         skip_row
     };
 
-    consumer_m(reader_resource_tracker resource_tracker, const io_priority_class& pc)
+    consumer_m(reader_resource_tracker resource_tracker, tracing::trace_state_ptr trace_state, const io_priority_class& pc)
     : _resource_tracker(resource_tracker)
+    , _trace_state(std::move(trace_state))
     , _pc(pc) {
     }
 
@@ -221,6 +230,10 @@ public:
     // The restriction that applies to this consumer
     reader_resource_tracker resource_tracker() const {
         return _resource_tracker;
+    }
+
+    tracing::trace_state_ptr trace_state() const {
+        return _trace_state;
     }
 };
 
