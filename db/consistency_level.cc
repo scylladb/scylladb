@@ -211,10 +211,12 @@ filter_for_query(consistency_level cl,
     const auto remaining_bf = bf - selected_endpoints.size();
 
     if (cf) {
-        auto get_hit_rate = [cf] (gms::inet_address ep) -> float {
+        bool has_missing_hit_rates = false;
+        auto get_hit_rate = [cf, &has_missing_hit_rates] (gms::inet_address ep) -> float {
             constexpr float max_hit_rate = 0.999;
             auto ht = cf->get_hit_rate(ep);
             if (!ht) {
+                has_missing_hit_rates = true;
                 return 0.0;
             }
             if (float(ht->rate) < 0) {
@@ -241,7 +243,7 @@ filter_for_query(consistency_level cl,
             return std::make_pair(ep, ht);
         }));
 
-        if (!old_node && ht_max - ht_min > 0.01) { // if there is old node or hit rates are close skip calculations
+        if (!has_missing_hit_rates && !old_node && ht_max - ht_min > 0.01) { // if there is old node or hit rates are close skip calculations
             // local node is always first if present (see storage_proxy::get_live_sorted_endpoints)
             unsigned local_idx = epi[0].first == utils::fb_utilities::get_broadcast_address() ? 0 : epi.size() + 1;
             live_endpoints = miss_equalizing_combination(epi, local_idx, remaining_bf, bool(extra));
