@@ -2612,7 +2612,7 @@ class scylla_generate_object_graph(gdb.Command):
                             stop = True
                             break
 
-                    edges[(next_obj, address)].add(next_off)
+                    edges[(next_obj, current_obj)].add(next_off)
                     if next_obj in vertices:
                         continue
 
