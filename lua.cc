@@ -47,7 +47,7 @@ struct lua_closer {
     }
 };
 
-static const char scylla_varint_metatable_name[] = "Scylla.varint";
+static const char scylla_decimal_metatable_name[] = "Scylla.decimal";
 
 class lua_slice_state {
     std::unique_ptr<alloc_state> a_state;
@@ -180,11 +180,11 @@ sstring lua::compile(const runtime_config& cfg, const std::vector<sstring>& arg_
     return sstring(p, len);
 }
 
-static boost::multiprecision::cpp_int* get_cpp_int(lua_State* l, int arg) {
-    constexpr size_t alignment = alignof(boost::multiprecision::cpp_int);
-    char* p = reinterpret_cast<char*>(luaL_testudata(l, arg, scylla_varint_metatable_name));
+static big_decimal* get_decimal(lua_State* l, int arg) {
+    constexpr size_t alignment = alignof(big_decimal);
+    char* p = reinterpret_cast<char*>(luaL_testudata(l, arg, scylla_decimal_metatable_name));
     if (p) {
-        return reinterpret_cast<boost::multiprecision::cpp_int*>(align_up(p, alignment));
+        return reinterpret_cast<big_decimal*>(align_up(p, alignment));
     }
     return nullptr;
 }
@@ -201,10 +201,14 @@ static T* aligned_used_data(lua_State* l) {
     return reinterpret_cast<T*>(align_up(p, alignment));
 }
 
+static void push_big_decimal(lua_State* l, const big_decimal& v) {
+    auto* p = aligned_used_data<big_decimal>(l);
+    new (p) big_decimal(v);
+    luaL_setmetatable(l, scylla_decimal_metatable_name);
+}
+
 static void push_cpp_int(lua_State* l, const boost::multiprecision::cpp_int& v) {
-    auto* p = aligned_used_data<boost::multiprecision::cpp_int>(l);
-    new (p) boost::multiprecision::cpp_int(v);
-    luaL_setmetatable(l, scylla_varint_metatable_name);
+    push_big_decimal(l, big_decimal(0, v));
 }
 
 struct lua_table {
@@ -218,7 +222,7 @@ template <typename Func>
 concept bool CanHandleRawLuaTypes = requires(Func f) {
     { f(*static_cast<const long long*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
     { f(*static_cast<const double*>(nullptr)) }                         -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const boost::multiprecision::cpp_int*>(nullptr)) } -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const big_decimal*>(nullptr)) }                    -> lua_visit_ret_type<Func>;
     { f(*static_cast<const std::string_view*>(nullptr)) }               -> lua_visit_ret_type<Func>;
     { f(*static_cast<const lua_table*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
 };
@@ -247,12 +251,25 @@ static auto visit_lua_raw_value(lua_State* l, int index, Func&& f) {
     case LUA_TNIL:
         throw exceptions::invalid_request_exception("unexpected value");
     case LUA_TUSERDATA:
-        return f(*get_cpp_int(l, index));
+        return f(*get_decimal(l, index));
     case LUA_TTHREAD:
     case LUA_TLIGHTUSERDATA:
         assert(0 && "We never make thread or light user data visible to scripts");
     }
     assert(0 && "invalid lua type");
+}
+
+template <typename Func>
+static auto visit_decimal(const big_decimal &v, Func&& f) {
+    boost::multiprecision::cpp_int ten(10);
+    const auto& dividend = v.unscaled_value();
+    auto divisor = boost::multiprecision::pow(ten, v.scale());
+    if (dividend % divisor == 0) {
+        return f(dividend/divisor);
+    }
+    boost::multiprecision::cpp_rational r = dividend;
+    r /= divisor;
+    return f(r.convert_to<double>());
 }
 
 GCC6_CONCEPT(
@@ -300,6 +317,15 @@ static auto visit_lua_value(lua_State* l, int index, Func&& f) {
             }
             return f(v2);
         }
+        auto operator()(const big_decimal& v) {
+            struct visitor {
+                Func& f;
+                const big_decimal &d;
+                auto operator()(const double&) -> std::invoke_result_t<Func, double> { assert(0 && "not implemented"); }
+                auto operator()(const boost::multiprecision::cpp_int& v) { return f(v); }
+            };
+            return visit_decimal(v, visitor{f, v});
+        }
         auto operator()(const lua_table& v) {
             return f(v);
         }
@@ -320,13 +346,13 @@ static auto visit_lua_number(lua_State* l, int index, Func&& f) {
            ));
 }
 
-static int varint_gc(lua_State *l) {
-    std::destroy_at(get_cpp_int(l, 1));
+static int decimal_gc(lua_State *l) {
+    std::destroy_at(get_decimal(l, 1));
     return 0;
 }
 
-static const struct luaL_Reg varint_methods[] {
-    {"__gc", varint_gc},
+static const struct luaL_Reg decimal_methods[] {
+    {"__gc", decimal_gc},
     {nullptr, nullptr}
 };
 
@@ -339,10 +365,10 @@ static int load_script_l(lua_State* l) {
         lua_pop(l, 1);
     }
 
-    luaL_newmetatable(l, scylla_varint_metatable_name);
+    luaL_newmetatable(l, scylla_decimal_metatable_name);
     lua_pushvalue(l, -1);
     lua_setfield(l, -2, "__index");
-    luaL_setfuncs(l, varint_methods, 0);
+    luaL_setfuncs(l, decimal_methods, 0);
 
     if (luaL_loadbufferx(l, binary.data(), binary.size(), "<internal>", "b")) {
         lua_error(l);
