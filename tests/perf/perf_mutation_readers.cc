@@ -39,11 +39,13 @@ class combined {
     std::vector<mutation> _single;
     std::vector<std::vector<mutation>> _disjoint_interleaved;
     std::vector<std::vector<mutation>> _disjoint_ranges;
+    std::vector<std::vector<mutation>> _overlapping_partitions_disjoint_rows;
 private:
     static std::vector<mutation> create_one_row(simple_schema&);
     static std::vector<mutation> create_single_stream(simple_schema&);
     static std::vector<std::vector<mutation>> create_disjoint_interleaved_streams(simple_schema&);
     static std::vector<std::vector<mutation>> create_disjoint_ranges_streams(simple_schema&);
+    static std::vector<std::vector<mutation>> create_overlapping_partitions_disjoint_rows_streams(simple_schema&);
 protected:
     simple_schema& schema() const { return _schema; }
     const std::vector<mutation>& one_row_stream() const { return _one_row; }
@@ -54,6 +56,9 @@ protected:
     const std::vector<std::vector<mutation>>& disjoint_ranges_streams() const {
         return _disjoint_ranges;
     }
+    const std::vector<std::vector<mutation>>& overlapping_partitions_disjoint_rows_streams() const {
+        return _overlapping_partitions_disjoint_rows;
+    }
     future<> consume_all(flat_mutation_reader mr) const;
 public:
     combined()
@@ -61,6 +66,7 @@ public:
         , _single(create_single_stream(_schema))
         , _disjoint_interleaved(create_disjoint_interleaved_streams(_schema))
         , _disjoint_ranges(create_disjoint_ranges_streams(_schema))
+        , _overlapping_partitions_disjoint_rows(create_overlapping_partitions_disjoint_rows_streams(_schema))
     { }
 };
 
@@ -113,6 +119,24 @@ std::vector<std::vector<mutation>> combined::create_disjoint_ranges_streams(simp
         mss.emplace_back(boost::copy_range<std::vector<mutation>>(
             base
             | boost::adaptors::sliced(i * slice, std::min((i + 1) * slice, base.size()))
+        ));
+    }
+    return mss;
+}
+
+std::vector<std::vector<mutation>> combined::create_overlapping_partitions_disjoint_rows_streams(simple_schema& s) {
+    auto keys = s.make_pkeys(4);
+    std::vector<std::vector<mutation>> mss;
+    for (int i = 0; i < 4; i++) {
+        mss.emplace_back(boost::copy_range<std::vector<mutation>>(
+            keys
+            | boost::adaptors::transformed([&] (auto& dkey) {
+                auto m = mutation(s.schema(), dkey);
+                for (int j = 0; j < 32; j++) {
+                    m.apply(s.make_row(s.make_ckey(32 * i + j), "value"));
+                }
+                return m;
+            })
         ));
     }
     return mss;
@@ -176,6 +200,18 @@ PERF_TEST_F(combined, disjoint_ranges)
     return consume_all(make_combined_reader(schema().schema(),
         boost::copy_range<std::vector<flat_mutation_reader>>(
             disjoint_ranges_streams()
+            | boost::adaptors::transformed([] (auto&& ms) {
+                return flat_mutation_reader_from_mutations(std::move(ms));
+            })
+        )
+    ));
+}
+
+PERF_TEST_F(combined, overlapping_partitions_disjoint_rows)
+{
+    return consume_all(make_combined_reader(schema().schema(),
+        boost::copy_range<std::vector<flat_mutation_reader>>(
+            overlapping_partitions_disjoint_rows_streams()
             | boost::adaptors::transformed([] (auto&& ms) {
                 return flat_mutation_reader_from_mutations(std::move(ms));
             })
