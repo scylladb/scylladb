@@ -3058,7 +3058,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     struct {
                         column_family* cf = nullptr;
                         float operator()(const gms::inet_address& ep) const {
-                            return float(cf->get_hit_rate(ep).rate);
+                            auto ht = cf->get_hit_rate(ep);
+                            return ht ? float(ht->rate) : 0.0;
                         }
                     } ep_to_hr{pcf};
                     return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));

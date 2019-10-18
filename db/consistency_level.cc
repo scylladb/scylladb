@@ -214,15 +214,18 @@ filter_for_query(consistency_level cl,
         auto get_hit_rate = [cf] (gms::inet_address ep) -> float {
             constexpr float max_hit_rate = 0.999;
             auto ht = cf->get_hit_rate(ep);
-            if (float(ht.rate) < 0) {
-                return float(ht.rate);
-            } else if (lowres_clock::now() - ht.last_updated > std::chrono::milliseconds(1000)) {
+            if (!ht) {
+                return 0.0;
+            }
+            if (float(ht->rate) < 0) {
+                return float(ht->rate);
+            } else if (lowres_clock::now() - ht->last_updated > std::chrono::milliseconds(1000)) {
                 // if a cache entry is not updates for a while try to send traffic there
                 // to get more up to date data, mark it updated to not send to much traffic there
-                cf->set_hit_rate(ep, ht.rate);
+                cf->set_hit_rate(ep, ht->rate);
                 return max_hit_rate;
             } else {
-                return std::min(float(ht.rate), max_hit_rate); // calculation below cannot work with hit rate 1
+                return std::min(float(ht->rate), max_hit_rate); // calculation below cannot work with hit rate 1
             }
         };
 

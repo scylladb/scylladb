@@ -2220,7 +2220,7 @@ void table::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
     e.last_updated = lowres_clock::now();
 }
 
-table::cache_hit_rate table::get_hit_rate(gms::inet_address addr) {
+std::optional<table::cache_hit_rate> table::get_hit_rate(gms::inet_address addr) {
     auto it = _cluster_cache_hit_rates.find(addr);
     if (utils::fb_utilities::get_broadcast_address() == addr) {
         return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
@@ -2233,6 +2233,9 @@ table::cache_hit_rate table::get_hit_rate(gms::inet_address addr) {
             auto* state = eps->get_application_state_ptr(gms::application_state::CACHE_HITRATES);
             float f = -1.0f; // missing state means old node
             if (state) {
+                if (state->value == "DISABLED") {
+                    return {};
+                }
                 sstring me = format("{}.{}", _schema->ks_name(), _schema->cf_name());
                 auto i = state->value.find(me);
                 if (i != sstring::npos) {
@@ -2244,7 +2247,7 @@ table::cache_hit_rate table::get_hit_rate(gms::inet_address addr) {
                 return cache_hit_rate{cache_temperature(f), lowres_clock::now()};
             }
         }
-        return cache_hit_rate {cache_temperature(0.0f), lowres_clock::now()};
+        return {};
     } else {
         return it->second;
     }
