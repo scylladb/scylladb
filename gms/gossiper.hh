@@ -51,6 +51,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/feature.hh"
 #include "gms/gossip_digest_syn.hh"
+#include "gms/gossip_digest.hh"
 #include "utils/loading_shared_values.hh"
 #include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
@@ -85,6 +86,11 @@ struct syn_msg_pending {
     std::optional<gossip_digest_syn> syn_msg;
 };
 
+struct ack_msg_pending {
+    bool pending = false;
+    std::optional<utils::chunked_vector<gossip_digest>> ack_msg_digest;
+};
+
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
@@ -116,6 +122,7 @@ private:
     future<> handle_echo_msg();
     future<> handle_shutdown_msg(inet_address from);
     future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
+    future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to);
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
@@ -126,6 +133,7 @@ private:
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
+    std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
 public:
     sstring get_cluster_name();
     sstring get_partitioner_name();
