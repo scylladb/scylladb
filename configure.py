@@ -1123,6 +1123,12 @@ if not os.path.exists(xxhash_dir) or not os.listdir(xxhash_dir):
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
+# thrift version detection, see #4538
+thrift_version = subprocess.check_output(["thrift", "-version"]).decode("utf-8").split(" ")[-1]
+if int(thrift_version.replace(".", "")) < 110:
+    print('Note: thrift version < 0.11.0 detected, using boost symbols')
+    args.user_cflags += ' -DTHRIFT_USES_BOOST'
+
 for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
