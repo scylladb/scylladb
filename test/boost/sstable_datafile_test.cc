@@ -2414,7 +2414,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
     //        e blob
     //);
     return test_env::do_with_async([] (test_env& env) {
-        return for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+        for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
             auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
             auto builder = schema_builder("test", "test_multi_schema")
                 .with_column("a", int32_type, column_kind::partition_key)
