@@ -548,14 +548,15 @@ SEASTAR_THREAD_TEST_CASE(test_sm_fast_forwarding_combining_reader_with_galloping
 }
 
 struct sst_factory {
-    sstables::test_env env;
+    sstables::test_env& env;
     schema_ptr s;
     sstring path;
     unsigned gen;
     uint32_t level;
 
-    sst_factory(schema_ptr s, const sstring& path, unsigned gen, int level)
-        : s(s)
+    sst_factory(sstables::test_env& env, schema_ptr s, const sstring& path, unsigned gen, int level)
+        : env(env)
+        , s(s)
         , path(path)
         , gen(gen)
         , level(level)
@@ -570,6 +571,7 @@ struct sst_factory {
 };
 
 SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
+  sstables::test_env::do_with_async([] (sstables::test_env& env) {
     storage_service_for_tests ssft;
 
     simple_schema s;
@@ -614,11 +616,11 @@ SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
 
     unsigned gen{0};
     std::vector<sstables::shared_sstable> sstable_list = {
-            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 0), std::move(sstable_level_0_0_mutations)),
-            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 1), std::move(sstable_level_1_0_mutations)),
-            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 1), std::move(sstable_level_1_1_mutations)),
-            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 2), std::move(sstable_level_2_0_mutations)),
-            make_sstable_containing(sst_factory(s.schema(), tmp.path().string(), ++gen, 2), std::move(sstable_level_2_1_mutations)),
+            make_sstable_containing(sst_factory(env, s.schema(), tmp.path().string(), ++gen, 0), std::move(sstable_level_0_0_mutations)),
+            make_sstable_containing(sst_factory(env, s.schema(), tmp.path().string(), ++gen, 1), std::move(sstable_level_1_0_mutations)),
+            make_sstable_containing(sst_factory(env, s.schema(), tmp.path().string(), ++gen, 1), std::move(sstable_level_1_1_mutations)),
+            make_sstable_containing(sst_factory(env, s.schema(), tmp.path().string(), ++gen, 2), std::move(sstable_level_2_0_mutations)),
+            make_sstable_containing(sst_factory(env, s.schema(), tmp.path().string(), ++gen, 2), std::move(sstable_level_2_1_mutations)),
     };
 
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, {});
@@ -672,6 +674,7 @@ SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
         .produces(expexted_mutation_4)
         .produces(expexted_mutation_5)
         .produces_end_of_stream();
+  }).get();
 }
 
 static mutation make_mutation_with_key(simple_schema& s, dht::decorated_key dk) {
