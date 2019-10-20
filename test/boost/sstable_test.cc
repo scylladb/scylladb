@@ -245,10 +245,9 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
     return check_component_integrity(component_type::CompressionInfo);
 }
 
-template <typename Func>
-inline auto
-write_and_validate_sst(schema_ptr s, sstring dir, Func&& func) {
-    return test_env::do_with(tmpdir(), [s = std::move(s), dir = std::move(dir), func = std::move(func)] (test_env& env, tmpdir& tmp) {
+future<>
+write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<future<> (shared_sstable sst1, shared_sstable sst2)> func) {
+    return test_env::do_with(tmpdir(), [s = std::move(s), dir = std::move(dir), func = std::move(func)] (test_env& env, tmpdir& tmp) mutable {
         return do_write_sst(env, s, dir, tmp.path().string(), 1).then([&env, &tmp, s = std::move(s), func = std::move(func)] (auto sst1) {
             auto sst2 = env.make_sstable(s, tmp.path().string(), 2, la, big);
             return func(std::move(sst1), std::move(sst2));
