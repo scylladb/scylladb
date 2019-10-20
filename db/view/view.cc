@@ -86,7 +86,7 @@ cql3::statements::select_statement& view_info::select_statement() const {
         // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
         // to be available on every node. Then, we won't need to check if this view is backing a secondary index.
         const column_definition* legacy_token_column = nullptr;
-        if (service::get_local_storage_service().db().local().find_column_family(base_id()).get_index_manager().is_index(_schema)) {
+        if (service::get_local_storage_service().db().local().find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
            if (!_schema.clustering_key_columns().empty()) {
                legacy_token_column = &_schema.clustering_key_columns().front();
            }
