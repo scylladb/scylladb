@@ -22,6 +22,7 @@
 #pragma once
 
 #include <seastar/core/do_with.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 #include "sstables/sstables.hh"
 #include "test/lib/tmpdir.hh"
@@ -67,8 +68,7 @@ public:
         });
     }
 
-    template <typename Func>
-    static inline auto do_with_async(Func&& func) {
+    static inline future<> do_with_async(noncopyable_function<void (test_env&)> func) {
         return seastar::async([func = std::move(func)] {
             auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
             test_env env;
