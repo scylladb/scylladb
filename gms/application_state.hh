@@ -62,9 +62,9 @@ enum class application_state {
     SCHEMA_TABLES_VERSION,
     RPC_READY,
     VIEW_BACKLOG,
+    SHARD_COUNT,
+    IGNORE_MSB_BITS,
     // pad to allow adding new states to existing cluster
-    X6,
-    X7,
     X8,
     X9,
     X10,

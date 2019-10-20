@@ -46,6 +46,7 @@
 #include "schema_features.hh"
 #include "hashing.hh"
 #include "schema_mutations.hh"
+#include "types/map.hh"
 
 #include <vector>
 #include <map>
@@ -220,6 +221,18 @@ index_metadata_kind deserialize_index_kind(sstring kind);
 mutation compact_for_schema_digest(const mutation& m);
 
 void feed_hash_for_schema_digest(hasher&, const mutation&, schema_features);
+
+template<typename K, typename V>
+std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const sstring& name) {
+    if (auto values = row.get<map_type_impl::native_type>(name)) {
+        std::map<K, V> map;
+        for (auto&& entry : *values) {
+            map.emplace(value_cast<K>(entry.first), value_cast<V>(entry.second));
+        };
+        return map;
+    }
+    return std::nullopt;
+}
 
 } // namespace schema_tables
 } // namespace db

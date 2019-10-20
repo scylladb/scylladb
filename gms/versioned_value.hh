@@ -220,6 +220,14 @@ public:
             return versioned_value(rack_id);
         }
 
+        versioned_value shard_count(int shard_count) {
+            return versioned_value(format("{}", shard_count));
+        }
+
+        versioned_value ignore_msb_bits(unsigned ignore_msb_bits) {
+            return versioned_value(format("{}", ignore_msb_bits));
+        }
+
         versioned_value rpcaddress(gms::inet_address endpoint) {
             return versioned_value(format("{}", endpoint));
         }

@@ -41,6 +41,8 @@
 
 #include "cql3/statements/cf_prop_defs.hh"
 #include "db/extensions.hh"
+#include "cdc/cdc.hh"
+#include "service/storage_service.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -68,6 +70,8 @@ const sstring cf_prop_defs::KW_CRC_CHECK_CHANCE = "crc_check_chance";
 
 const sstring cf_prop_defs::KW_ID = "id";
 
+const sstring cf_prop_defs::KW_CDC = "cdc";
+
 const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
 
 const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
@@ -84,7 +88,7 @@ void cf_prop_defs::validate(const db::extensions& exts) {
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
         KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
-        KW_COMPRESSION, KW_CRC_CHECK_CHANCE, KW_ID
+        KW_COMPRESSION, KW_CRC_CHECK_CHANCE, KW_ID, KW_CDC
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),
@@ -121,6 +125,12 @@ void cf_prop_defs::validate(const db::extensions& exts) {
         }
         compression_parameters cp(*compression_options);
         cp.validate();
+    }
+
+    auto cdc_options = get_cdc_options();
+    if (cdc_options && !cdc_options->empty()) {
+        // Constructor throws if options are not valid
+        cdc::options opts(*cdc_options);
     }
 
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
@@ -170,6 +180,10 @@ std::optional<utils::UUID> cf_prop_defs::get_id() const {
     }
 
     return std::nullopt;
+}
+
+std::optional<std::map<sstring, sstring>> cf_prop_defs::get_cdc_options() const {
+    return get_map(KW_CDC);
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder, const db::extensions& exts) {
@@ -244,6 +258,14 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, const db::extension
     auto compression_options = get_compression_options();
     if (compression_options) {
         builder.set_compressor_params(compression_parameters(*compression_options));
+    }
+    auto cdc_options = get_cdc_options();
+    if (cdc_options) {
+        auto opts = cdc::options(*cdc_options);
+        if (opts.enabled() && !service::get_local_storage_service().cluster_supports_cdc()) {
+            throw exceptions::configuration_exception("CDC not supported by the cluster");
+        }
+        builder.set_cdc_options(std::move(opts));
     }
 #if 0
     CachingOptions cachingOptions = getCachingOptions();

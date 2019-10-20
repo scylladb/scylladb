@@ -100,12 +100,10 @@ void production_snitch_base::reset_io_state() {
 
 sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key,
                                                   const sstring& default_val) {
-    gms::gossiper& local_gossiper = gms::get_local_gossiper();
-    auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
-    if (ep_state) {
-        return ep_state->value;
+    auto val = snitch_base::get_endpoint_info(endpoint, key);
+    if (val) {
+        return *val;
     }
-
     // ...if not found - look in the SystemTable...
     if (!_saved_endpoints) {
         _saved_endpoints = db::system_keyspace::load_dc_rack_info();

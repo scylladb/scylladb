@@ -341,6 +341,7 @@ private:
     gms::feature _view_virtual_columns;
     gms::feature _digest_insensitive_to_expiry;
     gms::feature _computed_columns;
+    gms::feature _cdc_feature;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
     seastar::semaphore _feature_listeners_sem = {1};
@@ -2339,6 +2340,10 @@ public:
 
     bool cluster_supports_mc_sstable() const {
         return bool(_mc_sstable_feature);
+    }
+
+    bool cluster_supports_cdc() const {
+        return bool(_cdc_feature);
     }
 
     bool cluster_supports_row_level_repair() const {
