@@ -183,6 +183,16 @@ SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
         e.execute_cql("create type ut3 (a int, b list<int>)").discard_result().get();
         REQUIRE_INVALID(e, "create table bad (a int primary key, b ut3)",
                 "Non-frozen UDTs with nested non-frozen collections are not supported");
+
+        // cannot have too many fields inside UDTs
+        REQUIRE_INVALID(e, format("create type ut4 ({})", boost::algorithm::join(
+                boost::irange(0, 1 << 15) | boost::adaptors::transformed([] (int i) { return format("a{} int", i); }), ", ")),
+                format("A user type cannot have more than {} fields", (1 << 15) - 1));
+
+        e.execute_cql(format("create type ut4 ({})", boost::algorithm::join(
+                boost::irange(1, 1 << 15) | boost::adaptors::transformed([] (int i) { return format("a{} int", i); }), ", "))).discard_result().get();
+        REQUIRE_INVALID(e, "alter type ut4 add b int",
+                "Cannot add new field to type ks.ut4: maximum number of fields reached");
     });
 }
 
