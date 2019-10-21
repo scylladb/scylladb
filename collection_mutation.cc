@@ -134,15 +134,27 @@ api::timestamp_type collection_mutation_view::last_update(const abstract_type& t
 
 collection_mutation_description
 collection_mutation_view_description::materialize(const abstract_type& type) const {
-    assert(type.is_collection());
-    auto& ctype = static_cast<const collection_type_impl&>(type);
-
     collection_mutation_description m;
     m.tomb = tomb;
     m.cells.reserve(cells.size());
-    for (auto&& e : cells) {
-        m.cells.emplace_back(bytes(e.first.begin(), e.first.end()), atomic_cell(*ctype.value_comparator(), e.second));
+
+    visit(type, make_visitor(
+    [&] (const collection_type_impl& ctype) {
+        auto& value_type = *ctype.value_comparator();
+        for (auto&& e : cells) {
+            m.cells.emplace_back(to_bytes(e.first), atomic_cell(value_type, e.second));
+        }
+    },
+    [&] (const user_type_impl& utype) {
+        for (auto&& e : cells) {
+            m.cells.emplace_back(to_bytes(e.first), atomic_cell(*utype.type(deserialize_field_index(e.first)), e.second));
+        }
+    },
+    [&] (const abstract_type& o) {
+        throw std::runtime_error(format("attempted to materialize collection_mutation_view_description with type {}", o.name()));
     }
+    ));
+
     return m;
 }
 
