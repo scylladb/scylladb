@@ -77,7 +77,7 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
         });
     // user
     _generators.emplace_back(
-        [this] (std::mt19937& engine, is_multi_cell) mutable {
+        [this] (std::mt19937& engine, is_multi_cell multi_cell) mutable {
             std::uniform_int_distribution<size_t> count_dist{2, 4};
             const auto count = count_dist(engine);
 
@@ -89,7 +89,7 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
             }
 
             return user_type_impl::get_instance(_spec.keyspace_name(), to_bytes(_spec.udt_name(engine)), std::move(field_names),
-                    std::move(field_types), false);
+                    std::move(field_types), bool(multi_cell));
         });
     // list
     _generators.emplace_back(

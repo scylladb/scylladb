@@ -338,6 +338,7 @@ private:
     gms::feature _digest_insensitive_to_expiry;
     gms::feature _computed_columns;
     gms::feature _cdc_feature;
+    gms::feature _nonfrozen_udts;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
     seastar::semaphore _feature_listeners_sem = {1};
@@ -2366,6 +2367,10 @@ public:
 
     bool cluster_supports_computed_columns() const {
         return bool(_computed_columns);
+    }
+
+    bool cluster_supports_nonfrozen_udts() const {
+        return bool(_nonfrozen_udts);
     }
 
     // Returns schema features which all nodes in the cluster advertise as supported.

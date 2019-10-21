@@ -242,8 +242,8 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             throw exceptions::invalid_request_exception("Counter support is not enabled");
         }
         if (pt.get_type()->is_multi_cell()) {
-            // check for multi-cell types (non-frozen UDTs or collections) inside a non-frozen UDT
             if (pt.get_type()->is_user_type()) {
+                // check for multi-cell types (non-frozen UDTs or collections) inside a non-frozen UDT
                 auto type = static_cast<const user_type_impl*>(pt.get_type().get());
                 for (auto&& inner: type->all_types()) {
                     if (inner->is_multi_cell()) {
@@ -251,6 +251,10 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                         assert(inner->is_collection());
                         throw exceptions::invalid_request_exception("Non-frozen UDTs with nested non-frozen collections are not supported");
                     }
+                }
+
+                if (!service::get_local_storage_service().cluster_supports_nonfrozen_udts()) {
+                    throw exceptions::invalid_request_exception("Non-frozen UDT support is not enabled");
                 }
             }
 

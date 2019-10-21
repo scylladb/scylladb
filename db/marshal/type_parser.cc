@@ -235,7 +235,7 @@ data_type type_parser::get_abstract_type(const sstring& compare_with, type_parse
     } else if (class_name == "org.apache.cassandra.db.marshal.UserType") {
         auto [keyspace, name, field_names, field_types] = parser.get_user_type_parameters();
         return user_type_impl::get_instance(
-                std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types), false);
+                std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types), multicell);
     } else {
         throw std::runtime_error("unknown type: " + class_name);
     }
