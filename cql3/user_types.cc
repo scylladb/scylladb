@@ -109,11 +109,11 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
 }
 
 void user_types::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
-    auto&& ut = dynamic_pointer_cast<const user_type_impl>(receiver->type);
-    if (!ut) {
+    if (!receiver->type->is_user_type()) {
         throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
     }
 
+    auto ut = static_pointer_cast<const user_type_impl>(receiver->type);
     for (size_t i = 0; i < ut->size(); i++) {
         column_identifier field(to_bytes(ut->field_name(i)), utf8_type);
         if (_entries.count(field) == 0) {
