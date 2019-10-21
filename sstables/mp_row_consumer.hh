@@ -39,6 +39,8 @@
 #include "keys.hh"
 #include "clustering_bounds_comparator.hh"
 #include "range_tombstone.hh"
+#include "types/user.hh"
+#include "concrete_types.hh"
 
 namespace sstables {
 
@@ -547,8 +549,27 @@ public:
                 return;
             }
             if (is_multi_cell) {
-                auto ctype = static_pointer_cast<const collection_type_impl>(col.cdef->type);
-                auto ac = make_atomic_cell(*ctype->value_comparator(),
+                auto& value_type = visit(*col.cdef->type, make_visitor(
+                    [] (const collection_type_impl& ctype) -> const abstract_type& { return *ctype.value_comparator(); },
+                    [&] (const user_type_impl& utype) -> const abstract_type& {
+                        if (col.collection_extra_data.size() != sizeof(int16_t)) {
+                            throw malformed_sstable_exception(format("wrong size of field index while reading UDT column: expected {}, got {}",
+                                        sizeof(int16_t), col.collection_extra_data.size()));
+                        }
+
+                        auto field_idx = deserialize_field_index(col.collection_extra_data);
+                        if (field_idx >= utype.size()) {
+                            throw malformed_sstable_exception(format("field index too big while reading UDT column: type has {} fields, got {}",
+                                        utype.size(), field_idx));
+                        }
+
+                        return *utype.type(field_idx);
+                    },
+                    [] (const abstract_type& o) -> const abstract_type& {
+                        throw malformed_sstable_exception(format("attempted to read multi-cell column, but expected type was {}", o.name()));
+                    }
+                ));
+                auto ac = make_atomic_cell(value_type,
                                            api::timestamp_type(timestamp),
                                            value,
                                            gc_clock::duration(ttl),
@@ -1185,9 +1206,28 @@ public:
         }
         check_schema_mismatch(column_info, column_def);
         if (column_def.is_multi_cell()) {
-            auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
+            auto& value_type = visit(*column_def.type, make_visitor(
+                [] (const collection_type_impl& ctype) -> const abstract_type& { return *ctype.value_comparator(); },
+                [&] (const user_type_impl& utype) -> const abstract_type& {
+                    if (cell_path.size() != sizeof(int16_t)) {
+                        throw malformed_sstable_exception(format("wrong size of field index while reading UDT column: expected {}, got {}",
+                                    sizeof(int16_t), cell_path.size()));
+                    }
+
+                    auto field_idx = deserialize_field_index(cell_path);
+                    if (field_idx >= utype.size()) {
+                        throw malformed_sstable_exception(format("field index too big while reading UDT column: type has {} fields, got {}",
+                                    utype.size(), field_idx));
+                    }
+
+                    return *utype.type(field_idx);
+                },
+                [] (const abstract_type& o) -> const abstract_type& {
+                    throw malformed_sstable_exception(format("attempted to read multi-cell column, but expected type was {}", o.name()));
+                }
+            ));
             auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
-                                 : make_atomic_cell(*ctype->value_comparator(),
+                                 : make_atomic_cell(value_type,
                                                     timestamp,
                                                     value,
                                                     ttl,
