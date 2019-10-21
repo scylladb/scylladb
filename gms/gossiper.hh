@@ -158,7 +158,9 @@ public:
     static constexpr std::chrono::milliseconds INTERVAL{1000};
     static constexpr std::chrono::hours A_VERY_LONG_TIME{24 * 3};
 
-    /** Maximimum difference in generation and version values we are willing to accept about a peer */
+    // Maximimum difference between remote generation value and generation
+    // value this node would get if this node were restarted that we are
+    // willing to accept about a peer.
     static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
     std::chrono::milliseconds fat_client_timeout;
 
