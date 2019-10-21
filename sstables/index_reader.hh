@@ -27,6 +27,7 @@
 #include <seastar/util/bool_class.hh>
 #include "utils/buffer_input_stream.hh"
 #include "sstables/prepended_input_stream.hh"
+#include "tracing/traced_file.hh"
 
 namespace sstables {
 
@@ -294,6 +295,7 @@ future<> close_index_list(shared_index_lists::list_ptr& list) {
 class index_reader {
     shared_sstable _sstable;
     const io_priority_class& _pc;
+    tracing::trace_state_ptr _trace_state;
     shared_index_lists _index_lists;
 
     struct reader {
@@ -308,10 +310,13 @@ class index_reader {
             return options;
         }
 
-        reader(shared_sstable sst, const io_priority_class& pc, uint64_t begin, uint64_t end, uint64_t quantity)
+        reader(shared_sstable sst, const io_priority_class& pc, tracing::trace_state_ptr trace_state, uint64_t begin, uint64_t end, uint64_t quantity)
             : _consumer(quantity)
             , _context(_consumer,
-                       trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema, sst->_index_file,
+                       trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema,
+                       trace_state
+                           ? tracing::make_traced_file(sst->_index_file, std::move(trace_state), format("{}:", sst->filename(component_type::Index)))
+                           : sst->_index_file,
                        get_file_input_stream_options(sst, pc), begin, end - begin,
                        (sst->get_version() == sstable_version_types::mc
                            ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))
@@ -379,7 +384,7 @@ private:
                 end = summary.entries[summary_idx + 1].position;
             }
 
-            return do_with(std::make_unique<reader>(_sstable, _pc, position, end, quantity), [this, summary_idx] (auto& entries_reader) {
+            return do_with(std::make_unique<reader>(_sstable, _pc, _trace_state, position, end, quantity), [this, summary_idx] (auto& entries_reader) {
                 return entries_reader->_context.consume_input().then_wrapped([this, summary_idx, &entries_reader] (future<> f) {
                     std::exception_ptr ex;
                     if (f.failed()) {
@@ -629,9 +634,10 @@ private:
     }
 
 public:
-    index_reader(shared_sstable sst, const io_priority_class& pc)
+    index_reader(shared_sstable sst, const io_priority_class& pc, tracing::trace_state_ptr trace_state)
         : _sstable(std::move(sst))
         , _pc(pc)
+        , _trace_state(std::move(trace_state))
     {
         sstlog.trace("index {}: index_reader for {}", this, _sstable->get_filename());
     }

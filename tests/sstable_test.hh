@@ -85,7 +85,8 @@ public:
 
     future<index_list> read_indexes() {
         auto l = make_lw_shared<index_list>();
-        return do_with(std::make_unique<index_reader>(_sst, default_priority_class()), [this, l] (std::unique_ptr<index_reader>& ir) {
+        return do_with(std::make_unique<index_reader>(_sst, default_priority_class(), tracing::trace_state_ptr()),
+                [this, l] (std::unique_ptr<index_reader>& ir) {
             return ir->read_partition_data().then([&, l] {
                 l->push_back(std::move(ir->current_partition_entry()));
             }).then([&, l] {

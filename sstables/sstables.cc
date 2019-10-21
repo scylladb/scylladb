@@ -3208,7 +3208,8 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
     if (!filter_has_key(hk)) {
         return make_ready_future<bool>(false);
     }
-    seastar::shared_ptr<sstables::index_reader> lh_index = seastar::make_shared<sstables::index_reader>(s, default_priority_class());
+    seastar::shared_ptr<sstables::index_reader> lh_index
+        = seastar::make_shared<sstables::index_reader>(s, default_priority_class(), tracing::trace_state_ptr());
     return lh_index->advance_lower_and_check_if_present(dk).then([lh_index, s, this] (bool present) {
         return make_ready_future<bool>(present);
     });
