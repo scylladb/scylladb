@@ -46,6 +46,7 @@
 #include "maps.hh"
 #include "sets.hh"
 #include "lists.hh"
+#include "user_types.hh"
 
 namespace cql3 {
 
