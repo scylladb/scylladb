@@ -61,10 +61,9 @@ bool collection_mutation_view::is_empty() const {
   });
 }
 
-bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone tomb, gc_clock::time_point now) const {
-    assert(type.is_collection());
-    auto& ctype = static_cast<const collection_type_impl&>(type);
-
+template <typename F>
+GCC6_CONCEPT(requires std::is_invocable_r_v<const data::type_info&, F, bytes_view&>)
+static bool is_any_live(const atomic_cell_value_view& data, tombstone tomb, gc_clock::time_point now, F&& read_cell_type_info) {
   return data.with_linearized([&] (bytes_view in) {
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -72,18 +71,42 @@ bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone 
         auto ttl = read_simple<gc_clock::duration::rep>(in);
         tomb.apply(tombstone{ts, gc_clock::time_point(gc_clock::duration(ttl))});
     }
+
     auto nr = read_simple<uint32_t>(in);
     for (uint32_t i = 0; i != nr; ++i) {
-        auto ksize = read_simple<uint32_t>(in);
-        in.remove_prefix(ksize);
+        auto& type_info = read_cell_type_info(in);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(ctype.value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(type_info, read_simple_bytes(in, vsize));
         if (value.is_live(tomb, now, false)) {
             return true;
         }
     }
+
     return false;
   });
+}
+
+bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone tomb, gc_clock::time_point now) const {
+    return visit(type, make_visitor(
+    [&] (const collection_type_impl& ctype) {
+        auto& type_info = ctype.value_comparator()->imr_state().type_info();
+        return ::is_any_live(data, tomb, now, [&type_info] (bytes_view& in) -> const data::type_info& {
+            auto key_size = read_simple<uint32_t>(in);
+            in.remove_prefix(key_size);
+            return type_info;
+        });
+    },
+    [&] (const user_type_impl& utype) {
+        return ::is_any_live(data, tomb, now, [&utype] (bytes_view& in) -> const data::type_info& {
+            auto key_size = read_simple<uint32_t>(in);
+            auto key = read_simple_bytes(in, key_size);
+            return utype.type(deserialize_field_index(key))->imr_state().type_info();
+        });
+    },
+    [&] (const abstract_type& o) -> bool {
+        throw std::runtime_error(format("collection_mutation_view::is_any_live: unknown type {}", o.name()));
+    }
+    ));
 }
 
 api::timestamp_type collection_mutation_view::last_update(const abstract_type& type) const {
