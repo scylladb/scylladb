@@ -75,6 +75,7 @@ public:
         virtual bool is_collection() const;
         virtual bool is_counter() const;
         virtual bool is_duration() const;
+        virtual bool is_user_type() const;
         bool is_frozen() const;
         virtual bool references_user_type(const sstring&) const;
         virtual std::optional<sstring> keyspace() const;

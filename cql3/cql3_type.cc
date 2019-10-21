@@ -213,6 +213,9 @@ public:
         return true;
     }
 
+    virtual bool is_user_type() const override {
+        return true;
+    }
 };
 
 
@@ -268,6 +271,11 @@ cql3_type::raw::is_collection() const {
 
 bool
 cql3_type::raw::is_counter() const {
+    return false;
+}
+
+bool
+cql3_type::raw::is_user_type() const {
     return false;
 }
 
