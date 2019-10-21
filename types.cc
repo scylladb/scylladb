@@ -3095,6 +3095,22 @@ bytes serialize_for_cql(const abstract_type& type, collection_mutation_view v, c
     });
 }
 
+bytes serialize_field_index(size_t idx) {
+    if (idx >= size_t(std::numeric_limits<int16_t>::max())) {
+        // should've been rejected earlier, but just to be sure...
+        throw std::runtime_error(format("index for user type field too large: {}", idx));
+    }
+
+    bytes b(bytes::initialized_later(), sizeof(int16_t));
+    write_be(reinterpret_cast<char*>(b.data()), static_cast<int16_t>(idx));
+    return b;
+}
+
+size_t deserialize_field_index(const bytes_view& b) {
+    assert(b.size() == sizeof(int16_t));
+    return read_be<int16_t>(reinterpret_cast<const char*>(b.data()));
+}
+
 thread_local const shared_ptr<const abstract_type> byte_type(make_shared<byte_type_impl>());
 thread_local const shared_ptr<const abstract_type> short_type(make_shared<short_type_impl>());
 thread_local const shared_ptr<const abstract_type> int32_type(make_shared<int32_type_impl>());
