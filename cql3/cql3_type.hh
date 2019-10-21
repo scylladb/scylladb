@@ -66,13 +66,15 @@ public:
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {
+    protected:
+        bool _frozen = false;
     public:
         virtual ~raw() {}
-        bool _frozen = false;
         virtual bool supports_freezing() const = 0;
         virtual bool is_collection() const;
         virtual bool is_counter() const;
         virtual bool is_duration() const;
+        bool is_frozen() const;
         virtual bool references_user_type(const sstring&) const;
         virtual std::optional<sstring> keyspace() const;
         virtual void freeze();

@@ -113,7 +113,7 @@ public:
     virtual cql3_type prepare_internal(const sstring& keyspace, user_types_metadata& user_types) override {
         assert(_values); // "Got null values type for a collection";
 
-        if (!_frozen && _values->supports_freezing() && !_values->_frozen) {
+        if (!is_frozen() && _values->supports_freezing() && !_values->is_frozen()) {
             throw exceptions::invalid_request_exception(format("Non-frozen collections are not allowed inside collections: {}", *this));
         }
         if (_values->is_counter()) {
@@ -121,24 +121,24 @@ public:
         }
 
         if (_keys) {
-            if (!_frozen && _keys->supports_freezing() && !_keys->_frozen) {
+            if (!is_frozen() && _keys->supports_freezing() && !_keys->is_frozen()) {
                 throw exceptions::invalid_request_exception(format("Non-frozen collections are not allowed inside collections: {}", *this));
             }
         }
 
         if (_kind == abstract_type::kind::list) {
-            return cql3_type(list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !_frozen));
+            return cql3_type(list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !is_frozen()));
         } else if (_kind == abstract_type::kind::set) {
             if (_values->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed inside sets: {}", *this));
             }
-            return cql3_type(set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !_frozen));
+            return cql3_type(set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !is_frozen()));
         } else if (_kind == abstract_type::kind::map) {
             assert(_keys); // "Got null keys type for a collection";
             if (_keys->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed as map keys: {}", *this));
             }
-            return cql3_type(map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types).get_type(), _values->prepare_internal(keyspace, user_types).get_type(), !_frozen));
+            return cql3_type(map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types).get_type(), _values->prepare_internal(keyspace, user_types).get_type(), !is_frozen()));
         }
         abort();
     }
@@ -152,8 +152,8 @@ public:
     }
 
     virtual sstring to_string() const override {
-        sstring start = _frozen ? "frozen<" : "";
-        sstring end = _frozen ? ">" : "";
+        sstring start = is_frozen() ? "frozen<" : "";
+        sstring end = is_frozen() ? ">" : "";
         if (_kind == abstract_type::kind::list) {
             return format("{}list<{}>{}", start, _values, end);
         } else if (_kind == abstract_type::kind::set) {
@@ -194,7 +194,7 @@ public:
         }
         try {
             auto&& type = user_types.get_type(_name.get_user_type_name());
-            if (!_frozen) {
+            if (!is_frozen()) {
                 throw exceptions::invalid_request_exception("Non-frozen User-Defined types are not supported, please use frozen<>");
             }
             return cql3_type(std::move(type));
@@ -236,7 +236,7 @@ public:
         _frozen = true;
     }
     virtual cql3_type prepare_internal(const sstring& keyspace, user_types_metadata& user_types) override {
-        if (!_frozen) {
+        if (!is_frozen()) {
             freeze();
         }
         std::vector<data_type> ts;
@@ -268,6 +268,11 @@ cql3_type::raw::is_collection() const {
 bool
 cql3_type::raw::is_counter() const {
     return false;
+}
+
+bool
+cql3_type::raw::is_frozen() const {
+    return _frozen;
 }
 
 std::optional<sstring>
