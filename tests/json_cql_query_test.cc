@@ -542,7 +542,7 @@ SEASTAR_TEST_CASE(test_json_udt) {
 
         e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"first\": 5, \"third\": 2.5, \"second\": \"test123\"}}';").get();
 
-        auto ut = user_type_impl::get_instance("ks", "utype", std::vector{bytes("first"), bytes("second"), bytes("third")}, {int32_type, utf8_type, float_type});
+        auto ut = user_type_impl::get_instance("ks", "utype", std::vector{bytes("first"), bytes("second"), bytes("third")}, {int32_type, utf8_type, float_type}, false);
 
         auto msg = e.execute_cql("SELECT * FROM t;").get0();
         assert_that(msg).is_rows().with_rows({{
@@ -588,7 +588,7 @@ SEASTAR_TEST_CASE(test_unpack_decimal){
 
         auto ut = user_type_impl::get_instance("ks", to_bytes("ds"),
                 {to_bytes("d1"), to_bytes("d2"), to_bytes("d3")},
-                {decimal_type, varint_type, int32_type});
+                {decimal_type, varint_type, int32_type}, false);
         auto ut_val = make_user_value(ut,
                 user_type_impl::native_type({big_decimal{0, boost::multiprecision::cpp_int(1)},
                 boost::multiprecision::cpp_int(2),

@@ -89,7 +89,7 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
             }
 
             return user_type_impl::get_instance(_spec.keyspace_name(), to_bytes(_spec.udt_name(engine)), std::move(field_names),
-                    std::move(field_types));
+                    std::move(field_types), false);
         });
     // list
     _generators.emplace_back(

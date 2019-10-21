@@ -1647,7 +1647,7 @@ SEASTAR_TEST_CASE(test_user_type) {
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             auto ut = user_type_impl::get_instance("ks", to_bytes("ut1"),
                         {to_bytes("my_int"), to_bytes("my_bigint"), to_bytes("my_text")},
-                        {int32_type, long_type, utf8_type});
+                        {int32_type, long_type, utf8_type}, false);
             auto ut_val = make_user_value(ut,
                           user_type_impl::native_type({int32_t(2001),
                                                        int64_t(3001),

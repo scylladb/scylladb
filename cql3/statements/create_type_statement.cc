@@ -131,7 +131,7 @@ inline user_type create_type_statement::create_type(database& db)
     }
 
     return user_type_impl::get_instance(keyspace(), _name.get_user_type_name(),
-        std::move(field_names), std::move(field_types));
+        std::move(field_names), std::move(field_types), false);
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)

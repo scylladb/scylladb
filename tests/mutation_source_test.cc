@@ -2013,10 +2013,10 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     auto set_of_bytes = set_type_impl::get_instance(bytes_type, true);
     auto udt_int_text = user_type_impl::get_instance("ks", "udt",
         { utf8_type->decompose("f1"), utf8_type->decompose("f2"), },
-        { int32_type, utf8_type });
+        { int32_type, utf8_type }, false);
     auto udt_int_blob_long = user_type_impl::get_instance("ks", "udt",
         { utf8_type->decompose("v1"), utf8_type->decompose("v2"), utf8_type->decompose("v3"), },
-        { int32_type, bytes_type, long_type });
+        { int32_type, bytes_type, long_type }, false);
 
     auto random_int32_value = [] {
         return int32_type->decompose(tests::random::get_int<int32_t>());

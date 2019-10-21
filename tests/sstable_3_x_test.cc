@@ -4011,7 +4011,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     // CREATE TYPE ut (my_int int, my_boolean boolean, my_text text);
     auto ut = user_type_impl::get_instance("sst3", to_bytes("ut"),
             {to_bytes("my_int"), to_bytes("my_boolean"), to_bytes("my_text")},
-            {int32_type, boolean_type, utf8_type});
+            {int32_type, boolean_type, utf8_type}, false);
 
     sstring table_name = "user_defined_type_table";
     // CREATE TABLE user_defined_type_table (pk int, rc frozen <ut>, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};

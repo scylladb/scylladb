@@ -93,7 +93,8 @@ protected:
     static boost::iterator_range<tuple_deserializing_iterator> make_range(bytes_view v) {
         return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };
     }
-    tuple_type_impl(kind k, sstring name, std::vector<data_type> types);
+    tuple_type_impl(kind k, sstring name, std::vector<data_type> types, bool freeze_inner);
+    tuple_type_impl(std::vector<data_type> types, bool freze_inner);
 public:
     tuple_type_impl(std::vector<data_type> types);
     static shared_ptr<const tuple_type_impl> get_instance(std::vector<data_type> types);
