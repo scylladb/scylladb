@@ -127,7 +127,8 @@ public:
         assert(_values); // "Got null values type for a collection";
 
         if (!is_frozen() && _values->supports_freezing() && !_values->is_frozen()) {
-            throw exceptions::invalid_request_exception(format("Non-frozen collections are not allowed inside collections: {}", *this));
+            throw exceptions::invalid_request_exception(
+                    format("Non-frozen user types or collections are not allowed inside collections: {}", *this));
         }
         if (_values->is_counter()) {
             throw exceptions::invalid_request_exception(format("Counters are not allowed inside collections: {}", *this));
@@ -135,7 +136,8 @@ public:
 
         if (_keys) {
             if (!is_frozen() && _keys->supports_freezing() && !_keys->is_frozen()) {
-                throw exceptions::invalid_request_exception(format("Non-frozen collections are not allowed inside collections: {}", *this));
+                throw exceptions::invalid_request_exception(
+                        format("Non-frozen user types or collections are not allowed inside collections: {}", *this));
             }
         }
 
