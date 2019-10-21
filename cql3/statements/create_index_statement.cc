@@ -151,21 +151,17 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
                             target->as_string()));
         }
 
-        bool is_map = dynamic_cast<const collection_type_impl *>(cd->type.get()) != nullptr
-                      && dynamic_cast<const collection_type_impl *>(cd->type.get())->is_map();
-        bool is_collection = cd->type->is_collection();
-        bool is_frozen_collection = is_collection && !cd->type->is_multi_cell();
-
-        if (is_frozen_collection) {
-            validate_for_frozen_collection(target);
-        } else if (is_collection) {
+        if (cd->type->is_multi_cell()) {
             // NOTICE(sarna): should be lifted after #2962 (indexes on non-frozen collections) is implemented
+            // NOTICE(kbraun): don't forget about non-frozen user defined types
             throw exceptions::invalid_request_exception(
-                    format("Cannot create secondary index on non-frozen collection column {}", cd->name_as_text()));
+                    format("Cannot create secondary index on non-frozen collection or UDT column {}", cd->name_as_text()));
+        } else if (cd->type->is_collection()) {
+            validate_for_frozen_collection(target);
         } else {
             validate_not_full_index(target);
             validate_is_values_index_if_target_column_not_collection(cd, target);
-            validate_target_column_is_map_if_index_involves_keys(is_map, target);
+            validate_target_column_is_map_if_index_involves_keys(cd->type->is_map(), target);
         }
     }
 
