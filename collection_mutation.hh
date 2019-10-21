@@ -77,6 +77,9 @@ public:
     // Requires a type to reconstruct the structural information.
     bool is_any_live(const abstract_type&, tombstone t = tombstone(), gc_clock::time_point tp = gc_clock::time_point::min()) const;
 
+    // The maximum of timestamps of the mutation's cells and tombstone.
+    api::timestamp_type last_update(const abstract_type&) const;
+
     // Given a function that operates on a collection_mutation_view_description,
     // calls it on the corresponding description of `this`.
     template <typename F>

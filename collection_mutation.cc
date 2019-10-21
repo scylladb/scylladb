@@ -84,8 +84,11 @@ bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone 
   });
 }
 
-api::timestamp_type collection_type_impl::last_update(collection_mutation_view cm) const {
-  return cm.data.with_linearized([&] (bytes_view in) {
+api::timestamp_type collection_mutation_view::last_update(const abstract_type& type) const {
+    assert(type.is_collection());
+    auto& ctype = static_cast<const collection_type_impl&>(type);
+
+  return data.with_linearized([&] (bytes_view in) {
     api::timestamp_type max = api::missing_timestamp;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -97,7 +100,7 @@ api::timestamp_type collection_type_impl::last_update(collection_mutation_view c
         auto ksize = read_simple<uint32_t>(in);
         in.remove_prefix(ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(ctype.value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
         max = std::max(value.timestamp(), max);
     }
     return max;
