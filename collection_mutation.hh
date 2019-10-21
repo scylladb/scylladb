@@ -26,6 +26,7 @@
 #include "gc_clock.hh"
 #include "atomic_cell.hh"
 
+class abstract_type;
 class collection_type_impl;
 class compaction_garbage_collector;
 class row_tombstone;
@@ -72,7 +73,7 @@ public:
     imr_object_type _data;
 
     collection_mutation() {}
-    collection_mutation(const collection_type_impl&, collection_mutation_view);
-    collection_mutation(const collection_type_impl&, bytes_view);
+    collection_mutation(const abstract_type&, collection_mutation_view);
+    collection_mutation(const abstract_type&, bytes_view);
     operator collection_mutation_view() const;
 };

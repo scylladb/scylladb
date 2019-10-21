@@ -23,10 +23,10 @@
 
 #include "collection_mutation.hh"
 
-collection_mutation::collection_mutation(const collection_type_impl& type, collection_mutation_view v)
+collection_mutation::collection_mutation(const abstract_type& type, collection_mutation_view v)
     : _data(imr_object_type::make(data::cell::make_collection(v.data), &type.imr_state().lsa_migrator())) {}
 
-collection_mutation::collection_mutation(const collection_type_impl& type, bytes_view v)
+collection_mutation::collection_mutation(const abstract_type& type, bytes_view v)
     : _data(imr_object_type::make(data::cell::make_collection(v), &type.imr_state().lsa_migrator())) {}
 
 static collection_mutation_view get_collection_mutation_view(const uint8_t* ptr)

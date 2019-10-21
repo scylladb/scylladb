@@ -274,11 +274,10 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
                 clustering_row_builder(const schema& s, clustering_key key, row_tombstone t, row_marker m)
                     : _s(s), _mf(mutation_fragment::clustering_row_tag_t(), std::move(key), std::move(t), std::move(m), row()) { }
                 void accept_atomic_cell(column_id id, atomic_cell ac) {
-                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(std::move(ac)));
+                    _mf.as_mutable_clustering_row().cells().append_cell(id, std::move(ac));
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
-                    auto& ctype = *static_pointer_cast<const collection_type_impl>(_s.regular_column_at(id).type);
-                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(collection_mutation(ctype, cm)));
+                    _mf.as_mutable_clustering_row().cells().append_cell(id, collection_mutation(*_s.regular_column_at(id).type, cm));
                 }
                 mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
             };
@@ -296,11 +295,10 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
             public:
                 explicit static_row_builder(const schema& s) : _s(s), _mf(static_row()) { }
                 void accept_atomic_cell(column_id id, atomic_cell ac) {
-                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(std::move(ac)));
+                    _mf.as_mutable_static_row().cells().append_cell(id, std::move(ac));
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
-                    auto& ctype = *static_pointer_cast<const collection_type_impl>(_s.static_column_at(id).type);
-                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(collection_mutation(ctype, cm)));
+                    _mf.as_mutable_static_row().cells().append_cell(id, collection_mutation(*_s.static_column_at(id).type, cm));
                 }
                 mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
             };
