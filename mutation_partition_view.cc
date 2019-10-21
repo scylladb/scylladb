@@ -105,16 +105,32 @@ atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, 
 
 collection_mutation read_collection_cell(const abstract_type& type, ser::collection_cell_view cv)
 {
-    assert(type.is_collection());
-    auto& ctype = static_cast<const collection_type_impl&>(type);
-
     collection_mutation_description mut;
     mut.tomb = cv.tomb();
     auto&& elements = cv.elements();
     mut.cells.reserve(elements.size());
-    for (auto&& e : elements) {
-        mut.cells.emplace_back(e.key(), read_atomic_cell(*ctype.value_comparator(), e.value(), atomic_cell::collection_member::yes));
-    }
+
+    visit(type, make_visitor(
+        [&] (const collection_type_impl& ctype) {
+            auto& value_type = *ctype.value_comparator();
+            for (auto&& e : elements) {
+                mut.cells.emplace_back(e.key(), read_atomic_cell(value_type, e.value(), atomic_cell::collection_member::yes));
+            }
+        },
+        [&] (const user_type_impl& utype) {
+            for (auto&& e : elements) {
+                bytes key = e.key();
+                auto idx = deserialize_field_index(key);
+                assert(idx < utype.size());
+
+                mut.cells.emplace_back(key, read_atomic_cell(*utype.type(idx), e.value(), atomic_cell::collection_member::yes));
+            }
+        },
+        [&] (const abstract_type& o) {
+            throw std::runtime_error(format("attempted to read a collection cell with type: {}", o.name()));
+        }
+    ));
+
     return mut.serialize(type);
 }
 
