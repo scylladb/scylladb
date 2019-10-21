@@ -54,6 +54,10 @@ bool cql3_type::raw::references_user_type(const sstring& name) const {
 class cql3_type::raw_type : public raw {
 private:
     cql3_type _type;
+
+    virtual sstring to_string() const override {
+        return _type.to_string();
+    }
 public:
     raw_type(cql3_type type)
         : _type{type}
@@ -74,10 +78,6 @@ public:
         return _type.is_counter();
     }
 
-    virtual sstring to_string() const {
-        return _type.to_string();
-    }
-
     virtual bool is_duration() const override {
         return _type.get_type() == duration_type;
     }
@@ -87,6 +87,19 @@ class cql3_type::raw_collection : public raw {
     const abstract_type::kind _kind;
     shared_ptr<raw> _keys;
     shared_ptr<raw> _values;
+
+    virtual sstring to_string() const override {
+        sstring start = is_frozen() ? "frozen<" : "";
+        sstring end = is_frozen() ? ">" : "";
+        if (_kind == abstract_type::kind::list) {
+            return format("{}list<{}>{}", start, _values, end);
+        } else if (_kind == abstract_type::kind::set) {
+            return format("{}set<{}>{}", start, _values, end);
+        } else if (_kind == abstract_type::kind::map) {
+            return format("{}map<{}, {}>{}", start, _keys, _values, end);
+        }
+        abort();
+    }
 public:
     raw_collection(const abstract_type::kind kind, shared_ptr<raw> keys, shared_ptr<raw> values)
             : _kind(kind), _keys(std::move(keys)), _values(std::move(values)) {
@@ -150,23 +163,14 @@ public:
     bool is_duration() const override {
         return false;
     }
-
-    virtual sstring to_string() const override {
-        sstring start = is_frozen() ? "frozen<" : "";
-        sstring end = is_frozen() ? ">" : "";
-        if (_kind == abstract_type::kind::list) {
-            return format("{}list<{}>{}", start, _values, end);
-        } else if (_kind == abstract_type::kind::set) {
-            return format("{}set<{}>{}", start, _values, end);
-        } else if (_kind == abstract_type::kind::map) {
-            return format("{}map<{}, {}>{}", start, _keys, _values, end);
-        }
-        abort();
-    }
 };
 
 class cql3_type::raw_ut : public raw {
     ut_name _name;
+
+    virtual sstring to_string() const override {
+        return _name.to_string();
+    }
 public:
     raw_ut(ut_name name)
             : _name(std::move(name)) {
@@ -209,14 +213,15 @@ public:
         return true;
     }
 
-    virtual sstring to_string() const override {
-        return _name.to_string();
-    }
 };
 
 
 class cql3_type::raw_tuple : public raw {
     std::vector<shared_ptr<raw>> _types;
+
+    virtual sstring to_string() const override {
+        return format("tuple<{}>", join(", ", _types));
+    }
 public:
     raw_tuple(std::vector<shared_ptr<raw>> types)
             : _types(std::move(types)) {
@@ -253,10 +258,6 @@ public:
         return std::any_of(_types.begin(), _types.end(), [&name](auto t) {
             return t->references_user_type(name);
         });
-    }
-
-    virtual sstring to_string() const override {
-        return format("tuple<{}>", join(", ", _types));
     }
 };
 

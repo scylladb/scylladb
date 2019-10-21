@@ -153,7 +153,8 @@ user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_
     std::vector<data_type> new_types(to_update->field_types());
     auto&& add_type = _field_type->prepare(db, keyspace()).get_type();
     if (add_type->references_user_type(to_update->_keyspace, to_update->_name)) {
-        throw exceptions::invalid_request_exception(format("Cannot add new field {} of type {} to type {} as this would create a circular reference", _field_name->to_string(), _field_type->to_string(), _name.to_string()));
+        throw exceptions::invalid_request_exception(format("Cannot add new field {} of type {} to type {} as this would create a circular reference",
+                    *_field_name, *_field_type, _name.to_string()));
     }
     new_types.push_back(std::move(add_type));
     return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), std::move(new_types));
@@ -170,7 +171,7 @@ user_type alter_type_statement::add_or_alter::do_alter(database& db, user_type t
     auto new_type = _field_type->prepare(db, keyspace()).get_type();
     if (!new_type->is_compatible_with(*previous)) {
         throw exceptions::invalid_request_exception(format("Type {} in incompatible with previous type {} of field {} in user type {}",
-            _field_type->to_string(), previous->as_cql3_type().to_string(), _field_name->to_string(), _name.to_string()));
+            *_field_type, previous->as_cql3_type(), *_field_name, _name));
     }
 
     std::vector<data_type> new_types(to_update->field_types());

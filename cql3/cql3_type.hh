@@ -66,6 +66,7 @@ public:
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {
+        virtual sstring to_string() const = 0;
     protected:
         bool _frozen = false;
     public:
@@ -87,7 +88,6 @@ public:
         static shared_ptr<raw> set(shared_ptr<raw> t);
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
         static shared_ptr<raw> frozen(shared_ptr<raw> t);
-        virtual sstring to_string() const = 0;
         friend std::ostream& operator<<(std::ostream& os, const raw& r);
     };
 
