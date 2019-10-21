@@ -174,7 +174,7 @@ lists::value::equals(shared_ptr<list_type_impl> lt, const value& v) {
             [t = lt->get_elements_type()] (const bytes_opt& e1, const bytes_opt& e2) { return t->equal(*e1, *e2); });
 }
 
-std::vector<bytes_opt>
+const std::vector<bytes_opt>&
 lists::value::get_elements() {
     return _elements;
 }

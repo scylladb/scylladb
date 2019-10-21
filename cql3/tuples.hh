@@ -126,7 +126,7 @@ public:
             return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
         }
 
-        virtual std::vector<bytes_opt> get_elements() override {
+        virtual const std::vector<bytes_opt>& get_elements() override {
             return _elements;
         }
         virtual sstring to_string() const override {
