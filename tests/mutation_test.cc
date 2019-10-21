@@ -322,6 +322,69 @@ SEASTAR_TEST_CASE(test_list_mutations) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
+    // (a int, b text, c long)
+    auto ut = user_type_impl::get_instance("ks", to_bytes("ut"),
+            {to_bytes("a"), to_bytes("b"), to_bytes("c"), to_bytes("d")},
+            {int32_type, utf8_type, long_type, utf8_type},
+            true);
+
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", ut}}, utf8_type));
+    auto mt = make_lw_shared<memtable>(s);
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+    auto& column = *s->get_column_definition("s1");
+
+    // {a: 0, c: 2}
+    auto mut1 = make_collection_mutation({}, serialize_field_index(0), make_collection_member(int32_type, 0),
+            serialize_field_index(2), make_collection_member(long_type, 2));
+    mutation m1(s, key);
+    m1.set_static_cell(column, mut1.serialize(*ut));
+    mt->apply(m1);
+
+    // {d: "text"}
+    auto mut2 = make_collection_mutation({}, serialize_field_index(3), make_collection_member(utf8_type, "text"));
+    mutation m2(s, key);
+    m2.set_static_cell(column, mut2.serialize(*ut));
+    mt->apply(m2);
+
+    // {c: 3}
+    auto mut3 = make_collection_mutation({}, serialize_field_index(2), make_collection_member(long_type, 3));
+    mutation m3(s, key);
+    m3.set_static_cell(column, mut3.serialize(*ut));
+    mt->apply(m3);
+
+    auto p = get_partition(*mt, key);
+    lazy_row& r = p.static_row();
+    auto i = r.find_cell(column.id);
+    BOOST_REQUIRE(i);
+    i->as_collection_mutation().with_deserialized(*ut, [&] (collection_mutation_view_description m) {
+        // one cell for each field that has been set. mut3 and mut1 should have been merged
+        BOOST_REQUIRE(m.cells.size() == 3);
+        BOOST_REQUIRE(std::all_of(m.cells.begin(), m.cells.begin(), [] (const auto& c) { return c.second.is_live(); }));
+
+        auto cells_equal = [] (const auto& c1, const auto& c2) {
+            return c1.first == c2.first && c1.second.value().linearize() == c2.second.value().linearize();
+        };
+
+        auto cell_a = std::make_pair(serialize_field_index(0), make_collection_member(int32_type, 0));
+        BOOST_REQUIRE(cells_equal(m.cells[0], std::pair<bytes_view, atomic_cell_view>(cell_a.first, cell_a.second)));
+
+        auto cell_c = std::make_pair(serialize_field_index(2), make_collection_member(long_type, 3));
+        BOOST_REQUIRE(cells_equal(m.cells[1], std::pair<bytes_view, atomic_cell_view>(cell_c.first, cell_c.second)));
+
+        auto cell_d = std::make_pair(serialize_field_index(3), make_collection_member(utf8_type, "text"));
+        BOOST_REQUIRE(cells_equal(m.cells[2], std::pair<bytes_view, atomic_cell_view>(cell_d.first, cell_d.second)));
+
+        auto mm = m.materialize(*ut);
+        BOOST_REQUIRE(mm.cells.size() == 3);
+
+        BOOST_REQUIRE(cells_equal(mm.cells[0], cell_a));
+        BOOST_REQUIRE(cells_equal(mm.cells[1], cell_c));
+        BOOST_REQUIRE(cells_equal(mm.cells[2], cell_d));
+    });
+}
+
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     return seastar::async([] {
     storage_service_for_tests ssft;
