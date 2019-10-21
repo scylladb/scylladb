@@ -1347,7 +1347,7 @@ make_map_mutation(const Map& map,
     auto vtyp = column_type->get_values_type();
 
     if (column_type->is_multi_cell()) {
-        map_type_impl::mutation mut;
+        collection_mutation_description mut;
 
         for (auto&& entry : map) {
             auto te = f(entry);
@@ -1492,7 +1492,7 @@ make_list_mutation(const std::vector<T, Args...>& values,
     auto vtyp = column_type->get_elements_type();
 
     if (column_type->is_multi_cell()) {
-        list_type_impl::mutation m;
+        collection_mutation_description m;
         m.cells.reserve(values.size());
         m.tomb.timestamp = timestamp - 1;
         m.tomb.deletion_time = gc_clock::now();

@@ -237,7 +237,7 @@ private:
     class collection_mutation {
         const column_definition *_cdef;
     public:
-        collection_type_impl::mutation cm;
+        collection_mutation_description cm;
 
         // We need to get a copy of the prefix here, because the outer object may be short lived.
         collection_mutation(const column_definition *cdef)
@@ -843,7 +843,7 @@ class mp_row_consumer_m : public consumer_m {
         atomic_cell_or_collection val;
     };
     std::vector<cell> _cells;
-    collection_type_impl::mutation _cm;
+    collection_mutation_description _cm;
 
     struct range_tombstone_start {
         clustering_key_prefix ck;

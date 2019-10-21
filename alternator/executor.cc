@@ -49,6 +49,7 @@
 #include "utils/big_decimal.hh"
 #include "seastar/json/json_elements.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include "collection_mutation.hh"
 
 #include <boost/range/adaptors.hpp>
 
@@ -606,8 +607,8 @@ public:
     void del(bytes&& name, api::timestamp_type ts) {
         add(std::move(name), atomic_cell::make_dead(ts, gc_clock::now()));
     }
-    collection_type_impl::mutation to_mut() {
-        collection_type_impl::mutation ret;
+    collection_mutation_description to_mut() {
+        collection_mutation_description ret;
         for (auto&& e : collected) {
             ret.cells.emplace_back(e.first, std::move(e.second));
         }

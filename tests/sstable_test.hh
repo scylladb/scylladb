@@ -586,7 +586,7 @@ inline void match_absent(const row& row, const schema& s, bytes col) {
     BOOST_REQUIRE(row.find_cell(cdef->id) == nullptr);
 }
 
-inline collection_type_impl::mutation
+inline collection_mutation_description
 match_collection(const row& row, const schema& s, bytes col, const tombstone& t) {
     auto cdef = s.get_column_definition(col);
 

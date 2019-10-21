@@ -311,7 +311,7 @@ timestamp_based_splitting_mutation_writer::split_collection(atomic_cell_or_colle
 
     collection.as_collection_mutation().data.with_linearized([&, this] (bytes_view bv) {
         auto original_mv = collection_type.deserialize_mutation_form(bv);
-        small_flat_map<bucket_id, collection_type_impl::mutation_view, 4> mutations_by_bucket;
+        small_flat_map<bucket_id, collection_mutation_view_description, 4> mutations_by_bucket;
         for (auto&& c : original_mv.cells) {
             mutations_by_bucket[_classifier(c.second.timestamp())].cells.push_back(c);
         }

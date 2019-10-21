@@ -365,7 +365,7 @@ static atomic_cell make_empty(const atomic_cell_view& ac) {
 static collection_mutation make_empty(
         const collection_mutation_view& cm,
         const collection_type_impl& ctype) {
-    collection_type_impl::mutation n;
+    collection_mutation_description n;
     cm.data.with_linearized([&] (bytes_view bv) {
         auto m_view = ctype.deserialize_mutation_form(bv);
         n.tomb = m_view.tomb;

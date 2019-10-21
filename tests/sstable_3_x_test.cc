@@ -3538,7 +3538,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
     mutation mut{s, key};
 
     mut.partition().apply_insert(*s, clustering_key::make_empty(), write_timestamp);
-    set_type_impl::mutation set_values;
+    collection_mutation_description set_values;
     set_values.tomb = tombstone {write_timestamp - 1, tp};
     set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
     set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
@@ -3568,7 +3568,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
 
-    set_type_impl::mutation set_values;
+    collection_mutation_description set_values;
     set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
 
     mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_of_ints_type->serialize_mutation_form(set_values));
@@ -4955,7 +4955,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "rc1", data_value{2}, write_timestamp);
 
-    set_type_impl::mutation set_values;
+    collection_mutation_description set_values;
     set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
     set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
     set_values.cells.emplace_back(int32_type->decompose(4), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
@@ -4997,7 +4997,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_col
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_static_cell("st1", data_value{2}, write_timestamp);
 
-    set_type_impl::mutation set_values;
+    collection_mutation_description set_values;
     set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
     set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
     set_values.cells.emplace_back(int32_type->decompose(4), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));

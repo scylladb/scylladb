@@ -30,8 +30,6 @@
 #include "utils/chunked_vector.hh"
 #include "schema_fwd.hh"
 
-class compaction_garbage_collector;
-
 class collection_type_impl : public abstract_type {
     static logging::logger _logger;
 public:
@@ -42,20 +40,6 @@ protected:
     explicit collection_type_impl(kind k, sstring name, bool is_multi_cell)
             : abstract_type(k, std::move(name), {}, data::type_info::make_collection()), _is_multi_cell(is_multi_cell) {}
 public:
-    // representation of a collection mutation, key/value pairs, value is a mutation itself
-    struct mutation {
-        tombstone tomb;
-        utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
-        // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
-        // Removes cells covered by tomb or this->tomb.
-        bool compact_and_expire(column_id id, row_tombstone tomb, gc_clock::time_point query_time,
-            can_gc_fn&, gc_clock::time_point gc_before, compaction_garbage_collector* collector = nullptr);
-    };
-    struct mutation_view {
-        tombstone tomb;
-        utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
-        mutation materialize(const collection_type_impl&) const;
-    };
     bool is_multi_cell() const { return _is_multi_cell; }
     virtual data_type name_comparator() const = 0;
     virtual data_type value_comparator() const = 0;
@@ -68,16 +52,16 @@ public:
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
     // requires linearized collection_mutation_view, lifetime
-    mutation_view deserialize_mutation_form(bytes_view in) const;
+    collection_mutation_view_description deserialize_mutation_form(bytes_view in) const;
     bool is_empty(collection_mutation_view in) const;
     bool is_any_live(collection_mutation_view in, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
     api::timestamp_type last_update(collection_mutation_view in) const;
-    virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const = 0;
+    virtual bytes to_value(collection_mutation_view_description mut, cql_serialization_format sf) const = 0;
     bytes to_value(collection_mutation_view mut, cql_serialization_format sf) const;
     // FIXME: use iterators?
-    collection_mutation serialize_mutation_form(const mutation& mut) const;
-    collection_mutation serialize_mutation_form(mutation_view mut) const;
-    collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
+    collection_mutation serialize_mutation_form(const collection_mutation_description& mut) const;
+    collection_mutation serialize_mutation_form(collection_mutation_view_description mut) const;
+    collection_mutation serialize_mutation_form_only_live(collection_mutation_view_description mut, gc_clock::time_point now) const;
     collection_mutation merge(collection_mutation_view a, collection_mutation_view b) const;
     collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
     // Calls Func(atomic_cell_view) for each cell in this collection.

@@ -60,7 +60,7 @@ public:
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
             cql_serialization_format sf);
-    virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
+    virtual bytes to_value(collection_mutation_view_description mut, cql_serialization_format sf) const override;
 };
 
 data_value make_map_value(data_type tuple_type, map_type_impl::native_type value);

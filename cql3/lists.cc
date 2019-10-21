@@ -270,8 +270,8 @@ lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const u
         return;
     }
     if (column.type->is_multi_cell()) {
-        // delete + append
-        collection_type_impl::mutation mut;
+        // Delete all cells first, then append new ones
+        collection_mutation_view_description mut;
         mut.tomb = params.make_tombstone_just_before();
         auto ctype = static_pointer_cast<const list_type_impl>(column.type);
         auto col_mut = ctype->serialize_mutation_form(std::move(mut));
@@ -322,9 +322,10 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         throw exceptions::invalid_request_exception(format("List index {:d} out of bound, list has size {:d}",
                 idx, existing_list.size()));
     }
+
     const data_value& eidx_dv = existing_list[idx].first;
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
-    list_type_impl::mutation mut;
+    collection_mutation_description mut;
     mut.cells.reserve(1);
     if (!value) {
         mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
@@ -355,7 +356,7 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
 
     auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
 
-    list_type_impl::mutation mut;
+    collection_mutation_description mut;
     mut.cells.reserve(1);
     mut.cells.emplace_back(to_bytes(*index), params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
     auto smut = ltype->serialize_mutation_form(mut);
@@ -390,7 +391,7 @@ lists::do_append(shared_ptr<term> value,
         }
 
         auto&& to_add = list_value->_elements;
-        collection_type_impl::mutation appended;
+        collection_mutation_description appended;
         appended.cells.reserve(to_add.size());
         for (auto&& e : to_add) {
             auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
@@ -422,7 +423,7 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
     assert(lvalue);
     auto time = precision_time::REFERENCE_TIME - (db_clock::now() - precision_time::REFERENCE_TIME);
 
-    collection_type_impl::mutation mut;
+    collection_mutation_description mut;
     mut.cells.reserve(lvalue->get_elements().size());
     // We reverse the order of insertion, so that the last element gets the lastest time
     // (lists are sorted by time)
@@ -474,7 +475,7 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
     // the read-before-write this operation requires limits its usefulness on big lists, so in practice
     // toDiscard will be small and keeping a list will be more efficient.
     auto&& to_discard = lvalue->_elements;
-    collection_type_impl::mutation mnew;
+    collection_mutation_description mnew;
     for (auto&& cell : elist) {
         auto has_value = [&] (bytes_view value) {
             return std::find_if(to_discard.begin(), to_discard.end(),
@@ -520,7 +521,7 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     if (idx < 0 || size_t(idx) >= existing_list.size()) {
         throw exceptions::invalid_request_exception(format("List index {:d} out of bound, list has size {:d}", idx, existing_list.size()));
     }
-    collection_type_impl::mutation mut;
+    collection_mutation_description mut;
     const data_value& eidx_dv = existing_list[idx].first;
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
     mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());

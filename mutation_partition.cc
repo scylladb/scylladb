@@ -1748,7 +1748,7 @@ bool row::compact_and_expire(
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
           cell.data.with_linearized([&] (bytes_view cell_bv) {
             auto m_view = ctype->deserialize_mutation_form(cell_bv);
-            collection_type_impl::mutation m = m_view.materialize(*ctype);
+            collection_mutation_description m = m_view.materialize(*ctype);
             any_live |= m.compact_and_expire(id, tomb, query_time, can_gc, gc_before, collector);
             if (m.cells.empty() && m.tomb <= tomb.tomb()) {
                 erase = true;

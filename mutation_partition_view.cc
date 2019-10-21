@@ -105,7 +105,7 @@ atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, 
 
 collection_mutation read_collection_cell(const collection_type_impl& ctype, ser::collection_cell_view cv)
 {
-    collection_type_impl::mutation mut;
+    collection_mutation_description mut;
     mut.tomb = cv.tomb();
     auto&& elements = cv.elements();
     mut.cells.reserve(elements.size());

@@ -64,7 +64,7 @@ private:
         auto old_ctype = static_pointer_cast<const collection_type_impl>(old_type);
         auto old_view = old_ctype->deserialize_mutation_form(cell_bv);
 
-        collection_type_impl::mutation new_view;
+        collection_mutation_description new_view;
         if (old_view.tomb.timestamp > new_def.dropped_at()) {
             new_view.tomb = old_view.tomb;
         }

@@ -792,7 +792,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
-        set_type_impl::mutation set_mut;
+        collection_mutation_description set_mut;
         set_mut.tomb = tomb;
         set_mut.cells.emplace_back(to_bytes("1"), make_atomic_cell(bytes_type, {}));
         set_mut.cells.emplace_back(to_bytes("2"), make_atomic_cell(bytes_type, {}));
@@ -806,7 +806,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
         auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
         mutation m2(s, key2);
-        set_type_impl::mutation set_mut_single;
+        collection_mutation_description set_mut_single;
         set_mut_single.cells.emplace_back(to_bytes("4"), make_atomic_cell(bytes_type, {}));
 
         m2.set_clustered_cell(c_key, set_col, set_type->serialize_mutation_form(set_mut_single));
@@ -834,7 +834,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                 return do_with(make_dkey(s, "key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
                     auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
                     return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, verifier, tomb, &static_set_col, rd] (auto mutation) {
-                        auto verify_set = [&tomb] (const collection_type_impl::mutation& m) {
+                        auto verify_set = [&tomb] (const collection_mutation_description& m) {
                             BOOST_REQUIRE(bool(m.tomb) == true);
                             BOOST_REQUIRE(m.tomb == tomb);
                             BOOST_REQUIRE(m.cells.size() == 3);

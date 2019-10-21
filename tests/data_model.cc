@@ -119,7 +119,7 @@ mutation mutation_description::build(schema_ptr s) const {
             [&] (const collection& c) {
                 assert(!cdef->is_atomic());
                 auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
-                collection_type_impl::mutation mut;
+                collection_mutation_description mut;
                 mut.tomb = c.tomb;
                 for (auto& [ key, value ] : c.elements) {
                     if (!value.expiring) {
@@ -157,7 +157,7 @@ mutation mutation_description::build(schema_ptr s) const {
             [&] (const collection& c) {
                     assert(!cdef->is_atomic());
                     auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
-                    collection_type_impl::mutation mut;
+                    collection_mutation_description mut;
                     mut.tomb = c.tomb;
                     for (auto& [ key, value ] : c.elements) {
                         if (!value.expiring) {

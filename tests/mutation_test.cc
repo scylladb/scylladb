@@ -194,17 +194,17 @@ SEASTAR_TEST_CASE(test_row_tombstone_updates) {
     return make_ready_future<>();
 }
 
-collection_type_impl::mutation make_collection_mutation(tombstone t, bytes key, atomic_cell cell)
+collection_mutation_description make_collection_mutation(tombstone t, bytes key, atomic_cell cell)
 {
-    collection_type_impl::mutation m;
+    collection_mutation_description m;
     m.tomb = t;
     m.cells.emplace_back(std::move(key), std::move(cell));
     return m;
 }
 
-collection_type_impl::mutation make_collection_mutation(tombstone t, bytes key1, atomic_cell cell1,  bytes key2, atomic_cell cell2)
+collection_mutation_description make_collection_mutation(tombstone t, bytes key1, atomic_cell cell1,  bytes key2, atomic_cell cell2)
 {
-    collection_type_impl::mutation m;
+    collection_mutation_description m;
     m.tomb = t;
     m.cells.emplace_back(std::move(key1), std::move(cell1));
     m.cells.emplace_back(std::move(key2), std::move(cell2));
@@ -1508,14 +1508,14 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
         auto k = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key")));
         mutation m1(s, k);
         auto uuid = utils::UUID_gen::get_time_UUID_bytes();
-        collection_type_impl::mutation mcol1;
+        collection_mutation_description mcol1;
         mcol1.cells.emplace_back(
                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
                 atomic_cell::make_live(*bytes_type, api::timestamp_type(1), to_bytes("element")));
         m1.set_clustered_cell(clustering_key::make_empty(), col, ctype.serialize_mutation_form(mcol1));
 
         mutation m2(s, k);
-        collection_type_impl::mutation mcol2;
+        collection_mutation_description mcol2;
         mcol2.tomb = tombstone(api::timestamp_type(2), gc_clock::now());
         m2.set_clustered_cell(clustering_key::make_empty(), col, ctype.serialize_mutation_form(mcol2));
 

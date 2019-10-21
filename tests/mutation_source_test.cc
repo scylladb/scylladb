@@ -1836,7 +1836,7 @@ public:
                     }
                     static thread_local std::uniform_int_distribution<int> element_dist{1, 13};
                     static thread_local std::uniform_int_distribution<int64_t> uuid_ts_dist{-12219292800000L, -12219292800000L + 1000};
-                    collection_type_impl::mutation m;
+                    collection_mutation_description m;
                     auto num_cells = element_dist(_gen);
                     m.cells.reserve(num_cells);
                     std::unordered_set<bytes> unique_cells;
@@ -1860,7 +1860,7 @@ public:
                     if (col.is_atomic() || col.is_counter()) {
                         return atomic_cell::make_dead(timestamp_dist(_gen), expiry_dist(_gen));
                     }
-                    collection_type_impl::mutation m;
+                    collection_mutation_description m;
                     m.tomb = tombstone(timestamp_dist(_gen), expiry_dist(_gen));
                     return static_pointer_cast<const collection_type_impl>(col.type)->serialize_mutation_form(m);
 

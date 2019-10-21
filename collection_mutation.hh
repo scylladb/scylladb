@@ -21,9 +21,36 @@
 
 #pragma once
 
+#include "utils/chunked_vector.hh"
+#include "schema_fwd.hh"
+#include "gc_clock.hh"
 #include "atomic_cell.hh"
 
 class collection_type_impl;
+class compaction_garbage_collector;
+class row_tombstone;
+
+// An auxiliary struct used to (de)construct collection_mutations.
+// Unlike collection_mutation which is a serialized blob, this struct allows to inspect logical units of information
+// (tombstone and cells) inside the mutation easily.
+struct collection_mutation_description {
+    tombstone tomb;
+    utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
+
+    // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
+    // Removes cells covered by tomb or this->tomb.
+    bool compact_and_expire(column_id id, row_tombstone tomb, gc_clock::time_point query_time,
+        can_gc_fn&, gc_clock::time_point gc_before, compaction_garbage_collector* collector = nullptr);
+};
+
+// Similar to collection_mutation_description, except that it doesn't store the cells' data, only observes it.
+struct collection_mutation_view_description {
+    tombstone tomb;
+    utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
+
+    // Copies the observed data, storing it in a collection_mutation_description.
+    collection_mutation_description materialize(const collection_type_impl&) const;
+};
 
 class collection_mutation_view {
 public:
