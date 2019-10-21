@@ -129,6 +129,31 @@ operation::set_field::is_compatible_with(shared_ptr<raw_update> other) {
     return !dynamic_pointer_cast<set_value>(std::move(other));
 }
 
+shared_ptr<column_identifier::raw>
+operation::field_deletion::affected_column() {
+    return _id;
+}
+
+shared_ptr<operation>
+operation::field_deletion::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+    if (!receiver.type->is_user_type()) {
+        throw exceptions::invalid_request_exception(
+                format("Invalid deletion operation for non-UDT column {}", receiver.name_as_text()));
+    } else if (!receiver.type->is_multi_cell()) {
+        throw exceptions::invalid_request_exception(
+                format("Frozen UDT column {} does not support field deletions", receiver.name_as_text()));
+    }
+
+    auto type = static_cast<const user_type_impl*>(receiver.type.get());
+    auto idx = type->idx_of_field(_field->name());
+    if (!idx) {
+        throw exceptions::invalid_request_exception(
+                format("UDT column {} does not have a field named {}", receiver.name_as_text(), *_field));
+    }
+
+    return make_shared<user_types::deleter_by_field>(receiver, *idx);
+}
+
 sstring
 operation::addition::to_string(const column_definition& receiver) const {
     return format("{} = {} + {}", receiver.name_as_text(), receiver.name_as_text(), *_value);

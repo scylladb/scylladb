@@ -177,6 +177,7 @@ public:
      * This can be one of:
      *   - Deleting a column
      *   - Deleting an element of a collection
+     *   - Deleting a field of a user-defined type
      */
     class raw_deletion {
     public:
@@ -234,6 +235,21 @@ public:
         virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) override;
 
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
+    };
+
+    // Delete a single field inside a user-defined type.
+    // Equivalent to setting the field to null.
+    class field_deletion : public raw_deletion {
+        const shared_ptr<column_identifier::raw> _id;
+        const shared_ptr<column_identifier> _field;
+    public:
+        field_deletion(shared_ptr<column_identifier::raw> id, shared_ptr<column_identifier> field)
+                : _id(std::move(id)), _field(std::move(field)) {
+        }
+
+        virtual shared_ptr<column_identifier::raw> affected_column() override;
+
+        virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) override;
     };
 
     class addition : public raw_update {

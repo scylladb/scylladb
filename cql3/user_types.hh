@@ -128,6 +128,16 @@ public:
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
+
+    class deleter_by_field : public operation {
+        size_t _field_idx;
+    public:
+        deleter_by_field(const column_definition& column, size_t field_idx)
+            : operation(column, nullptr), _field_idx(field_idx) {
+        }
+
+        virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
+    };
 };
 
 }
