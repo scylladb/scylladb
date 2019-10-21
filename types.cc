@@ -96,6 +96,15 @@ sstring inet_to_string(const seastar::net::inet_address& addr) {
     return out.str();
 }
 
+std::vector<bytes_opt> to_bytes_opt_vec(const std::vector<bytes_view_opt>& v) {
+    std::vector<bytes_opt> r;
+    r.reserve(v.size());
+    for (auto& e: v) {
+        r.push_back(to_bytes_opt(e));
+    }
+    return r;
+}
+
 static const char* byte_type_name      = "org.apache.cassandra.db.marshal.ByteType";
 static const char* short_type_name     = "org.apache.cassandra.db.marshal.ShortType";
 static const char* int32_type_name     = "org.apache.cassandra.db.marshal.Int32Type";

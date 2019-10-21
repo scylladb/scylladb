@@ -1055,6 +1055,8 @@ to_bytes_opt(bytes_view_opt bv) {
     return std::nullopt;
 }
 
+std::vector<bytes_opt> to_bytes_opt_vec(const std::vector<bytes_view_opt>&);
+
 inline
 bytes_view_opt
 as_bytes_view_opt(const bytes_opt& bv) {

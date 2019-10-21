@@ -92,15 +92,8 @@ tuples::in_value::from_serialized(const fragmented_temporary_buffer::view& value
 
         std::vector<std::vector<bytes_opt>> elements;
         elements.reserve(l.size());
-        for (auto&& element : l) {
-            auto tuple_buff = ttype->decompose(element);
-            auto tuple = ttype->split(tuple_buff);
-            std::vector<bytes_opt> elems;
-            elems.reserve(tuple.size());
-            for (auto&& e : tuple) {
-                elems.emplace_back(to_bytes_opt(e));
-            }
-            elements.emplace_back(std::move(elems));
+        for (auto&& e : l) {
+            elements.emplace_back(to_bytes_opt_vec(ttype->split(ttype->decompose(e))));
         }
         return tuples::in_value(elements);
       });
