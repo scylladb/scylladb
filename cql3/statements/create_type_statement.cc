@@ -94,7 +94,10 @@ void create_type_statement::validate(service::storage_proxy& proxy, const servic
 
     for (auto&& type : _column_types) {
         if (type->is_counter()) {
-            throw exceptions::invalid_request_exception(format("A user type cannot contain counters"));
+            throw exceptions::invalid_request_exception("A user type cannot contain counters");
+        }
+        if (type->is_user_type() && !type->is_frozen()) {
+            throw exceptions::invalid_request_exception("A user type cannot contain non-frozen user type fields");
         }
     }
 }
