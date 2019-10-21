@@ -72,6 +72,11 @@ public:
     // Is this a noop mutation?
     bool is_empty() const;
 
+    // Is any of the stored cells live (not deleted nor expired) at the time point `tp`,
+    // given the later of the tombstones `t` and the one stored in the mutation (if any)?
+    // Requires a type to reconstruct the structural information.
+    bool is_any_live(const abstract_type&, tombstone t = tombstone(), gc_clock::time_point tp = gc_clock::time_point::min()) const;
+
     // Given a function that operates on a collection_mutation_view_description,
     // calls it on the corresponding description of `this`.
     template <typename F>

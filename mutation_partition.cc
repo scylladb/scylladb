@@ -824,12 +824,11 @@ static void get_compacted_row_slice(const schema& s,
                     write_cell(writer, slice, cell->as_atomic_cell(def));
                 }
             } else {
-                auto&& mut = cell->as_collection_mutation();
-                auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-                if (!ctype->is_any_live(mut)) {
+                auto mut = cell->as_collection_mutation();
+                if (!mut.is_any_live(*def.type)) {
                     writer.add().skip();
                 } else {
-                    write_cell(writer, slice, def.type, mut);
+                    write_cell(writer, slice, def.type, std::move(mut));
                 }
             }
         }
@@ -848,9 +847,8 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
                 return stop_iteration::yes;
             }
         } else {
-            auto&& cell = cell_or_collection.as_collection_mutation();
-            auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-            if (ctype->is_any_live(cell, tomb, now)) {
+            auto mut = cell_or_collection.as_collection_mutation();
+            if (mut.is_any_live(*def.type, tomb, now)) {
                 any_live = true;
                 return stop_iteration::yes;
             }

@@ -59,8 +59,11 @@ bool collection_mutation_view::is_empty() const {
   });
 }
 
-bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone tomb, gc_clock::time_point now) const {
-  return cm.data.with_linearized([&] (bytes_view in) {
+bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone tomb, gc_clock::time_point now) const {
+    assert(type.is_collection());
+    auto& ctype = static_cast<const collection_type_impl&>(type);
+
+  return data.with_linearized([&] (bytes_view in) {
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
         auto ts = read_simple<api::timestamp_type>(in);
@@ -72,7 +75,7 @@ bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone to
         auto ksize = read_simple<uint32_t>(in);
         in.remove_prefix(ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(ctype.value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
         if (value.is_live(tomb, now, false)) {
             return true;
         }
