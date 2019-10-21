@@ -219,7 +219,7 @@ std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_ba
     if (cdef.is_atomic()) {
         return _classifier(cell.as_atomic_cell(cdef).timestamp());
     }
-    if (cdef.type->is_collection()) {
+    if (cdef.type->is_collection() || cdef.type->is_user_type()) {
         std::optional<bucket_id> bucket;
         bool mismatch = false;
         cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
@@ -331,7 +331,7 @@ timestamp_based_splitting_mutation_writer::split_row(column_kind kind, row&& r) 
         const auto& cdef = _schema->column_at(kind, id);
         if (cdef.type->is_atomic()) {
             rows_by_bucket[_classifier(cell.as_atomic_cell(cdef).timestamp())].append_cell(id, std::move(cell));
-        } else if (cdef.type->is_collection()) {
+        } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
             for (auto&& [bucket, cell_piece] : split_collection(std::move(cell), cdef)) {
                 rows_by_bucket[bucket].append_cell(id, std::move(cell_piece));
             }
