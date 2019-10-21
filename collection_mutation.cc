@@ -338,34 +338,48 @@ collection_mutation merge(const abstract_type& type, collection_mutation_view a,
     });
 }
 
+template <typename C>
+GCC6_CONCEPT(requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>)
+static collection_mutation_view_description
+difference(collection_mutation_view_description a, collection_mutation_view_description b, C&& key_type)
+{
+    collection_mutation_view_description diff;
+    diff.cells.reserve(std::max(a.cells.size(), b.cells.size()));
+
+    auto it = b.cells.begin();
+    for (auto&& c : a.cells) {
+        while (it != b.cells.end() && key_type.less(it->first, c.first)) {
+            ++it;
+        }
+        if (it == b.cells.end() || !key_type.equal(it->first, c.first)
+            || compare_atomic_cell_for_merge(c.second, it->second) > 0) {
+
+            auto cell = std::make_pair(c.first, c.second);
+            diff.cells.emplace_back(std::move(cell));
+        }
+    }
+    if (a.tomb > b.tomb) {
+        diff.tomb = a.tomb;
+    }
+
+    return diff;
+}
+
 collection_mutation difference(const abstract_type& type, collection_mutation_view a, collection_mutation_view b)
 {
     return a.with_deserialized(type, [&] (collection_mutation_view_description a_view) {
         return b.with_deserialized(type, [&] (collection_mutation_view_description b_view) {
-            assert(type.is_collection());
-            auto& ctype = static_cast<const collection_type_impl&>(type);
-
-            collection_mutation_view_description diff;
-            diff.cells.reserve(std::max(a_view.cells.size(), b_view.cells.size()));
-
-            auto key_type = ctype.name_comparator();
-
-            auto it = b_view.cells.begin();
-            for (auto&& c : a_view.cells) {
-                while (it != b_view.cells.end() && key_type->less(it->first, c.first)) {
-                    ++it;
-                }
-                if (it == b_view.cells.end() || !key_type->equal(it->first, c.first)
-                    || compare_atomic_cell_for_merge(c.second, it->second) > 0) {
-
-                    auto cell = std::make_pair(c.first, c.second);
-                    diff.cells.emplace_back(std::move(cell));
-                }
+            return visit(type, make_visitor(
+            [&] (const collection_type_impl& ctype) {
+                return difference(std::move(a_view), std::move(b_view), *ctype.name_comparator());
+            },
+            [&] (const user_type_impl& utype) {
+                return difference(std::move(a_view), std::move(b_view), *short_type);
+            },
+            [] (const abstract_type& o) -> collection_mutation_view_description {
+                throw std::runtime_error(format("collection_mutation difference: unknown type: {}", o.name()));
             }
-            if (a_view.tomb > b_view.tomb) {
-                diff.tomb = a_view.tomb;
-            }
-            return diff.serialize(type);
+            )).serialize(type);
         });
     });
 }
