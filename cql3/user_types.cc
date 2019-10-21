@@ -145,6 +145,38 @@ sstring user_types::literal::to_string() const {
     return format("{{{}}}", ::join(", ", _entries | boost::adaptors::transformed(kv_to_str)));
 }
 
+user_types::value::value(std::vector<bytes_opt> elements)
+        : _elements(std::move(elements)) {
+}
+
+user_types::value::value(std::vector<bytes_view_opt> elements)
+    : value(to_bytes_opt_vec(std::move(elements))) {
+}
+
+user_types::value user_types::value::from_serialized(const fragmented_temporary_buffer::view& v, const user_type_impl& type) {
+    return with_linearized(v, [&] (bytes_view val) {
+        auto elements = type.split(val);
+        if (elements.size() > type.size()) {
+            throw exceptions::invalid_request_exception(
+                    format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
+        }
+
+        return value(elements);
+    });
+}
+
+cql3::raw_value user_types::value::get(const query_options&) {
+    return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
+}
+
+const std::vector<bytes_opt>& user_types::value::get_elements() {
+    return _elements;
+}
+
+sstring user_types::value::to_string() const {
+    return format("({})", join(", ", _elements));
+}
+
 user_types::delayed_value::delayed_value(user_type type, std::vector<shared_ptr<term>> values)
         : _type(std::move(type)), _values(std::move(values)) {
 }
@@ -190,7 +222,7 @@ std::vector<bytes_opt> user_types::delayed_value::bind_internal(const query_opti
 }
 
 shared_ptr<terminal> user_types::delayed_value::bind(const query_options& options) {
-    return ::make_shared<constants::value>(cql3::raw_value::make_value((bind_and_get(options))));
+    return ::make_shared<user_types::value>(bind_internal(options));
 }
 
 cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {

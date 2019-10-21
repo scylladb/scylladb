@@ -71,6 +71,19 @@ public:
         virtual sstring to_string() const override;
     };
 
+    class value : public multi_item_terminal {
+        std::vector<bytes_opt> _elements;
+    public:
+        explicit value(std::vector<bytes_opt>);
+        explicit value(std::vector<bytes_view_opt>);
+
+        static value from_serialized(const fragmented_temporary_buffer::view&, const user_type_impl&);
+
+        virtual cql3::raw_value get(const query_options&) override;
+        virtual const std::vector<bytes_opt>& get_elements() override;
+        virtual sstring to_string() const override;
+    };
+
     // Same purpose than Lists.DelayedValue, except we do handle bind marker in that case
     class delayed_value : public non_terminal {
         user_type _type;
