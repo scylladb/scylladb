@@ -1629,21 +1629,26 @@ void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
     visit(*this, validate_visitor{v, sf});
 }
 
-static void serialize_aux(const tuple_type_impl& t, const tuple_type_impl::native_type* v, bytes::iterator& out) {
-    auto do_serialize = [&out] (auto&& t_v) {
-        const data_type& t = boost::get<0>(t_v);
-        const data_value& v = boost::get<1>(t_v);
+static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::native_type* val, bytes::iterator& out) {
+    assert(val);
+    auto& elems = *val;
+
+    assert(elems.size() <= type.size());
+
+    for (size_t i = 0; i < elems.size(); ++i) {
+        const data_type& t = type.type(i);
+        const data_value& v = elems[i];
         if (!v.is_null() && t != v.type()) {
-            throw std::runtime_error("tuple element type mismatch");
+            throw std::runtime_error(format("tuple element type mismatch: expected {}, got {}", t->name(), v.type()->name()));
         }
+
         if (v.is_null()) {
             write(out, int32_t(-1));
         } else {
             write(out, int32_t(v.serialized_size()));
             v.serialize(out);
         }
-    };
-    boost::range::for_each(boost::combine(t.all_types(), *v), do_serialize);
+    }
 }
 
 static size_t concrete_serialized_size(const varint_type_impl::native_type& v);
@@ -1949,6 +1954,58 @@ data_value abstract_type::deserialize(bytes_view v) const {
     return visit(*this, deserialize_visitor{v});
 }
 
+int32_t compare_aux(const tuple_type_impl& t, bytes_view v1, bytes_view v2) {
+    // This is a slight modification of lexicographical_tri_compare:
+    // when the only difference between the tuples is that one of them has additional trailing nulls,
+    // we consider them equal. For example, in the following CQL scenario:
+    // 1. create type ut (a int);
+    // 2. create table cf (a int primary key, b frozen<ut>);
+    // 3. insert into cf (a, b) values (0, (0));
+    // 4. alter type ut add b int;
+    // 5. select * from cf where b = {a:0,b:null};
+    // the row with a = 0 should be returned, even though the value stored in the database is shorter
+    // (by one null) than the value given by the user.
+
+    auto types_first = t.all_types().begin();
+    auto types_last = t.all_types().end();
+
+    auto first1 = tuple_deserializing_iterator::start(v1);
+    auto last1 = tuple_deserializing_iterator::finish(v1);
+
+    auto first2 = tuple_deserializing_iterator::start(v2);
+    auto last2 = tuple_deserializing_iterator::finish(v2);
+
+    while (types_first != types_last && first1 != last1 && first2 != last2) {
+        if (auto c = tri_compare_opt(*types_first, *first1, *first2)) {
+            return c;
+        }
+
+        ++first1;
+        ++first2;
+        ++types_first;
+    }
+
+    while (types_first != types_last && first1 != last1) {
+        if (*first1) {
+            return 1;
+        }
+
+        ++first1;
+        ++types_first;
+    }
+
+    while (types_first != types_last && first2 != last2) {
+        if (*first2) {
+            return -1;
+        }
+
+        ++first2;
+        ++types_first;
+    }
+
+    return 0;
+}
+
 namespace {
 struct compare_visitor {
     bytes_view v1;
@@ -2018,11 +2075,7 @@ struct compare_visitor {
         return compare_unsigned(v1, v2);
     }
     int32_t operator()(const empty_type_impl&) { return 0; }
-    int32_t operator()(const tuple_type_impl& t) {
-        return lexicographical_tri_compare(t.all_types().begin(), t.all_types().end(),
-                tuple_deserializing_iterator::start(v1), tuple_deserializing_iterator::finish(v1),
-                tuple_deserializing_iterator::start(v2), tuple_deserializing_iterator::finish(v2), tri_compare_opt);
-    }
+    int32_t operator()(const tuple_type_impl& t) { return compare_aux(t, v1, v2); }
     int32_t operator()(const counter_type_impl&) {
         fail(unimplemented::cause::COUNTERS);
         return 0;
