@@ -467,6 +467,7 @@ cassandra_interface = Thrift(source='interface/cassandra.thrift', service='Cassa
 scylla_core = (['database.cc',
                 'table.cc',
                 'atomic_cell.cc',
+                'collection_mutation.cc',
                 'hashers.cc',
                 'schema.cc',
                 'frozen_schema.cc',

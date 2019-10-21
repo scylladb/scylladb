@@ -22,6 +22,7 @@
 #pragma once
 
 #include "atomic_cell.hh"
+#include "collection_mutation.hh"
 #include "tombstone.hh"
 #include "range_tombstone.hh"
 #include "keys.hh"

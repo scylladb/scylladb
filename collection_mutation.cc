@@ -1,0 +1,223 @@
+/*
+ * Copyright (C) 2019 ScyllaDB
+ */
+
+/*
+ * This file is part of Scylla.
+ *
+ * Scylla is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Scylla is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "types/collection.hh"
+
+#include "collection_mutation.hh"
+
+collection_mutation::collection_mutation(const collection_type_impl& type, collection_mutation_view v)
+    : _data(imr_object_type::make(data::cell::make_collection(v.data), &type.imr_state().lsa_migrator())) {}
+
+collection_mutation::collection_mutation(const collection_type_impl& type, bytes_view v)
+    : _data(imr_object_type::make(data::cell::make_collection(v), &type.imr_state().lsa_migrator())) {}
+
+static collection_mutation_view get_collection_mutation_view(const uint8_t* ptr)
+{
+    auto f = data::cell::structure::get_member<data::cell::tags::flags>(ptr);
+    auto ti = data::type_info::make_collection();
+    data::cell::context ctx(f, ti);
+    auto view = data::cell::structure::get_member<data::cell::tags::cell>(ptr).as<data::cell::tags::collection>(ctx);
+    auto dv = data::cell::variable_value::make_view(view, f.get<data::cell::tags::external_data>());
+    return collection_mutation_view { dv };
+}
+
+collection_mutation::operator collection_mutation_view() const
+{
+    return get_collection_mutation_view(_data.get());
+}
+
+collection_mutation_view atomic_cell_or_collection::as_collection_mutation() const {
+    return get_collection_mutation_view(_data.get());
+}
+
+bool collection_type_impl::is_empty(collection_mutation_view cm) const {
+  return cm.data.with_linearized([&] (bytes_view in) { // FIXME: we can guarantee that this is in the first fragment
+    auto has_tomb = read_simple<bool>(in);
+    return !has_tomb && read_simple<uint32_t>(in) == 0;
+  });
+}
+
+bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone tomb, gc_clock::time_point now) const {
+  return cm.data.with_linearized([&] (bytes_view in) {
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        auto ts = read_simple<api::timestamp_type>(in);
+        auto ttl = read_simple<gc_clock::duration::rep>(in);
+        tomb.apply(tombstone{ts, gc_clock::time_point(gc_clock::duration(ttl))});
+    }
+    auto nr = read_simple<uint32_t>(in);
+    for (uint32_t i = 0; i != nr; ++i) {
+        auto ksize = read_simple<uint32_t>(in);
+        in.remove_prefix(ksize);
+        auto vsize = read_simple<uint32_t>(in);
+        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
+        if (value.is_live(tomb, now, false)) {
+            return true;
+        }
+    }
+    return false;
+  });
+}
+
+api::timestamp_type collection_type_impl::last_update(collection_mutation_view cm) const {
+  return cm.data.with_linearized([&] (bytes_view in) {
+    api::timestamp_type max = api::missing_timestamp;
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        max = std::max(max, read_simple<api::timestamp_type>(in));
+        (void)read_simple<gc_clock::duration::rep>(in);
+    }
+    auto nr = read_simple<uint32_t>(in);
+    for (uint32_t i = 0; i != nr; ++i) {
+        auto ksize = read_simple<uint32_t>(in);
+        in.remove_prefix(ksize);
+        auto vsize = read_simple<uint32_t>(in);
+        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
+        max = std::max(value.timestamp(), max);
+    }
+    return max;
+  });
+}
+
+template <typename Iterator>
+collection_mutation do_serialize_mutation_form(
+        const collection_type_impl& ctype,
+        const tombstone& tomb,
+        boost::iterator_range<Iterator> cells) {
+    auto element_size = [] (size_t c, auto&& e) -> size_t {
+        return c + 8 + e.first.size() + e.second.serialize().size();
+    };
+    auto size = accumulate(cells, (size_t)4, element_size);
+    size += 1;
+    if (tomb) {
+        size += sizeof(tomb.timestamp) + sizeof(tomb.deletion_time);
+    }
+    bytes ret(bytes::initialized_later(), size);
+    bytes::iterator out = ret.begin();
+    *out++ = bool(tomb);
+    if (tomb) {
+        write(out, tomb.timestamp);
+        write(out, tomb.deletion_time.time_since_epoch().count());
+    }
+    auto writeb = [&out] (bytes_view v) {
+        serialize_int32(out, v.size());
+        out = std::copy_n(v.begin(), v.size(), out);
+    };
+    // FIXME: overflow?
+    serialize_int32(out, boost::distance(cells));
+    for (auto&& kv : cells) {
+        auto&& k = kv.first;
+        auto&& v = kv.second;
+        writeb(k);
+
+        writeb(v.serialize());
+    }
+    return collection_mutation(ctype, ret);
+}
+
+collection_mutation
+collection_type_impl::serialize_mutation_form(const mutation& mut) const {
+    return do_serialize_mutation_form(*this, mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
+}
+
+collection_mutation
+collection_type_impl::serialize_mutation_form(mutation_view mut) const {
+    return do_serialize_mutation_form(*this, mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
+}
+
+collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const {
+    return do_serialize_mutation_form(*this, mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
+        return e.second.is_live(t, now, false);
+    }));
+}
+
+collection_mutation
+collection_type_impl::merge(collection_mutation_view a, collection_mutation_view b) const {
+ return a.data.with_linearized([&] (bytes_view a_in) {
+  return b.data.with_linearized([&] (bytes_view b_in) {
+    auto aa = deserialize_mutation_form(a_in);
+    auto bb = deserialize_mutation_form(b_in);
+    mutation_view merged;
+    merged.cells.reserve(aa.cells.size() + bb.cells.size());
+    using element_type = std::pair<bytes_view, atomic_cell_view>;
+    auto key_type = name_comparator();
+    auto compare = [key_type] (const element_type& e1, const element_type& e2) {
+        return key_type->less(e1.first, e2.first);
+    };
+    auto merge = [this] (const element_type& e1, const element_type& e2) {
+        // FIXME: use std::max()?
+        return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) > 0 ? e1.second : e2.second);
+    };
+    // applied to a tombstone, returns a predicate checking whether a cell is killed by
+    // the tombstone
+    auto cell_killed = [] (const std::optional<tombstone>& t) {
+        return [&t] (const element_type& e) {
+            if (!t) {
+                return false;
+            }
+            // tombstone wins if timestamps equal here, unlike row tombstones
+            if (t->timestamp < e.second.timestamp()) {
+                return false;
+            }
+            return true;
+            // FIXME: should we consider TTLs too?
+        };
+    };
+    combine(aa.cells.begin(), std::remove_if(aa.cells.begin(), aa.cells.end(), cell_killed(bb.tomb)),
+            bb.cells.begin(), std::remove_if(bb.cells.begin(), bb.cells.end(), cell_killed(aa.tomb)),
+            std::back_inserter(merged.cells),
+            compare,
+            merge);
+    merged.tomb = std::max(aa.tomb, bb.tomb);
+    return serialize_mutation_form(std::move(merged));
+  });
+ });
+}
+
+collection_mutation
+collection_type_impl::difference(collection_mutation_view a, collection_mutation_view b) const
+{
+ return a.data.with_linearized([&] (bytes_view a_in) {
+  return b.data.with_linearized([&] (bytes_view b_in) {
+    auto aa = deserialize_mutation_form(a_in);
+    auto bb = deserialize_mutation_form(b_in);
+    mutation_view diff;
+    diff.cells.reserve(std::max(aa.cells.size(), bb.cells.size()));
+    auto key_type = name_comparator();
+    auto it = bb.cells.begin();
+    for (auto&& c : aa.cells) {
+        while (it != bb.cells.end() && key_type->less(it->first, c.first)) {
+            ++it;
+        }
+        if (it == bb.cells.end() || !key_type->equal(it->first, c.first)
+            || compare_atomic_cell_for_merge(c.second, it->second) > 0) {
+
+            auto cell = std::make_pair(c.first, c.second);
+            diff.cells.emplace_back(std::move(cell));
+        }
+    }
+    if (aa.tomb > bb.tomb) {
+        diff.tomb = aa.tomb;
+    }
+    return serialize_mutation_form(std::move(diff));
+  });
+ });
+}
