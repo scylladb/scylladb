@@ -704,6 +704,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Set to true if the cluster was initially installed from 3.1.0. If it was upgraded from an earlier version,"
         " or installed from a later version, leave this set to false. This adjusts the communication protocol to"
         " work around a bug in Scylla 3.1.0")
+    , enable_user_defined_functions(this, "enable_user_defined_functions", value_status::Used, false,  "Enable user defined functions")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address")
