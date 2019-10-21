@@ -107,13 +107,18 @@ MAVEN_LOCAL_REPO="$HOME/.m2"
 
 mkdir -p "$MAVEN_LOCAL_REPO"
 
+docker_common_args=()
+
+if [ "$PWD" != "$toplevel" ]; then
+     docker_common_args+=(-v "$toplevel:$toplevel:z")
+fi
+
 docker_common_args=(
        --network host \
        -u "$(id -u):$(id -g)" \
        "${group_args[@]}" \
        --cap-add SYS_PTRACE \
        -v "$PWD:$PWD:z" \
-       -v "$toplevel:$toplevel:z" \
        -v /tmp:/tmp:z \
        -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO:z" \
        -v /etc/passwd:/etc/passwd:ro \
