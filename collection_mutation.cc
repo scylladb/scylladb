@@ -261,14 +261,18 @@ collection_mutation merge(const abstract_type& type, collection_mutation_view a,
     });
 }
 
-collection_mutation
-collection_type_impl::difference(collection_mutation_view a, collection_mutation_view b) const
+collection_mutation difference(const abstract_type& type, collection_mutation_view a, collection_mutation_view b)
 {
-    return a.with_deserialized(*this, [&] (collection_mutation_view_description a_view) {
-        return b.with_deserialized(*this, [&] (collection_mutation_view_description b_view) {
+    return a.with_deserialized(type, [&] (collection_mutation_view_description a_view) {
+        return b.with_deserialized(type, [&] (collection_mutation_view_description b_view) {
+            assert(type.is_collection());
+            auto& ctype = static_cast<const collection_type_impl&>(type);
+
             collection_mutation_view_description diff;
             diff.cells.reserve(std::max(a_view.cells.size(), b_view.cells.size()));
-            auto key_type = name_comparator();
+
+            auto key_type = ctype.name_comparator();
+
             auto it = b_view.cells.begin();
             for (auto&& c : a_view.cells) {
                 while (it != b_view.cells.end() && key_type->less(it->first, c.first)) {
@@ -284,7 +288,7 @@ collection_type_impl::difference(collection_mutation_view a, collection_mutation
             if (a_view.tomb > b_view.tomb) {
                 diff.tomb = a_view.tomb;
             }
-            return diff.serialize(*this);
+            return diff.serialize(type);
         });
     });
 }

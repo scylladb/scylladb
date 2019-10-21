@@ -53,7 +53,6 @@ public:
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
     virtual bytes to_value(collection_mutation_view_description mut, cql_serialization_format sf) const = 0;
     bytes to_value(collection_mutation_view mut, cql_serialization_format sf) const;
-    collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const = 0;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const = 0;
     data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {
