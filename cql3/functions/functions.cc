@@ -27,10 +27,13 @@
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
 #include "cql3/constants.hh"
+#include "cql3/user_types.hh"
 #include "database.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
+#include "types/user.hh"
+#include "concrete_types.hh"
 
 namespace cql3 {
 namespace functions {
@@ -463,23 +466,34 @@ function_call::contains_bind_marker() const {
 
 shared_ptr<terminal>
 function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serialization_format sf)  {
-    if (!dynamic_pointer_cast<const collection_type_impl>(fun->return_type())) {
-        return ::make_shared<constants::value>(std::move(result));
-    }
+    static constexpr auto to_buffer = [] (const cql3::raw_value& v) {
+        if (v) {
+            return fragmented_temporary_buffer::view{bytes_view{*v}};
+        }
+        return fragmented_temporary_buffer::view{};
+    };
 
-    auto ctype = static_pointer_cast<const collection_type_impl>(fun->return_type());
-    fragmented_temporary_buffer::view res;
-    if (result) {
-        res = fragmented_temporary_buffer::view(bytes_view(*result));
+    return visit(*fun->return_type(), make_visitor(
+    [&] (const list_type_impl& ltype) -> shared_ptr<terminal> {
+        return make_shared(lists::value::from_serialized(to_buffer(result), ltype, sf));
+    },
+    [&] (const set_type_impl& stype) -> shared_ptr<terminal> {
+        return make_shared(sets::value::from_serialized(to_buffer(result), stype, sf));
+    },
+    [&] (const map_type_impl& mtype) -> shared_ptr<terminal> {
+        return make_shared(maps::value::from_serialized(to_buffer(result), mtype, sf));
+    },
+    [&] (const user_type_impl& utype) -> shared_ptr<terminal> {
+        // TODO (kbraun): write a test for this case when User Defined Functions are implemented
+        return make_shared(user_types::value::from_serialized(to_buffer(result), utype));
+    },
+    [&] (const abstract_type& type) -> shared_ptr<terminal> {
+        if (type.is_collection()) {
+            throw std::runtime_error(format("function_call::make_terminal: unhandled collection type {}", type.name()));
+        }
+        return make_shared<constants::value>(std::move(result));
     }
-    if (ctype->get_kind() == abstract_type::kind::list) {
-        return make_shared(lists::value::from_serialized(std::move(res), *static_pointer_cast<const list_type_impl>(ctype), sf));
-    } else if (ctype->get_kind() == abstract_type::kind::set) {
-        return make_shared(sets::value::from_serialized(std::move(res), *static_pointer_cast<const set_type_impl>(ctype), sf));
-    } else if (ctype->get_kind() == abstract_type::kind::map) {
-        return make_shared(maps::value::from_serialized(std::move(res), *static_pointer_cast<const map_type_impl>(ctype), sf));
-    }
-    abort();
+    ));
 }
 
 ::shared_ptr<term>
