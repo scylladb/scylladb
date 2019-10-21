@@ -2013,13 +2013,22 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     auto set_of_bytes = set_type_impl::get_instance(bytes_type, true);
     auto udt_int_text = user_type_impl::get_instance("ks", "udt",
         { utf8_type->decompose("f1"), utf8_type->decompose("f2"), },
-        { int32_type, utf8_type }, false);
+        { int32_type, utf8_type }, true);
     auto udt_int_blob_long = user_type_impl::get_instance("ks", "udt",
+        { utf8_type->decompose("v1"), utf8_type->decompose("v2"), utf8_type->decompose("v3"), },
+        { int32_type, bytes_type, long_type }, true);
+    auto frozen_udt_int_text = user_type_impl::get_instance("ks", "udt",
+        { utf8_type->decompose("f1"), utf8_type->decompose("f2"), },
+        { int32_type, utf8_type }, false);
+    auto frozen_udt_int_blob_long = user_type_impl::get_instance("ks", "udt",
         { utf8_type->decompose("v1"), utf8_type->decompose("v2"), utf8_type->decompose("v3"), },
         { int32_type, bytes_type, long_type }, false);
 
     auto random_int32_value = [] {
         return int32_type->decompose(tests::random::get_int<int32_t>());
+    };
+    auto random_text_value = [] {
+        return utf8_type->decompose(tests::random::get_sstring());
     };
     int32_t key_id = 0;
     auto random_partition_key = [&] () -> tests::data_model::mutation_description::key {
@@ -2058,8 +2067,14 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
             { utf8_type->decompose("c"), bytes() },
         };
     };
-    auto random_udt = [&] {
-        return udt_int_text->decompose(make_user_value(udt_int_text, user_type_impl::native_type{
+    auto random_udt = [&] () -> tests::data_model::mutation_description::collection {
+        return {
+            { serialize_field_index(0), random_int32_value() },
+            { serialize_field_index(1), random_text_value() },
+        };
+    };
+    auto random_frozen_udt = [&] {
+        return frozen_udt_int_text->decompose(make_user_value(udt_int_text, user_type_impl::native_type{
             tests::random::get_int<int32_t>(),
             tests::random::get_sstring(),
         }));
@@ -2081,6 +2096,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
         { 500, tuple_of_int_long, { tuple_of_bytes_long, tuple_of_bytes_bytes }, { [&] { return random_tuple(); } }, empty_type },
         { 600, set_of_text, { set_of_bytes }, { [&] { return random_set(); } }, empty_type },
         { 700, udt_int_text, { udt_int_blob_long }, { [&] { return random_udt(); } }, empty_type },
+        { 800, frozen_udt_int_text, { frozen_udt_int_blob_long }, { [&] { return random_frozen_udt(); } }, empty_type },
     };
     auto static_columns = columns;
     auto regular_columns = columns;
