@@ -78,16 +78,6 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-static std::optional<uint32_t> get_idx_of_field(user_type type, shared_ptr<column_identifier> field)
-{
-    for (uint32_t i = 0; i < type->field_names().size(); ++i) {
-        if (field->name() == type->field_names()[i]) {
-            return {i};
-        }
-    }
-    return {};
-}
-
 void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, bool is_local_only)
 {
     auto&& all_types = ks.metadata()->user_types()->get_all_types();
@@ -153,7 +143,7 @@ alter_type_statement::add_or_alter::add_or_alter(const ut_name& name, bool is_ad
 
 user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_update) const
 {
-    if (get_idx_of_field(to_update, _field_name)) {
+    if (to_update->idx_of_field(_field_name->name())) {
         throw exceptions::invalid_request_exception(format("Cannot add new field {} to type {}: a field of the same name already exists",
             _field_name->to_string(), _name.to_string()));
     }
@@ -171,7 +161,7 @@ user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_
 
 user_type alter_type_statement::add_or_alter::do_alter(database& db, user_type to_update) const
 {
-    std::optional<uint32_t> idx = get_idx_of_field(to_update, _field_name);
+    auto idx = to_update->idx_of_field(_field_name->name());
     if (!idx) {
         throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", _field_name->to_string(), _name.to_string()));
     }
@@ -208,7 +198,7 @@ user_type alter_type_statement::renames::make_updated_type(database& db, user_ty
     std::vector<bytes> new_names(to_update->field_names());
     for (auto&& rename : _renames) {
         auto&& from = rename.first;
-        std::optional<uint32_t> idx = get_idx_of_field(to_update, from);
+        auto idx = to_update->idx_of_field(from->name());
         if (!idx) {
             throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", from->to_string(), _name.to_string()));
         }

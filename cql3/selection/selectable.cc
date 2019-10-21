@@ -142,20 +142,19 @@ shared_ptr<selector::factory>
 selectable::with_field_selection::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& factory = _selected->new_selector_factory(db, s, defs);
     auto&& type = factory->new_instance()->get_type();
-    auto&& ut = dynamic_pointer_cast<const user_type_impl>(type->underlying_type());
-    if (!ut) {
+    if (!type->underlying_type()->is_user_type()) {
         throw exceptions::invalid_request_exception(
-                format("Invalid field selection: {} of type {} is not a user type",
-                       _selected->to_string(), factory->new_instance()->get_type()->as_cql3_type()));
+                format("Invalid field selection: {} of type {} is not a user type", _selected->to_string(), type->as_cql3_type()));
     }
-    for (size_t i = 0; i < ut->size(); ++i) {
-        if (ut->field_name(i) != _field->bytes_) {
-            continue;
-        }
-        return field_selector::new_factory(std::move(ut), i, std::move(factory));
+
+    auto ut = static_pointer_cast<const user_type_impl>(type->underlying_type());
+    auto idx = ut->idx_of_field(_field->bytes_);
+    if (!idx) {
+        throw exceptions::invalid_request_exception(format("{} of type {} has no field {}",
+                                                           _selected->to_string(), ut->as_cql3_type(), _field));
     }
-    throw exceptions::invalid_request_exception(format("{} of type {} has no field {}",
-                                                       _selected->to_string(), ut->as_cql3_type(), _field));
+
+    return field_selector::new_factory(std::move(ut), *idx, std::move(factory));
 }
 
 sstring

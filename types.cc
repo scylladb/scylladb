@@ -2916,6 +2916,16 @@ bool abstract_type::is_value_compatible_with(const abstract_type& other) const {
     return is_value_compatible_with_internal(*this, *other.underlying_type());
 }
 
+std::optional<size_t>
+user_type_impl::idx_of_field(const bytes& name) const {
+    for (size_t i = 0; i < _field_names.size(); ++i) {
+        if (name == _field_names[i]) {
+            return {i};
+        }
+    }
+    return {};
+}
+
 sstring
 tuple_type_impl::make_name(const std::vector<data_type>& types) {
     // To keep format compatibility with Origin we never wrap
