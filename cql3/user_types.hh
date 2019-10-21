@@ -118,6 +118,16 @@ public:
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
+
+    class setter_by_field : public operation {
+        size_t _field_idx;
+    public:
+        setter_by_field(const column_definition& column, size_t field_idx, shared_ptr<term> t)
+            : operation(column, std::move(t)), _field_idx(field_idx) {
+        }
+
+        virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
+    };
 };
 
 }

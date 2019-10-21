@@ -295,4 +295,22 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
     }
 }
 
+void user_types::setter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
+    assert(column.type->is_user_type() && column.type->is_multi_cell());
+
+    auto value = _t->bind_and_get(params._options);
+    if (value.is_unset_value()) {
+        return;
+    }
+
+    auto& type = static_cast<const user_type_impl&>(*column.type);
+
+    collection_mutation_description mut;
+    mut.cells.emplace_back(serialize_field_index(_field_idx), value
+                ? params.make_cell(*type.type(_field_idx), *value, atomic_cell::collection_member::yes)
+                : make_dead_cell(params));
+
+    m.set_cell(row_key, column, mut.serialize(type));
+}
+
 }
