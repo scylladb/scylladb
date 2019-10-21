@@ -41,6 +41,7 @@
 #include "cql3/user_types.hh"
 
 #include "cql3/cql3_type.hh"
+#include "cql3/constants.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
@@ -227,6 +228,17 @@ shared_ptr<terminal> user_types::delayed_value::bind(const query_options& option
 
 cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
     return options.make_temporary(cql3::raw_value::make_value(user_type_impl::build_value(bind_internal(options))));
+}
+
+shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
+    auto value = options.get_value_at(_bind_index);
+    if (value.is_null()) {
+        return nullptr;
+    }
+    if (value.is_unset_value()) {
+        return constants::UNSET_VALUE;
+    }
+    return make_shared(value::from_serialized(*value, static_cast<const user_type_impl&>(*_receiver->type)));
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {

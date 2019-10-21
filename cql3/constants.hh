@@ -173,7 +173,7 @@ public:
         marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
             : abstract_marker{bind_index, std::move(receiver)}
         {
-            assert(!_receiver->type->is_collection());
+            assert(!_receiver->type->is_collection() && !_receiver->type->is_user_type());
         }
 
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override {

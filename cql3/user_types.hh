@@ -40,11 +40,11 @@
 
 #pragma once
 
+#include "cql3/abstract_marker.hh"
 #include "column_specification.hh"
 #include "term.hh"
 #include "column_identifier.hh"
 #include "operation.hh"
-#include "constants.hh"
 #include "to_string.hh"
 
 namespace cql3 {
@@ -99,6 +99,17 @@ public:
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override;
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
+    };
+
+    class marker : public abstract_marker {
+    public:
+        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+            : abstract_marker{bind_index, std::move(receiver)}
+        {
+            assert(_receiver->type->is_user_type());
+        }
+
+        virtual shared_ptr<terminal> bind(const query_options& options) override;
     };
 
     class setter : public operation {

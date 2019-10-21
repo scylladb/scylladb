@@ -45,6 +45,7 @@
 #include "cql3/lists.hh"
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
+#include "cql3/user_types.hh"
 #include "types/list.hh"
 
 namespace cql3 {
@@ -68,19 +69,22 @@ abstract_marker::raw::raw(int32_t bind_index)
 
 ::shared_ptr<term> abstract_marker::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
 {
-    auto receiver_type = ::dynamic_pointer_cast<const collection_type_impl>(receiver->type);
-    if (receiver_type == nullptr) {
-        return ::make_shared<constants::marker>(_bind_index, receiver);
+    if (receiver->type->is_collection()) {
+        if (receiver->type->get_kind() == abstract_type::kind::list) {
+            return ::make_shared<lists::marker>(_bind_index, receiver);
+        } else if (receiver->type->get_kind() == abstract_type::kind::set) {
+            return ::make_shared<sets::marker>(_bind_index, receiver);
+        } else if (receiver->type->get_kind() == abstract_type::kind::map) {
+            return ::make_shared<maps::marker>(_bind_index, receiver);
+        }
+        assert(0);
     }
-    if (receiver_type->get_kind() == abstract_type::kind::list) {
-        return ::make_shared<lists::marker>(_bind_index, receiver);
-    } else if (receiver_type->get_kind() == abstract_type::kind::set) {
-        return ::make_shared<sets::marker>(_bind_index, receiver);
-    } else if (receiver_type->get_kind() == abstract_type::kind::map) {
-        return ::make_shared<maps::marker>(_bind_index, receiver);
+
+    if (receiver->type->is_user_type()) {
+        return ::make_shared<user_types::marker>(_bind_index, receiver);
     }
-    assert(0);
-    return shared_ptr<term>();
+
+    return ::make_shared<constants::marker>(_bind_index, receiver);
 }
 
 assignment_testable::test_result abstract_marker::raw::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
