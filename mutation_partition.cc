@@ -1145,8 +1145,7 @@ apply_monotonically(const column_definition& def, cell_and_hash& dst,
             dst.hash = std::move(src_hash);
         }
     } else {
-        auto ct = static_pointer_cast<const collection_type_impl>(def.type);
-        dst.cell = ct->merge(dst.cell.as_collection_mutation(), src.as_collection_mutation());
+        dst.cell = merge(*def.type, dst.cell.as_collection_mutation(), src.as_collection_mutation());
         dst.hash = { };
     }
 }

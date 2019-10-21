@@ -109,3 +109,5 @@ public:
     collection_mutation(const abstract_type&, bytes_view);
     operator collection_mutation_view() const;
 };
+
+collection_mutation merge(const abstract_type&, collection_mutation_view, collection_mutation_view);

@@ -215,16 +215,18 @@ collection_mutation collection_mutation_view_description::serialize(const abstra
     return serialize_collection_mutation(type, tomb, boost::make_iterator_range(cells.begin(), cells.end()));
 }
 
-collection_mutation
-collection_type_impl::merge(collection_mutation_view a, collection_mutation_view b) const {
-    return a.with_deserialized(*this, [&] (collection_mutation_view_description a_view) {
-        return b.with_deserialized(*this, [&] (collection_mutation_view_description b_view) {
+collection_mutation merge(const abstract_type& type, collection_mutation_view a, collection_mutation_view b) {
+    return a.with_deserialized(type, [&] (collection_mutation_view_description a_view) {
+        return b.with_deserialized(type, [&] (collection_mutation_view_description b_view) {
+            assert(type.is_collection());
+            auto& ctype = static_cast<const collection_type_impl&>(type);
+
             using element_type = std::pair<bytes_view, atomic_cell_view>;
-            auto key_type = name_comparator();
+            auto key_type = ctype.name_comparator();
             auto compare = [key_type] (const element_type& e1, const element_type& e2) {
                 return key_type->less(e1.first, e2.first);
             };
-            auto merge = [this] (const element_type& e1, const element_type& e2) {
+            auto merge = [] (const element_type& e1, const element_type& e2) {
                 // FIXME: use std::max()?
                 return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) > 0 ? e1.second : e2.second);
             };
@@ -254,7 +256,7 @@ collection_type_impl::merge(collection_mutation_view a, collection_mutation_view
                     merge);
             merged.tomb = std::max(a_view.tomb, b_view.tomb);
 
-            return merged.serialize(*this);
+            return merged.serialize(type);
         });
     });
 }
