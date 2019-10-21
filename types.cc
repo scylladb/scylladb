@@ -3032,20 +3032,22 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
     return visit(*this, visitor{updated});
 }
 
+static bytes_view linearized(const data::value_view& v, std::vector<bytes>& store) {
+    if (v.is_fragmented()) {
+        return store.emplace_back(v.linearize());
+    }
+
+    return v.first_fragment();
+}
+
 static bytes serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
-    std::vector<bytes> linearized;
+    std::vector<bytes> linearized_values;
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size() * 2);
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
-            tmp.emplace_back(e.first);
-            auto value_view = e.second.value();
-            if (value_view.is_fragmented()) {
-                auto& v = linearized.emplace_back(value_view.linearize());
-                tmp.emplace_back(v);
-            } else {
-                tmp.emplace_back(value_view.first_fragment());
-            }
+            tmp.push_back(e.first);
+            tmp.push_back(linearized(e.second.value(), linearized_values));
         }
     }
     return collection_type_impl::pack(tmp.begin(), tmp.end(), tmp.size() / 2, sf);
@@ -3063,21 +3065,48 @@ static bytes serialize_for_cql_aux(const set_type_impl&, collection_mutation_vie
 }
 
 static bytes serialize_for_cql_aux(const list_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
-    std::vector<bytes> linearized;
+    std::vector<bytes> linearized_values;
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
-            auto value_view = e.second.value();
-            if (value_view.is_fragmented()) {
-                auto& v = linearized.emplace_back(value_view.linearize());
-                tmp.emplace_back(v);
-            } else {
-                tmp.emplace_back(value_view.first_fragment());
-            }
+            tmp.push_back(linearized(e.second.value(), linearized_values));
         }
     }
     return collection_type_impl::pack(tmp.begin(), tmp.end(), tmp.size(), sf);
+}
+
+static bytes serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view_description mut, cql_serialization_format) {
+    assert(type.is_multi_cell());
+    assert(mut.cells.size() <= type.size());
+
+    std::vector<bytes> linearized_values;
+    std::vector<bytes_view_opt> tmp;
+    tmp.resize(type.size());
+
+    size_t curr_field_pos = 0;
+    for (auto&& e : mut.cells) {
+        auto field_pos = deserialize_field_index(e.first);
+        assert(field_pos < type.size());
+
+        // Some fields don't have corresponding cells -- these fields are null.
+        while (curr_field_pos < field_pos) {
+            tmp[curr_field_pos++] = std::nullopt;
+        }
+
+        if (e.second.is_live(mut.tomb, false)) {
+            tmp[curr_field_pos++] = linearized(e.second.value(), linearized_values);
+        } else {
+            tmp[curr_field_pos++] = std::nullopt;
+        }
+    }
+
+    // Trailing null fields
+    while (curr_field_pos < type.size()) {
+        tmp[curr_field_pos++] = std::nullopt;
+    }
+
+    return tuple_type_impl::build_value(std::move(tmp));
 }
 
 bytes serialize_for_cql(const abstract_type& type, collection_mutation_view v, cql_serialization_format sf) {
@@ -3088,6 +3117,7 @@ bytes serialize_for_cql(const abstract_type& type, collection_mutation_view v, c
             [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
             [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
             [&] (const list_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
+            [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, std::move(mv), sf); },
             [&] (const abstract_type& o) -> bytes {
                 throw std::runtime_error(format("attempted to serialize a collection of cells with type: {}", o.name()));
             }
