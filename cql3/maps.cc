@@ -153,17 +153,17 @@ maps::literal::to_string() const {
 }
 
 maps::value
-maps::value::from_serialized(const fragmented_temporary_buffer::view& fragmented_value, map_type type, cql_serialization_format sf) {
+maps::value::from_serialized(const fragmented_temporary_buffer::view& fragmented_value, const map_type_impl& type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserialize_for_native_protocol?!
       return with_linearized(fragmented_value, [&] (bytes_view value) {
-        auto m = value_cast<map_type_impl::native_type>(type->deserialize(value, sf));
-        std::map<bytes, bytes, serialized_compare> map(type->get_keys_type()->as_less_comparator());
+        auto m = value_cast<map_type_impl::native_type>(type.deserialize(value, sf));
+        std::map<bytes, bytes, serialized_compare> map(type.get_keys_type()->as_less_comparator());
         for (auto&& e : m) {
-            map.emplace(type->get_keys_type()->decompose(e.first),
-                        type->get_values_type()->decompose(e.second));
+            map.emplace(type.get_keys_type()->decompose(e.first),
+                        type.get_values_type()->decompose(e.second));
         }
         return maps::value { std::move(map) };
       });
@@ -269,8 +269,7 @@ maps::marker::bind(const query_options& options) {
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-    return ::make_shared<maps::value>(maps::value::from_serialized(*val, static_pointer_cast<const map_type_impl>(_receiver->type),
-                                      options.get_cql_serialization_format()));
+    return ::make_shared(maps::value::from_serialized(*val, static_cast<const map_type_impl&>(*_receiver->type), options.get_cql_serialization_format()));
 }
 
 void

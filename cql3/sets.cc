@@ -132,16 +132,16 @@ sets::literal::to_string() const {
 }
 
 sets::value
-sets::value::from_serialized(const fragmented_temporary_buffer::view& val, set_type type, cql_serialization_format sf) {
+sets::value::from_serialized(const fragmented_temporary_buffer::view& val, const set_type_impl& type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol?!
       return with_linearized(val, [&] (bytes_view v) {
-        auto s = value_cast<set_type_impl::native_type>(type->deserialize(v, sf));
-        std::set<bytes, serialized_compare> elements(type->get_elements_type()->as_less_comparator());
+        auto s = value_cast<set_type_impl::native_type>(type.deserialize(v, sf));
+        std::set<bytes, serialized_compare> elements(type.get_elements_type()->as_less_comparator());
         for (auto&& element : s) {
-            elements.insert(elements.end(), type->get_elements_type()->decompose(element));
+            elements.insert(elements.end(), type.get_elements_type()->decompose(element));
         }
         return value(std::move(elements));
       });
@@ -237,15 +237,15 @@ sets::marker::bind(const query_options& options) {
     } else if (value.is_unset_value()) {
         return constants::UNSET_VALUE;
     } else {
-        auto as_set_type = static_pointer_cast<const set_type_impl>(_receiver->type);
+        auto& type = static_cast<const set_type_impl&>(*_receiver->type);
         try {
             with_linearized(*value, [&] (bytes_view v) {
-                as_set_type->validate(v, options.get_cql_serialization_format());
+                type.validate(v, options.get_cql_serialization_format());
             });
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
-        return make_shared(value::from_serialized(*value, as_set_type, options.get_cql_serialization_format()));
+        return make_shared(value::from_serialized(*value, type, options.get_cql_serialization_format()));
     }
 }
 
