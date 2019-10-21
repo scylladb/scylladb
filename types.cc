@@ -535,7 +535,6 @@ listlike_collection_type_impl::listlike_collection_type_impl(
         kind k, sstring name, data_type elements, bool is_multi_cell)
     : collection_type_impl(k, name, is_multi_cell), _elements(elements) {}
 
-
 int listlike_collection_type_impl::compare_with_map(const map_type_impl& map_type, bytes_view list, bytes_view map) const
 {
     assert((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
@@ -596,28 +595,6 @@ bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type
     return b;
 }
 
-std::vector<atomic_cell>
-collection_type_impl::enforce_limit(std::vector<atomic_cell> cells, int version) const {
-    assert(is_multi_cell());
-    if (version >= 3 || cells.size() <= max_elements) {
-        return cells;
-    }
-    _logger.error("Detected collection with {} elements, more than the {} limit. Only the first {} elements will be returned to the client. "
-            "Please see http://cassandra.apache.org/doc/cql3/CQL.html#collections for more details.", cells.size(), max_elements, max_elements);
-    cells.erase(cells.begin() + max_elements, cells.end());
-    return cells;
-}
-
-bytes
-collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) const {
-    assert(is_multi_cell());
-    cells = enforce_limit(std::move(cells), version);
-    std::vector<bytes> values = serialized_values(std::move(cells));
-    // FIXME: implement
-    abort();
-    // return CollectionSerializer.pack(values, cells.size(), version);
-}
-
 static bool is_compatible_with_aux(const collection_type_impl& t, const abstract_type& previous) {
     if (t.get_kind() != previous.get_kind()) {
         return false;
@@ -650,13 +627,6 @@ static bool is_value_compatible_with_internal_aux(const collection_type_impl& t,
         return t.is_compatible_with(previous);
     }
     return t.is_value_compatible_with_frozen(cprev);
-}
-
-bytes
-collection_type_impl::to_value(collection_mutation_view mut, cql_serialization_format sf) const {
-    return mut.with_deserialized(*this, [&] (collection_mutation_view_description m) {
-        return to_value(std::move(m), sf);
-    });
 }
 
 size_t collection_size_len(cql_serialization_format sf) {
@@ -1185,32 +1155,6 @@ static bytes from_json_object_aux(const map_type_impl& t, const Json::Value& val
     return collection_type_impl::pack(raw_map.begin(), raw_map.end(), raw_map.size() / 2, sf);
 }
 
-std::vector<bytes>
-map_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
-    // FIXME:
-    abort();
-}
-
-bytes
-map_type_impl::to_value(collection_mutation_view_description mut, cql_serialization_format sf) const {
-    std::vector<bytes> linearized;
-    std::vector<bytes_view> tmp;
-    tmp.reserve(mut.cells.size() * 2);
-    for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb, false)) {
-            tmp.emplace_back(e.first);
-            auto value_view = e.second.value();
-            if (value_view.is_fragmented()) {
-                auto& v = linearized.emplace_back(value_view.linearize());
-                tmp.emplace_back(v);
-            } else {
-                tmp.emplace_back(value_view.first_fragment());
-            }
-        }
-    }
-    return pack(tmp.begin(), tmp.end(), tmp.size() / 2, sf);
-}
-
 bytes
 map_type_impl::serialize_partially_deserialized_form(
         const std::vector<std::pair<bytes_view, bytes_view>>& v, cql_serialization_format sf) {
@@ -1377,24 +1321,6 @@ static bytes from_json_object_aux(const set_type_impl& t, const Json::Value& val
     return collection_type_impl::pack(raw_set.begin(), raw_set.end(), raw_set.size(), sf);
 }
 
-std::vector<bytes>
-set_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
-    // FIXME:
-    abort();
-}
-
-bytes
-set_type_impl::to_value(collection_mutation_view_description mut, cql_serialization_format sf) const {
-    std::vector<bytes_view> tmp;
-    tmp.reserve(mut.cells.size());
-    for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb, false)) {
-            tmp.emplace_back(e.first);
-        }
-    }
-    return pack(tmp.begin(), tmp.end(), tmp.size(), sf);
-}
-
 bytes
 set_type_impl::serialize_partially_deserialized_form(
         const std::vector<bytes_view>& v, cql_serialization_format sf) const {
@@ -1528,31 +1454,6 @@ static bytes from_json_object_aux(const list_type_impl& t, const Json::Value& va
         values.emplace_back(t.get_elements_type()->from_json_object(v, sf));
     }
     return collection_type_impl::pack(values.begin(), values.end(), values.size(), sf);
-}
-
-std::vector<bytes>
-list_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
-    // FIXME:
-    abort();
-}
-
-bytes
-list_type_impl::to_value(collection_mutation_view_description mut, cql_serialization_format sf) const {
-    std::vector<bytes> linearized;
-    std::vector<bytes_view> tmp;
-    tmp.reserve(mut.cells.size());
-    for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb, false)) {
-            auto value_view = e.second.value();
-            if (value_view.is_fragmented()) {
-                auto& v = linearized.emplace_back(value_view.linearize());
-                tmp.emplace_back(v);
-            } else {
-                tmp.emplace_back(value_view.first_fragment());
-            }
-        }
-    }
-    return pack(tmp.begin(), tmp.end(), tmp.size(), sf);
 }
 
 template <typename F>
@@ -3129,6 +3030,69 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
         }
     };
     return visit(*this, visitor{updated});
+}
+
+static bytes serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+    std::vector<bytes> linearized;
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.cells.size() * 2);
+    for (auto&& e : mut.cells) {
+        if (e.second.is_live(mut.tomb, false)) {
+            tmp.emplace_back(e.first);
+            auto value_view = e.second.value();
+            if (value_view.is_fragmented()) {
+                auto& v = linearized.emplace_back(value_view.linearize());
+                tmp.emplace_back(v);
+            } else {
+                tmp.emplace_back(value_view.first_fragment());
+            }
+        }
+    }
+    return collection_type_impl::pack(tmp.begin(), tmp.end(), tmp.size() / 2, sf);
+}
+
+static bytes serialize_for_cql_aux(const set_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.cells.size());
+    for (auto&& e : mut.cells) {
+        if (e.second.is_live(mut.tomb, false)) {
+            tmp.emplace_back(e.first);
+        }
+    }
+    return collection_type_impl::pack(tmp.begin(), tmp.end(), tmp.size(), sf);
+}
+
+static bytes serialize_for_cql_aux(const list_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+    std::vector<bytes> linearized;
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.cells.size());
+    for (auto&& e : mut.cells) {
+        if (e.second.is_live(mut.tomb, false)) {
+            auto value_view = e.second.value();
+            if (value_view.is_fragmented()) {
+                auto& v = linearized.emplace_back(value_view.linearize());
+                tmp.emplace_back(v);
+            } else {
+                tmp.emplace_back(value_view.first_fragment());
+            }
+        }
+    }
+    return collection_type_impl::pack(tmp.begin(), tmp.end(), tmp.size(), sf);
+}
+
+bytes serialize_for_cql(const abstract_type& type, collection_mutation_view v, cql_serialization_format sf) {
+    assert(type.is_multi_cell());
+
+    return v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
+        return visit(type, make_visitor(
+            [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
+            [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
+            [&] (const list_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
+            [&] (const abstract_type& o) -> bytes {
+                throw std::runtime_error(format("attempted to serialize a collection of cells with type: {}", o.name()));
+            }
+        ));
+    });
 }
 
 thread_local const shared_ptr<const abstract_type> byte_type(make_shared<byte_type_impl>());

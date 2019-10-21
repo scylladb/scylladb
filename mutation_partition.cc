@@ -690,14 +690,15 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell
 }
 
 template<typename RowWriter>
-void write_cell(RowWriter& w, const query::partition_slice& slice, const data_type& type, collection_mutation_view v) {
-    auto ctype = static_pointer_cast<const collection_type_impl>(type);
-    if (slice.options.contains<query::partition_slice::option::collections_as_maps>()) {
-        ctype = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
+void write_cell(RowWriter& w, const query::partition_slice& slice, data_type type, collection_mutation_view v) {
+    if (type->is_collection() && slice.options.contains<query::partition_slice::option::collections_as_maps>()) {
+        auto& ctype = static_cast<const collection_type_impl&>(*type);
+        type = map_type_impl::get_instance(ctype.name_comparator(), ctype.value_comparator(), true);
     }
+
     w.add().write().skip_timestamp()
         .skip_expiry()
-        .write_value(ctype->to_value(v, slice.cql_format()))
+        .write_value(serialize_for_cql(*type, std::move(v), slice.cql_format()))
         .skip_ttl()
         .end_qr_cell();
 }
