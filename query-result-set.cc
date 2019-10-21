@@ -184,12 +184,17 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
         } else {
             auto cell = i.next_collection_cell();
             if (cell) {
-                auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
-                if (_slice.options.contains<partition_slice::option::collections_as_maps>()) {
-                    ctype = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
-                }
                 cell->with_linearized([&] (bytes_view value_view) {
-                    cells.emplace(col.name_as_text(), ctype->deserialize_value(value_view, _slice.cql_format()));
+                    if (col.type->is_collection()) {
+                        auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
+                        if (_slice.options.contains<partition_slice::option::collections_as_maps>()) {
+                            ctype = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
+                        }
+
+                        cells.emplace(col.name_as_text(), ctype->deserialize_value(value_view, _slice.cql_format()));
+                    } else {
+                        cells.emplace(col.name_as_text(), col.type->deserialize_value(value_view));
+                    }
                 });
             }
         }
