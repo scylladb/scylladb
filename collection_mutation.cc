@@ -52,8 +52,8 @@ collection_mutation_view atomic_cell_or_collection::as_collection_mutation() con
     return get_collection_mutation_view(_data.get());
 }
 
-bool collection_type_impl::is_empty(collection_mutation_view cm) const {
-  return cm.data.with_linearized([&] (bytes_view in) { // FIXME: we can guarantee that this is in the first fragment
+bool collection_mutation_view::is_empty() const {
+  return data.with_linearized([&] (bytes_view in) { // FIXME: we can guarantee that this is in the first fragment
     auto has_tomb = read_simple<bool>(in);
     return !has_tomb && read_simple<uint32_t>(in) == 0;
   });

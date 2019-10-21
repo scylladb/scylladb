@@ -51,7 +51,6 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
-    bool is_empty(collection_mutation_view in) const;
     bool is_any_live(collection_mutation_view in, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
     api::timestamp_type last_update(collection_mutation_view in) const;
     virtual bytes to_value(collection_mutation_view_description mut, cql_serialization_format sf) const = 0;

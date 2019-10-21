@@ -69,6 +69,9 @@ class collection_mutation_view {
 public:
     atomic_cell_value_view data;
 
+    // Is this a noop mutation?
+    bool is_empty() const;
+
     // Given a function that operates on a collection_mutation_view_description,
     // calls it on the corresponding description of `this`.
     template <typename F>

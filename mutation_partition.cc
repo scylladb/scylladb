@@ -1841,7 +1841,7 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
             } else {
                 auto ct = static_pointer_cast<const collection_type_impl>(s.column_at(kind, c.first).type);
                 auto diff = ct->difference(c.second.as_collection_mutation(), it->second.as_collection_mutation());
-                if (!ct->is_empty(diff)) {
+                if (!static_cast<collection_mutation_view>(diff).is_empty()) {
                     r.append_cell(c.first, std::move(diff));
                 }
             }
