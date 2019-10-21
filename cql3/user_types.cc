@@ -162,21 +162,28 @@ void user_types::delayed_value::collect_marker_specification(shared_ptr<variable
     }
 }
 
-std::vector<cql3::raw_value> user_types::delayed_value::bind_internal(const query_options& options) {
+std::vector<bytes_opt> user_types::delayed_value::bind_internal(const query_options& options) {
     auto sf = options.get_cql_serialization_format();
-    std::vector<cql3::raw_value> buffers;
+
+    // user_types::literal::prepare makes sure that every field gets a corresponding value.
+    // For missing fields the values become nullopts.
+    assert(_type->size() == _values.size());
+
+    std::vector<bytes_opt> buffers;
     for (size_t i = 0; i < _type->size(); ++i) {
         const auto& value = _values[i]->bind_and_get(options);
         if (!_type->is_multi_cell() && value.is_unset_value()) {
-            throw exceptions::invalid_request_exception(format("Invalid unset value for field '{}' of user defined type {}", _type->field_name_as_string(i), _type->get_name_as_string()));
+            throw exceptions::invalid_request_exception(format("Invalid unset value for field '{}' of user defined type {}",
+                        _type->field_name_as_string(i), _type->get_name_as_string()));
         }
-        buffers.push_back(cql3::raw_value::make_value(value));
+
+        buffers.push_back(to_bytes_opt(value));
+
         // Inside UDT values, we must force the serialization of collections to v3 whatever protocol
         // version is in use since we're going to store directly that serialized value.
         if (!sf.collection_format_unchanged() && _type->field_type(i)->is_collection() && buffers.back()) {
             auto&& ctype = static_pointer_cast<const collection_type_impl>(_type->field_type(i));
-            buffers.back() = cql3::raw_value::make_value(
-                    ctype->reserialize(sf, cql_serialization_format::latest(), bytes_view(*buffers.back())));
+            buffers.back() = ctype->reserialize(sf, cql_serialization_format::latest(), bytes_view(*buffers.back()));
         }
     }
     return buffers;
