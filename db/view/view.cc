@@ -364,16 +364,15 @@ static atomic_cell make_empty(const atomic_cell_view& ac) {
 // is copied unchanged.
 static collection_mutation make_empty(
         const collection_mutation_view& cm,
-        const collection_type_impl& ctype) {
+        const abstract_type& type) {
     collection_mutation_description n;
-    cm.data.with_linearized([&] (bytes_view bv) {
-        auto m_view = ctype.deserialize_mutation_form(bv);
+    cm.with_deserialized(type, [&] (collection_mutation_view_description m_view) {
         n.tomb = m_view.tomb;
         for (auto&& c : m_view.cells) {
             n.cells.emplace_back(c.first, make_empty(c.second));
         }
     });
-    return ctype.serialize_mutation_form(n);
+    return n.serialize(type);
 }
 
 // In some cases, we need to copy to a view table even columns which have not

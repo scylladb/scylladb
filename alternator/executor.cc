@@ -644,7 +644,7 @@ static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) 
     }
 
     if (!attrs_collector.empty()) {
-        auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
+        auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
         row.cells().apply(attrs_column(*schema), std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.
@@ -1583,7 +1583,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
             }
         }
         if (!attrs_collector.empty()) {
-            auto serialized_map = attrs_type()->serialize_mutation_form(attrs_collector.to_mut());
+            auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
             row.cells().apply(attrs_column(*schema), std::move(serialized_map));
         }
         // To allow creation of an item with no attributes, we need a row marker.

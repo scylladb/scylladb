@@ -134,7 +134,7 @@ mutation mutation_description::build(schema_ptr s) const {
                                                                            atomic_cell::collection_member::yes));
                     }
                 }
-                m.set_static_cell(*cdef, ctype->serialize_mutation_form(std::move(mut)));
+                m.set_static_cell(*cdef, mut.serialize(*ctype));
             }
         ), value_or_collection);
     }
@@ -173,7 +173,7 @@ mutation mutation_description::build(schema_ptr s) const {
                         }
 
                     }
-                    m.set_clustered_cell(ck, *cdef, ctype->serialize_mutation_form(std::move(mut)));
+                    m.set_clustered_cell(ck, *cdef, mut.serialize(*ctype));
                 }
             ), value_or_collection);
         }

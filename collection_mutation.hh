@@ -27,9 +27,10 @@
 #include "atomic_cell.hh"
 
 class abstract_type;
-class collection_type_impl;
 class compaction_garbage_collector;
 class row_tombstone;
+
+class collection_mutation;
 
 // An auxiliary struct used to (de)construct collection_mutations.
 // Unlike collection_mutation which is a serialized blob, this struct allows to inspect logical units of information
@@ -42,6 +43,9 @@ struct collection_mutation_description {
     // Removes cells covered by tomb or this->tomb.
     bool compact_and_expire(column_id id, row_tombstone tomb, gc_clock::time_point query_time,
         can_gc_fn&, gc_clock::time_point gc_before, compaction_garbage_collector* collector = nullptr);
+
+    // Packs the data to a serialized blob.
+    collection_mutation serialize(const abstract_type&) const;
 };
 
 // Similar to collection_mutation_description, except that it doesn't store the cells' data, only observes it.
@@ -50,12 +54,29 @@ struct collection_mutation_view_description {
     utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
 
     // Copies the observed data, storing it in a collection_mutation_description.
-    collection_mutation_description materialize(const collection_type_impl&) const;
+    collection_mutation_description materialize(const abstract_type&) const;
+
+    // Packs the data to a serialized blob.
+    collection_mutation serialize(const abstract_type&) const;
 };
+
+// Given a linearized collection_mutation_view, returns an auxiliary struct allowing the inspection of each cell.
+// The struct is an observer of the data given by the collection_mutation_view and doesn't extend its lifetime.
+// The function needs to be given the type of stored data to reconstruct the structural information.
+collection_mutation_view_description deserialize_collection_mutation(const abstract_type&, bytes_view);
 
 class collection_mutation_view {
 public:
     atomic_cell_value_view data;
+
+    // Given a function that operates on a collection_mutation_view_description,
+    // calls it on the corresponding description of `this`.
+    template <typename F>
+    inline decltype(auto) with_deserialized(const abstract_type& type, F f) const {
+        return data.with_linearized([&] (bytes_view bv) {
+            return f(deserialize_collection_mutation(type, std::move(bv)));
+        });
+    }
 };
 
 // A serialized mutation of a collection of cells.

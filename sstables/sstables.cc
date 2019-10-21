@@ -1712,9 +1712,7 @@ void sstable::write_range_tombstone(file_writer& out,
 }
 
 void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection) {
-  collection.data.with_linearized([&] (bytes_view collection_bv) {
-    auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
-    auto mview = t->deserialize_mutation_form(collection_bv);
+  collection.with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
     const bytes& column_name = cdef.name();
     if (mview.tomb) {
         write_range_tombstone(out, clustering_key, composite::eoc::start, clustering_key, composite::eoc::end, { column_name }, mview.tomb);

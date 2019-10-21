@@ -256,8 +256,7 @@ private:
             if (!_cdef) {
                 return;
             }
-            auto ctype = static_pointer_cast<const collection_type_impl>(_cdef->type);
-            auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(cm));
+            auto ac = atomic_cell_or_collection::from_collection_mutation(cm.serialize(*_cdef->type));
             if (_cdef->is_static()) {
                 mf.as_mutable_static_row().set_cell(*_cdef, std::move(ac));
             } else {
@@ -1222,9 +1221,7 @@ public:
             const column_definition& column_def = get_column_definition(column_id);
             if (!_cm.cells.empty() || (_cm.tomb && _cm.tomb.timestamp > column_def.dropped_at())) {
                 check_schema_mismatch(column_info, column_def);
-                auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
-                auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(_cm));
-                _cells.push_back({column_def.id, atomic_cell_or_collection(std::move(ac))});
+                _cells.push_back({column_def.id, _cm.serialize(*column_def.type)});
             }
         }
         _cm.tomb = {};

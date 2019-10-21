@@ -706,7 +706,7 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
         return false;
     }
 
-    auto col_type = static_pointer_cast<const collection_type_impl>(_column_def.type);
+    auto col_type = static_cast<const collection_type_impl*>(_column_def.type.get());
     if ((!_keys.empty() || !_entry_keys.empty()) && !col_type->is_map()) {
         return false;
     }
@@ -716,8 +716,8 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
     auto&& element_type = col_type->is_set() ? col_type->name_comparator() : col_type->value_comparator();
     if (_column_def.type->is_multi_cell()) {
         auto cell = cells.find_cell(_column_def.id);
-      return cell->as_collection_mutation().data.with_linearized([&] (bytes_view collection_bv) {
-        auto&& elements = col_type->deserialize_mutation_form(collection_bv).cells;
+      return cell->as_collection_mutation().with_deserialized(*col_type, [&] (collection_mutation_view_description mv) {
+        auto&& elements = mv.cells;
         auto end = std::remove_if(elements.begin(), elements.end(), [now] (auto&& element) {
             return element.second.is_dead(now);
         });
@@ -790,6 +790,7 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
 }
 
 bool single_column_restriction::contains::is_satisfied_by(bytes_view collection_bv, const query_options& options) const {
+    assert(_column_def.type->is_collection());
     auto col_type = static_pointer_cast<const collection_type_impl>(_column_def.type);
     if (collection_bv.empty() || ((!_keys.empty() || !_entry_keys.empty()) && !col_type->is_map())) {
         return false;

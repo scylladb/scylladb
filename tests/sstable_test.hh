@@ -592,12 +592,10 @@ match_collection(const row& row, const schema& s, bytes col, const tombstone& t)
 
     BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
     auto c = row.cell_at(cdef->id).as_collection_mutation();
-    auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
-  return c.data.with_linearized([&] (bytes_view c_bv) {
-    auto&& mut = ctype->deserialize_mutation_form(c_bv);
-    BOOST_REQUIRE(mut.tomb == t);
-    return mut.materialize(*ctype);
-  });
+    return c.with_deserialized(*cdef->type, [&] (collection_mutation_view_description mut) {
+        BOOST_REQUIRE(mut.tomb == t);
+        return mut.materialize(*cdef->type);
+    });
 }
 
 template <status Status>

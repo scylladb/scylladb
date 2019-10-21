@@ -51,30 +51,13 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
-    // requires linearized collection_mutation_view, lifetime
-    collection_mutation_view_description deserialize_mutation_form(bytes_view in) const;
     bool is_empty(collection_mutation_view in) const;
     bool is_any_live(collection_mutation_view in, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
     api::timestamp_type last_update(collection_mutation_view in) const;
     virtual bytes to_value(collection_mutation_view_description mut, cql_serialization_format sf) const = 0;
     bytes to_value(collection_mutation_view mut, cql_serialization_format sf) const;
-    // FIXME: use iterators?
-    collection_mutation serialize_mutation_form(const collection_mutation_description& mut) const;
-    collection_mutation serialize_mutation_form(collection_mutation_view_description mut) const;
-    collection_mutation serialize_mutation_form_only_live(collection_mutation_view_description mut, gc_clock::time_point now) const;
     collection_mutation merge(collection_mutation_view a, collection_mutation_view b) const;
     collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
-    // Calls Func(atomic_cell_view) for each cell in this collection.
-    // noexcept if Func doesn't throw.
-    template<typename Func>
-    void for_each_cell(collection_mutation_view c, Func&& func) const {
-      c.data.with_linearized([&] (bytes_view c_bv) {
-        auto m_view = deserialize_mutation_form(c_bv);
-        for (auto&& c : m_view.cells) {
-            func(std::move(c.second));
-        }
-      });
-    }
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const = 0;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const = 0;
     data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {

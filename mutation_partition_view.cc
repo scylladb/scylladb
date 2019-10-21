@@ -103,8 +103,11 @@ atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, 
     return boost::apply_visitor(atomic_cell_visitor(type, cm), cv);
 }
 
-collection_mutation read_collection_cell(const collection_type_impl& ctype, ser::collection_cell_view cv)
+collection_mutation read_collection_cell(const abstract_type& type, ser::collection_cell_view cv)
 {
+    assert(type.is_collection());
+    auto& ctype = static_cast<const collection_type_impl&>(type);
+
     collection_mutation_description mut;
     mut.tomb = cv.tomb();
     auto&& elements = cv.elements();
@@ -112,7 +115,7 @@ collection_mutation read_collection_cell(const collection_type_impl& ctype, ser:
     for (auto&& e : elements) {
         mut.cells.emplace_back(e.key(), read_atomic_cell(*ctype.value_comparator(), e.value(), atomic_cell::collection_member::yes));
     }
-    return ctype.serialize_mutation_form(mut);
+    return mut.serialize(type);
 }
 
 template<typename Visitor>
@@ -143,7 +146,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 // FIXME: Pass view to cell to avoid copy
                 auto&& outer = current_allocator();
                 with_allocator(standard_allocator(), [&] {
-                    auto cell = read_collection_cell(*static_pointer_cast<const collection_type_impl>(_col.type()), ccv);
+                    auto cell = read_collection_cell(*_col.type(), ccv);
                     with_allocator(outer, [&] {
                         _visitor.accept_collection(_id, cell);
                     });

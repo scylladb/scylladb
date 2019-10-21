@@ -1854,7 +1854,7 @@ public:
                     std::sort(m.cells.begin(), m.cells.end(), [] (auto&& c1, auto&& c2) {
                             return timeuuid_type->as_less_comparator()(c1.first, c2.first);
                     });
-                    return ctype->serialize_mutation_form(m);
+                    return m.serialize(*ctype);
                 };
                 auto get_dead_cell = [&] () -> atomic_cell_or_collection{
                     if (col.is_atomic() || col.is_counter()) {
@@ -1862,7 +1862,7 @@ public:
                     }
                     collection_mutation_description m;
                     m.tomb = tombstone(timestamp_dist(_gen), expiry_dist(_gen));
-                    return static_pointer_cast<const collection_type_impl>(col.type)->serialize_mutation_form(m);
+                    return m.serialize(*col.type);
 
                 };
                 // FIXME: generate expiring cells

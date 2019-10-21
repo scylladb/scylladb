@@ -654,9 +654,9 @@ static bool is_value_compatible_with_internal_aux(const collection_type_impl& t,
 
 bytes
 collection_type_impl::to_value(collection_mutation_view mut, cql_serialization_format sf) const {
-  return mut.data.with_linearized([&] (bytes_view bv) {
-    return to_value(deserialize_mutation_form(bv), sf);
-  });
+    return mut.with_deserialized(*this, [&] (collection_mutation_view_description m) {
+        return to_value(std::move(m), sf);
+    });
 }
 
 size_t collection_size_len(cql_serialization_format sf) {

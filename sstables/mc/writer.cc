@@ -1096,9 +1096,7 @@ void writer::write_collection(bytes_ostream& writer, const clustering_key_prefix
         const column_definition& cdef, collection_mutation_view collection, const row_time_properties& properties,
         bool has_complex_deletion) {
     uint64_t current_pos = writer.size();
-    auto& ctype = *static_pointer_cast<const collection_type_impl>(cdef.type);
-    collection.data.with_linearized([&] (bytes_view collection_bv) {
-        auto mview = ctype.deserialize_mutation_form(collection_bv);
+    collection.with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
         if (has_complex_deletion) {
             write_delta_deletion_time(writer, mview.tomb);
             _c_stats.update(mview.tomb);
@@ -1174,9 +1172,7 @@ static bool row_has_complex_deletion(const schema& s, const row& r, column_kind 
         if (cdef.is_atomic()) {
             return stop_iteration::no;
         }
-        auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
-        return c.as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
-            auto mview = t->deserialize_mutation_form(c_bv);
+        return c.as_collection_mutation().with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
             if (mview.tomb) {
                 result = true;
             }

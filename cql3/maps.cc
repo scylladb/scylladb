@@ -288,9 +288,7 @@ maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
         // Delete all cells first, then put new ones
         collection_mutation_description mut;
         mut.tomb = params.make_tombstone_just_before();
-        auto ctype = static_pointer_cast<const map_type_impl>(column.type);
-        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
-        m.set_cell(row_key, column, std::move(col_mut));
+        m.set_cell(row_key, column, mut.serialize(*column.type));
     }
     do_put(m, row_key, params, value, column);
 }
@@ -310,13 +308,12 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
     if (!key) {
         throw invalid_request_exception("Invalid null map key");
     }
-    auto ctype = static_pointer_cast<const map_type_impl>(column.type);
+    auto ctype = static_cast<const map_type_impl*>(column.type.get());
     auto avalue = value ? params.make_cell(*ctype->get_values_type(), *value, atomic_cell::collection_member::yes) : params.make_dead_cell();
     collection_mutation_description update;
     update.cells.emplace_back(std::move(to_bytes(*key)), std::move(avalue));
-    // should have been verified as map earlier?
-    auto col_mut = ctype->serialize_mutation_form(std::move(update));
-    m.set_cell(prefix, column, std::move(col_mut));
+
+    m.set_cell(prefix, column, update.serialize(*ctype));
 }
 
 void
@@ -339,12 +336,12 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
 
         collection_mutation_description mut;
 
-        auto ctype = static_pointer_cast<const map_type_impl>(column.type);
+        auto ctype = static_cast<const map_type_impl*>(column.type.get());
         for (auto&& e : map_value->map) {
             mut.cells.emplace_back(e.first, params.make_cell(*ctype->get_values_type(), fragmented_temporary_buffer::view(e.second), atomic_cell::collection_member::yes));
         }
-        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
-        m.set_cell(prefix, column, std::move(col_mut));
+
+        m.set_cell(prefix, column, mut.serialize(*ctype));
     } else {
         // for frozen maps, we're overwriting the whole cell
         if (!value) {
@@ -369,8 +366,8 @@ maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix
     }
     collection_mutation_description mut;
     mut.cells.emplace_back(*key->get(params._options), params.make_dead_cell());
-    auto mtype = static_cast<const map_type_impl*>(column.type.get());
-    m.set_cell(prefix, column, mtype->serialize_mutation_form(mut));
+
+    m.set_cell(prefix, column, mut.serialize(*column.type));
 }
 
 }

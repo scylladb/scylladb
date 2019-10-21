@@ -1744,18 +1744,15 @@ bool row::compact_and_expire(
                 any_live = true;
             }
         } else {
-            auto&& cell = c.as_collection_mutation();
-            auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-          cell.data.with_linearized([&] (bytes_view cell_bv) {
-            auto m_view = ctype->deserialize_mutation_form(cell_bv);
-            collection_mutation_description m = m_view.materialize(*ctype);
-            any_live |= m.compact_and_expire(id, tomb, query_time, can_gc, gc_before, collector);
-            if (m.cells.empty() && m.tomb <= tomb.tomb()) {
-                erase = true;
-            } else {
-                c = ctype->serialize_mutation_form(m);
-            }
-          });
+            c.as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
+                auto m = m_view.materialize(*def.type);
+                any_live |= m.compact_and_expire(id, tomb, query_time, can_gc, gc_before, collector);
+                if (m.cells.empty() && m.tomb <= tomb.tomb()) {
+                    erase = true;
+                } else {
+                    c = m.serialize(*def.type);
+                }
+            });
         }
         return erase;
     });

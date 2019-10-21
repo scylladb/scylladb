@@ -273,9 +273,8 @@ lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const u
         // Delete all cells first, then append new ones
         collection_mutation_view_description mut;
         mut.tomb = params.make_tombstone_just_before();
-        auto ctype = static_pointer_cast<const list_type_impl>(column.type);
-        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
-        m.set_cell(prefix, column, std::move(col_mut));
+
+        m.set_cell(prefix, column, mut.serialize(*column.type));
     }
     do_append(value, m, prefix, column, params);
 }
@@ -315,7 +314,6 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
     }
-    auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
     auto&& existing_list = *existing_list_opt;
     // we verified that index is an int32_type
     if (idx < 0 || size_t(idx) >= existing_list.size()) {
@@ -323,6 +321,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
                 idx, existing_list.size()));
     }
 
+    auto ltype = static_cast<const list_type_impl*>(column.type.get());
     const data_value& eidx_dv = existing_list[idx].first;
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
     collection_mutation_description mut;
@@ -333,8 +332,8 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         mut.cells.emplace_back(std::move(eidx),
                 params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
     }
-    auto smut = ltype->serialize_mutation_form(mut);
-    m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(smut)));
+
+    m.set_cell(prefix, column, mut.serialize(*ltype));
 }
 
 bool
@@ -354,15 +353,13 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
 
-    auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
+    auto ltype = static_cast<const list_type_impl*>(column.type.get());
 
     collection_mutation_description mut;
     mut.cells.reserve(1);
     mut.cells.emplace_back(to_bytes(*index), params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
-    auto smut = ltype->serialize_mutation_form(mut);
-    m.set_cell(prefix, column,
-                    atomic_cell_or_collection::from_collection_mutation(
-                                    std::move(smut)));
+
+    m.set_cell(prefix, column, mut.serialize(*ltype));
 }
 
 void
@@ -382,13 +379,14 @@ lists::do_append(shared_ptr<term> value,
         const column_definition& column,
         const update_parameters& params) {
     auto&& list_value = dynamic_pointer_cast<lists::value>(value);
-    auto&& ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
     if (column.type->is_multi_cell()) {
         // If we append null, do nothing. Note that for Setter, we've
         // already removed the previous value so we're good here too
         if (!value || value == constants::UNSET_VALUE) {
             return;
         }
+
+        auto ltype = static_cast<const list_type_impl*>(column.type.get());
 
         auto&& to_add = list_value->_elements;
         collection_mutation_description appended;
@@ -399,7 +397,7 @@ lists::do_append(shared_ptr<term> value,
             // FIXME: can e be empty?
             appended.cells.emplace_back(std::move(uuid), params.make_cell(*ltype->value_comparator(), *e, atomic_cell::collection_member::yes));
         }
-        m.set_cell(prefix, column, ltype->serialize_mutation_form(appended));
+        m.set_cell(prefix, column, appended.serialize(*ltype));
     } else {
         // for frozen lists, we're overwriting the whole cell value
         if (!value) {
@@ -427,7 +425,7 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
     mut.cells.reserve(lvalue->get_elements().size());
     // We reverse the order of insertion, so that the last element gets the lastest time
     // (lists are sorted by time)
-    auto&& ltype = static_cast<const list_type_impl*>(column.type.get());
+    auto ltype = static_cast<const list_type_impl*>(column.type.get());
     for (auto&& v : lvalue->_elements | boost::adaptors::reversed) {
         auto&& pt = precision_time::get_next(time);
         auto uuid = utils::UUID_gen::get_time_UUID_bytes(pt.millis.time_since_epoch().count(), pt.nanos);
@@ -435,7 +433,7 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
     }
     // now reverse again, to get the original order back
     std::reverse(mut.cells.begin(), mut.cells.end());
-    m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(ltype->serialize_mutation_form(std::move(mut))));
+    m.set_cell(prefix, column, mut.serialize(*ltype));
 }
 
 bool
@@ -450,8 +448,6 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
     auto&& existing_list = params.get_prefetched_list(m.key(), prefix, column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
     auto&& value = _t->bind(params._options);
-
-    auto&& ltype = static_pointer_cast<const list_type_impl>(column.type);
 
     if (!existing_list) {
         return;
@@ -469,6 +465,8 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
 
     auto lvalue = dynamic_pointer_cast<lists::value>(value);
     assert(lvalue);
+
+    auto ltype = static_cast<const list_type_impl*>(column.type.get());
 
     // Note: below, we will call 'contains' on this toDiscard list for each element of existingList.
     // Meaning that if toDiscard is big, converting it to a HashSet might be more efficient. However,
@@ -488,8 +486,7 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
             mnew.cells.emplace_back(std::move(eidx), params.make_dead_cell());
         }
     }
-    auto mnew_ser = ltype->serialize_mutation_form(mnew);
-    m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(mnew_ser)));
+    m.set_cell(prefix, column, mnew.serialize(*ltype));
 }
 
 bool
@@ -508,7 +505,6 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
         return;
     }
 
-    auto ltype = static_pointer_cast<const list_type_impl>(column.type);
     auto cvalue = dynamic_pointer_cast<constants::value>(index);
     assert(cvalue);
 
@@ -525,7 +521,7 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     const data_value& eidx_dv = existing_list[idx].first;
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
     mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
-    m.set_cell(prefix, column, ltype->serialize_mutation_form(mut));
+    m.set_cell(prefix, column, mut.serialize(*column.type));
 }
 
 }
