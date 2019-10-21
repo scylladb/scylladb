@@ -148,6 +148,10 @@ user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_
             _field_name->to_string(), _name.to_string()));
     }
 
+    if (to_update->size() == max_udt_fields) {
+        throw exceptions::invalid_request_exception(format("Cannot add new field to type {}: maximum number of fields reached", _name));
+    }
+
     std::vector<bytes> new_names(to_update->field_names());
     new_names.push_back(_field_name->name());
     std::vector<data_type> new_types(to_update->field_types());

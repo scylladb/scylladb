@@ -88,6 +88,10 @@ void create_type_statement::validate(service::storage_proxy& proxy, const servic
         throw exceptions::invalid_request_exception(format("Cannot add type in unknown keyspace {}", keyspace()));
     }
 
+    if (_column_types.size() > max_udt_fields) {
+        throw exceptions::invalid_request_exception(format("A user type cannot have more than {} fields", max_udt_fields));
+    }
+
     for (auto&& type : _column_types) {
         if (type->is_counter()) {
             throw exceptions::invalid_request_exception(format("A user type cannot contain counters"));

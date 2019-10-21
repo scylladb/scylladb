@@ -65,3 +65,4 @@ private:
 
 data_value make_user_value(data_type tuple_type, user_type_impl::native_type value);
 
+constexpr size_t max_udt_fields = std::numeric_limits<int16_t>::max();
