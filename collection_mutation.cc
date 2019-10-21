@@ -109,10 +109,9 @@ bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone 
     ));
 }
 
-api::timestamp_type collection_mutation_view::last_update(const abstract_type& type) const {
-    assert(type.is_collection());
-    auto& ctype = static_cast<const collection_type_impl&>(type);
-
+template <typename F>
+GCC6_CONCEPT(requires std::is_invocable_r_v<const data::type_info&, F, bytes_view&>)
+static api::timestamp_type last_update(const atomic_cell_value_view& data, F&& read_cell_type_info) {
   return data.with_linearized([&] (bytes_view in) {
     api::timestamp_type max = api::missing_timestamp;
     auto has_tomb = read_simple<bool>(in);
@@ -120,16 +119,41 @@ api::timestamp_type collection_mutation_view::last_update(const abstract_type& t
         max = std::max(max, read_simple<api::timestamp_type>(in));
         (void)read_simple<gc_clock::duration::rep>(in);
     }
+
     auto nr = read_simple<uint32_t>(in);
     for (uint32_t i = 0; i != nr; ++i) {
-        auto ksize = read_simple<uint32_t>(in);
-        in.remove_prefix(ksize);
+        auto& type_info = read_cell_type_info(in);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(ctype.value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(type_info, read_simple_bytes(in, vsize));
         max = std::max(value.timestamp(), max);
     }
+
     return max;
   });
+}
+
+
+api::timestamp_type collection_mutation_view::last_update(const abstract_type& type) const {
+    return visit(type, make_visitor(
+    [&] (const collection_type_impl& ctype) {
+        auto& type_info = ctype.value_comparator()->imr_state().type_info();
+        return ::last_update(data, [&type_info] (bytes_view& in) -> const data::type_info& {
+            auto key_size = read_simple<uint32_t>(in);
+            in.remove_prefix(key_size);
+            return type_info;
+        });
+    },
+    [&] (const user_type_impl& utype) {
+        return ::last_update(data, [&utype] (bytes_view& in) -> const data::type_info& {
+            auto key_size = read_simple<uint32_t>(in);
+            auto key = read_simple_bytes(in, key_size);
+            return utype.type(deserialize_field_index(key))->imr_state().type_info();
+        });
+    },
+    [&] (const abstract_type& o) -> api::timestamp_type {
+        throw std::runtime_error(format("collection_mutation_view::last_update: unknown type {}", o.name()));
+    }
+    ));
 }
 
 collection_mutation_description
