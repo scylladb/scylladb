@@ -38,6 +38,10 @@ class collection_mutation;
 // (tombstone and cells) inside the mutation easily.
 struct collection_mutation_description {
     tombstone tomb;
+    // FIXME: use iterators?
+    // we never iterate over `cells` more than once, so there is no need to store them in memory.
+    // In some cases instead of constructing the `cells` vector, it would be more efficient to provide
+    // a one-time-use forward iterator which returns the cells.
     utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
 
     // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
@@ -52,6 +56,7 @@ struct collection_mutation_description {
 // Similar to collection_mutation_description, except that it doesn't store the cells' data, only observes it.
 struct collection_mutation_view_description {
     tombstone tomb;
+    // FIXME: use iterators? See the fixme in collection_mutation_description; the same considerations apply here.
     utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
 
     // Copies the observed data, storing it in a collection_mutation_description.
