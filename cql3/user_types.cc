@@ -229,4 +229,58 @@ cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options
     return options.make_temporary(cql3::raw_value::make_value(user_type_impl::build_value(bind_internal(options))));
 }
 
+void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
+    auto value = _t->bind(params._options);
+    if (value == constants::UNSET_VALUE) {
+        return;
+    }
+
+    auto& type = static_cast<const user_type_impl&>(*column.type);
+    if (type.is_multi_cell()) {
+        // Non-frozen user defined type.
+
+        collection_mutation_description mut;
+
+        // Setting a non-frozen (multi-cell) UDT means overwriting all cells.
+        // We start by deleting all existing cells.
+
+        // TODO? (kbraun): is this the desired behaviour?
+        // This is how C* does it, but consider the following scenario:
+        // create type ut (a int, b int);
+        // create table cf (a int primary key, b ut);
+        // insert into cf json '{"a": 1, "b":{"a":1, "b":2}}';
+        // insert into cf json '{"a": 1, "b":{"a":1}}' default unset;
+        // currently this would set b.b to null. However, by specifying 'default unset',
+        // perhaps the user intended to leave b.a unchanged.
+        mut.tomb = params.make_tombstone_just_before();
+
+        if (value) {
+            auto ut_value = static_pointer_cast<multi_item_terminal>(value);
+
+            const auto& elems = ut_value->get_elements();
+            // There might be fewer elements given than fields in the type
+            // (e.g. when the user uses a short tuple literal), but never more.
+            assert(elems.size() <= type.size());
+
+            for (size_t i = 0; i < elems.size(); ++i) {
+                if (!elems[i]) {
+                    // This field was not specified or was specified as null.
+                    continue;
+                }
+
+                mut.cells.emplace_back(serialize_field_index(i),
+                        params.make_cell(*type.type(i), *elems[i], atomic_cell::collection_member::yes));
+            }
+        }
+
+        m.set_cell(row_key, column, mut.serialize(type));
+    } else {
+        if (value) {
+            m.set_cell(row_key, column, make_cell(type, *value->get(params._options), params));
+        } else {
+            m.set_cell(row_key, column, make_dead_cell(params));
+        }
+    }
+}
+
 }

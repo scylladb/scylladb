@@ -60,6 +60,7 @@ public:
     bool is_collection() const { return _type->is_collection(); }
     bool is_counter() const { return _type->is_counter(); }
     bool is_native() const { return _type->is_native(); }
+    bool is_user_type() const { return _type->is_user_type(); }
     data_type get_type() const { return _type; }
     const sstring& to_string() const { return _type->cql3_type_name(); }
 

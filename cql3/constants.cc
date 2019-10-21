@@ -85,7 +85,7 @@ assignment_testable::test_result
 constants::literal::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
 {
     auto receiver_type = receiver->type->as_cql3_type();
-    if (receiver_type.is_collection()) {
+    if (receiver_type.is_collection() || receiver_type.is_user_type()) {
         return test_result::NOT_ASSIGNABLE;
     }
     if (!receiver_type.is_native()) {

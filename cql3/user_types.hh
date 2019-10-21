@@ -43,6 +43,7 @@
 #include "column_specification.hh"
 #include "term.hh"
 #include "column_identifier.hh"
+#include "operation.hh"
 #include "constants.hh"
 #include "to_string.hh"
 
@@ -98,6 +99,13 @@ public:
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override;
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
+    };
+
+    class setter : public operation {
+    public:
+        using operation::operation;
+
+        virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 };
 

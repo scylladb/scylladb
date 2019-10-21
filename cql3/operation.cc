@@ -43,6 +43,7 @@
 #include "maps.hh"
 #include "sets.hh"
 #include "lists.hh"
+#include "user_types.hh"
 #include "types/tuple.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -200,20 +201,24 @@ operation::set_value::prepare(database& db, const sstring& keyspace, const colum
         throw exceptions::invalid_request_exception(format("Cannot set the value of counter column {} (counters can only be incremented/decremented, not set)", receiver.name_as_text()));
     }
 
-    if (!receiver.type->is_collection()) {
-        return ::make_shared<constants::setter>(receiver, v);
+    if (receiver.type->is_collection()) {
+        auto k = receiver.type->get_kind();
+        if (k == abstract_type::kind::list) {
+            return make_shared<lists::setter>(receiver, v);
+        } else if (k == abstract_type::kind::set) {
+            return make_shared<sets::setter>(receiver, v);
+        } else if (k == abstract_type::kind::map) {
+            return make_shared<maps::setter>(receiver, v);
+        } else {
+            abort();
+        }
     }
 
-    auto k = static_pointer_cast<const collection_type_impl>(receiver.type)->get_kind();
-    if (k == abstract_type::kind::list) {
-        return make_shared<lists::setter>(receiver, v);
-    } else if (k == abstract_type::kind::set) {
-        return make_shared<sets::setter>(receiver, v);
-    } else if (k == abstract_type::kind::map) {
-        return make_shared<maps::setter>(receiver, v);
-    } else {
-        abort();
+    if (receiver.type->is_user_type()) {
+        return make_shared<user_types::setter>(receiver, v);
     }
+
+    return ::make_shared<constants::setter>(receiver, v);
 }
 
 ::shared_ptr <operation>
