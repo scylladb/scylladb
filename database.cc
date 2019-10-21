@@ -56,7 +56,6 @@
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "frozen_mutation.hh"
-#include "mutation_partition_applier.hh"
 #include <seastar/core/do_with.hh>
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
