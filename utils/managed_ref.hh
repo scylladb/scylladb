@@ -68,6 +68,14 @@ struct managed_ref {
         return *this;
     }
 
+    T* get() {
+        return _ptr ? &_ptr->_value : nullptr;
+    }
+
+    const T* get() const {
+        return _ptr ? &_ptr->_value : nullptr;
+    }
+
     T& operator*() {
         return _ptr->_value;
     }
@@ -86,6 +94,10 @@ struct managed_ref {
 
     explicit operator bool() const {
         return _ptr != nullptr;
+    }
+
+    size_t external_memory_usage() const {
+        return _ptr ? current_allocator().object_memory_size_in_allocator(_ptr) : 0;
     }
 };
 

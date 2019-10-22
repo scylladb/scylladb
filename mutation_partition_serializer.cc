@@ -202,7 +202,7 @@ template<typename Writer>
 void mutation_partition_serializer::write_serialized(Writer&& writer, const schema& s, const mutation_partition& mp)
 {
     auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
-    auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row(), s, column_kind::static_column).end_static_row().start_range_tombstones();
+    auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row().get(), s, column_kind::static_column).end_static_row().start_range_tombstones();
     write_tombstones(s, row_tombstones, mp.row_tombstones());
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     for (auto&& cr : mp.non_dummy_rows()) {

@@ -48,12 +48,12 @@ public:
     }
 
     void accept_static_cell(column_id id, atomic_cell&& cell) {
-        row& r = _partition.static_row();
+        row& r = _partition.static_row().maybe_create();
         r.append_cell(id, atomic_cell_or_collection(std::move(cell)));
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
-        row& r = _partition.static_row();
+        row& r = _partition.static_row().maybe_create();
         auto& ctype = *static_pointer_cast<const collection_type_impl>(_schema.static_column_at(id).type);
         r.append_cell(id, atomic_cell_or_collection(collection_mutation(ctype, collection)));
     }

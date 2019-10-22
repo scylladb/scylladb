@@ -1893,7 +1893,7 @@ public:
 
         m.partition().set_static_row_continuous(_bool_dist(_gen));
 
-        set_random_cells(m.partition().static_row(), column_kind::static_column);
+        set_random_cells(m.partition().static_row().maybe_create(), column_kind::static_column);
 
         auto row_count_dist = [&] (auto& gen) {
             static thread_local std::normal_distribution<> dist(32, 1.5);

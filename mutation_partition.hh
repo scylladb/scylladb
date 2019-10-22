@@ -47,6 +47,7 @@
 #include "intrusive_set_external_comparator.hh"
 #include "utils/with_relational_operators.hh"
 #include "utils/preempt.hh"
+#include "utils/managed_ref.hh"
 
 class mutation_fragment;
 class clustering_row;
@@ -370,6 +371,283 @@ public:
         friend std::ostream& operator<<(std::ostream& os, const printer& p);
     };
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
+};
+
+// Like row, but optimized for the case where the row doesn't exist (e.g. static rows)
+class lazy_row {
+    managed_ref<row> _row;
+    static inline const row _empty_row;
+public:
+    lazy_row() = default;
+    explicit lazy_row(row&& r) {
+        if (!r.empty()) {
+            _row = make_managed<row>(std::move(r));
+        }
+    }
+
+    lazy_row(const schema& s, column_kind kind, const lazy_row& r) {
+        if (!r.empty()) {
+            _row = make_managed<row>(s, kind, *r._row);
+        }
+    }
+
+    lazy_row(const schema& s, column_kind kind, const row& r) {
+        if (!r.empty()) {
+            _row = make_managed<row>(s, kind, r);
+        }
+    }
+
+    row& maybe_create() {
+        if (!_row) {
+            _row = make_managed<row>();
+        }
+        return *_row;
+    }
+
+    const row& get_existing() const & {
+        return *_row;
+    }
+
+    row& get_existing() & {
+        return *_row;
+    }
+
+    row&& get_existing() && {
+        return std::move(*_row);
+    }
+
+    const row& get() const {
+        return _row ? *_row : _empty_row;
+    }
+
+    size_t size() const {
+        if (!_row) {
+            return 0;
+        }
+        return _row->size();
+    }
+
+    bool empty() const {
+        if (!_row) {
+            return true;
+        }
+        return _row->empty();
+    }
+
+    void reserve(column_id nr) {
+        if (nr) {
+            maybe_create().reserve(nr);
+        }
+    }
+
+    const atomic_cell_or_collection& cell_at(column_id id) const {
+        if (!_row) {
+            throw_with_backtrace<std::out_of_range>(format("Column not found for id = {:d}", id));
+        } else {
+            return _row->cell_at(id);
+        }
+    }
+
+    // Returns a pointer to cell's value or nullptr if column is not set.
+    const atomic_cell_or_collection* find_cell(column_id id) const {
+        if (!_row) {
+            return nullptr;
+        }
+        return _row->find_cell(id);
+    }
+
+    // Returns a pointer to cell's value and hash or nullptr if column is not set.
+    const cell_and_hash* find_cell_and_hash(column_id id) const {
+        if (!_row) {
+            return nullptr;
+        }
+        return _row->find_cell_and_hash(id);
+    }
+
+    // Calls Func(column_id, cell_and_hash&) or Func(column_id, atomic_cell_and_collection&)
+    // for each cell in this row, depending on the concrete Func type.
+    // noexcept if Func doesn't throw.
+    template<typename Func>
+    void for_each_cell(Func&& func) {
+        if (!_row) {
+            return;
+        }
+        _row->for_each_cell(std::forward<Func>(func));
+    }
+
+    template<typename Func>
+    void for_each_cell(Func&& func) const {
+        if (!_row) {
+            return;
+        }
+        _row->for_each_cell(std::forward<Func>(func));
+    }
+
+    template<typename Func>
+    void for_each_cell_until(Func&& func) const {
+        if (!_row) {
+            return;
+        }
+        _row->for_each_cell_until(std::forward<Func>(func));
+    }
+
+    // Merges cell's value into the row.
+    // Weak exception guarantees.
+    void apply(const column_definition& column, const atomic_cell_or_collection& cell, cell_hash_opt hash = cell_hash_opt()) {
+        maybe_create().apply(column, cell, std::move(hash));
+    }
+
+    // Merges cell's value into the row.
+    // Weak exception guarantees.
+    void apply(const column_definition& column, atomic_cell_or_collection&& cell, cell_hash_opt hash = cell_hash_opt()) {
+        maybe_create().apply(column, std::move(cell), std::move(hash));
+    }
+
+    // Monotonic exception guarantees. In case of exception the sum of cell and this remains the same as before the exception.
+    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell, cell_hash_opt hash = cell_hash_opt()) {
+        maybe_create().apply_monotonically(column, std::move(cell), std::move(hash));
+    }
+
+    // Adds cell to the row. The column must not be already set.
+    void append_cell(column_id id, atomic_cell_or_collection cell) {
+        maybe_create().append_cell(id, std::move(cell));
+    }
+
+    // Weak exception guarantees
+    void apply(const schema& s, column_kind kind, const row& src) {
+        if (src.empty()) {
+            return;
+        }
+        maybe_create().apply(s, kind, src);
+    }
+
+    // Weak exception guarantees
+    void apply(const schema& s, column_kind kind, const lazy_row& src) {
+        if (src.empty()) {
+            return;
+        }
+        maybe_create().apply(s, kind, src.get_existing());
+    }
+
+    // Weak exception guarantees
+    void apply(const schema& s, column_kind kind, row&& src) {
+        if (src.empty()) {
+            return;
+        }
+        maybe_create().apply(s, kind, std::move(src));
+    }
+
+    // Monotonic exception guarantees
+    void apply_monotonically(const schema& s, column_kind kind, row&& src) {
+        if (src.empty()) {
+            return;
+        }
+        maybe_create().apply_monotonically(s, kind, std::move(src));
+    }
+
+    // Monotonic exception guarantees
+    void apply_monotonically(const schema& s, column_kind kind, lazy_row&& src) {
+        if (src.empty()) {
+            return;
+        }
+        if (!_row) {
+            _row = std::move(src._row);
+            return;
+        }
+        get_existing().apply_monotonically(s, kind, std::move(src.get_existing()));
+    }
+
+    // Expires cells based on query_time. Expires tombstones based on gc_before
+    // and max_purgeable. Removes cells covered by tomb.
+    // Returns true iff there are any live cells left.
+    bool compact_and_expire(
+            const schema& s,
+            column_kind kind,
+            row_tombstone tomb,
+            gc_clock::time_point query_time,
+            can_gc_fn& can_gc,
+            gc_clock::time_point gc_before,
+            const row_marker& marker,
+            compaction_garbage_collector* collector = nullptr);
+
+    bool compact_and_expire(
+            const schema& s,
+            column_kind kind,
+            row_tombstone tomb,
+            gc_clock::time_point query_time,
+            can_gc_fn& can_gc,
+            gc_clock::time_point gc_before,
+            compaction_garbage_collector* collector = nullptr);
+
+    lazy_row difference(const schema& s, column_kind kind, const lazy_row& other) const {
+        if (!_row) {
+            return lazy_row();
+        }
+        if (!other._row) {
+            return lazy_row(s, kind, *_row);
+        }
+        return lazy_row(_row->difference(s, kind, *other._row));
+    }
+
+    bool equal(column_kind kind, const schema& this_schema, const lazy_row& other, const schema& other_schema) const {
+        bool e1 = empty();
+        bool e2 = other.empty();
+        if (e1 && e2) {
+            return true;
+        }
+        if (e1 != e2) {
+            return false;
+        }
+        // both non-empty
+        return _row->equal(kind, this_schema, *other._row, other_schema);
+    }
+
+    size_t external_memory_usage(const schema& s, column_kind kind) const {
+        if (!_row) {
+            return 0;
+        }
+        return _row.external_memory_usage() + _row->external_memory_usage(s, kind);
+    }
+
+    cell_hash_opt cell_hash_for(column_id id) const {
+        if (!_row) {
+            return cell_hash_opt{};
+        }
+        return _row->cell_hash_for(id);
+    }
+
+    void prepare_hash(const schema& s, column_kind kind) const {
+        if (!_row) {
+            return;
+        }
+        _row->prepare_hash(s, kind);
+    }
+
+    void clear_hash() const {
+        if (!_row) {
+            return;
+        }
+        _row->clear_hash();
+    }
+
+    bool is_live(const schema& s, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const {
+        if (!_row) {
+            return false;
+        }
+        return _row->is_live(s, kind, tomb, now);
+    }
+
+    class printer {
+        const schema& _schema;
+        column_kind _kind;
+        const lazy_row& _row;
+    public:
+        printer(const schema& s, column_kind k, const lazy_row& r) : _schema(s), _kind(k), _row(r) { }
+        printer(const printer&) = delete;
+        printer(printer&&) = delete;
+
+        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    };
 };
 
 class row_marker;
@@ -922,7 +1200,7 @@ public:
     friend class size_calculator;
 private:
     tombstone _tombstone;
-    row _static_row;
+    lazy_row _static_row;
     bool _static_row_continuous = true;
     rows_type _rows;
     // Contains only strict prefixes so that we don't have to lookup full keys
@@ -1131,8 +1409,8 @@ public:
     deletable_row& clustered_row(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
 public:
     tombstone partition_tombstone() const { return _tombstone; }
-    row& static_row() { return _static_row; }
-    const row& static_row() const { return _static_row; }
+    lazy_row& static_row() { return _static_row; }
+    const lazy_row& static_row() const { return _static_row; }
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const { return _rows; }
     const range_tombstone_list& row_tombstones() const { return _row_tombstones; }
