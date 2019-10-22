@@ -524,6 +524,7 @@ usingClauseObjective[::shared_ptr<cql3::attributes::raw> attrs]
  */
 updateStatement returns [::shared_ptr<raw::update_statement> expr]
     @init {
+        bool if_exists = false;
         auto attrs = ::make_shared<cql3::attributes::raw>();
         std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, ::shared_ptr<cql3::operation::raw_update>>> operations;
     }
@@ -531,13 +532,14 @@ updateStatement returns [::shared_ptr<raw::update_statement> expr]
       ( usingClause[attrs] )?
       K_SET columnOperation[operations] (',' columnOperation[operations])*
       K_WHERE wclause=whereClause
-      ( K_IF conditions=updateConditions )?
+      ( K_IF (K_EXISTS{ if_exists = true; } | conditions=updateConditions) )?
       {
           return ::make_shared<raw::update_statement>(std::move(cf),
                                                   std::move(attrs),
                                                   std::move(operations),
                                                   std::move(wclause),
-                                                  std::move(conditions));
+                                                  std::move(conditions),
+                                                  if_exists);
      }
     ;
 

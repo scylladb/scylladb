@@ -78,7 +78,7 @@ public:
         ::shared_ptr<attributes::raw> attrs,
         std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
         std::vector<relation_ptr> where_clause,
-        conditions_vector conditions);
+        conditions_vector conditions, bool if_exists);
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
                 ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats);
