@@ -104,17 +104,17 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
     if (!_collection_element) {
         if (_op == operator_type::IN) {
             if (_in_values.empty()) { // ?
-                return column_condition::in_condition(receiver, _in_marker->prepare(db, keyspace, receiver.column_specification));
+                return column_condition::in_condition(receiver, {}, _in_marker->prepare(db, keyspace, receiver.column_specification), {});
             }
 
             std::vector<::shared_ptr<term>> terms;
             for (auto&& value : _in_values) {
                 terms.push_back(value->prepare(db, keyspace, receiver.column_specification));
             }
-            return column_condition::in_condition(receiver, std::move(terms));
+            return column_condition::in_condition(receiver, {}, {}, std::move(terms));
         } else {
             validate_operation_on_durations(*receiver.type, _op);
-            return column_condition::condition(receiver, _value->prepare(db, keyspace, receiver.column_specification), _op);
+            return column_condition::condition(receiver, {}, _value->prepare(db, keyspace, receiver.column_specification), _op);
         }
     }
 
@@ -142,13 +142,13 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         if (_in_values.empty()) {
             return column_condition::in_condition(receiver,
                     _collection_element->prepare(db, keyspace, element_spec),
-                    _in_marker->prepare(db, keyspace, value_spec));
+                    _in_marker->prepare(db, keyspace, value_spec), {});
         }
         std::vector<shared_ptr<term>> terms;
         terms.reserve(_in_values.size());
         boost::push_back(terms, _in_values
                                 | boost::adaptors::transformed(std::bind(&term::raw::prepare, std::placeholders::_1, std::ref(db), std::ref(keyspace), value_spec)));
-        return column_condition::in_condition(receiver, _collection_element->prepare(db, keyspace, element_spec), terms);
+        return column_condition::in_condition(receiver, _collection_element->prepare(db, keyspace, element_spec), {}, terms);
     } else {
         validate_operation_on_durations(*receiver.type, _op);
 

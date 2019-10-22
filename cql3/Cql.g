@@ -1466,16 +1466,16 @@ udtColumnOperation[operations_type& operations,
 columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
     : key=cident
-        ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, *op)); }
+        ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, {}, *op)); }
         | K_IN
-            ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(values)); }
-            | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(marker)); }
+            ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, {}, values)); }
+            | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, marker, {})); }
             )
         | '[' element=term ']'
-            ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::collection_condition(t, element, *op)); }
+            ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, element, *op)); }
             | K_IN
-                ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::collection_in_condition(element, values)); }
-                | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::collection_in_condition(element, marker)); }
+                ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, {}, values)); }
+                | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, marker, {})); }
                 )
             )
         )

@@ -73,36 +73,19 @@ public:
         }
     }
 
-    static ::shared_ptr<column_condition> condition(const column_definition& def, ::shared_ptr<term> value, const operator_type& op) {
-        return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, std::move(value), std::vector<::shared_ptr<term>>{}, op);
-    }
 
+    // Helper constructor wrapper for  "IF col['key'] = 'foo'" or "IF col = 'foo'" */
     static ::shared_ptr<column_condition> condition(const column_definition& def, ::shared_ptr<term> collection_element,
             ::shared_ptr<term> value, const operator_type& op) {
         return ::make_shared<column_condition>(def, std::move(collection_element), std::move(value),
             std::vector<::shared_ptr<term>>{}, op);
     }
 
-    static ::shared_ptr<column_condition> in_condition(const column_definition& def, std::vector<::shared_ptr<term>> in_values) {
-        return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, ::shared_ptr<term>{},
-            std::move(in_values), operator_type::IN);
-    }
-
+    // Helper constructor wrapper for  "IF col IN ... and IF col['key'] IN ... */
     static ::shared_ptr<column_condition> in_condition(const column_definition& def, ::shared_ptr<term> collection_element,
-            std::vector<::shared_ptr<term>> in_values) {
-        return ::make_shared<column_condition>(def, std::move(collection_element), ::shared_ptr<term>{},
-            std::move(in_values), operator_type::IN);
-    }
-
-    static ::shared_ptr<column_condition> in_condition(const column_definition& def, ::shared_ptr<term> in_marker) {
-        return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, std::move(in_marker),
-            std::vector<::shared_ptr<term>>{}, operator_type::IN);
-    }
-
-    static ::shared_ptr<column_condition> in_condition(const column_definition& def, ::shared_ptr<term> collection_element,
-        ::shared_ptr<term> in_marker) {
+            ::shared_ptr<term> in_marker, std::vector<::shared_ptr<term>> in_values) {
         return ::make_shared<column_condition>(def, std::move(collection_element), std::move(in_marker),
-            std::vector<::shared_ptr<term>>{}, operator_type::IN);
+            std::move(in_values), operator_type::IN);
     }
 
     bool uses_function(const sstring& ks_name, const sstring& function_name);
@@ -137,42 +120,25 @@ public:
                 , _op(op)
         { }
 
-        /** A condition on a column. For example: "IF col = 'foo'" */
-        static ::shared_ptr<raw> simple_condition(::shared_ptr<term::raw> value, const operator_type& op) {
-            return ::make_shared<raw>(std::move(value), std::vector<::shared_ptr<term::raw>>{},
-                ::shared_ptr<abstract_marker::in_raw>{}, ::shared_ptr<term::raw>{}, op);
-        }
-
-        /** An IN condition on a column. For example: "IF col IN ('foo', 'bar', ...)" */
-        static ::shared_ptr<raw> simple_in_condition(std::vector<::shared_ptr<term::raw>> in_values) {
-            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::move(in_values),
-                ::shared_ptr<abstract_marker::in_raw>{}, ::shared_ptr<term::raw>{}, operator_type::IN);
-        }
-
-        /** An IN condition on a column with a single marker. For example: "IF col IN ?" */
-        static ::shared_ptr<raw> simple_in_condition(::shared_ptr<abstract_marker::in_raw> in_marker) {
-            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::vector<::shared_ptr<term::raw>>{},
-                std::move(in_marker), ::shared_ptr<term::raw>{}, operator_type::IN);
-        }
-
-        /** A condition on a collection element. For example: "IF col['key'] = 'foo'" */
-        static ::shared_ptr<raw> collection_condition(::shared_ptr<term::raw> value, ::shared_ptr<term::raw> collection_element,
+        /** A condition on a column or collection element. For example: "IF col['key'] = 'foo'" or "IF col = 'foo'" */
+        static ::shared_ptr<raw> simple_condition(::shared_ptr<term::raw> value, ::shared_ptr<term::raw> collection_element,
                 const operator_type& op) {
-            return ::make_shared<raw>(std::move(value), std::vector<::shared_ptr<term::raw>>{}, ::shared_ptr<abstract_marker::in_raw>{}, std::move(collection_element), op);
+            return ::make_shared<raw>(std::move(value), std::vector<::shared_ptr<term::raw>>{},
+                    ::shared_ptr<abstract_marker::in_raw>{}, std::move(collection_element), op);
         }
 
-        /** An IN condition on a collection element. For example: "IF col['key'] IN ('foo', 'bar', ...)" */
-        static ::shared_ptr<raw> collection_in_condition(::shared_ptr<term::raw> collection_element,
-                std::vector<::shared_ptr<term::raw>> in_values) {
-            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::move(in_values), ::shared_ptr<abstract_marker::in_raw>{},
-                std::move(collection_element), operator_type::IN);
-        }
-
-        /** An IN condition on a collection element with a single marker. For example: "IF col['key'] IN ?" */
-        static ::shared_ptr<raw> collection_in_condition(::shared_ptr<term::raw> collection_element,
-                ::shared_ptr<abstract_marker::in_raw> in_marker) {
-            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::vector<::shared_ptr<term::raw>>{}, std::move(in_marker),
-                std::move(collection_element), operator_type::IN);
+        /**
+         * An IN condition on a column or a collection element. IN may contain a list of values or a single marker.
+         * For example:
+         * "IF col IN ('foo', 'bar', ...)"
+         * "IF col IN ?"
+         * "IF col['key'] IN * ('foo', 'bar', ...)"
+         * "IF col['key'] IN ?"
+         */
+        static ::shared_ptr<raw> in_condition(::shared_ptr<term::raw> collection_element,
+                ::shared_ptr<abstract_marker::in_raw> in_marker, std::vector<::shared_ptr<term::raw>> in_values) {
+            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::move(in_values), std::move(in_marker),
+                    std::move(collection_element), operator_type::IN);
         }
 
         ::shared_ptr<column_condition> prepare(database& db, const sstring& keyspace, const column_definition& receiver);
