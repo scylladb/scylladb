@@ -114,15 +114,6 @@ struct estimated_histogram {
     }
 
 
-    // FIXME: convert Java code below.
-#if 0
-    public EstimatedHistogram(long[] offsets, long[] bucketData)
-    {
-        assert bucketData.length == offsets.length +1;
-        bucketOffsets = offsets;
-        buckets = new AtomicLongArray(bucketData);
-    }
-#endif
 private:
     void new_offsets(int size) {
         bucket_offsets.resize(size);
@@ -251,66 +242,12 @@ public:
 
     friend estimated_histogram merge(estimated_histogram a, const estimated_histogram& b);
 
-    // FIXME: convert Java code below.
-#if 0
     /**
      * @return the count in the given bucket
      */
-    long get(int bucket)
-    {
-        return buckets.get(bucket);
+    int64_t get(int bucket) {
+        return buckets[bucket];
     }
-
-    /**
-     * @param reset zero out buckets afterwards if true
-     * @return a long[] containing the current histogram buckets
-     */
-    public long[] getBuckets(boolean reset)
-    {
-        final int len = buckets.length();
-        long[] rv = new long[len];
-
-        if (reset)
-            for (int i = 0; i < len; i++)
-                rv[i] = buckets.getAndSet(i, 0L);
-        else
-            for (int i = 0; i < len; i++)
-                rv[i] = buckets.get(i);
-
-        return rv;
-    }
-
-    /**
-     * @return the smallest value that could have been added to this histogram
-     */
-    public long min()
-    {
-        for (int i = 0; i < buckets.length(); i++)
-        {
-            if (buckets.get(i) > 0)
-                return i == 0 ? 0 : 1 + bucketOffsets[i - 1];
-        }
-        return 0;
-    }
-
-    /**
-     * @return the largest value that could have been added to this histogram.  If the histogram
-     * overflowed, returns Long.MAX_VALUE.
-     */
-    public long max()
-    {
-        int lastBucket = buckets.length() - 1;
-        if (buckets.get(lastBucket) > 0)
-            return Long.MAX_VALUE;
-
-        for (int i = lastBucket - 1; i >= 0; i--)
-        {
-            if (buckets.get(i) > 0)
-                return bucketOffsets[i];
-        }
-        return 0;
-    }
-#endif
 
     /**
      * @param percentile
@@ -372,15 +309,6 @@ public:
         }
         return *this;
     }
-#if 0
-    /**
-     * @return true if this histogram has overflowed -- that is, a value larger than our largest bucket could bound was added
-     */
-    public boolean isOverflowed()
-    {
-        return buckets.get(buckets.length() - 1) > 0;
-    }
-#endif
 
     friend std::ostream& operator<<(std::ostream& out, const estimated_histogram& h) {
         // only print overflow if there is any
@@ -436,71 +364,6 @@ public:
         s += "]";
         return s;
     }
-
-#if 0
-    @Override
-    public boolean equals(Object o)
-    {
-        if (this == o)
-            return true;
-
-        if (!(o instanceof EstimatedHistogram))
-            return false;
-
-        EstimatedHistogram that = (EstimatedHistogram) o;
-        return Arrays.equals(getBucketOffsets(), that.getBucketOffsets()) &&
-               Arrays.equals(getBuckets(false), that.getBuckets(false));
-    }
-
-    @Override
-    public int hashCode()
-    {
-        return Objects.hashCode(getBucketOffsets(), getBuckets(false));
-    }
-
-    public static class EstimatedHistogramSerializer implements ISerializer<EstimatedHistogram>
-    {
-        public void serialize(EstimatedHistogram eh, DataOutputPlus out) throws IOException
-        {
-            long[] offsets = eh.getBucketOffsets();
-            long[] buckets = eh.getBuckets(false);
-            out.writeInt(buckets.length);
-            for (int i = 0; i < buckets.length; i++)
-            {
-                out.writeLong(offsets[i == 0 ? 0 : i - 1]);
-                out.writeLong(buckets[i]);
-            }
-        }
-
-        public EstimatedHistogram deserialize(DataInput in) throws IOException
-        {
-            int size = in.readInt();
-            long[] offsets = new long[size - 1];
-            long[] buckets = new long[size];
-
-            for (int i = 0; i < size; i++) {
-                offsets[i == 0 ? 0 : i - 1] = in.readLong();
-                buckets[i] = in.readLong();
-            }
-            return new EstimatedHistogram(offsets, buckets);
-        }
-
-        public long serializedSize(EstimatedHistogram eh, TypeSizes typeSizes)
-        {
-            int size = 0;
-
-            long[] offsets = eh.getBucketOffsets();
-            long[] buckets = eh.getBuckets(false);
-            size += typeSizes.sizeof(buckets.length);
-            for (int i = 0; i < buckets.length; i++)
-            {
-                size += typeSizes.sizeof(offsets[i == 0 ? 0 : i - 1]);
-                size += typeSizes.sizeof(buckets[i]);
-            }
-            return size;
-        }
-    }
-#endif
 };
 
 inline estimated_histogram estimated_histogram_merge(estimated_histogram a, const estimated_histogram& b) {
