@@ -259,13 +259,6 @@ private:
 
     std::optional<inet_address> _removing_node;
 
-    /* Are we starting this node in bootstrap mode? */
-    bool _is_bootstrap_mode;
-
-    /* we bootstrap but do NOT join the ring unless told to do so */
-    // FIXME: System.getProperty("cassandra.write_survey", "false")
-    bool _is_survey_mode = false;
-
     bool _initialized;
 
     bool _joined = false;
@@ -351,12 +344,6 @@ public:
     sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
 
-    void finish_bootstrapping() {
-        _is_bootstrap_mode = false;
-    }
-
-    /** This method updates the local token on disk  */
-    void set_tokens(std::unordered_set<token> tokens);
     void set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens);
 #if 0
 
@@ -553,13 +540,13 @@ private:
     void set_mode(mode m, bool log);
     void set_mode(mode m, sstring msg, bool log);
     void mark_existing_views_as_built();
+
+    // Stream data for which we become a new replica.
+    // Before that, if we're not replacing another node, inform other nodes about our chosen tokens (_bootstrap_tokens)
+    // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
+    void bootstrap();
+
 public:
-    void bootstrap(std::unordered_set<token> tokens);
-
-    bool is_bootstrap_mode() {
-        return _is_bootstrap_mode;
-    }
-
 #if 0
 
     public TokenMetadata getTokenMetadata()

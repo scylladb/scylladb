@@ -162,8 +162,16 @@ future<> setup(distributed<database>& db,
                distributed<cql3::query_processor>& qp,
                distributed<service::storage_service>& ss);
 future<> update_schema_version(utils::UUID version);
-future<> update_tokens(std::unordered_set<dht::token> tokens);
-future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> tokens);
+
+/*
+ * Save tokens used by this node in the LOCAL table.
+ */
+future<> update_tokens(const std::unordered_set<dht::token>& tokens);
+
+/**
+ * Record tokens being used by another node in the PEERS table.
+ */
+future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
 future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
@@ -478,17 +486,6 @@ enum class bootstrap_state {
 #endif
 
     /**
-     * Convenience method to update the list of tokens in the local system keyspace.
-     *
-     * @param addTokens tokens to add
-     * @param rmTokens tokens to remove
-     * @return the collection of persisted tokens
-     */
-    future<std::unordered_set<dht::token>> update_local_tokens(
-        const std::unordered_set<dht::token> add_tokens,
-        const std::unordered_set<dht::token> rm_tokens);
-
-    /**
      * Return a map of stored tokens to IP addresses
      *
      */
@@ -500,6 +497,10 @@ enum class bootstrap_state {
      */
     future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
 
+    /*
+     * Read this node's tokens stored in the LOCAL table.
+     * Used to initialize a restarting node.
+     */
     future<std::unordered_set<dht::token>> get_saved_tokens();
 
     future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
