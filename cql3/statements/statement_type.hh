@@ -41,14 +41,7 @@
 
 #pragma once
 
-#include <vector>
-#include "to_string.hh"
-#include "schema.hh"
-#include "cql3/restrictions/restrictions.hh"
-#include "cql3/restrictions/primary_key_restrictions.hh"
-#include "cql3/restrictions/single_column_restrictions.hh"
-#include "cql3/relation.hh"
-#include "cql3/variable_specifications.hh"
+#include <ostream>
 
 namespace cql3 {
 
@@ -59,7 +52,8 @@ class statement_type final {
         insert,
         update,
         del,
-        select
+        select,
+        max_value = select
     };
     const type _type;
 
@@ -85,6 +79,12 @@ public:
     static const statement_type UPDATE;
     static const statement_type DELETE;
     static const statement_type SELECT;
+
+    static constexpr size_t MAX_VALUE = size_t(type::max_value);
+
+    explicit operator size_t() const {
+        return size_t(_type);
+    }
 
     bool operator==(const statement_type& other) const {
         return _type == other._type;

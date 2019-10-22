@@ -48,7 +48,7 @@ namespace cql3 {
 namespace statements {
 
 delete_statement::delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats)
-        : modification_statement{type, bound_terms, std::move(s), std::move(attrs), &stats.deletes}
+        : modification_statement{type, bound_terms, std::move(s), std::move(attrs), stats}
 { }
 
 bool delete_statement::require_full_clustering_key() const {

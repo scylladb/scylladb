@@ -73,14 +73,14 @@ modification_statement_timeout(const schema& s) {
     }
 }
 
-modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, uint64_t* cql_stats_counter_ptr)
+modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, cql_stats& stats)
     : cql_statement_no_metadata(modification_statement_timeout(*schema_))
     , type{type_}
     , _bound_terms{bound_terms}
     , s{schema_}
     , attrs{std::move(attrs_)}
     , _column_operations{}
-    , _cql_modification_counter_ptr(cql_stats_counter_ptr)
+    , _stats(stats)
 { }
 
 bool modification_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {

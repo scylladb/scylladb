@@ -119,22 +119,22 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
             {
                     sm::make_derive(
                             "reads",
-                            _cql_stats.reads,
+                            _cql_stats.statements[size_t(statement_type::SELECT)],
                             sm::description("Counts a total number of CQL read requests.")),
 
                     sm::make_derive(
                             "inserts",
-                            _cql_stats.inserts,
+                            _cql_stats.statements[size_t(statement_type::INSERT)],
                             sm::description("Counts a total number of CQL INSERT requests.")),
 
                     sm::make_derive(
                             "updates",
-                            _cql_stats.updates,
+                            _cql_stats.statements[size_t(statement_type::UPDATE)],
                             sm::description("Counts a total number of CQL UPDATE requests.")),
 
                     sm::make_derive(
                             "deletes",
-                            _cql_stats.deletes,
+                            _cql_stats.statements[size_t(statement_type::DELETE)],
                             sm::description("Counts a total number of CQL DELETE requests.")),
 
                     sm::make_derive(

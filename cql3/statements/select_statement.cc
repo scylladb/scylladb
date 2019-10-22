@@ -304,7 +304,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     auto now = gc_clock::now();
 
     const bool restrictions_need_filtering = _restrictions->need_filtering();
-    ++_stats.reads;
+    ++_stats.statements[size_t(statement_type::SELECT)];
     _stats.filtered_reads += restrictions_need_filtering;
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
@@ -855,7 +855,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
 
     auto now = gc_clock::now();
 
-    ++_stats.reads;
+    ++_stats.statements[size_t(statement_type::SELECT)];
     ++_stats.secondary_index_reads;
 
     assert(_restrictions->uses_secondary_indexing());

@@ -65,7 +65,7 @@ public:
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
 #endif
 
-    update_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, uint64_t* cql_stats_counter_ptr);
+    update_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats);
 private:
     virtual bool require_full_clustering_key() const override;
 
@@ -84,8 +84,8 @@ class insert_prepared_json_statement : public update_statement {
     ::shared_ptr<term> _term;
     bool _default_unset;
 public:
-    insert_prepared_json_statement(uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, uint64_t* cql_stats_counter_ptr, ::shared_ptr<term> t, bool default_unset)
-        : update_statement(statement_type::INSERT, bound_terms, s, std::move(attrs), cql_stats_counter_ptr), _term(t), _default_unset(default_unset) {
+    insert_prepared_json_statement(uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats, ::shared_ptr<term> t, bool default_unset)
+        : update_statement(statement_type::INSERT, bound_terms, s, std::move(attrs), stats), _term(t), _default_unset(default_unset) {
         _restrictions = ::make_shared<restrictions::statement_restrictions>(s, false);
     }
 private:
