@@ -685,13 +685,17 @@ public:
     }
 };
 
-static future<std::optional<paxos_response_handler::ballot_and_contention>> sleep_and_restart() {
+static future<> sleep_approx_50ms() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    std::uniform_int_distribution<> dist(0, 100);
-    return sleep(std::chrono::milliseconds(dist(re))).then([] {
+    static thread_local std::uniform_int_distribution<> dist(0, 100);
+    return seastar::sleep(std::chrono::milliseconds(dist(re)));
+}
+
+static future<std::optional<paxos_response_handler::ballot_and_contention>> sleep_and_restart() {
+    return sleep_approx_50ms().then([] {
          return std::optional<paxos_response_handler::ballot_and_contention>(); // continue
     });
-};
+}
 
 /**
  * Begin a Paxos session by sending a prepare request and completing any in-progress requests seen in the replies.
@@ -3970,9 +3974,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                                     handler->id());
                             tracing::trace(handler->tr_state, "PAXOS proposal not accepted (pre-empted by a higher ballot)");
                             ++contentions;
-                            return seastar::sleep(100ms).then([] {
-                                return std::optional<bool>();
-                            });
+                            return sleep_approx_50ms().then([] { return std::optional<bool>(); });
                         });
                     });
                 });
