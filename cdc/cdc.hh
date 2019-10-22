@@ -133,22 +133,22 @@ struct db_context final {
     public:
         builder(service::storage_proxy& proxy) : _proxy(proxy) { }
 
-        builder with_migration_manager(service::migration_manager& migration_manager) {
+        builder& with_migration_manager(service::migration_manager& migration_manager) {
             _migration_manager = migration_manager;
             return *this;
         }
 
-        builder with_token_metadata(locator::token_metadata& token_metadata) {
+        builder& with_token_metadata(locator::token_metadata& token_metadata) {
             _token_metadata = token_metadata;
             return *this;
         }
 
-        builder with_snitch(locator::snitch_ptr& snitch) {
+        builder& with_snitch(locator::snitch_ptr& snitch) {
             _snitch = snitch;
             return *this;
         }
 
-        builder with_partitioner(dht::i_partitioner& partitioner) {
+        builder& with_partitioner(dht::i_partitioner& partitioner) {
             _partitioner = partitioner;
             return *this;
         }
