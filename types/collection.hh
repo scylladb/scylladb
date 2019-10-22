@@ -105,6 +105,23 @@ protected:
     explicit listlike_collection_type_impl(kind k, sstring name, data_type elements,bool is_multi_cell);
 public:
     const data_type& get_elements_type() const { return _elements; }
+    // A list or set value can be serialized as a vector<pair<timeuuid, data_value>> or
+    // vector<pair<data_value, empty>> respectively. Compare this representation with
+    // vector<data_value> without transforming either of the arguments. Since Cassandra doesn't
+    // allow nested multi-cell collections this representation does not transcend to values, and we
+    // don't need to worry about recursing.
+    // @param this          type of the listlike value represented as vector<data_value>
+    // @param map_type      type of the listlike value represented as vector<pair<data_value, data_value>>
+    // @param list          listlike value, represented as vector<data_value>
+    // @param map           listlike value represented as vector<pair<data_value, data_value>>
+    //
+    // This function is used to compare receiver with a literal or parameter marker during condition
+    // evaluation.
+    int32_t compare_with_map(const map_type_impl& map_type, bytes_view list, bytes_view map) const;
+    // A list or set value can be represented as a vector<pair<timeuuid, data_value>> or
+    // vector<pair<data_value, empty>> respectively. Serialize this representation
+    // as a vector of values, not as a vector of pairs.
+    bytes serialize_map(const map_type_impl& map_type, const data_value& value) const;
 };
 
 template <typename BytesViewIterator>
