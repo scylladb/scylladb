@@ -60,7 +60,7 @@ batch_statement::batch_statement(int bound_terms, type type_,
                                  std::vector<single_statement> statements,
                                  std::unique_ptr<attributes> attrs,
                                  cql_stats& stats)
-    : cql_statement_no_metadata(timeout_for_type(type_))
+    : cql_statement_opt_metadata(timeout_for_type(type_))
     , _bound_terms(bound_terms), _type(type_), _statements(std::move(statements))
     , _attrs(std::move(attrs))
     , _has_conditions(boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))

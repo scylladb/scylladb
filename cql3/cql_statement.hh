@@ -115,4 +115,21 @@ public:
     }
 };
 
+// Conditional modification statements and batches
+// return a result set and have metadata, while same
+// statements without conditions do not.
+class cql_statement_opt_metadata : public cql_statement {
+protected:
+    // Result set metadata, may be empty for simple updates and batches
+    shared_ptr<metadata> _metadata;
+public:
+    using cql_statement::cql_statement;
+    virtual shared_ptr<const metadata> get_result_metadata() const override {
+        if (_metadata) {
+            return _metadata;
+        }
+        return make_empty_metadata();
+    }
+};
+
 }

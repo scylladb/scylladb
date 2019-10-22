@@ -74,7 +74,7 @@ modification_statement_timeout(const schema& s) {
 }
 
 modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, cql_stats& stats)
-    : cql_statement_no_metadata(modification_statement_timeout(*schema_))
+    : cql_statement_opt_metadata(modification_statement_timeout(*schema_))
     , type{type_}
     , _bound_terms{bound_terms}
     , s{schema_}
