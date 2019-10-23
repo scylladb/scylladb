@@ -715,6 +715,11 @@ void storage_service::join_token_ring(int delay) {
         db::system_keyspace::update_tokens(_bootstrap_tokens).get();
         bootstrap();
         // bootstrap will block until finished
+        if (_is_bootstrap_mode) {
+            auto err = format("We are not supposed in bootstrap mode any more");
+            slogger.warn("{}", err);
+            throw std::runtime_error(err);
+        }
     } else {
         maybe_start_sys_dist_ks();
         size_t num_tokens = _db.local().get_config().num_tokens();
@@ -819,6 +824,7 @@ void storage_service::mark_existing_views_as_built() {
 
 // Runs inside seastar::async context
 void storage_service::bootstrap() {
+    _is_bootstrap_mode = true;
     if (!db().local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
