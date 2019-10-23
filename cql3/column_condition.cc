@@ -100,63 +100,51 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
     if (receiver.type->is_counter()) {
         throw exceptions::invalid_request_exception("Conditions on counters are not supported");
     }
+    shared_ptr<term> collection_element_term;
+    shared_ptr<column_specification> value_spec = receiver.column_specification;
 
-    if (!_collection_element) {
-        if (_op == operator_type::IN) {
-            if (_in_values.empty()) { // ?
-                return column_condition::in_condition(receiver, {}, _in_marker->prepare(db, keyspace, receiver.column_specification), {});
-            }
-
-            std::vector<::shared_ptr<term>> terms;
-            for (auto&& value : _in_values) {
-                terms.push_back(value->prepare(db, keyspace, receiver.column_specification));
-            }
-            return column_condition::in_condition(receiver, {}, {}, std::move(terms));
+    if (_collection_element) {
+        if (!receiver.type->is_collection()) {
+            throw exceptions::invalid_request_exception(format("Invalid element access syntax for non-collection column {}",
+                        receiver.name_as_text()));
+        }
+        // Pass  a correct type specification to the collection_element->prepare(), so that it can
+        // later be used to validate the parameter type is compatible with receiver type.
+        shared_ptr<column_specification> element_spec;
+        auto ctype = static_cast<const collection_type_impl*>(receiver.type.get());
+        if (ctype->get_kind() == abstract_type::kind::list) {
+            element_spec = lists::index_spec_of(receiver.column_specification);
+            value_spec = lists::value_spec_of(receiver.column_specification);
+        } else if (ctype->get_kind() == abstract_type::kind::map) {
+            element_spec = maps::key_spec_of(*receiver.column_specification);
+            value_spec = maps::value_spec_of(*receiver.column_specification);
+        } else if (ctype->get_kind() == abstract_type::kind::set) {
+            throw exceptions::invalid_request_exception(format("Invalid element access syntax for set column {}",
+                        receiver.name_as_text()));
         } else {
-            validate_operation_on_durations(*receiver.type, _op);
-            return column_condition::condition(receiver, {}, _value->prepare(db, keyspace, receiver.column_specification), _op);
+            assert(false);
         }
+        collection_element_term = _collection_element->prepare(db, keyspace, element_spec);
     }
 
-    if (!receiver.type->is_collection()) {
-        throw exceptions::invalid_request_exception(format("Invalid element access syntax for non-collection column {}", receiver.name_as_text()));
-    }
-
-    shared_ptr<column_specification> element_spec, value_spec;
-    // TODO (kbraun): after LWT is implemented, generalize this code to UDTs and extend the CQL grammar.
-    assert(receiver.type->is_collection());
-    auto ctype = static_cast<const collection_type_impl*>(receiver.type.get());
-    if (ctype->get_kind() == abstract_type::kind::list) {
-        element_spec = lists::index_spec_of(receiver.column_specification);
-        value_spec = lists::value_spec_of(receiver.column_specification);
-    } else if (ctype->get_kind() == abstract_type::kind::map) {
-        element_spec = maps::key_spec_of(*receiver.column_specification);
-        value_spec = maps::value_spec_of(*receiver.column_specification);
-    } else if (ctype->get_kind() == abstract_type::kind::set) {
-        throw exceptions::invalid_request_exception(format("Invalid element access syntax for set column {}", receiver.name()));
-    } else {
-        abort();
-    }
-
-    if (_op == operator_type::IN) {
-        if (_in_values.empty()) {
-            return column_condition::in_condition(receiver,
-                    _collection_element->prepare(db, keyspace, element_spec),
-                    _in_marker->prepare(db, keyspace, value_spec), {});
-        }
-        std::vector<shared_ptr<term>> terms;
-        terms.reserve(_in_values.size());
-        boost::push_back(terms, _in_values
-                                | boost::adaptors::transformed(std::bind(&term::raw::prepare, std::placeholders::_1, std::ref(db), std::ref(keyspace), value_spec)));
-        return column_condition::in_condition(receiver, _collection_element->prepare(db, keyspace, element_spec), {}, terms);
-    } else {
+    if (_op.is_compare()) {
         validate_operation_on_durations(*receiver.type, _op);
-
-        return column_condition::condition(receiver,
-                _collection_element->prepare(db, keyspace, element_spec),
-                _value->prepare(db, keyspace, value_spec),
-                _op);
+        return column_condition::condition(receiver, collection_element_term, _value->prepare(db, keyspace, value_spec), _op);
     }
+    assert(_op == operator_type::IN);
+
+    if (_in_marker) {
+        assert(_in_values.empty());
+        shared_ptr<term> multi_item_term = _in_marker->prepare(db, keyspace, value_spec);
+        return column_condition::in_condition(receiver, collection_element_term, multi_item_term, {});
+    }
+    // Both _in_values and in _in_marker can be missing in case of empty IN list: "a IN ()"
+    std::vector<::shared_ptr<term>> terms;
+    terms.reserve(_in_values.size());
+    for (auto&& value : _in_values) {
+        terms.push_back(value->prepare(db, keyspace, value_spec));
+    }
+    return column_condition::in_condition(receiver, collection_element_term, {}, std::move(terms));
 }
 
-}
+} // end of namespace cql3
