@@ -757,6 +757,7 @@ public:
         " It is not enough to have ever since upgraded to newer versions of Cassandra. If you EVER used a version earlier than 2.1 in the cluster where these SSTables come from, DO NOT TURN ON THIS OPTION! You will corrupt your data. You have been warned.") \
     val(enable_shard_aware_drivers, bool, true, Used, "Enable native transport drivers to use connection-per-shard for better performance") \
     val(abort_on_internal_error, bool, false, Used, "Abort the server instead of throwing exception when internal invariants are violated.") \
+    val(enable_3_1_0_compatibility_mode, bool, false, Used, "Set to true if the cluster was initially installed from 3.1.0. If it was upgraded from an earlier version, or installed from a later version, leave this set to false. This adjusts the communication protocol to work around a bug in Scylla 3.1.0") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

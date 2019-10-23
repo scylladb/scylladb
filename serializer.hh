@@ -282,6 +282,38 @@ struct normalize<bytes_ostream> {
 template <typename T, typename U>
 struct is_equivalent : std::is_same<typename normalize<std::remove_const_t<std::remove_reference_t<T>>>::type, typename normalize<std::remove_const_t <std::remove_reference_t<U>>>::type> {
 };
+
+// gc_clock duration values were serialized as 32-bit prior to 3.1, and
+// are serialized as 64-bit in 3.1.0.
+//
+// TTL values are capped to 20 years, which fits into 32 bits, so
+// truncation is not a concern.
+
+inline bool gc_clock_using_3_1_0_serialization = false;
+
+template <typename Output>
+void
+serialize_gc_clock_duration_value(Output& out, int64_t v) {
+    if (!gc_clock_using_3_1_0_serialization) {
+        // This should have been caught by the CQL layer, so this is just
+        // for extra safety.
+        assert(int32_t(v) == v);
+        serializer<int32_t>::write(out, v);
+    } else {
+        serializer<int64_t>::write(out, v);
+    }
+}
+
+template <typename Input>
+int64_t
+deserialize_gc_clock_duration_value(Input& in) {
+    if (!gc_clock_using_3_1_0_serialization) {
+        return serializer<int32_t>::read(in);
+    } else {
+        return serializer<int64_t>::read(in);
+    }
+}
+
 }
 
 /*

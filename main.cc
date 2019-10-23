@@ -69,6 +69,7 @@
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
+#include "serializer.hh"
 
 namespace fs = std::filesystem;
 
@@ -407,6 +408,11 @@ int main(int ac, char** av) {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
             configurable::init_all(opts, *cfg, *ext).get();
+
+            // We're writing to a non-atomic variable here. But bool writes are atomic
+            // in all supported architectures, and some broadcast or other below
+            // will apply the required memory barriers anyway.
+            ser::gc_clock_using_3_1_0_serialization = cfg->enable_3_1_0_compatibility_mode();
 
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             logging::apply_settings(cfg->logging_settings(opts));
