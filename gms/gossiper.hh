@@ -50,6 +50,7 @@
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
 #include "gms/feature.hh"
+#include "gms/gossip_digest_syn.hh"
 #include "utils/loading_shared_values.hh"
 #include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
@@ -78,6 +79,11 @@ class feature_service;
 
 struct bind_messaging_port_tag {};
 using bind_messaging_port = bool_class<bind_messaging_port_tag>;
+
+struct syn_msg_pending {
+    bool pending = false;
+    std::optional<gossip_digest_syn> syn_msg;
+};
 
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
@@ -109,6 +115,7 @@ private:
     future<> handle_ack2_msg(gossip_digest_ack2 msg);
     future<> handle_echo_msg();
     future<> handle_shutdown_msg(inet_address from);
+    future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to);
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
@@ -118,6 +125,7 @@ private:
     sstring _cluster_name;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
+    std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
 public:
     sstring get_cluster_name();
     sstring get_partitioner_name();
