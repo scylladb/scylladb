@@ -122,7 +122,8 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
             throw exceptions::invalid_request_exception(format("Invalid element access syntax for set column {}",
                         receiver.name_as_text()));
         } else {
-            assert(false);
+            throw exceptions::invalid_request_exception(
+                    format("Unsupported collection type {} in a condition with element access", ctype->cql3_type_name()));
         }
         collection_element_term = _collection_element->prepare(db, keyspace, element_spec);
     }
