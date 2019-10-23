@@ -521,6 +521,10 @@ public:
     friend class view_update_backlog_broker;
     friend class view_update_write_response_handler;
     friend class paxos_response_handler;
+    friend class mutation_holder;
+    friend class per_destination_mutation;
+    friend class shared_mutation;
+    friend class cas_mutation;
 };
 
 // A Paxos (AKA Compare And Swap, CAS) protocol involves multiple roundtrips between the coordinator
