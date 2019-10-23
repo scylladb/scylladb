@@ -71,6 +71,7 @@
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
 #include "cql3/cql_config.hh"
+#include "serializer.hh"
 
 #include "alternator/server.hh"
 
@@ -550,6 +551,12 @@ int main(int ac, char** av) {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
             configurable::init_all(opts, *cfg, *ext).get();
+
+            // We're writing to a non-atomic variable here. But bool writes are atomic
+            // in all supported architectures, and the broadcast_to_all_shards().get() below
+            // will apply the required memory barriers anyway.
+            ser::gc_clock_using_3_1_0_serialization = cfg->enable_3_1_0_compatibility_mode();
+
             cfg->broadcast_to_all_shards().get();
 
             ::sighup_handler sigup_handler(opts, *cfg);

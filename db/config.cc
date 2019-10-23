@@ -700,6 +700,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , max_clustering_key_restrictions_per_query(this, "max_clustering_key_restrictions_per_query", liveness::LiveUpdate, value_status::Used, 100,
             "Maximum number of distinct clustering key restrictions per query. This limit places a bound on the size of IN tuples, "
             "especially when multiple clustering key columns have IN restrictions. Increasing this value can result in server instability.")
+    , enable_3_1_0_compatibility_mode(this, "enable_3_1_0_compatibility_mode", value_status::Used, false,
+        "Set to true if the cluster was initially installed from 3.1.0. If it was upgraded from an earlier version,"
+        " or installed from a later version, leave this set to false. This adjusts the communication protocol to"
+        " work around a bug in Scylla 3.1.0")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address")
