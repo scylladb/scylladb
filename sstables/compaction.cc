@@ -1071,7 +1071,8 @@ compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, 
     }
     auto c = make_compaction(cleanup, cf, std::move(descriptor), std::move(creator), std::move(replacer));
     if (c->contains_multi_fragment_runs()) {
-        return compaction::run(std::move(c), c->make_garbage_collected_sstable_writer());
+        auto gc_writer = c->make_garbage_collected_sstable_writer();
+        return compaction::run(std::move(c), std::move(gc_writer));
     }
     return compaction::run(std::move(c));
 }
