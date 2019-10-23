@@ -110,7 +110,9 @@ private:
     const gc_clock::duration _ttl;
     // For operations that require a read-before-write, stores prefetched cell values.
     // For CAS statements, stores values of conditioned columns.
-    const prefetch_data _prefetched;
+    // Is a reference to an outside prefetch_data container since a CAS BATCH statement
+    // prefetches all rows at once, for all its nested modification statements.
+    const prefetch_data& _prefetched;
 public:
     const api::timestamp_type _timestamp;
     const gc_clock::time_point _local_deletion_time;
@@ -118,9 +120,9 @@ public:
     const query_options& _options;
 
     update_parameters(const schema_ptr schema_, const query_options& options,
-            api::timestamp_type timestamp, gc_clock::duration ttl, prefetch_data prefetched)
+            api::timestamp_type timestamp, gc_clock::duration ttl, const prefetch_data& prefetched)
         : _ttl(ttl)
-        , _prefetched(std::move(prefetched))
+        , _prefetched(prefetched)
         , _timestamp(timestamp)
         , _local_deletion_time(gc_clock::now())
         , _schema(std::move(schema_))

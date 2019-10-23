@@ -76,9 +76,6 @@ namespace raw { class modification_statement; }
  * Abstract parent class of individual modifications, i.e. INSERT, UPDATE and DELETE.
  */
 class modification_statement : public cql_statement_opt_metadata {
-private:
-    static thread_local const ::shared_ptr<column_identifier> CAS_RESULT_COLUMN;
-
 public:
     const statement_type type;
 
@@ -94,6 +91,13 @@ private:
     // This bitset contains a mask of ordinal_id identifiers
     // of the required columns.
     column_mask _columns_to_read;
+    // A CAS statement returns a result set with the columns
+    // used in condition expression. This is a mask of ordinal_id
+    // identifiers of the required columns. Contains all columns
+    // of a schema if we have IF EXISTS/IF NOT EXISTS. Does *not*
+    // contain LIST columns prefetched to apply updates, unless
+    // these columns are also used in conditions.
+    column_mask _columns_of_cas_result_set;
 public:
     const schema_ptr s;
     const std::unique_ptr<attributes> attrs;
@@ -191,6 +195,16 @@ public:
 
     void process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
 
+    // CAS statement returns a result set. Prepare result set metadata
+    // so that get_result_metadata() returns a meaningful value.
+    void build_cas_result_set_metadata();
+    // Build a result set with prefetched rows, but return only
+    // the columns required by CAS. Static since reused by BATCH
+    // CAS.
+    static seastar::shared_ptr<cql_transport::messages::result_message>
+    build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
+            const column_mask& mask, bool is_applied,
+            const update_parameters::prefetch_data& rows);
 public:
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache);
     virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache);
@@ -207,6 +221,10 @@ public:
     // Columns used in this statement conditions or operations.
     const column_mask& columns_to_read() const { return _columns_to_read; }
 
+    // Columns of the statement result set (only CAS statement
+    // returns a result set).
+    const column_mask& columns_of_cas_result_set() { return _columns_of_cas_result_set; }
+
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
     lw_shared_ptr<query::read_command> read_command(query::clustering_row_ranges ranges, db::consistency_level cl) const;
@@ -219,6 +237,17 @@ public:
             const std::vector<query::clustering_range>& ranges,
             const update_parameters& params,
             const json_cache_opt& json_cache);
+
+    /**
+     * Checks whether the conditions represented by this statement apply provided the current state of the row on
+     * which those conditions are.
+     *
+     * @param row the row with current data corresponding to these conditions. Can be null if there
+     * is no matching row.
+     * @return whether the conditions represented by this statement apply or not.
+     */
+    bool applies_to(const update_parameters::prefetch_data::row* row, const query_options& options) const;
+
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
@@ -250,6 +279,7 @@ public:
      */
     future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs);
 
+    virtual json_cache_opt maybe_prepare_json_cache(const query_options& options);
 protected:
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been
@@ -257,7 +287,6 @@ protected:
      * @throws InvalidRequestException
      */
     virtual void validate_where_clause_for_conditions() const;
-    virtual json_cache_opt maybe_prepare_json_cache(const query_options& options);
     friend class raw::modification_statement;
 };
 

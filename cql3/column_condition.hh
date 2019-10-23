@@ -89,6 +89,10 @@ public:
 
     bool uses_function(const sstring& ks_name, const sstring& function_name);
 
+    // Retrieve parameter marker values, if any, find the appropriate collection
+    // element if the cell is a collection and an element access is used in the expression,
+    // and evaluate the condition.
+    bool applies_to(const data_value* cell_value, const query_options& options) const;
 
     // Helper constructor wrapper for  "IF col['key'] = 'foo'" or "IF col = 'foo'" */
     static ::shared_ptr<column_condition> condition(const column_definition& def, ::shared_ptr<term> collection_element,

@@ -332,16 +332,19 @@ void validate_for_write(consistency_level cl) {
         }
     }
 
-    public void validateForCas() throws InvalidRequestException
-    {
-        if (!isSerialConsistency())
-            throw new InvalidRequestException("Invalid consistency for conditional update. Must be one of SERIAL or LOCAL_SERIAL");
-    }
 #endif
 
 bool is_serial_consistency(consistency_level cl) {
     return cl == consistency_level::SERIAL || cl == consistency_level::LOCAL_SERIAL;
 }
+
+void validate_for_cas(consistency_level cl)
+{
+    if (!is_serial_consistency(cl)) {
+        throw exceptions::invalid_request_exception("Invalid consistency for conditional update. Must be one of SERIAL or LOCAL_SERIAL");
+    }
+}
+
 
 void validate_counter_for_write(const schema& s, consistency_level cl) {
     if (cl == consistency_level::ANY) {

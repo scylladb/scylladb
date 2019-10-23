@@ -40,8 +40,10 @@
 #include "batch_statement.hh"
 #include "raw/batch_statement.hh"
 #include "db/config.hh"
+#include "db/consistency_level_validations.hh"
 #include "database.hh"
 #include <seastar/core/execution_stage.hh>
+#include "cas_request.hh"
 
 namespace cql3 {
 
@@ -66,6 +68,14 @@ batch_statement::batch_statement(int bound_terms, type type_,
     , _has_conditions(boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))
     , _stats(stats)
 {
+    if (has_conditions()) {
+        // A batch can be created not only by raw::batch_statement::prepare, but also by
+        // cql_server::connection::process_batch, which doesn't call any methods of
+        // cql3::statements::batch_statement, only constructs it. So let's call
+        // build_cas_result_set_metadata right from the constructor to avoid crash trying to access
+        // uninitialized batch metadata.
+        build_cas_result_set_metadata();
+    }
 }
 
 batch_statement::batch_statement(type type_,
@@ -323,11 +333,80 @@ future<> batch_statement::execute_without_conditions(
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
-        service::storage_proxy& storage,
+        service::storage_proxy& proxy,
         const query_options& options,
-        service::query_state& state)
-{
-    fail(unimplemented::cause::LWT);
+        service::query_state& qs) {
+
+    auto cl_for_commit = options.get_consistency();
+    auto cl_for_paxos = options.check_serial_consistency();
+    db::validate_for_cas(cl_for_paxos);
+    seastar::shared_ptr<cas_request> request;
+    schema_ptr schema;
+
+    db::timeout_clock::time_point now = db::timeout_clock::now();
+    const timeout_config& cfg = options.get_timeout_config();
+    auto batch_timeout = now + cfg.write_timeout; // Statement timeout.
+    auto cas_timeout = now + cfg.cas_timeout;     // Ballot contention timeout.
+    auto read_timeout = now + cfg.read_timeout;   // Query timeout.
+
+    for (size_t i = 0; i < _statements.size(); ++i) {
+
+        modification_statement& statement = *_statements[i].statement;
+        const query_options& statement_options = options.for_statement(i);
+
+        statement.inc_cql_stats();
+        modification_statement::json_cache_opt json_cache = statement.maybe_prepare_json_cache(statement_options);
+        // At most one key
+        std::vector<dht::partition_range> keys = statement.build_partition_keys(statement_options, json_cache);
+        if (keys.empty()) {
+            continue;
+        }
+        if (request.get() == nullptr) {
+            schema = statement.s;
+            request = seastar::make_shared<cas_request>(schema, std::move(keys));
+        } else if (keys.size() != 1 || keys.front().equal(request->key().front(), dht::ring_position_comparator(*schema)) == false) {
+            throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple partitions");
+        }
+        std::vector<query::clustering_range> ranges = statement.create_clustering_ranges(statement_options, json_cache);
+
+        request->add_row_update(statement, std::move(ranges), std::move(json_cache), statement_options);
+    }
+    if (request.get() == nullptr) {
+        throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional BATCH"));
+    }
+
+    return proxy.cas(schema, request, request->read_command(), request->key(),
+            {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
+            cl_for_paxos, cl_for_commit, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {
+        return modification_statement::build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied, request->rows());
+    });
+}
+
+void batch_statement::build_cas_result_set_metadata() {
+    if (_statements.empty()) {
+        return;
+    }
+    const auto& schema = *_statements.front().statement->s;
+    // Add the mandatory [applied] column to result set metadata
+    std::vector<shared_ptr<column_specification>> columns;
+
+    auto applied = make_shared<cql3::column_specification>(schema.ks_name(), schema.cf_name(),
+            make_shared<cql3::column_identifier>("[applied]", false), boolean_type);
+    columns.push_back(applied);
+
+    for (const auto& def : boost::range::join(schema.partition_key_columns(), schema.clustering_key_columns())) {
+        _columns_of_cas_result_set.set(def.ordinal_id);
+    }
+    for (const auto& s : _statements) {
+        _columns_of_cas_result_set.union_with(s.statement->columns_of_cas_result_set());
+    }
+    columns.reserve(_columns_of_cas_result_set.count());
+    for (const auto& def : schema.all_columns()) {
+        if (_columns_of_cas_result_set.test(def.ordinal_id)) {
+            columns.emplace_back(def.column_specification);
+        }
+    }
+    _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
 }
 
 namespace raw {
