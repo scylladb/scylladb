@@ -196,9 +196,32 @@ future<> server::verify_signature(const request& req) {
     return make_ready_future<>();
 }
 
+future<json::json_return_type> server::handle_api_request(std::unique_ptr<request>&& req) {
+    sstring target = req->get_header(TARGET);
+    std::vector<std::string_view> split_target = split(target, '.');
+    //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
+    std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
+    slogger.trace("Request: {} {}", op, req->content);
+    return verify_signature(*req).then([this, op, req = std::move(req)] () mutable {
+        auto callback_it = _callbacks.find(op);
+        if (callback_it == _callbacks.end()) {
+            _executor.local()._stats.unsupported_operations++;
+            throw api_error("UnknownOperationException",
+                    format("Unsupported operation {}", op));
+        }
+        //FIXME: Client state can provide more context, e.g. client's endpoint address
+        // We use unique_ptr because client_state cannot be moved or copied
+        return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
+            client_state->set_raw_keyspace(executor::KEYSPACE_NAME);
+            executor::maybe_trace_query(*client_state, op, req->content);
+            tracing::trace(client_state->get_trace_state(), op);
+            return callback_it->second(_executor.local(), *client_state, std::move(req));
+        });
+    });
+}
+
 void server::set_routes(routes& r) {
-    using alternator_callback = std::function<future<json::json_return_type>(executor&, executor::client_state&, std::unique_ptr<request>)>;
-    std::unordered_map<std::string_view, alternator_callback> routes{
+    _callbacks = {
         {"CreateTable", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) {
             return e.maybe_create_keyspace().then([&e, &client_state, req = std::move(req)] { return e.create_table(client_state, req->content); }); }
         },
@@ -216,29 +239,8 @@ void server::set_routes(routes& r) {
         {"Query", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.query(client_state, req->content); }},
     };
 
-    api_handler* handler = new api_handler([this, routes = std::move(routes)](std::unique_ptr<request> req) -> future<json::json_return_type> {
-        _executor.local()._stats.total_operations++;
-        sstring target = req->get_header(TARGET);
-        std::vector<std::string_view> split_target = split(target, '.');
-        //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
-        std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
-        slogger.trace("Request: {} {}", op, req->content);
-        return verify_signature(*req).then([this, routes = std::move(routes), op, req = std::move(req)] () mutable {
-            auto callback_it = routes.find(op);
-            if (callback_it == routes.end()) {
-                _executor.local()._stats.unsupported_operations++;
-                throw api_error("UnknownOperationException",
-                        format("Unsupported operation {}", op));
-            }
-            //FIXME: Client state can provide more context, e.g. client's endpoint address
-            // We use unique_ptr because client_state cannot be moved or copied
-            return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
-                client_state->set_raw_keyspace(executor::KEYSPACE_NAME);
-                executor::maybe_trace_query(*client_state, op, req->content);
-                tracing::trace(client_state->get_trace_state(), op);
-                return callback_it->second(_executor.local(), *client_state, std::move(req));
-            });
-        });
+    api_handler* handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
+        return handle_api_request(std::move(req));
     });
 
     r.add(operation_type::POST, url("/"), handler);

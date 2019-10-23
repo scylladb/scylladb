@@ -30,10 +30,14 @@
 namespace alternator {
 
 class server {
+    using alternator_callback = std::function<future<json::json_return_type>(executor&, executor::client_state&, std::unique_ptr<request>)>;
+    using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
+
     seastar::httpd::http_server_control _control;
     seastar::httpd::http_server_control _https_control;
     seastar::sharded<executor>& _executor;
     bool _enforce_authorization;
+    alternator_callbacks_map _callbacks;
 public:
     server(seastar::sharded<executor>& executor) : _executor(executor) {}
 
@@ -41,6 +45,7 @@ public:
 private:
     void set_routes(seastar::httpd::routes& r);
     future<> verify_signature(const seastar::httpd::request& r);
+    future<json::json_return_type> handle_api_request(std::unique_ptr<request>&& req);
 };
 
 }
