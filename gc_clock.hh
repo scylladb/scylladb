@@ -86,3 +86,37 @@ struct appending_hash<gc_clock::time_point> {
         }
     }
 };
+
+
+namespace ser {
+
+// Forward-declaration - defined in serializer.hh, to avoid including it here.
+
+template <typename Output>
+void serialize_gc_clock_duration_value(Output& out, int64_t value);
+
+template <typename Input>
+int64_t deserialize_gc_clock_duration_value(Input& in);
+
+template <typename T>
+struct serializer;
+
+template <>
+struct serializer<gc_clock::duration> {
+    template <typename Input>
+    static gc_clock::duration read(Input& in) {
+        return gc_clock::duration(deserialize_gc_clock_duration_value(in));
+    }
+
+    template <typename Output>
+    static void write(Output& out, gc_clock::duration d) {
+        serialize_gc_clock_duration_value(out, d.count());
+    }
+
+    template <typename Input>
+    static void skip(Input& in) {
+        read(in);
+    }
+};
+
+}
