@@ -144,9 +144,12 @@ docker_common_args=(
        "${args[@]}"
 )
 
-if [[ -n "$interactive" ]]; then
+if [[ -n "$interactive" || -n "$is_podman" ]]; then
     # If --interactive was given on the command line, we can't run in detached mode
     # as it will be impossible to interact with the container.
+
+    # We also avoid detached mode with podman, which doesn't need it
+    # (it does not proxy SIGTERM) and doesn't work well with it.
     exec docker run --rm "${docker_common_args[@]}"
 fi
 
