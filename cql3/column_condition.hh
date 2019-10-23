@@ -52,11 +52,18 @@ namespace cql3 {
  */
 class column_condition final {
 public:
+    // If _collection_element is not zero, this defines the receiver cell, not the entire receiver
+    // column.
+    // E.g. if column type is list<string> and expression is "a = ['test']", then the type of the
+    // column definition below is list<string>. If expression is "a[0] = 'test'", then the column
+    // object stands for the string cell. See column_condition::raw::prepare() for details.
     const column_definition& column;
 private:
     // For collection, when testing the equality of a specific element, nullptr otherwise.
     ::shared_ptr<term> _collection_element;
+    // A literal value for comparison predicates or a multi item terminal for "a IN ?"
     ::shared_ptr<term> _value;
+    // List of terminals for "a IN (value, value, ...)"
     std::vector<::shared_ptr<term>> _in_values;
     const operator_type& _op;
 public:
@@ -72,6 +79,15 @@ public:
             assert(_in_values.empty());
         }
     }
+    /**
+     * Collects the column specification for the bind variables of this operation.
+     *
+     * @param boundNames the list of column specification where to collect the
+     * bind variables of this term in.
+     */
+    void collect_marker_specificaton(::shared_ptr<variable_specifications> bound_names);
+
+    bool uses_function(const sstring& ks_name, const sstring& function_name);
 
 
     // Helper constructor wrapper for  "IF col['key'] = 'foo'" or "IF col = 'foo'" */
@@ -88,23 +104,13 @@ public:
             std::move(in_values), operator_type::IN);
     }
 
-    bool uses_function(const sstring& ks_name, const sstring& function_name);
-public:
-    /**
-     * Collects the column specification for the bind variables of this operation.
-     *
-     * @param boundNames the list of column specification where to collect the
-     * bind variables of this term in.
-     */
-    void collect_marker_specificaton(::shared_ptr<variable_specifications> bound_names);
-
     class raw final {
     private:
         ::shared_ptr<term::raw> _value;
         std::vector<::shared_ptr<term::raw>> _in_values;
         ::shared_ptr<abstract_marker::in_raw> _in_marker;
 
-        // Can be nullptr, only used with the syntax "IF m[e] = ..." (in which case it's 'e')
+        // Can be nullptr, used with the syntax "IF m[e] = ..." (in which case it's 'e')
         ::shared_ptr<term::raw> _collection_element;
         const operator_type& _op;
     public:
@@ -145,4 +151,4 @@ public:
     };
 };
 
-}
+} // end of namespace cql3
