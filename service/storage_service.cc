@@ -715,6 +715,11 @@ void storage_service::join_token_ring(int delay) {
         db::system_keyspace::update_tokens(_bootstrap_tokens).get();
         bootstrap();
         // bootstrap will block until finished
+        if (_is_bootstrap_mode) {
+            auto err = format("We are not supposed in bootstrap mode any more");
+            slogger.warn("{}", err);
+            throw std::runtime_error(err);
+        }
     } else {
         maybe_start_sys_dist_ks();
         size_t num_tokens = _db.local().get_config().num_tokens();
@@ -819,6 +824,7 @@ void storage_service::mark_existing_views_as_built() {
 
 // Runs inside seastar::async context
 void storage_service::bootstrap() {
+    _is_bootstrap_mode = true;
     if (!db().local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
@@ -3524,6 +3530,17 @@ db::schema_features storage_service::cluster_schema_features() const {
     f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(bool(_digest_insensitive_to_expiry));
     f.set_if<db::schema_feature::COMPUTED_COLUMNS>(bool(_computed_columns));
     return f;
+}
+
+future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
+    return get_storage_service().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
+        auto my_address = ss.get_broadcast_address();
+        auto pending_ranges = ss.get_token_metadata().get_pending_ranges(keyspace, my_address).size();
+        bool is_bootstrap_mode = ss._is_bootstrap_mode;
+        slogger.debug("is_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
+                keyspace, is_bootstrap_mode, pending_ranges);
+        return !is_bootstrap_mode && pending_ranges == 0;
+    });
 }
 
 } // namespace service

@@ -304,17 +304,24 @@ void set_storage_service(http_context& ctx, routes& r) {
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
-            std::vector<column_family*> column_families_vec;
-            auto& cm = db.get_compaction_manager();
-            for (auto cf : column_families) {
-                column_families_vec.push_back(&db.find_column_family(keyspace, cf));
+        return service::get_local_storage_service().is_cleanup_allowed(keyspace).then([&ctx, keyspace,
+                column_families = std::move(column_families)] (bool is_cleanup_allowed) mutable {
+            if (!is_cleanup_allowed) {
+                return make_exception_future<json::json_return_type>(
+                        std::runtime_error("Can not perform cleanup operation when topology changes"));
             }
-            return parallel_for_each(column_families_vec, [&cm] (column_family* cf) {
-                return cm.perform_cleanup(cf);
+            return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
+                std::vector<column_family*> column_families_vec;
+                auto& cm = db.get_compaction_manager();
+                for (auto cf : column_families) {
+                    column_families_vec.push_back(&db.find_column_family(keyspace, cf));
+                }
+                return parallel_for_each(column_families_vec, [&cm] (column_family* cf) {
+                    return cm.perform_cleanup(cf);
+                });
+            }).then([]{
+                return make_ready_future<json::json_return_type>(0);
             });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
         });
     });
 

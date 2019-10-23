@@ -259,6 +259,9 @@ private:
 
     std::optional<inet_address> _removing_node;
 
+    /* Are we starting this node in bootstrap mode? */
+    bool _is_bootstrap_mode;
+
     bool _initialized;
 
     bool _joined = false;
@@ -343,6 +346,10 @@ private:
 public:
     sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
+
+    void finish_bootstrapping() {
+        _is_bootstrap_mode = false;
+    }
 
     void set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens);
 #if 0
@@ -547,6 +554,10 @@ private:
     void bootstrap();
 
 public:
+    bool is_bootstrap_mode() {
+        return _is_bootstrap_mode;
+    }
+
 #if 0
 
     public TokenMetadata getTokenMetadata()
@@ -2368,6 +2379,8 @@ private:
     void notify_up(inet_address endpoint);
     void notify_joined(inet_address endpoint);
     void notify_cql_change(inet_address endpoint, bool ready);
+public:
+    future<bool> is_cleanup_allowed(sstring keyspace);
 };
 
 future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service,
