@@ -28,6 +28,7 @@
 #include "rjson.hh"
 #include "auth.hh"
 #include <cctype>
+#include "cql3/query_processor.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -118,7 +119,11 @@ protected:
     sstring _type;
 };
 
-static void verify_signature(request& req) {
+future<> server::verify_signature(const request& req) {
+    if (!_enforce_authorization) {
+        slogger.debug("Skipping authorization");
+        return make_ready_future<>();
+    }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
         throw api_error("InvalidSignatureException", "Host header is mandatory for signature verification");
@@ -127,7 +132,7 @@ static void verify_signature(request& req) {
     if (host_it == req._headers.end()) {
         throw api_error("InvalidSignatureException", "Authorization header is mandatory for signature verification");
     }
-    std::string_view host = host_it->second;
+    std::string host = host_it->second;
     std::vector<std::string_view> credentials_raw = split(authorization_it->second, ' ');
     std::string credential;
     std::string user_signature;
@@ -160,12 +165,10 @@ static void verify_signature(request& req) {
     if (credential_split.size() != 5) {
         throw api_error("ValidationException", format("Incorrect credential information format: {}", credential));
     }
-    std::string_view user(credential_split[0]);
-    //FIXME: use the datestamp to check if the authorization signature has not expired,
-    // the default expiration period seems to be 5min.
-    std::string_view datestamp(credential_split[1]);
-    std::string_view region(credential_split[2]);
-    std::string_view service(credential_split[3]);
+    std::string user(credential_split[0]);
+    std::string datestamp(credential_split[1]);
+    std::string region(credential_split[2]);
+    std::string service(credential_split[3]);
 
     std::map<std::string_view, std::string_view> signed_headers_map;
     for (const auto& header : signed_headers) {
@@ -181,19 +184,54 @@ static void verify_signature(request& req) {
         }
     }
 
-    //FIXME: We need a proper way of providing the secret access key
-    std::string secret_access_key = "whatever";
-    std::string signature = get_signature(user, secret_access_key, std::string_view(host), req._method,
-            signed_headers_str, signed_headers_map, req.content, region, service, "");
+    auto cache_getter = [] (std::string username) {
+        return get_key_from_roles(cql3::get_query_processor().local(), std::move(username));
+    };
+    return _key_cache.get_ptr(user, cache_getter).then([this, &req,
+                                                    user = std::move(user),
+                                                    host = std::move(host),
+                                                    datestamp = std::move(datestamp),
+                                                    signed_headers_str = std::move(signed_headers_str),
+                                                    signed_headers_map = std::move(signed_headers_map),
+                                                    region = std::move(region),
+                                                    service = std::move(service),
+                                                    user_signature = std::move(user_signature)] (key_cache::value_ptr key_ptr) {
+        std::string signature = get_signature(user, *key_ptr, std::string_view(host), req._method,
+                datestamp, signed_headers_str, signed_headers_map, req.content, region, service, "");
 
-    if (signature != std::string_view(user_signature)) {
-        throw api_error("UnrecognizedClientException", "The security token included in the request is invalid.");
-    }
+        if (signature != std::string_view(user_signature)) {
+            _key_cache.remove(user);
+            throw api_error("UnrecognizedClientException", "The security token included in the request is invalid.");
+        }
+    });
+}
+
+future<json::json_return_type> server::handle_api_request(std::unique_ptr<request>&& req) {
+    sstring target = req->get_header(TARGET);
+    std::vector<std::string_view> split_target = split(target, '.');
+    //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
+    std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
+    slogger.trace("Request: {} {}", op, req->content);
+    return verify_signature(*req).then([this, op, req = std::move(req)] () mutable {
+        auto callback_it = _callbacks.find(op);
+        if (callback_it == _callbacks.end()) {
+            _executor.local()._stats.unsupported_operations++;
+            throw api_error("UnknownOperationException",
+                    format("Unsupported operation {}", op));
+        }
+        //FIXME: Client state can provide more context, e.g. client's endpoint address
+        // We use unique_ptr because client_state cannot be moved or copied
+        return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
+            client_state->set_raw_keyspace(executor::KEYSPACE_NAME);
+            executor::maybe_trace_query(*client_state, op, req->content);
+            tracing::trace(client_state->get_trace_state(), op);
+            return callback_it->second(_executor.local(), *client_state, std::move(req));
+        });
+    });
 }
 
 void server::set_routes(routes& r) {
-    using alternator_callback = std::function<future<json::json_return_type>(executor&, executor::client_state&, std::unique_ptr<request>)>;
-    std::unordered_map<std::string_view, alternator_callback> routes{
+    _callbacks = {
         {"CreateTable", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) {
             return e.maybe_create_keyspace().then([&e, &client_state, req = std::move(req)] { return e.create_table(client_state, req->content); }); }
         },
@@ -211,35 +249,17 @@ void server::set_routes(routes& r) {
         {"Query", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.query(client_state, req->content); }},
     };
 
-    api_handler* handler = new api_handler([this, routes = std::move(routes)](std::unique_ptr<request> req) -> future<json::json_return_type> {
-        _executor.local()._stats.total_operations++;
-        sstring target = req->get_header(TARGET);
-        std::vector<std::string_view> split_target = split(target, '.');
-        //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
-        std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
-        slogger.trace("Request: {} {}", op, req->content);
-        if (_enforce_authorization) {
-            verify_signature(*req);
-        } else {
-            slogger.debug("Skipping authorization");
-        }
-        auto callback_it = routes.find(op);
-        if (callback_it == routes.end()) {
-            _executor.local()._stats.unsupported_operations++;
-            throw api_error("UnknownOperationException",
-                    format("Unsupported operation {}", op));
-        }
-        //FIXME: Client state can provide more context, e.g. client's endpoint address
-        // We use unique_ptr because client_state cannot be moved or copied
-        return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
-            client_state->set_raw_keyspace(executor::KEYSPACE_NAME);
-            executor::maybe_trace_query(*client_state, op, req->content);
-            tracing::trace(client_state->get_trace_state(), op);
-            return callback_it->second(_executor.local(), *client_state, std::move(req));
-        });
+    api_handler* handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
+        return handle_api_request(std::move(req));
     });
 
     r.add(operation_type::POST, url("/"), handler);
+}
+
+//FIXME: A way to immediately invalidate the cache should be considered,
+// e.g. when the system table which stores the keys is changed.
+// For now, this propagation may take up to 1 minute.
+server::server(seastar::sharded<executor>& executor) : _executor(executor), _key_cache(1024, 1min, slogger), _enforce_authorization(false) {
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization) {
