@@ -1531,15 +1531,14 @@ struct validate_visitor {
             throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size()));
         }
     }
-    void operator()(const string_type_impl& t) {
-        if (t.as_cql3_type() == cql3::cql3_type::ascii) {
-            if (!utils::ascii::validate(v)) {
-                throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
-            }
-        } else {
-            if (!utils::utf8::validate(v)) {
-                throw marshal_exception("Validation failed - non-UTF8 character in a UTF8 string");
-            }
+    void operator()(const ascii_type_impl&) {
+        if (!utils::ascii::validate(v)) {
+            throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
+        }
+    }
+    void operator()(const utf8_type_impl&) {
+        if (!utils::utf8::validate(v)) {
+            throw marshal_exception("Validation failed - non-UTF8 character in a UTF8 string");
         }
     }
     void operator()(const bytes_type_impl& t) {}
