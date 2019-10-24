@@ -943,12 +943,6 @@ mutation_fragment_stream_validator::mutation_fragment_stream_validator(const sch
     fmr_logger.debug("[validator {}] Will validate {} monotonicity.", static_cast<void*>(this), compare_keys ? "keys" : "only partition regions");
 }
 
-mutation_fragment_stream_validator::~mutation_fragment_stream_validator() {
-    if (_prev_kind != mutation_fragment::kind::partition_end) {
-        on_internal_error(fmr_logger, format("[validator {}] Stream ended with unclosed partition: {}", static_cast<void*>(this), _prev_kind));
-    }
-}
-
 bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv) {
     auto kind = mv.mutation_fragment_kind();
     auto pos = mv.position();
@@ -987,4 +981,10 @@ bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv)
         _prev_region = region;
     }
     return true;
+}
+
+void mutation_fragment_stream_validator::on_end_of_stream() const {
+    if (_prev_kind != mutation_fragment::kind::partition_end) {
+        on_internal_error(fmr_logger, format("[validator {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _prev_kind));
+    }
 }
