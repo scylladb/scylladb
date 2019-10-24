@@ -63,12 +63,15 @@ public:
     untyped_result_set_row(const untyped_result_set_row&) = delete;
 
     bool has(const sstring&) const;
-    bytes get_blob(const sstring& name) const {
+    bytes_view get_view(const sstring& name) const {
         return *_data.at(name);
+    }
+    bytes get_blob(const sstring& name) const {
+        return bytes(get_view(name));
     }
     template<typename T>
     T get_as(const sstring& name) const {
-        return value_cast<T>(data_type_for<T>()->deserialize(get_blob(name)));
+        return value_cast<T>(data_type_for<T>()->deserialize(get_view(name)));
     }
     template<typename T>
     std::optional<T> get_opt(const sstring& name) const {
@@ -87,7 +90,7 @@ public:
         auto vec =
                 value_cast<map_type_impl::native_type>(
                         map_type_impl::get_instance(keytype, valtype, false)->deserialize(
-                                get_blob(name)));
+                                get_view(name)));
         std::transform(vec.begin(), vec.end(), out,
                 [](auto& p) {
                     return std::pair<K, V>(value_cast<K>(p.first), value_cast<V>(p.second));
@@ -106,7 +109,7 @@ public:
         auto vec =
                 value_cast<list_type_impl::native_type>(
                         list_type_impl::get_instance(valtype, false)->deserialize(
-                                get_blob(name)));
+                                get_view(name)));
         std::transform(vec.begin(), vec.end(), out, [](auto& v) { return value_cast<V>(v); });
     }
     template<typename V, typename ... Rest>
@@ -140,6 +143,8 @@ public:
     }
 };
 
+class result_set;
+
 class untyped_result_set {
 public:
     using row = untyped_result_set_row;
@@ -148,6 +153,7 @@ public:
     using iterator = rows_type::const_iterator;
 
     untyped_result_set(::shared_ptr<cql_transport::messages::result_message>);
+    untyped_result_set(const cql3::result_set&);
     untyped_result_set(untyped_result_set&&) = default;
 
     const_iterator begin() const {

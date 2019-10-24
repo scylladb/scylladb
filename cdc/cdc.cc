@@ -20,6 +20,8 @@
  */
 
 #include <utility>
+#include <algorithm>
+
 #include <seastar/util/defer.hh>
 #include <seastar/core/thread.hh>
 
@@ -33,6 +35,11 @@
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
+#include "types/tuple.hh"
+#include "cql3/statements/select_statement.hh"
+#include "cql3/multi_column_relation.hh"
+#include "cql3/tuples.hh"
+#include "log.hh"
 
 using locator::snitch_ptr;
 using locator::token_metadata;
@@ -51,8 +58,14 @@ template<> struct hash<std::pair<net::inet_address, unsigned int>> {
 
 }
 
+using namespace std::chrono_literals;
+
+static logging::logger cdc_log("cdc");
 
 namespace cdc {
+
+using operation_native_type = std::underlying_type_t<operation>;
+using column_op_native_type = std::underlying_type_t<column_op>;
 
 sstring log_name(const sstring& table_name) {
     static constexpr auto cdc_log_suffix = "_scylla_cdc_log";
@@ -103,17 +116,21 @@ static future<> setup_log(db_context ctx, const schema& s) {
     b.with_column("stream_id", uuid_type, column_kind::partition_key);
     b.with_column("time", timeuuid_type, column_kind::clustering_key);
     b.with_column("batch_seq_no", int32_type, column_kind::clustering_key);
-    b.with_column("operation", int32_type);
+    b.with_column("operation", data_type_for<operation_native_type>());
     b.with_column("ttl", long_type);
-    auto add_columns = [&] (const schema::const_iterator_range_type& columns) {
+    auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
-            b.with_column("_" + column.name(), column.type);
+            auto type = column.type;
+            if (is_data_col) {
+                type = tuple_type_impl::get_instance({ /* op */ data_type_for<column_op_native_type>(), /* value */ type, /* ttl */long_type});
+            }
+            b.with_column("_" + column.name(), type);
         }
     };
     add_columns(s.partition_key_columns());
     add_columns(s.clustering_key_columns());
-    add_columns(s.static_columns());
-    add_columns(s.regular_columns());
+    add_columns(s.static_columns(), true);
+    add_columns(s.regular_columns(), true);
     return ctx._migration_manager.announce_new_column_family(b.build(), false);
 }
 
@@ -215,7 +232,8 @@ private:
     schema_ptr _log_schema;
     utils::UUID _time;
     bytes _decomposed_time;
-    const streams_type& _streams;
+    ::shared_ptr<const transformer::streams_type> _streams;
+    const column_definition& _op_col;
 
     clustering_key set_pk_columns(const partition_key& pk, int batch_no, mutation& m) const {
         const auto log_ck = clustering_key::from_exploded(
@@ -233,24 +251,32 @@ private:
         }
         return log_ck;
     }
+
+    void set_operation(const clustering_key& ck, operation op, mutation& m) const {
+        m.set_cell(ck, _op_col, atomic_cell::make_live(*_op_col.type, _time.timestamp(), _op_col.type->decompose(operation_native_type(op))));
+    }
+
     partition_key stream_id(const net::inet_address& ip, unsigned int shard_id) const {
-        auto it = _streams.find(std::make_pair(ip, shard_id));
-        if (it == std::end(_streams)) {
+        auto it = _streams->find(std::make_pair(ip, shard_id));
+        if (it == std::end(*_streams)) {
                 throw std::runtime_error(format("No stream found for node {} and shard {}", ip, shard_id));
         }
         return partition_key::from_exploded(*_log_schema, { uuid_type->decompose(it->second) });
     }
 public:
-    transformer(db_context ctx, schema_ptr s, const streams_type& streams)
+    transformer(db_context ctx, schema_ptr s, ::shared_ptr<const transformer::streams_type> streams)
         : _ctx(ctx)
         , _schema(std::move(s))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _time(utils::UUID_gen::get_time_UUID())
         , _decomposed_time(timeuuid_type->decompose(_time))
-        , _streams(streams)
-    { }
+        , _streams(std::move(streams))
+        , _op_col(*_log_schema->get_column_definition(to_bytes("operation")))
+    {}
 
-    mutation transform(const mutation& m) const {
+    // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
+    // more details like tombstones/ttl? Probably not but keep in mind.
+    mutation transform(const mutation& m, const cql3::untyped_result_set* rs = nullptr) const {
         auto& t = m.token();
         auto&& ep = _ctx._token_metadata.get_endpoint(
                 _ctx._token_metadata.first_token(t));
@@ -262,7 +288,8 @@ public:
         auto& p = m.partition();
         if (p.partition_tombstone()) {
             // Partition deletion
-            set_pk_columns(m.key(), 0, res);
+            auto log_ck = set_pk_columns(m.key(), 0, res);
+            set_operation(log_ck, operation::partition_delete, res);
         } else if (!p.row_tombstones().empty()) {
             // range deletion
             int batch_no = 0;
@@ -285,11 +312,15 @@ public:
                 {
                     auto log_ck = set_pk_columns(m.key(), batch_no, res);
                     set_bound(log_ck, rt.start);
+                    // TODO: separate inclusive/exclusive range
+                    set_operation(log_ck, operation::range_delete_start, res);
                     ++batch_no;
                 }
                 {
                     auto log_ck = set_pk_columns(m.key(), batch_no, res);
                     set_bound(log_ck, rt.end);
+                    // TODO: separate inclusive/exclusive range
+                    set_operation(log_ck, operation::range_delete_end, res);
                     ++batch_no;
                 }
             }
@@ -297,23 +328,162 @@ public:
             // should be update or deletion
             int batch_no = 0;
             for (const rows_entry& r : p.clustered_rows()) {
-                auto log_ck = set_pk_columns(m.key(), batch_no, res);
                 auto ck_value = r.key().explode(*_schema);
+
+                std::optional<clustering_key> pikey;
+                const cql3::untyped_result_set_row * pirow = nullptr;
+
+                if (rs) {
+                    for (auto& utr : *rs) {
+                        bool match = true;
+                        for (auto& c : _schema->clustering_key_columns()) {
+                            auto rv = utr.get_view(c.name_as_text());
+                            auto cv = r.key().get_component(*_schema, c.component_index());
+                            if (rv != cv) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            pikey = set_pk_columns(m.key(), batch_no, res);
+                            set_operation(*pikey, operation::pre_image, res);
+                            pirow = &utr;
+                            ++batch_no;
+                            break;
+                        }
+                    }
+                }
+
+                auto log_ck = set_pk_columns(m.key(), batch_no, res);
+
                 size_t pos = 0;
                 for (const auto& column : _schema->clustering_key_columns()) {
                     assert (pos < ck_value.size());
                     auto cdef = _log_schema->get_column_definition(to_bytes("_" + column.name()));
-                    auto value = atomic_cell::make_live(*column.type,
-                                                        _time.timestamp(),
-                                                        bytes_view(ck_value[pos]));
-                    res.set_cell(log_ck, *cdef, std::move(value));
+                    res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, _time.timestamp(), bytes_view(ck_value[pos])));
+
+                    if (pirow) {
+                        assert(pirow->has(column.name_as_text()));
+                        res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, _time.timestamp(), bytes_view(ck_value[pos])));
+                    }
+
                     ++pos;
                 }
 
+                std::vector<bytes_opt> values(3);
+
+                auto process_cells = [&](const row& r, column_kind ckind) {
+                    r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
+                        auto& cdef = _schema->column_at(ckind, id);
+                        auto* dst = _log_schema->get_column_definition(to_bytes("_" + cdef.name()));
+                        // todo: collections.
+                        if (cdef.is_atomic()) {
+                            column_op op;
+
+                            values[1] = values[2] = std::nullopt;
+                            auto view = cell.as_atomic_cell(cdef);
+                            if (view.is_live()) {
+                                op = column_op::set;
+                                values[1] = view.value().linearize();
+                                if (view.is_live_and_has_ttl()) {
+                                    values[2] = long_type->decompose(data_value(view.ttl().count()));
+                                }
+                            } else {
+                                op = column_op::del;
+                            }
+
+                            values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(op)));
+                            res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, _time.timestamp(), tuple_type_impl::build_value(values)));
+
+                            if (pirow && pirow->has(cdef.name_as_text())) {
+                                values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(column_op::set)));
+                                values[1] = pirow->get_blob(cdef.name_as_text());
+                                values[2] = std::nullopt;
+
+                                assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
+                                assert(pikey->explode() != log_ck.explode());
+                                res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, _time.timestamp(), tuple_type_impl::build_value(values)));
+                            }
+                        } else {
+                            cdc_log.warn("Non-atomic cell ignored {}.{}:{}", _schema->ks_name(), _schema->cf_name(), cdef.name_as_text());
+                        }
+                    });
+                };
+
+                process_cells(r.row().cells(), column_kind::regular_column);
+                process_cells(p.static_row().get(), column_kind::static_column);
+
+                set_operation(log_ck, operation::update, res);
                 ++batch_no;
             }
         }
+
         return res;
+    }
+
+    static db::timeout_clock::time_point default_timeout() {
+        return db::timeout_clock::now() + 10s;
+    }
+
+    future<lw_shared_ptr<cql3::untyped_result_set>> pre_image_select(
+            service::storage_proxy& proxy,
+            service::client_state& client_state,
+            db::consistency_level cl,
+            const mutation& m)
+    {
+        auto& p = m.partition();
+        if (p.partition_tombstone() || !p.row_tombstones().empty() || p.clustered_rows().empty()) {
+            return make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>();
+        }
+
+        dht::partition_range_vector partition_ranges{dht::partition_range(m.decorated_key())};
+
+        auto&& pc = _schema->partition_key_columns();
+        auto&& cc = _schema->clustering_key_columns();
+
+        std::vector<query::clustering_range> bounds;
+        if (cc.empty()) {
+            bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+        } else {
+            for (const rows_entry& r : p.clustered_rows()) {
+                auto& ck = r.key();
+                bounds.push_back(query::clustering_range::make_singular(ck));
+            }
+        }
+
+        std::vector<const column_definition*> columns;
+        columns.reserve(_schema->all_columns().size());
+
+        std::transform(pc.begin(), pc.end(), std::back_inserter(columns), [](auto& c) { return &c; });
+        std::transform(cc.begin(), cc.end(), std::back_inserter(columns), [](auto& c) { return &c; });
+
+        query::column_id_vector static_columns, regular_columns;
+
+        auto sk = column_kind::static_column;
+        auto rk = column_kind::regular_column;
+        // TODO: this assumes all mutations touch the same set of columns. This might not be true, and we may need to do more horrible set operation here.
+        for (auto& [r, cids, kind] : { std::tie(p.static_row().get(), static_columns, sk), std::tie(p.clustered_rows().begin()->row().cells(), regular_columns, rk) }) {
+            r.for_each_cell([&](column_id id, const atomic_cell_or_collection&) {
+                auto& cdef =_schema->column_at(kind, id);
+                cids.emplace_back(id);
+                columns.emplace_back(&cdef);
+            });
+        }
+
+        auto selection = cql3::selection::selection::for_columns(_schema, std::move(columns));
+        auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), selection->get_query_options());
+        auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_partitions);
+
+        return proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+                [this, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
+                    cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
+                    query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *selection));
+                    auto result_set = builder.build();
+                    if (!result_set || result_set->empty()) {
+                        return {};
+                    }
+                    return make_lw_shared<cql3::untyped_result_set>(*result_set);
+        });
     }
 };
 
@@ -378,7 +548,7 @@ public:
     }
 };
 
-static future<transformer::streams_type> get_streams(
+static future<::shared_ptr<transformer::streams_type>> get_streams(
         db_context ctx,
         const sstring& ks_name,
         const sstring& cf_name,
@@ -403,7 +573,7 @@ static future<transformer::streams_type> get_streams(
                     .build();
             streams_builder builder{ *s };
             v.consume(slice, builder);
-            return builder.build();
+            return ::make_shared<transformer::streams_type>(builder.build());
         });
     });
 }
@@ -414,15 +584,20 @@ future<std::vector<mutation>> append_log_mutations(
         service::storage_proxy::clock_type::time_point timeout,
         service::query_state& qs,
         std::vector<mutation> muts) {
-    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then(
-            [ctx, s = std::move(s), muts = std::move(muts)]
-            (transformer::streams_type streams) mutable {
-        transformer trans(ctx, std::move(s), streams);
-        muts.reserve(2 * muts.size());
-        for(int i = 0, size = muts.size(); i < size; ++i) {
-            muts.push_back(trans.transform(muts[i]));
-        }
-        return std::move(muts);
+    auto mp = ::make_lw_shared<std::vector<mutation>>(std::move(muts));
+
+    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), mp, &qs](::shared_ptr<transformer::streams_type> streams) mutable {
+        mp->reserve(2 * mp->size());
+        auto trans = make_lw_shared<transformer>(ctx, s, std::move(streams));
+        auto i = mp->begin();
+        auto e = mp->end();
+        return parallel_for_each(i, e, [ctx, &qs, trans, mp](mutation& m) {
+            return trans->pre_image_select(ctx._proxy, qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then([trans, mp, &m](lw_shared_ptr<cql3::untyped_result_set> rs) {
+                mp->push_back(trans->transform(m, rs.get()));
+            });
+        }).then([mp] {
+            return std::move(*mp);
+        });
     });
 }
 
