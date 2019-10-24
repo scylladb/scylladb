@@ -752,6 +752,7 @@ class mutation_fragment_stream_validator {
     position_in_partition _prev_pos;
     partition_region _prev_region;
     bool _compare_keys;
+    dht::decorated_key _prev_partition_key;
 public:
     mutation_fragment_stream_validator(const schema& s, bool compare_keys = false);
     ~mutation_fragment_stream_validator();
