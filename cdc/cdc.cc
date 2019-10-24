@@ -426,7 +426,6 @@ public:
     }
 
     future<lw_shared_ptr<cql3::untyped_result_set>> pre_image_select(
-            service::storage_proxy& proxy,
             service::client_state& client_state,
             db::consistency_level cl,
             const mutation& m)
@@ -474,7 +473,7 @@ public:
         auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), selection->get_query_options());
         auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_partitions);
 
-        return proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+        return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
                 [this, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
                     cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
                     query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *selection));
@@ -592,7 +591,7 @@ future<std::vector<mutation>> append_log_mutations(
         auto i = mp->begin();
         auto e = mp->end();
         return parallel_for_each(i, e, [ctx, &qs, trans, mp](mutation& m) {
-            return trans->pre_image_select(ctx._proxy, qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then([trans, mp, &m](lw_shared_ptr<cql3::untyped_result_set> rs) {
+            return trans->pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then([trans, mp, &m](lw_shared_ptr<cql3::untyped_result_set> rs) {
                 mp->push_back(trans->transform(m, rs.get()));
             });
         }).then([mp] {
