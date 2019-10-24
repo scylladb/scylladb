@@ -578,6 +578,15 @@ static future<::shared_ptr<transformer::streams_type>> get_streams(
     });
 }
 
+template <typename Func>
+future<std::vector<mutation>>
+transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_size, Func&& f) {
+    return parallel_for_each(
+            boost::irange(static_cast<decltype(muts.size())>(0), muts.size(), batch_size),
+            std::move(f))
+        .then([&muts] () mutable { return std::move(muts); });
+}
+
 future<std::vector<mutation>> append_log_mutations(
         db_context ctx,
         schema_ptr s,
@@ -585,16 +594,24 @@ future<std::vector<mutation>> append_log_mutations(
         service::query_state& qs,
         std::vector<mutation> muts) {
     return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), muts = std::move(muts), &qs](::shared_ptr<transformer::streams_type> streams) mutable {
-        return do_with(std::move(muts), transformer(ctx, s, std::move(streams)), [&qs] (std::vector<mutation>& muts, transformer& trans) {
+        return do_with(std::move(muts), transformer(ctx, s, std::move(streams)), [&qs, s] (std::vector<mutation>& muts, transformer& trans) {
             muts.reserve(2 * muts.size());
-            return parallel_for_each(boost::irange(static_cast<decltype(muts.size())>(0), muts.size()), [&qs, &trans, &muts] (int idx) mutable {
-                return trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, muts[idx]).then([&trans, &muts, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
-                    muts.push_back(trans.transform(muts[idx], rs.get()));
+            if (!s->cdc_options().preimage()) {
+                constexpr int batch_size = 100;
+                int muts_len = muts.size();
+                return transform_mutations(muts, batch_size, [&muts, &trans, batch_size, muts_len] (int idx) {
+                    for (int len = std::min(idx + batch_size, muts_len); idx < len; ++idx) {
+                        muts.push_back(trans.transform(muts[idx]));
+                    }
+                    return make_ready_future<>();
                 });
-            }).then([&muts] () mutable {
-                return std::move(muts);
-            });
-
+            } else {
+                return transform_mutations(muts, 1, [&qs, &trans, &muts] (int idx) mutable {
+                    return trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, muts[idx]).then([&trans, &muts, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+                        muts.push_back(trans.transform(muts[idx], rs.get()));
+                    });
+                });
+           }
         });
     });
 }
