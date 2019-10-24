@@ -132,7 +132,9 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         validate_operation_on_durations(*receiver.type, _op);
         return column_condition::condition(receiver, collection_element_term, _value->prepare(db, keyspace, value_spec), _op);
     }
-    assert(_op == operator_type::IN);
+    if (_op != operator_type::IN) {
+        throw exceptions::invalid_request_exception(format("Unsupported operator type {} in a condition ", _op));
+    }
 
     if (_in_marker) {
         assert(_in_values.empty());
