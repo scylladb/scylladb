@@ -124,38 +124,44 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
         auto test_random_streams = [&] (random_mutation_generator&& gen) {
             for (auto i = 0; i < 4; i++) {
                 dirty_memory_manager mgr;
-                auto muts = gen(4);
+                const auto muts = gen(4);
+                const auto now = gc_clock::now();
+                auto compacted_muts = muts;
+                for (auto& mut : compacted_muts) {
+                    mut.partition().compact_for_compaction(*mut.schema(), always_gc, now);
+                }
 
                 BOOST_TEST_MESSAGE("Simple read");
                 auto mt = make_memtable(mgr, muts);
+
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
-                    .produces_partition(muts[0])
-                    .produces_partition(muts[1])
-                    .produces_partition(muts[2])
-                    .produces_partition(muts[3])
+                    .produces_compacted(compacted_muts[0], now)
+                    .produces_compacted(compacted_muts[1], now)
+                    .produces_compacted(compacted_muts[2], now)
+                    .produces_compacted(compacted_muts[3], now)
                     .produces_end_of_stream();
 
                 BOOST_TEST_MESSAGE("Read with next_partition() calls between partition");
                 mt = make_memtable(mgr, muts);
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
                     .next_partition()
-                    .produces_partition(muts[0])
+                    .produces_compacted(compacted_muts[0], now)
                     .next_partition()
-                    .produces_partition(muts[1])
+                    .produces_compacted(compacted_muts[1], now)
                     .next_partition()
-                    .produces_partition(muts[2])
+                    .produces_compacted(compacted_muts[2], now)
                     .next_partition()
-                    .produces_partition(muts[3])
+                    .produces_compacted(compacted_muts[3], now)
                     .next_partition()
                     .produces_end_of_stream();
 
                 BOOST_TEST_MESSAGE("Read with next_partition() calls inside partitions");
                 mt = make_memtable(mgr, muts);
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
-                    .produces_partition(muts[0])
+                    .produces_compacted(compacted_muts[0], now)
                     .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
                     .next_partition()
-                    .produces_partition(muts[2])
+                    .produces_compacted(compacted_muts[2], now)
                     .next_partition()
                     .produces_partition_start(muts[3].decorated_key(), muts[3].partition().partition_tombstone())
                     .next_partition()
