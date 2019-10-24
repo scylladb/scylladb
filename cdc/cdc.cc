@@ -22,6 +22,7 @@
 #include <utility>
 #include <algorithm>
 
+#include <boost/range/irange.hpp>
 #include <seastar/util/defer.hh>
 #include <seastar/core/thread.hh>
 
@@ -586,11 +587,9 @@ future<std::vector<mutation>> append_log_mutations(
     return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), muts = std::move(muts), &qs](::shared_ptr<transformer::streams_type> streams) mutable {
         return do_with(std::move(muts), transformer(ctx, s, std::move(streams)), [&qs] (std::vector<mutation>& muts, transformer& trans) {
             muts.reserve(2 * muts.size());
-            auto i = muts.begin();
-            auto e = muts.end();
-            return parallel_for_each(i, e, [&qs, &trans, &muts] (mutation& m) mutable {
-                return trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then([&trans, &muts, &m] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
-                    muts.push_back(trans.transform(m, rs.get()));
+            return parallel_for_each(boost::irange(static_cast<decltype(muts.size())>(0), muts.size()), [&qs, &trans, &muts] (int idx) mutable {
+                return trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, muts[idx]).then([&trans, &muts, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+                    muts.push_back(trans.transform(muts[idx], rs.get()));
                 });
             }).then([&muts] () mutable {
                 return std::move(muts);
