@@ -583,19 +583,19 @@ future<std::vector<mutation>> append_log_mutations(
         service::storage_proxy::clock_type::time_point timeout,
         service::query_state& qs,
         std::vector<mutation> muts) {
-    auto mp = ::make_lw_shared<std::vector<mutation>>(std::move(muts));
-
-    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), mp, &qs](::shared_ptr<transformer::streams_type> streams) mutable {
-        mp->reserve(2 * mp->size());
-        auto trans = make_lw_shared<transformer>(ctx, s, std::move(streams));
-        auto i = mp->begin();
-        auto e = mp->end();
-        return parallel_for_each(i, e, [ctx, &qs, trans, mp](mutation& m) {
-            return trans->pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then([trans, mp, &m](lw_shared_ptr<cql3::untyped_result_set> rs) {
-                mp->push_back(trans->transform(m, rs.get()));
+    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), muts = std::move(muts), &qs](::shared_ptr<transformer::streams_type> streams) mutable {
+        return do_with(std::move(muts), transformer(ctx, s, std::move(streams)), [&qs] (std::vector<mutation>& muts, transformer& trans) {
+            muts.reserve(2 * muts.size());
+            auto i = muts.begin();
+            auto e = muts.end();
+            return parallel_for_each(i, e, [&qs, &trans, &muts] (mutation& m) mutable {
+                return trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then([&trans, &muts, &m] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+                    muts.push_back(trans.transform(m, rs.get()));
+                });
+            }).then([&muts] () mutable {
+                return std::move(muts);
             });
-        }).then([mp] {
-            return std::move(*mp);
+
         });
     });
 }
