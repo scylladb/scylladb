@@ -119,6 +119,14 @@ protected:
     sstring _type;
 };
 
+class health_handler : public handler_base {
+    virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        rep->set_status(reply::status_type::ok);
+        rep->write_body("txt", format("healthy: {}", req->get_header("Host")));
+        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+    }
+};
+
 future<> server::verify_signature(const request& req) {
     if (!_enforce_authorization) {
         slogger.debug("Skipping authorization");
@@ -249,11 +257,12 @@ void server::set_routes(routes& r) {
         {"Query", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.query(client_state, req->content); }},
     };
 
-    api_handler* handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
+    api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
         return handle_api_request(std::move(req));
     });
 
-    r.add(operation_type::POST, url("/"), handler);
+    r.add(operation_type::POST, url("/"), req_handler);
+    r.add(operation_type::GET, url("/"), new health_handler);
 }
 
 //FIXME: A way to immediately invalidate the cache should be considered,
