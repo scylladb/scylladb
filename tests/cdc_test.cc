@@ -201,7 +201,7 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
 
 SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true', 'preimage':'true'}");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
 
         auto select_log = [&] {
