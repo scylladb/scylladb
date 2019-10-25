@@ -239,7 +239,20 @@ future<json::json_return_type> server::handle_api_request(std::unique_ptr<reques
 }
 
 void server::set_routes(routes& r) {
-    _callbacks = {
+    api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
+        return handle_api_request(std::move(req));
+    });
+
+    r.add(operation_type::POST, url("/"), req_handler);
+    r.add(operation_type::GET, url("/"), new health_handler);
+}
+
+//FIXME: A way to immediately invalidate the cache should be considered,
+// e.g. when the system table which stores the keys is changed.
+// For now, this propagation may take up to 1 minute.
+server::server(seastar::sharded<executor>& e)
+        : _executor(e), _key_cache(1024, 1min, slogger), _enforce_authorization(false)
+      , _callbacks{
         {"CreateTable", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) {
             return e.maybe_create_keyspace().then([&e, &client_state, req = std::move(req)] { return e.create_table(client_state, req->content); }); }
         },
@@ -255,20 +268,7 @@ void server::set_routes(routes& r) {
         {"BatchWriteItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.batch_write_item(client_state, req->content); }},
         {"BatchGetItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.batch_get_item(client_state, req->content); }},
         {"Query", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.query(client_state, req->content); }},
-    };
-
-    api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
-        return handle_api_request(std::move(req));
-    });
-
-    r.add(operation_type::POST, url("/"), req_handler);
-    r.add(operation_type::GET, url("/"), new health_handler);
-}
-
-//FIXME: A way to immediately invalidate the cache should be considered,
-// e.g. when the system table which stores the keys is changed.
-// For now, this propagation may take up to 1 minute.
-server::server(seastar::sharded<executor>& executor) : _executor(executor), _key_cache(1024, 1min, slogger), _enforce_authorization(false) {
+    } {
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization) {
