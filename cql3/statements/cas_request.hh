@@ -70,12 +70,13 @@ private:
     // A single partition key. Represented as a vector of partition ranges
     // since this is the conventional format for storage_proxy.
     std::vector<dht::partition_range> _key;
-    std::optional<update_parameters::prefetch_data> _rows;
+    update_parameters::prefetch_data _rows;
 
 public:
     cas_request(schema_ptr schema_arg, std::vector<dht::partition_range> key_arg)
           : _schema(schema_arg)
           , _key(std::move(key_arg))
+          , _rows(schema_arg)
     {
         assert(_key.size() == 1 && query::is_single_partition(_key.front()));
     }
@@ -85,7 +86,7 @@ public:
     }
 
     const update_parameters::prefetch_data& rows() const {
-        return *_rows;
+        return _rows;
     }
 
     lw_shared_ptr<query::read_command> read_command() const;
