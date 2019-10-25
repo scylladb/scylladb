@@ -81,6 +81,10 @@
 #include "db/schema_tables.hh"
 #include "index/built_indexes_virtual_reader.hh"
 
+#include "idl/frozen_mutation.dist.hh"
+#include "serializer_impl.hh"
+#include "idl/frozen_mutation.dist.impl.hh"
+
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 namespace db {
@@ -170,13 +174,20 @@ schema_ptr batchlog() {
 
 /*static*/ schema_ptr paxos() {
     static thread_local auto paxos = [] {
+        // FIXME: switch to the new schema_builder interface (with_column(...), etc)
         schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
         // partition key
-        {{"row_key", bytes_type}},
+        {{"row_key", bytes_type}}, // serialization format is defined by partition_key idl
         // clustering key
         {{"cf_id", uuid_type}},
         // regular columns
-        {{"in_progress_ballot", timeuuid_type}, {"most_recent_commit", bytes_type}, {"most_recent_commit_at", timeuuid_type}, {"proposal", bytes_type}, {"proposal_ballot", timeuuid_type}},
+        {
+            {"in_progress_ballot", timeuuid_type},
+            {"most_recent_commit", bytes_type}, // serialization format is defined by frozen_mutation idl
+            {"most_recent_commit_at", timeuuid_type},
+            {"proposal", bytes_type}, // serialization format is defined by frozen_mutation idl
+            {"proposal_ballot", timeuuid_type},
+        },
         // static columns
         {},
         // regular column name type
@@ -568,35 +579,6 @@ schema_ptr batches() {
        builder.set_compaction_strategy_options({{"min_threshold", "2"}});
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return schema;
-}
-
-schema_ptr paxos() {
-    static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
-        // partition key
-        {{"row_key", bytes_type}},
-        // clustering key
-        {{"cf_id", uuid_type}},
-        // regular columns
-        {{"in_progress_ballot", timeuuid_type},
-         {"most_recent_commit", bytes_type},
-         {"most_recent_commit_at", timeuuid_type},
-         {"most_recent_commit_version", int32_type},
-         {"proposal", timeuuid_type},
-         {"proposal_version", int32_type}
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "in-progress paxos proposals"
-       )));
-       builder.set_compaction_strategy(sstables::compaction_strategy_type::leveled);
-       builder.with_version(generate_schema_version(builder.uuid()));
-       return builder.build();
     }();
     return schema;
 }
@@ -2077,6 +2059,93 @@ future<std::vector<view_build_progress>> load_view_build_progress() {
         }
         return progress;
     });
+}
+
+future<service::paxos::paxos_state> load_paxos_state(partition_key key, schema_ptr s, gc_clock::time_point now,
+        db::timeout_clock::time_point timeout) {
+    static auto cql = format("SELECT * FROM system.{} WHERE row_key = ? AND cf_id = ?", PAXOS);
+    // FIXME: we need execute_cql_with_now()
+    (void)now;
+    // FIXME: we need execute_cql_with_timeout()
+    (void)timeout;
+    auto f = execute_cql(cql, ser::serialize_to_buffer<bytes>(key), s->id());
+    return f.then([key = std::move(key), s] (shared_ptr<cql3::untyped_result_set> results) mutable {
+        if (results->empty()) {
+            return service::paxos::paxos_state();
+        }
+        auto& row = results->one();
+        auto promised = row.has("in_progress_ballot")
+                        ? row.get_as<utils::UUID>("in_progress_ballot") : utils::UUID_gen::min_time_UUID(0);
+
+        std::optional<service::paxos::proposal> accepted;
+        if (row.has("proposal")) {
+            accepted = service::paxos::proposal(row.get_as<utils::UUID>("proposal_ballot"),
+                    ser::deserialize_from_buffer<>(row.get_blob("proposal"),  boost::type<frozen_mutation>(), 0));
+        }
+
+        std::optional<service::paxos::proposal> most_recent;
+        if (row.has("most_recent_commit")) {
+            most_recent = service::paxos::proposal(row.get_as<utils::UUID>("most_recent_commit_at"),
+                    ser::deserialize_from_buffer<>(row.get_blob("most_recent_commit"), boost::type<frozen_mutation>(), 0));
+        }
+
+        return service::paxos::paxos_state(promised, std::move(accepted), std::move(most_recent));
+    });
+}
+
+static int32_t paxos_ttl_sec(const schema& s) {
+    // Keep paxos state around for at least 3h or gc_grace_seconds. If one of the Paxos participants
+    // is down for longer than gc_grace_seconds it is considered to be dead and must rebootstrap.
+    // Otherwise its Paxos table state will be repaired by nodetool repair or Paxos repair.
+    return std::max<int32_t>(3 * 3600, std::chrono::duration_cast<std::chrono::seconds>(s.gc_grace_seconds()).count());
+}
+
+future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
+    // FIXME: we need execute_cql_with_timeout()
+    (void)timeout;
+    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET in_progress_ballot = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
+    return execute_cql(cql,
+                       utils::UUID_gen::micros_timestamp(ballot),
+                       paxos_ttl_sec(s),
+                       ballot,
+                       ser::serialize_to_buffer<bytes>(key),
+                       s.id()
+                      ).discard_result();
+}
+
+future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout) {
+    // FIXME: we need execute_cql_with_timeout()
+    (void)timeout;
+    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = ?, proposal = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
+    return execute_cql(cql,
+                       utils::UUID_gen::micros_timestamp(proposal.ballot),
+                       paxos_ttl_sec(s),
+                       proposal.ballot,
+                       ser::serialize_to_buffer<bytes>(proposal.update),
+                       ser::serialize_to_buffer<bytes>(partition_key(proposal.update.key(s))),
+                       s.id()
+                      ).discard_result();
+}
+
+future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout) {
+    // FIXME: we need execute_cql_with_timeout()
+    (void)timeout;
+    // We always erase the last proposal when we learn about a new Paxos decision. The ballot
+    // timestamp of the decision is used for entire mutation, so if the "erased" proposal is more
+    // recent it will naturally stay on top.
+    // Erasing the last proposal is just an optimization and does not affect correctness:
+    // sp::begin_and_repair_paxos will exclude an accepted proposal if it is older than the most
+    // recent commit.
+    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null,"
+            " most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
+    return execute_cql(cql,
+                       utils::UUID_gen::micros_timestamp(decision.ballot),
+                       paxos_ttl_sec(s),
+                       decision.ballot,
+                       ser::serialize_to_buffer<bytes>(decision.update),
+                       ser::serialize_to_buffer<bytes>(partition_key(decision.update.key(s))),
+                       s.id()
+                      ).discard_result();
 }
 
 } // namespace system_keyspace

@@ -86,6 +86,7 @@
 #include "db/timeout_clock.hh"
 #include "multishard_mutation_query.hh"
 #include "database.hh"
+#include "db/consistency_level_validations.hh"
 
 namespace bi = boost::intrusive;
 
@@ -97,6 +98,8 @@ static logging::logger mlogger("mutation_data");
 
 const sstring storage_proxy::COORDINATOR_STATS_CATEGORY("storage_proxy_coordinator");
 const sstring storage_proxy::REPLICA_STATS_CATEGORY("storage_proxy_replica");
+
+thread_local uint64_t paxos_response_handler::next_id = 0;
 
 distributed<service::storage_proxy> _the_storage_proxy;
 
@@ -133,8 +136,12 @@ protected:
     schema_ptr _schema;
 public:
     virtual ~mutation_holder() {}
-    // Can return a nullptr
-    virtual lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) = 0;
+    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) = 0;
+    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) = 0;
+    virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, std::vector<gms::inet_address>&& forward,
+            storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) = 0;
     virtual bool is_shared() = 0;
     size_t size() const {
         return _size;
@@ -162,8 +169,36 @@ public:
             _mutations.emplace(m.first, std::move(fm));
         }
     }
-    virtual lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) override {
-        return _mutations[ep];
+    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
+        auto m = _mutations[ep];
+        if (m) {
+            return hm.store_hint(ep, _schema, std::move(m), tr_state);
+        } else {
+            return false;
+        }
+    }
+    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) override {
+        auto m = _mutations[utils::fb_utilities::get_broadcast_address()];
+        if (m) {
+            tracing::trace(tr_state, "Executing a mutation locally");
+            return sp.mutate_locally(_schema, *m, timeout);
+        }
+        return make_ready_future<>();
+    }
+    virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, std::vector<gms::inet_address>&& forward,
+            storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) override {
+        auto& ms = netw::get_local_messaging_service();
+        auto m = _mutations[utils::fb_utilities::get_broadcast_address()];
+        if (m) {
+            tracing::trace(tr_state, "Sending a mutation to /{}", ep);
+            return ms.send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *m,
+                                    std::move(forward), utils::fb_utilities::get_broadcast_address(), engine().cpu_id(),
+                                    response_id, tracing::make_trace_info(tr_state));
+        }
+        sp.got_response(response_id, ep, std::nullopt);
+        return make_ready_future<>();
     }
     virtual bool is_shared() override {
         return false;
@@ -191,14 +226,61 @@ public:
     }
     explicit shared_mutation(const mutation& m) : shared_mutation(frozen_mutation_and_schema{freeze(m), m.schema()}) {
     }
-    lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) override {
-        return _mutation;
+    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
+            return hm.store_hint(ep, _schema, _mutation, tr_state);
+    }
+    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) override {
+        tracing::trace(tr_state, "Executing a mutation locally");
+        return sp.mutate_locally(_schema, *_mutation, timeout);
+    }
+    virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, std::vector<gms::inet_address>&& forward,
+            storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) override {
+        tracing::trace(tr_state, "Sending a mutation to /{}", ep);
+        auto& ms = netw::get_local_messaging_service();
+        return ms.send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
+                std::move(forward), utils::fb_utilities::get_broadcast_address(), engine().cpu_id(),
+                response_id, tracing::make_trace_info(tr_state));
     }
     virtual bool is_shared() override {
         return true;
     }
     virtual void release_mutation() override {
         _mutation.release();
+    }
+};
+
+class cas_mutation : public mutation_holder {
+    lw_shared_ptr<paxos::proposal> _proposal;
+public:
+    explicit cas_mutation(paxos::proposal proposal , schema_ptr s)
+            : _proposal(make_lw_shared<paxos::proposal>(std::move(proposal))) {
+        _size = _proposal->update.representation().size();
+        _schema = std::move(s);
+    }
+    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
+            return false; // CAS does not save hints yet
+    }
+    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) override {
+        tracing::trace(tr_state, "Executing a learn locally");
+        return paxos::paxos_state::learn(_schema, *_proposal, timeout, tr_state);
+    }
+    virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, std::vector<gms::inet_address>&& forward,
+            storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) override {
+        tracing::trace(tr_state, "Sending a learn to /{}", ep);
+        auto& ms = netw::get_local_messaging_service();
+        return ms.send_paxos_learn(netw::messaging_service::msg_addr{ep, 0}, timeout,
+                                *_proposal, std::move(forward), utils::fb_utilities::get_broadcast_address(),
+                                engine().cpu_id(), response_id, tracing::make_trace_info(tr_state));
+    }
+    virtual bool is_shared() override {
+        return true;
+    }
+    virtual void release_mutation() override {
+        _proposal.release();
     }
 };
 
@@ -272,6 +354,7 @@ public:
     bool is_counter() const {
         return _type == db::write_type::COUNTER;
     }
+
     // While delayed, a request is not throttled.
     void unthrottle() {
         _stats.background_writes++;
@@ -421,11 +504,22 @@ public:
     const std::vector<gms::inet_address>& get_dead_endpoints() const {
         return _dead_endpoints;
     }
-    lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) {
-        return _mutation_holder->get_mutation_for(ep);
+    bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) {
+        return _mutation_holder->store_hint(hm, ep, tr_state);
+    }
+    future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
+        return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state));
+    }
+    future<> apply_remotely(gms::inet_address ep, std::vector<gms::inet_address>&& forward,
+            storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) {
+        return _mutation_holder->apply_remotely(*_proxy, ep, std::move(forward), response_id, timeout, std::move(tr_state));
     }
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
+    }
+    const size_t get_mutation_size() const {
+        return _mutation_holder->size();
     }
     storage_proxy::response_id_type id() const {
       return _id;
@@ -590,6 +684,394 @@ public:
         return false;
     }
 };
+
+static future<std::optional<paxos_response_handler::ballot_and_contention>> sleep_and_restart() {
+    static thread_local std::default_random_engine re{std::random_device{}()};
+    std::uniform_int_distribution<> dist(0, 100);
+    return sleep(std::chrono::milliseconds(dist(re))).then([] {
+         return std::optional<paxos_response_handler::ballot_and_contention>(); // continue
+    });
+};
+
+/**
+ * Begin a Paxos session by sending a prepare request and completing any in-progress requests seen in the replies.
+ *
+ * @return the Paxos ballot promised by the replicas if no in-progress requests were seen and a quorum of
+ * nodes have seen the most recent commit. Otherwise, return null.
+ */
+future<paxos_response_handler::ballot_and_contention> paxos_response_handler::begin_and_repair_paxos(client_state& cs, bool is_write) {
+    return do_with(unsigned(0), api::timestamp_type(0), shared_from_this(), [this, &cs] (unsigned& contentions,
+            api::timestamp_type& min_timestamp_micros_to_use, shared_ptr<paxos_response_handler>& prh) {
+        return repeat_until_value([this, &contentions, &cs, &min_timestamp_micros_to_use] {
+            if (storage_proxy::clock_type::now() > _cas_timeout) {
+                return make_exception_future<std::optional<ballot_and_contention>>(
+                        mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl_for_paxos, 0,
+                                _required_participants, db::write_type::CAS)
+                        );
+            }
+
+            // We want a timestamp that is guaranteed to be unique for that node (so that the ballot is
+            // globally unique), but if we've got a prepare rejected already we also want to make sure
+            // we pick a timestamp that has a chance to be promised, i.e. one that is greater that the
+            // most recently known in progress (#5667). Lastly, we don't want to use a timestamp that is
+            // older than the last one assigned by ClientState or operations may appear out-of-order
+            // (#7801).
+            api::timestamp_type ballot_micros = cs.get_timestamp_for_paxos(min_timestamp_micros_to_use);
+            // Note that ballotMicros is not guaranteed to be unique if two proposal are being handled
+            // concurrently by the same coordinator. But we still need ballots to be unique for each
+            // proposal so we have to use getRandomTimeUUIDFromMicros.
+            utils::UUID ballot = utils::UUID_gen::get_random_time_UUID_from_micros(ballot_micros);
+
+            paxos::paxos_state::logger.debug("CAS[{}] Preparing {}", _id, ballot);
+            tracing::trace(tr_state, "Preparing {}", ballot);
+
+            return prepare_ballot(ballot)
+                    .then([this, &contentions, ballot, &min_timestamp_micros_to_use] (paxos::prepare_summary summary) {
+                if (!summary.promised) {
+                    paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
+                    tracing::trace(tr_state, "Some replicas have already promised a higher ballot than ours; aborting");
+                    contentions++;
+                    return sleep_and_restart();
+                }
+
+                min_timestamp_micros_to_use = utils::UUID_gen::micros_timestamp(summary.most_recent_promised_ballot) + 1;
+
+                std::optional<paxos::proposal> in_progress = std::move(summary.most_recent_proposal);
+
+                // If we have an in-progress accepted ballot greater than the most recent commit
+                // we know, then it's an in-progress round that needs to be completed, so do it.
+                if (in_progress &&
+                        (!summary.most_recent_commit ||
+                         (summary.most_recent_commit &&
+                         in_progress->ballot.timestamp() > summary.most_recent_commit->ballot.timestamp()))) {
+                    paxos::paxos_state::logger.debug("CAS[{}] Finishing incomplete paxos round {}", _id, *in_progress);
+                    tracing::trace(tr_state, "Finishing incomplete paxos round {}", *in_progress);
+#if 0
+                    if(_is_write)
+                        cas_write_metrics.unfinished_commit.inc();
+                    else
+                        cas_read_metrics.unfinished_commit.inc();
+#endif
+
+                    return do_with(paxos::proposal(ballot, std::move(in_progress->update)),
+                            [this, &contentions] (paxos::proposal& refreshed_in_progress) {
+                        return accept_proposal(refreshed_in_progress, false).then([this, &contentions, &refreshed_in_progress] (bool is_accepted) mutable {
+                            if (is_accepted) {
+                                return learn_decision(std::move(refreshed_in_progress), false).then([] {
+                                        return make_ready_future<std::optional<ballot_and_contention>>(std::optional<ballot_and_contention>());
+                                }).handle_exception_type([this, &contentions] (mutation_write_timeout_exception& e) {
+#if 0
+                                    if(contentions > 0)
+                                        cas_write_metrics.contention.update(contentions);
+#endif
+                                    e.type = db::write_type::CAS;
+                                    // we're still doing preparation for the paxos rounds, so we want to use the CAS (see cASSANDRA-8672)
+                                    return make_exception_future<std::optional<ballot_and_contention>>(std::move(e));
+                                });
+                            } else {
+                                paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
+                                tracing::trace(tr_state, "Some replicas have already promised a higher ballot than ours; aborting");
+                                // sleep a random amount to give the other proposer a chance to finish
+                                contentions++;
+                                return sleep_and_restart();
+                            }
+                        });
+                    });
+                }
+
+                // To be able to propose our value on a new round, we need a quorum of replica to have learn
+                // the previous one. Why is explained at:
+                // https://issues.apache.org/jira/browse/CASSANDRA-5062?focusedCommentId=13619810&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel#comment-13619810)
+                // Since we waited for quorum nodes, if some of them haven't seen the last commit (which may
+                // just be a timing issue, but may also mean we lost messages), we pro-actively "repair"
+                // those nodes, and retry.
+                auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
+
+                std::unordered_set<gms::inet_address> missing_mrc = summary.replicas_missing_most_recent_commit(_schema, now_in_sec);
+                if (missing_mrc.size() > 0) {
+                    paxos::paxos_state::logger.debug("CAS[{}] Repairing replicas that missed the most recent commit", _id);
+                    tracing::trace(tr_state, "Repairing replicas that missed the most recent commit");
+                    std::array<std::tuple<paxos::proposal, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>, 1>
+                      m{std::make_tuple(std::move(*summary.most_recent_commit), _schema, _key.token(), std::move(missing_mrc))};
+                    // create_write_response_handler is overloaded for paxos::proposal and will
+                    // create cas_mutation holder, which consequently will ensure paxos::learn is
+                    // used.
+                    auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, false, tr_state, _permit, _timeout);
+
+                    // TODO: provided commits did not invalidate the prepare we just did above (which they
+                    // didn't), we could just wait for all the missing most recent commits to
+                    // acknowledge this decision and then move on with proposing our value.
+                    return f.then_wrapped([prh = shared_from_this()] (future<> f) {
+                        if (f.failed()) {
+                            paxos::paxos_state::logger.debug("CAS[{}] Failure during commit repair {}", prh->_id, f.get_exception());
+                        } else {
+                            f.ignore_ready_future();
+                        }
+                        return std::optional<ballot_and_contention>(); // continue
+                    });
+                }
+
+                return make_ready_future<std::optional<ballot_and_contention>>(ballot_and_contention{ballot, contentions});
+            });
+        });
+    });
+}
+
+template<class T> struct dependent_false : std::false_type {};
+
+// This function implement prepare stage of Paxos protocol and collects metadata needed to repair
+// previously unfinished round (if there was one).
+future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUID ballot) {
+    struct {
+        size_t errors = 0;
+        // the promise can be set before all replies are received at which point
+        // the optional will be disengaged so further replies are ignored
+        std::optional<promise<paxos::prepare_summary>> p = promise<paxos::prepare_summary>();
+        void set_value(paxos::prepare_summary&& s) {
+            p->set_value(std::move(s));
+            p.reset();
+        }
+        void set_exception(std::exception_ptr&& e) {
+            p->set_exception(std::move(e));
+            p.reset();
+        }
+    } request_tracker;
+
+    auto f = request_tracker.p->get_future();
+
+    // We may continue collecting prepare responses in the background after the reply is ready
+    (void)do_with(paxos::prepare_summary(_live_endpoints.size()), std::move(request_tracker), shared_from_this(),
+            [this, ballot] (paxos::prepare_summary& summary, auto& request_tracker, shared_ptr<paxos_response_handler>& prh) mutable {
+        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: sending ballot {} to {}", _id, ballot, _live_endpoints);
+        return parallel_for_each(_live_endpoints, [this, &summary, ballot, &request_tracker] (gms::inet_address peer) mutable {
+            return futurize_apply([&] {
+                if (fbu::is_me(peer)) {
+                    return paxos::paxos_state::prepare(tr_state, _schema, _key.key(), ballot, _timeout);
+                } else {
+                    netw::messaging_service& ms = netw::get_local_messaging_service();
+                    return ms.send_paxos_prepare(peer, _timeout, _schema->version(), _key.key(), ballot,
+                            tracing::make_trace_info(tr_state));
+                }
+            }).then_wrapped([this, &summary, &request_tracker, peer, ballot]
+                              (future<paxos::prepare_response> response_f) mutable {
+                if (!request_tracker.p) {
+                    response_f.ignore_ready_future();
+                    return; // ignore the response since a completion was already signaled
+                }
+
+                if (response_f.failed()) {
+                    auto ex = response_f.get_exception();
+                    if (is_timeout_exception(ex)) {
+                        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: timeout while sending ballot {} to {}", _id,
+                                ballot, peer);
+                        auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(),
+                                    _cl_for_paxos, summary.committed_ballots_by_replica.size(),  _required_participants,
+                                    db::write_type::CAS));
+                        request_tracker.set_exception(std::move(e));
+                    } else {
+                        request_tracker.errors++;
+                        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: fail to send ballot {} to {}: {}", _id,
+                                ballot, peer, ex);
+                        if (_required_participants + request_tracker.errors > _live_endpoints.size()) {
+                            auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
+                                        _schema->cf_name(), _cl_for_paxos, summary.committed_ballots_by_replica.size(),
+                                        request_tracker.errors, _required_participants, db::write_type::CAS));
+                            request_tracker.set_exception(std::move(e));
+                        }
+                    }
+                    return;
+                }
+                auto on_prepare_response = [&] (auto&& response) {
+                    using T = std::decay_t<decltype(response)>;
+                    if constexpr (std::is_same_v<T, utils::UUID>) {
+                        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got more up to date ballot {} from {}", _id, response, peer);
+                        // We got an UUID that prevented our proposal from succeeding
+                        summary.update_most_recent_promised_ballot(response);
+                        summary.promised = false;
+                        request_tracker.set_value(std::move(summary));
+                        return;
+                    } else if constexpr (std::is_same_v<T, paxos::promise>) {
+                        utils::UUID mrc_ballot = utils::UUID_gen::min_time_UUID(0);
+
+                        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got a response {} from {}", _id, response, peer);
+
+                        // Find the newest learned value among all replicas that answered.
+                        // It will be used to "repair" replicas that did not learn this value yet.
+                        if (response.most_recent_commit) {
+                            mrc_ballot = response.most_recent_commit->ballot;
+
+                            if (!summary.most_recent_commit ||
+                                    summary.most_recent_commit->ballot.timestamp() < mrc_ballot.timestamp()) {
+                                summary.most_recent_commit = std::move(response.most_recent_commit);
+                            }
+                        }
+
+                        // cannot throw since the memory was reserved ahead
+                        summary.committed_ballots_by_replica.emplace(peer, mrc_ballot);
+
+                        if (response.accepted_proposal) {
+                            summary.update_most_recent_promised_ballot(response.accepted_proposal->ballot);
+
+                            // If some response has an accepted proposal, then we should replay the proposal with the highest ballot.
+                            // So find the highest accepted proposal here.
+                            if (!summary.most_recent_proposal || response.accepted_proposal > summary.most_recent_proposal) {
+                                summary.most_recent_proposal = std::move(response.accepted_proposal);
+                            }
+                        }
+
+                        if (summary.committed_ballots_by_replica.size() == _required_participants) { // got all replies
+                            paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got enough replies to proceed", _id);
+                            request_tracker.set_value(std::move(summary));
+                        }
+                    } else {
+                        static_assert(dependent_false<T>::value, "unexpected type!");
+                    }
+                };
+                std::visit(on_prepare_response, response_f.get0());
+             });
+        });
+    });
+
+    return f;
+}
+
+// This function implements accept stage of the Paxos protocol.
+future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& proposal, bool timeout_if_partially_accepted) {
+    struct {
+        // the promise can be set before all replies are received at which point
+        // the optional will be disengaged so further replies are ignored
+        std::optional<promise<bool>> p = promise<bool>();
+        size_t accepts = 0;
+        size_t rejects = 0;
+        size_t errors = 0;
+
+        size_t all_replies() const {
+            return accepts + rejects + errors;
+        }
+        size_t non_accept_replies() const {
+            return rejects + errors;
+        }
+        size_t non_error_replies() const {
+            return accepts + rejects;
+        }
+        void set_value(bool v) {
+            p->set_value(v);
+            p.reset();
+        }
+        void set_exception(std::exception_ptr&& e) {
+            p->set_exception(std::move(e));
+            p.reset();
+        }
+    } request_tracker;
+
+    auto f = request_tracker.p->get_future();
+
+    // We may continue collecting propose responses in the background after the reply is ready
+    (void)do_with(std::move(request_tracker), shared_from_this(), [this, timeout_if_partially_accepted, &proposal]
+                           (auto& request_tracker, shared_ptr<paxos_response_handler>& prh) {
+        paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: sending commit {} to {}", _id, proposal, _live_endpoints);
+        return parallel_for_each(_live_endpoints, [this, &request_tracker, timeout_if_partially_accepted, &proposal] (gms::inet_address peer) mutable {
+            return futurize_apply([&] {
+                if (fbu::is_me(peer)) {
+                    return paxos::paxos_state::accept(tr_state, _schema, proposal, _timeout);
+                } else {
+                    netw::messaging_service& ms = netw::get_local_messaging_service();
+                    return ms.send_paxos_accept(peer, _timeout, proposal, tracing::make_trace_info(tr_state));
+                }
+            }).then_wrapped([this, &request_tracker, timeout_if_partially_accepted, &proposal, peer] (future<bool> accepted_f) {
+                if (!request_tracker.p) {
+                    accepted_f.ignore_ready_future();
+                    // Ignore the response since a completion was already signaled.
+                    return;
+                }
+
+                bool is_timeout = false;
+                if (accepted_f.failed()) {
+                    auto ex = accepted_f.get_exception();
+                    if (is_timeout_exception(ex)) {
+                        paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: timeout while sending proposal {} to {}",
+                                _id, proposal, peer);
+                        is_timeout = true;
+                    } else {
+                        paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: failure while sending proposal {} to {}: {}", _id,
+                                proposal, peer, ex);
+                        request_tracker.errors++;
+                    }
+                } else {
+                    bool accepted = accepted_f.get0();
+                    paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got \"{}\" from {}", _id,
+                            accepted ? "accepted" : "rejected", peer);
+
+                    accepted ? request_tracker.accepts++ : request_tracker.rejects++;
+                }
+                /**
+                 * The code has two modes of operation, controlled by the timeout_if_partially_accepted parameter.
+                 *
+                 * In timeout_if_partially_accepted is false, we will return a failure as soon as a majority of nodes reject
+                 * the proposal. This is used when replaying a proposal from an earlier leader.
+                 *
+                 * Otherwise, we wait for either all replicas to respond or until we achieve
+                 * the desired quorum. We continue to wait for all replicas even after we know we cannot succeed
+                 * because we need to know if no node at all has accepted our proposal or if at least one has.
+                 * In the former case, a proposer is guaranteed no-one will replay its value; in the
+                 * latter we don't, so we must timeout in case another leader replays it before we
+                 * can; see CASSANDRA-6013.
+                 */
+                if (request_tracker.accepts == _required_participants) {
+                    paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got enough accepts to proceed", _id);
+                    request_tracker.set_value(true);
+                } else if (is_timeout) {
+                    auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(),
+                                _cl_for_paxos, request_tracker.non_error_replies(), _required_participants, db::write_type::CAS));
+                    request_tracker.set_exception(std::move(e));
+                } else if (_required_participants + request_tracker.errors > _live_endpoints.size()) {
+                    // We got one too many errors. The quorum is no longer reachable. We can fail here
+                    // timeout_if_partially_accepted or not because failing is always safe - a client cannot
+                    // assume that the value was not committed.
+                    auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
+                                _schema->cf_name(), _cl_for_paxos, request_tracker.non_error_replies(),
+                                request_tracker.errors, _required_participants, db::write_type::CAS));
+                    request_tracker.set_exception(std::move(e));
+                } else if (_required_participants + request_tracker.non_accept_replies()  > _live_endpoints.size() && !timeout_if_partially_accepted) {
+                    // In case there is no need to reply with a timeout if at least one node is accepted
+                    // we can fail the request as soon is we know a quorum is unreachable.
+                    paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got enough rejects to proceed", _id);
+                    request_tracker.set_value(false);
+                } else if (request_tracker.all_replies() == _live_endpoints.size()) { // wait for all replies
+                    if (request_tracker.accepts == 0 && request_tracker.errors == 0) {
+                        paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is fully rejected", _id);
+                        // Return false if fully refused. Consider errors as accepts here since it
+                        // is not possible to know for sure.
+                        request_tracker.set_value(false);
+                    } else {
+                        // We got some rejects, but not all, and there were errors. So we can't know for
+                        // sure that the proposal is fully rejected, and it is obviously not
+                        // accepted, either.
+                        paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is partially rejected", _id);
+                        // TODO: we report write timeout exception to be compatible with Cassandra,
+                        // which uses write_timeout_exception to signal any "unknown" state.
+                        // To be changed in scope of work on https://issues.apache.org/jira/browse/CASSANDRA-15350
+                        auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(),
+                                    _schema->cf_name(), _cl_for_paxos, request_tracker.accepts, _required_participants,
+                                    db::write_type::CAS));
+                        request_tracker.set_exception(std::move(e));
+                    }
+                } // wait for more replies
+            }); // send_paxos_accept.then_wrapped
+        }); // parallel_for_each
+    }); // do_with
+
+    return f;
+}
+
+// This function implements learning stage of Paxos protocol
+future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool allow_hints) {
+    paxos::paxos_state::logger.trace("CAS[{}] learn_decision: commiting {} with cl={}", _id, decision, _cl_for_learn);
+    std::array<std::tuple<paxos::proposal, schema_ptr, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, _key.token())};
+    // FIXME: allow_hints is ignored. Consider if we should follow it and remove if not.
+    // Right now we do not store hints for when committing decisions.
+    return _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout);
+}
 
 static std::vector<gms::inet_address>
 replica_ids_to_endpoints(const std::vector<utils::UUID>& replica_ids) {
@@ -1054,24 +1536,18 @@ storage_proxy::mutate_streaming_mutation(const schema_ptr& s, utils::UUID plan_i
 }
 
 
-/**
- * Helper for create_write_response_handler, shared across mutate/mutate_atomically.
- * Both methods do roughly the same thing, with the latter intermixing batch log ops
- * in the logic.
- * Since ordering is (maybe?) significant, we need to carry some info across from here
- * to the hint method below (dead nodes).
- */
 storage_proxy::response_id_type
-storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
-    auto keyspace_name = m.schema()->ks_name();
+storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
+        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
+    auto keyspace_name = s->ks_name();
     keyspace& ks = _db.local().find_keyspace(keyspace_name);
     auto& rs = ks.get_replication_strategy();
-    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
+    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(token);
     std::vector<gms::inet_address> pending_endpoints =
-        get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), keyspace_name);
+        get_local_storage_service().get_token_metadata().pending_endpoints_for(token, keyspace_name);
 
-    slogger.trace("creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints, pending_endpoints);
-    tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints ,pending_endpoints);
+    slogger.trace("creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints, pending_endpoints);
+    tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints ,pending_endpoints);
 
     // Check if this node, which is serving as a coordinator for
     // the mutation, is also a replica for the partition being
@@ -1106,15 +1582,29 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::vector<gms::inet_address> dead_endpoints;
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
-    std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
-            std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper()));
+    std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()),
+            std::back_inserter(dead_endpoints), std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper()));
 
     slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     tracing::trace(tr_state, "Creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
 
     db::assure_sufficient_live_nodes(cl, ks, live_endpoints, pending_endpoints);
 
-    return create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), std::move(live_endpoints), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), _stats, std::move(permit));
+    return create_write_response_handler(ks, cl, type, std::move(mh), std::move(live_endpoints), pending_endpoints,
+            std::move(dead_endpoints), std::move(tr_state), _stats, std::move(permit));
+}
+
+/**
+ * Helper for create_write_response_handler, shared across mutate/mutate_atomically.
+ * Both methods do roughly the same thing, with the latter intermixing batch log ops
+ * in the logic.
+ * Since ordering is (maybe?) significant, we need to carry some info across from here
+ * to the hint method below (dead nodes).
+ */
+storage_proxy::response_id_type
+storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
+    return create_write_response_handler_helper(m.schema(), m.token(), std::make_unique<shared_mutation>(m), cl, type, tr_state,
+            std::move(permit));
 }
 
 storage_proxy::response_id_type
@@ -1130,6 +1620,30 @@ storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_
     keyspace& ks = _db.local().find_keyspace(keyspace_name);
 
     return create_write_response_handler(ks, cl, type, std::move(mh), std::move(endpoints), std::vector<gms::inet_address>(), std::vector<gms::inet_address>(), std::move(tr_state), _stats, std::move(permit));
+}
+
+storage_proxy::response_id_type
+storage_proxy::create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token>& meta,
+        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
+    auto& [commit, s, t] = meta;
+
+    return create_write_response_handler_helper(s, t, std::make_unique<cas_mutation>(std::move(commit), s), cl,
+            db::write_type::CAS, tr_state, std::move(permit));
+}
+
+storage_proxy::response_id_type
+storage_proxy::create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>& meta,
+        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
+    auto& [commit, s, token, endpoints] = meta;
+
+    slogger.trace("creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
+    tracing::trace(tr_state, "Creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
+
+    auto keyspace_name = s->ks_name();
+    keyspace& ks = _db.local().find_keyspace(keyspace_name);
+
+    return create_write_response_handler(ks, cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s), std::move(endpoints),
+                    std::vector<gms::inet_address>(), std::vector<gms::inet_address>(), std::move(tr_state), _stats, std::move(permit));
 }
 
 void
@@ -1316,6 +1830,54 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
         return f.handle_exception(std::move(handle_error));
     });
 }
+
+storage_proxy::paxos_participants
+storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &token, db::consistency_level cl_for_paxos) {
+    keyspace& ks = _db.local().find_keyspace(ks_name);
+    locator::abstract_replication_strategy& rs = ks.get_replication_strategy();
+    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(token);
+    std::vector<gms::inet_address> pending_endpoints =
+        get_local_storage_service().get_token_metadata().pending_endpoints_for(token, ks_name);
+
+    if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
+        auto itend = boost::range::remove_if(natural_endpoints, std::not1(std::cref(db::is_local)));
+        natural_endpoints.erase(itend, natural_endpoints.end());
+        itend = boost::range::remove_if(pending_endpoints, std::not1(std::cref(db::is_local)));
+        pending_endpoints.erase(itend, pending_endpoints.end());
+    }
+
+    // filter out natural_endpoints from pending_endpoints if the latter is not yet updated during node join
+    // should never happen, but better to be safe
+    auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
+        return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
+    });
+    pending_endpoints.erase(itend, pending_endpoints.end());
+
+    size_t participants = pending_endpoints.size() + natural_endpoints.size();
+    size_t required_participants = db::quorum_for(ks) + pending_endpoints.size();
+
+    std::vector<gms::inet_address> live_endpoints;
+    live_endpoints.reserve(participants);
+
+    boost::copy(boost::range::join(natural_endpoints, pending_endpoints) |
+            boost::adaptors::filtered(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())), std::back_inserter(live_endpoints));
+
+    if (live_endpoints.size() < required_participants) {
+        throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
+    }
+
+    // We cannot allow CAS operations with 2 or more pending endpoints, see #8346.
+    // Note that we fake an impossible number of required nodes in the unavailable exception
+    // to nail home the point that it's an impossible operation no matter how many nodes are live.
+    if (pending_endpoints.size() > 1) {
+        throw exceptions::unavailable_exception(fmt::format(
+                "Cannot perform LWT operation as there is more than one ({}) pending range movement", pending_endpoints.size()),
+                cl_for_paxos, participants + 1, live_endpoints.size());
+    }
+
+    return paxos_participants{std::move(live_endpoints), required_participants};
+}
+
 
 /**
  * Use this method to have these Mutations applied
@@ -1628,10 +2190,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto my_address = utils::fb_utilities::get_broadcast_address();
 
     // lambda for applying mutation locally
-    auto lmutate = [handler_ptr, response_id, this, my_address, timeout] (lw_shared_ptr<const frozen_mutation> m) mutable {
-        tracing::trace(handler_ptr->get_trace_state(), "Executing a mutation locally");
-        auto s = handler_ptr->get_schema();
-        return mutate_locally(std::move(s), *m, timeout).then([response_id, this, my_address, m, h = std::move(handler_ptr), p = shared_from_this()] {
+    auto lmutate = [handler_ptr, response_id, this, my_address, timeout] () mutable {
+        return handler_ptr->apply_locally(timeout, handler_ptr->get_trace_state())
+                .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
             got_response(response_id, my_address, get_view_update_backlog());
@@ -1639,16 +2200,12 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     };
 
     // lambda for applying mutation remotely
-    auto rmutate = [this, handler_ptr, timeout, response_id, my_address, &stats] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward, const frozen_mutation& m) {
-        auto& ms = netw::get_local_messaging_service();
-        auto msize = m.representation().size();
+    auto rmutate = [this, handler_ptr, timeout, response_id, my_address, &stats] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward) {
+        auto msize = handler_ptr->get_mutation_size(); // can overestimate for repair writes
         stats.queued_write_bytes += msize;
 
-        auto& tr_state = handler_ptr->get_trace_state();
-        tracing::trace(tr_state, "Sending a mutation to /{}", coordinator);
-
-        return ms.send_mutation(netw::messaging_service::msg_addr{coordinator, 0}, timeout, m,
-                std::move(forward), my_address, engine().cpu_id(), response_id, tracing::make_trace_info(tr_state)).finally([this, p = shared_from_this(), h = std::move(handler_ptr), msize, &stats] {
+        return handler_ptr->apply_remotely(coordinator, std::move(forward), response_id, timeout, handler_ptr->get_trace_state())
+                .finally([this, p = shared_from_this(), h = std::move(handler_ptr), msize, &stats] {
             stats.queued_write_bytes -= msize;
             unthrottle();
         });
@@ -1665,9 +2222,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         future<> f = make_ready_future<>();
 
 
-        lw_shared_ptr<const frozen_mutation> m = handler.get_mutation_for(coordinator);
-
-        if (!m || (handler.is_counter() && coordinator == my_address)) {
+        if (handler.is_counter() && coordinator == my_address) {
             got_response(response_id, coordinator, std::nullopt);
         } else {
             if (!handler.read_repair_write()) {
@@ -1677,9 +2232,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             }
 
             if (coordinator == my_address) {
-                f = futurize<void>::apply(lmutate, std::move(m));
+                f = futurize_apply(lmutate);
             } else {
-                f = futurize<void>::apply(rmutate, coordinator, std::move(forward), *m);
+                f = futurize_apply(rmutate, coordinator, std::move(forward));
             }
         }
 
@@ -1710,11 +2265,7 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
     if (hints_enabled(type)) {
         db::hints::manager& hints_manager = hints_manager_for(type);
         return boost::count_if(targets, [this, &mh, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
-            auto m = mh->get_mutation_for(target);
-            if (!m) {
-                return 0;
-            }
-            return hints_manager.store_hint(target, mh->schema(), std::move(m), tr_state);
+            return mh->store_hint(hints_manager, target, tr_state);
         });
     } else {
         return 0;
@@ -3248,36 +3799,84 @@ storage_proxy::do_query(schema_ptr s,
             (slice.default_row_ranges().empty() && !slice.get_specific_ranges())) {
         return make_empty();
     }
-    utils::latency_counter lc;
-    lc.start();
-    auto p = shared_from_this();
 
-    if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
-        try {
-            return query_singular(cmd,
-                    std::move(partition_ranges),
-                    cl,
-                    std::move(query_options)).finally([lc, p] () mutable {
-                p->_stats.read.mark(lc.stop().latency());
-                if (lc.is_start()) {
-                    p->_stats.estimated_read.add(lc.latency(), p->_stats.read.hist.count);
-                }
-            });
-        } catch (const no_such_column_family&) {
-            _stats.read.mark(lc.stop().latency());
-            return make_empty();
+    if (db::is_serial_consistency(cl)) {
+        return do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options));
+    } else {
+        utils::latency_counter lc;
+        lc.start();
+        auto p = shared_from_this();
+
+        if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
+            try {
+                return query_singular(cmd,
+                        std::move(partition_ranges),
+                        cl,
+                        std::move(query_options)).finally([lc, p] () mutable {
+                    p->_stats.read.mark(lc.stop().latency());
+                    if (lc.is_start()) {
+                        p->_stats.estimated_read.add(lc.latency(), p->_stats.read.hist.count);
+                    }
+                });
+            } catch (const no_such_column_family&) {
+                _stats.read.mark(lc.stop().latency());
+                return make_empty();
+            }
         }
+
+        return query_partition_key_range(cmd,
+                std::move(partition_ranges),
+                cl,
+                std::move(query_options)).finally([lc, p] () mutable {
+            p->_stats.range.mark(lc.stop().latency());
+            if (lc.is_start()) {
+                p->_stats.estimated_range.add(lc.latency(), p->_stats.range.hist.count);
+            }
+        });
+    }
+}
+
+future<storage_proxy::coordinator_query_result>
+storage_proxy::do_query_with_paxos(schema_ptr s,
+    lw_shared_ptr<query::read_command> cmd,
+    dht::partition_range_vector&& partition_ranges,
+    db::consistency_level cl,
+    storage_proxy::coordinator_query_options query_options) {
+    if (partition_ranges.size() > 1 || !query::is_single_partition(partition_ranges[0])) {
+        return make_exception_future<storage_proxy::coordinator_query_result>(
+                exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
     }
 
-    return query_partition_key_range(cmd,
-            std::move(partition_ranges),
-            cl,
-            std::move(query_options)).finally([lc, p] () mutable {
-        p->_stats.range.mark(lc.stop().latency());
-        if (lc.is_start()) {
-            p->_stats.estimated_range.add(lc.latency(), p->_stats.range.hist.count);
+    auto cl_for_learn = cl == db::consistency_level::LOCAL_SERIAL ? db::consistency_level::LOCAL_QUORUM :
+            db::consistency_level::QUORUM;
+
+    // All cas networking operations run with query provided timeout
+    db::timeout_clock::time_point timeout = query_options.timeout(*this);
+    // When to give up due to contention
+    db::timeout_clock::time_point cas_timeout = db::timeout_clock::now() +
+            std::chrono::milliseconds(_db.local().get_config().cas_contention_timeout_in_ms());
+
+    auto handler = seastar::make_shared<service::paxos_response_handler>(
+            shared_from_this(), query_options.trace_state, query_options.permit,
+            partition_ranges[0].start()->value().as_decorated_key(), s, cl, cl_for_learn, timeout, cas_timeout);
+
+    return handler->begin_and_repair_paxos(query_options.cstate, false)
+            .then_wrapped([this, s, cmd = std::move(cmd), partition_ranges = std::move(partition_ranges), cl_for_learn,
+                           query_options = std::move(query_options)] (future<service::paxos_response_handler::ballot_and_contention> f) mutable {
+        if (f.failed()) {
+            try {
+                f.get();
+                __builtin_unreachable();
+            } catch (mutation_write_timeout_exception& ex) {
+                return make_exception_future<storage_proxy::coordinator_query_result>(
+                        read_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, false));
+            } catch (mutation_write_failure_exception& ex) {
+                return make_exception_future<storage_proxy::coordinator_query_result>(
+                        read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false));
+            }
         }
-    });
+        return do_query(s, std::move(cmd), std::move(partition_ranges), cl_for_learn, std::move(query_options));
+    }).finally([handler] {});
 }
 
 std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) {
@@ -3403,7 +4002,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
 }
 
 bool storage_proxy::hints_enabled(db::write_type type) noexcept {
-    return bool(_hints_manager) || type == db::write_type::VIEW;
+    return (bool(_hints_manager) && type != db::write_type::CAS) || type == db::write_type::VIEW;
 }
 
 db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
@@ -3473,12 +4072,15 @@ void storage_proxy::init_messaging_service() {
             });
         });
     });
-    ms.register_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
 
-        if (trace_info && *trace_info) {
-            tracing::trace_info& tr_info = **trace_info;
+    static auto handle_write = [] (netw::messaging_service::msg_addr src_addr, rpc::opt_time_point t,
+                      utils::UUID schema_version, auto in, std::vector<gms::inet_address> forward, gms::inet_address reply_to,
+                      unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
+                      auto&& apply_fn, auto&& forward_fn) {
+        tracing::trace_state_ptr trace_state_ptr;
+
+        if (trace_info) {
+            tracing::trace_info& tr_info = *trace_info;
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(tr_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
@@ -3492,16 +4094,20 @@ void storage_proxy::init_messaging_service() {
             timeout = *t;
         }
 
-        return do_with(std::move(in), get_local_shared_storage_proxy(), size_t(0),
-                [src_addr = std::move(src_addr), &cinfo, forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout] (const frozen_mutation& m, shared_ptr<storage_proxy>& p, size_t& errors) mutable {
+        return do_with(std::move(in), get_local_shared_storage_proxy(), size_t(0), [src_addr = std::move(src_addr),
+                       forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout,
+                       schema_version, apply_fn = std::move(apply_fn), forward_fn = std::move(forward_fn)]
+                       (const auto& m, shared_ptr<storage_proxy>& p, size_t& errors) mutable {
             ++p->_stats.received_mutations;
             p->_stats.forwarded_mutations += forward.size();
             return when_all(
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize<void>::apply([timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr)] () mutable {
+                futurize<void>::apply([timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr), schema_version,
+                                      apply_fn = std::move(apply_fn), trace_state_ptr] () mutable {
                     // FIXME: get_schema_for_write() doesn't timeout
-                    return get_schema_for_write(m.schema_version(), netw::messaging_service::msg_addr{reply_to, shard}).then([&m, &p, timeout] (schema_ptr s) {
-                        return p->mutate_locally(std::move(s), m, timeout);
+                    return get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard})
+                                         .then([&m, &p, timeout, apply_fn = std::move(apply_fn), trace_state_ptr] (schema_ptr s) mutable {
+                        return apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
                     });
                 }).then([&p, reply_to, shard, response_id, trace_state_ptr] () {
                     auto& ms = netw::get_local_messaging_service();
@@ -3532,10 +4138,12 @@ void storage_proxy::init_messaging_service() {
                     slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
                     errors++;
                 }),
-                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr, timeout, &errors] (gms::inet_address forward) {
-                    auto& ms = netw::get_local_messaging_service();
+                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr,
+                                  timeout, &errors, forward_fn = std::move(forward_fn)] (gms::inet_address forward) {
                     tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                    return ms.send_mutation(netw::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id, tracing::make_trace_info(trace_state_ptr)).then_wrapped([&p, &errors] (future<> f) {
+                    return forward_fn(netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
+                                      tracing::make_trace_info(trace_state_ptr))
+                            .then_wrapped([&p, &errors] (future<> f) {
                         if (f.failed()) {
                             ++p->_stats.forwarding_errors;
                             errors++;
@@ -3566,6 +4174,45 @@ void storage_proxy::init_messaging_service() {
                 });
             });
         });
+    };
+
+    ms.register_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+
+        utils::UUID schema_version = in.schema_version();
+        return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
+                trace_info ? *trace_info : std::nullopt,
+                /* apply_fn */ [] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr, schema_ptr s, const frozen_mutation& m,
+                        clock_type::time_point timeout) {
+                    return p->mutate_locally(std::move(s), m, timeout);
+                },
+                /* forward_fn */ [] (netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
+                        gms::inet_address reply_to, unsigned shard, response_id_type response_id,
+                        std::optional<tracing::trace_info> trace_info) {
+                    auto& ms = netw::get_local_messaging_service();
+                    return ms.send_mutation(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
+                });
+    });
+    ms.register_paxos_learn([] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
+            std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard,
+            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+
+        utils::UUID schema_version = decision.update.schema_version();
+        return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, shard,
+                response_id, trace_info,
+               /* apply_fn */ [] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
+                       const paxos::proposal& decision, clock_type::time_point timeout) {
+                     return paxos::paxos_state::learn(std::move(s), decision, timeout, tr_state);
+              },
+              /* forward_fn */ [] (netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
+                      gms::inet_address reply_to, unsigned shard, response_id_type response_id,
+                      std::optional<tracing::trace_info> trace_info) {
+                    auto& ms = netw::get_local_messaging_service();
+                    return ms.send_paxos_learn(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
+              });
     });
     ms.register_mutation_done([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -3684,6 +4331,36 @@ void storage_proxy::init_messaging_service() {
             return local_schema_registry().get_frozen(v);
         });
     });
+
+    // Register PAXOS verb handlers
+    ms.register_paxos_prepare([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, utils::UUID schema_version,
+            partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        tracing::trace_state_ptr tr_state;
+        if (trace_info) {
+            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(tr_state);
+        }
+
+        return get_schema_for_read(schema_version, src_addr).then([tr_state = std::move(tr_state),
+                                                              key = std::move(key), ballot, timeout] (schema_ptr schema) {
+            return paxos::paxos_state::prepare(tr_state, std::move(schema), std::move(key), ballot, *timeout);
+        });
+    });
+    ms.register_paxos_accept([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
+            std::optional<tracing::trace_info> trace_info) {
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        tracing::trace_state_ptr tr_state;
+        if (trace_info) {
+            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(tr_state);
+        }
+
+        return get_schema_for_read(proposal.update.schema_version(), src_addr).then([tr_state = std::move(tr_state),
+                                                              proposal = std::move(proposal), timeout] (schema_ptr schema) {
+            return paxos::paxos_state::accept(tr_state, std::move(schema), std::move(proposal), *timeout);
+        });
+    });
 }
 
 void storage_proxy::uninit_messaging_service() {
@@ -3695,6 +4372,9 @@ void storage_proxy::uninit_messaging_service() {
     ms.unregister_read_mutation_data();
     ms.unregister_read_digest();
     ms.unregister_truncate();
+    ms.unregister_paxos_prepare();
+    ms.unregister_paxos_accept();
+    ms.unregister_paxos_learn();
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
