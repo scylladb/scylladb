@@ -2888,10 +2888,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
         assertions.push_back([val = std::move(set_val)] (const column_definition& def,
                                                          const atomic_cell_or_collection* cell) {
             BOOST_REQUIRE(def.is_multi_cell());
-            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
             int idx = 0;
-            cell->as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
-                auto m_view = ctype->deserialize_mutation_form(c_bv);
+            cell->as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
                 for (auto&& entry : m_view.cells) {
                     auto cmp = compare_unsigned(int32_type->decompose(int32_t(val[idx])), entry.first);
                     if (cmp != 0) {
@@ -2908,10 +2906,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
         assertions.push_back([val = std::move(list_val)] (const column_definition& def,
                                                           const atomic_cell_or_collection* cell) {
             BOOST_REQUIRE(def.is_multi_cell());
-            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
             int idx = 0;
-            cell->as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
-                auto m_view = ctype->deserialize_mutation_form(c_bv);
+            cell->as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
                 for (auto&& entry : m_view.cells) {
                     auto cmp = compare_unsigned(utf8_type->decompose(val[idx]), entry.second.value().linearize());
                     if (cmp != 0) {
@@ -2928,10 +2924,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
         assertions.push_back([val = std::move(map_val)] (const column_definition& def,
                                                          const atomic_cell_or_collection* cell) {
             BOOST_REQUIRE(def.is_multi_cell());
-            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
             int idx = 0;
-            cell->as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
-                auto m_view = ctype->deserialize_mutation_form(c_bv);
+            cell->as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
                 for (auto&& entry : m_view.cells) {
                     auto cmp1 = compare_unsigned(int32_type->decompose(int32_t(val[idx].first)), entry.first);
                     auto cmp2 = compare_unsigned(utf8_type->decompose(val[idx].second), entry.second.value().linearize());
@@ -3538,12 +3532,12 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
     mutation mut{s, key};
 
     mut.partition().apply_insert(*s, clustering_key::make_empty(), write_timestamp);
-    set_type_impl::mutation set_values;
+    collection_mutation_description set_values;
     set_values.tomb = tombstone {write_timestamp - 1, tp};
     set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
     set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
 
-    mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_of_ints_type->serialize_mutation_form(set_values));
+    mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_values.serialize(*set_of_ints_type));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
@@ -3568,10 +3562,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
 
-    set_type_impl::mutation set_values;
+    collection_mutation_description set_values;
     set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
 
-    mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_of_ints_type->serialize_mutation_form(set_values));
+    mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_values.serialize(*set_of_ints_type));
     mt->apply(mut);
 
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
@@ -4017,7 +4011,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     // CREATE TYPE ut (my_int int, my_boolean boolean, my_text text);
     auto ut = user_type_impl::get_instance("sst3", to_bytes("ut"),
             {to_bytes("my_int"), to_bytes("my_boolean"), to_bytes("my_text")},
-            {int32_type, boolean_type, utf8_type});
+            {int32_type, boolean_type, utf8_type}, false);
 
     sstring table_name = "user_defined_type_table";
     // CREATE TABLE user_defined_type_table (pk int, rc frozen <ut>, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
@@ -4955,11 +4949,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "rc1", data_value{2}, write_timestamp);
 
-    set_type_impl::mutation set_values;
+    collection_mutation_description set_values;
     set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
     set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
     set_values.cells.emplace_back(int32_type->decompose(4), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-    mut.set_clustered_cell(ckey, *s->get_column_definition("rc4"), set_of_ints_type->serialize_mutation_form(set_values));
+    mut.set_clustered_cell(ckey, *s->get_column_definition("rc4"), set_values.serialize(*set_of_ints_type));
 
     mut.set_cell(ckey, "rc5", data_value{5}, write_timestamp);
     mt->apply(mut);
@@ -4997,11 +4991,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_col
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_static_cell("st1", data_value{2}, write_timestamp);
 
-    set_type_impl::mutation set_values;
+    collection_mutation_description set_values;
     set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
     set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
     set_values.cells.emplace_back(int32_type->decompose(4), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-    mut.set_static_cell(*s->get_column_definition("st4"), set_of_ints_type->serialize_mutation_form(set_values));
+    mut.set_static_cell(*s->get_column_definition("st4"), set_values.serialize(*set_of_ints_type));
 
     mut.set_static_cell("st5", data_value{5}, write_timestamp);
     mt->apply(mut);

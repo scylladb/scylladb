@@ -123,6 +123,8 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
     }
 
     shared_ptr<column_specification> element_spec, value_spec;
+    // TODO (kbraun): after LWT is implemented, generalize this code to UDTs and extend the CQL grammar.
+    assert(receiver.type->is_collection());
     auto ctype = static_cast<const collection_type_impl*>(receiver.type.get());
     if (ctype->get_kind() == abstract_type::kind::list) {
         element_spec = lists::index_spec_of(receiver.column_specification);

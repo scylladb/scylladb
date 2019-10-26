@@ -221,30 +221,6 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);
 };
 
-class collection_mutation_view;
-
-// Represents a mutation of a collection.  Actual format is determined by collection type,
-// and is:
-//   set:  list of atomic_cell
-//   map:  list of pair<atomic_cell, bytes> (for key/value)
-//   list: tbd, probably ugly
-class collection_mutation {
-public:
-    using imr_object_type =  imr::utils::object<data::cell::structure>;
-    imr_object_type _data;
-
-    collection_mutation() {}
-    collection_mutation(const collection_type_impl&, collection_mutation_view v);
-    collection_mutation(const collection_type_impl&, bytes_view bv);
-    operator collection_mutation_view() const;
-};
-
-
-class collection_mutation_view {
-public:
-    atomic_cell_value_view data;
-};
-
 class column_definition;
 
 int compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right);

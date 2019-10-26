@@ -581,6 +581,7 @@ deleteSelection returns [std::vector<::shared_ptr<cql3::operation::raw_deletion>
 deleteOp returns [::shared_ptr<cql3::operation::raw_deletion> op]
     : c=cident                { $op = ::make_shared<cql3::operation::column_deletion>(std::move(c)); }
     | c=cident '[' t=term ']' { $op = ::make_shared<cql3::operation::element_deletion>(std::move(c), std::move(t)); }
+    | c=cident '.' field=ident { $op = ::make_shared<cql3::operation::field_deletion>(std::move(c), std::move(field)); }
     ;
 
 usingClauseDelete[::shared_ptr<cql3::attributes::raw> attrs]
@@ -1396,8 +1397,9 @@ columnOperation[operations_type& operations]
 
 columnOperationDifferentiator[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     : '=' normalColumnOperation[operations, key]
-    | '[' k=term ']' specializedColumnOperation[operations, key, k, false]
-    | '[' K_SCYLLA_TIMEUUID_LIST_INDEX '(' k=term ')' ']' specializedColumnOperation[operations, key, k, true]
+    | '[' k=term ']' collectionColumnOperation[operations, key, k, false]
+    | '.' field=ident udtColumnOperation[operations, key, field]
+    | '[' K_SCYLLA_TIMEUUID_LIST_INDEX '(' k=term ')' ']' collectionColumnOperation[operations, key, k, true]
     ;
 
 normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
@@ -1440,15 +1442,22 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
       }
     ;
 
-specializedColumnOperation[std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>,
-                                                 shared_ptr<cql3::operation::raw_update>>>& operations,
-                           shared_ptr<cql3::column_identifier::raw> key,
-                           shared_ptr<cql3::term::raw> k,
-                           bool by_uuid]
-
+collectionColumnOperation[operations_type& operations,
+                          shared_ptr<cql3::column_identifier::raw> key,
+                          shared_ptr<cql3::term::raw> k,
+                          bool by_uuid]
     : '=' t=term
       {
           add_raw_update(operations, key, make_shared<cql3::operation::set_element>(k, t, by_uuid));
+      }
+    ;
+
+udtColumnOperation[operations_type& operations,
+                   shared_ptr<cql3::column_identifier::raw> key,
+                   shared_ptr<cql3::column_identifier> field]
+    : '=' t=term
+      {
+          add_raw_update(operations, std::move(key), make_shared<cql3::operation::set_field>(std::move(field), std::move(t)));
       }
     ;
 

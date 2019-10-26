@@ -77,7 +77,7 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
         });
     // user
     _generators.emplace_back(
-        [this] (std::mt19937& engine, is_multi_cell) mutable {
+        [this] (std::mt19937& engine, is_multi_cell multi_cell) mutable {
             std::uniform_int_distribution<size_t> count_dist{2, 4};
             const auto count = count_dist(engine);
 
@@ -89,7 +89,7 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
             }
 
             return user_type_impl::get_instance(_spec.keyspace_name(), to_bytes(_spec.udt_name(engine)), std::move(field_names),
-                    std::move(field_types));
+                    std::move(field_types), bool(multi_cell));
         });
     // list
     _generators.emplace_back(
@@ -210,6 +210,17 @@ std::unique_ptr<random_schema_specification> make_random_schema_specification(
 
 namespace {
 
+// Picks a random subset of size `m` from the set {0, ..., `n` - 1}.
+std::vector<unsigned> random_subset(unsigned n, unsigned m, std::mt19937& engine) {
+    assert(m <= n);
+
+    std::vector<unsigned> the_set(n);
+    std::iota(the_set.begin(), the_set.end(), 0u);
+    std::shuffle(the_set.begin(), the_set.end(), engine);
+
+    return {the_set.begin(), the_set.begin() + m};
+}
+
 boost::multiprecision::cpp_int generate_multiprecision_integer_value(std::mt19937& engine, size_t max_size_in_bytes) {
     using boost::multiprecision::cpp_int;
 
@@ -261,6 +272,24 @@ std::vector<data_value> generate_frozen_tuple_values(std::mt19937& engine, value
     }
 
     return values;
+}
+
+data_model::mutation_description::collection generate_user_value(std::mt19937& engine, const user_type_impl& type,
+        value_generator& val_gen) {
+    using md = data_model::mutation_description;
+
+    // Non-null fields.
+    auto fields_num = std::uniform_int_distribution<size_t>(1, type.size())(engine);
+    auto field_idxs = random_subset(type.size(), fields_num, engine);
+    std::sort(field_idxs.begin(), field_idxs.end());
+
+    md::collection collection;
+    for (auto i: field_idxs) {
+        collection.elements.push_back({serialize_field_index(i),
+                val_gen.generate_atomic_value(engine, *type.type(i), value_generator::no_size_in_bytes_limit).serialize()});
+    }
+
+    return collection;
 }
 
 data_model::mutation_description::collection generate_collection(std::mt19937& engine, const abstract_type& key_type,
@@ -648,9 +677,15 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
     }
 
     if (auto maybe_user_type = dynamic_cast<const user_type_impl*>(&type)) {
-        return [this, maybe_user_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-            return generate_frozen_user_value(engine, *maybe_user_type, *this, no_size_in_bytes_limit).serialize();
-        };
+        if (maybe_user_type->is_multi_cell()) {
+            return [this, maybe_user_type] (std::mt19937& engine) -> data_model::mutation_description::value {
+                return generate_user_value(engine, *maybe_user_type, *this);
+            };
+        } else {
+            return [this, maybe_user_type] (std::mt19937& engine) -> data_model::mutation_description::value {
+                return generate_frozen_user_value(engine, *maybe_user_type, *this, no_size_in_bytes_limit).serialize();
+            };
+        }
     }
 
     if (auto maybe_tuple_type = dynamic_cast<const tuple_type_impl*>(&type)) {

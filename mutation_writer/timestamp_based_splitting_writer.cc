@@ -219,12 +219,10 @@ std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_ba
     if (cdef.is_atomic()) {
         return _classifier(cell.as_atomic_cell(cdef).timestamp());
     }
-    if (cdef.type->is_collection()) {
+    if (cdef.type->is_collection() || cdef.type->is_user_type()) {
         std::optional<bucket_id> bucket;
         bool mismatch = false;
-        const auto& ctype = *static_cast<const collection_type_impl*>(cdef.type.get());
-        cell.as_collection_mutation().data.with_linearized([&, this] (bytes_view bv) {
-            auto mv = ctype.deserialize_mutation_form(bv);
+        cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
             if (mv.tomb) {
                 bucket = _classifier(mv.tomb.timestamp);
             }
@@ -307,11 +305,9 @@ std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_ba
 small_flat_map<timestamp_based_splitting_mutation_writer::bucket_id, atomic_cell_or_collection, 4>
 timestamp_based_splitting_mutation_writer::split_collection(atomic_cell_or_collection&& collection, const column_definition& cdef) {
     small_flat_map<bucket_id, atomic_cell_or_collection, 4> pieces_by_bucket;
-    const auto& collection_type = *static_cast<const collection_type_impl*>(cdef.type.get());
 
-    collection.as_collection_mutation().data.with_linearized([&, this] (bytes_view bv) {
-        auto original_mv = collection_type.deserialize_mutation_form(bv);
-        small_flat_map<bucket_id, collection_type_impl::mutation_view, 4> mutations_by_bucket;
+    collection.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description original_mv) {
+        small_flat_map<bucket_id, collection_mutation_view_description, 4> mutations_by_bucket;
         for (auto&& c : original_mv.cells) {
             mutations_by_bucket[_classifier(c.second.timestamp())].cells.push_back(c);
         }
@@ -320,7 +316,7 @@ timestamp_based_splitting_mutation_writer::split_collection(atomic_cell_or_colle
         }
 
         for (auto&& [bucket, bucket_mv] : mutations_by_bucket) {
-            pieces_by_bucket.emplace(bucket, atomic_cell_or_collection{collection_type.serialize_mutation_form(bucket_mv)});
+            pieces_by_bucket.emplace(bucket, bucket_mv.serialize(*cdef.type));
         }
     });
 
@@ -335,7 +331,7 @@ timestamp_based_splitting_mutation_writer::split_row(column_kind kind, row&& r) 
         const auto& cdef = _schema->column_at(kind, id);
         if (cdef.type->is_atomic()) {
             rows_by_bucket[_classifier(cell.as_atomic_cell(cdef).timestamp())].append_cell(id, std::move(cell));
-        } else if (cdef.type->is_collection()) {
+        } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
             for (auto&& [bucket, cell_piece] : split_collection(std::move(cell), cdef)) {
                 rows_by_bucket[bucket].append_cell(id, std::move(cell_piece));
             }

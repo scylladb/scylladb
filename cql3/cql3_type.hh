@@ -60,19 +60,24 @@ public:
     bool is_collection() const { return _type->is_collection(); }
     bool is_counter() const { return _type->is_counter(); }
     bool is_native() const { return _type->is_native(); }
+    bool is_user_type() const { return _type->is_user_type(); }
     data_type get_type() const { return _type; }
     const sstring& to_string() const { return _type->cql3_type_name(); }
 
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {
+        virtual sstring to_string() const = 0;
+    protected:
+        bool _frozen = false;
     public:
         virtual ~raw() {}
-        bool _frozen = false;
         virtual bool supports_freezing() const = 0;
         virtual bool is_collection() const;
         virtual bool is_counter() const;
         virtual bool is_duration() const;
+        virtual bool is_user_type() const;
+        bool is_frozen() const;
         virtual bool references_user_type(const sstring&) const;
         virtual std::optional<sstring> keyspace() const;
         virtual void freeze();
@@ -85,7 +90,6 @@ public:
         static shared_ptr<raw> set(shared_ptr<raw> t);
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
         static shared_ptr<raw> frozen(shared_ptr<raw> t);
-        virtual sstring to_string() const = 0;
         friend std::ostream& operator<<(std::ostream& os, const raw& r);
     };
 

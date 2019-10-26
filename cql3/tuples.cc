@@ -81,26 +81,19 @@ tuples::literal::prepare(database& db, const sstring& keyspace, const std::vecto
 }
 
 tuples::in_value
-tuples::in_value::from_serialized(const fragmented_temporary_buffer::view& value_view, list_type type, const query_options& options) {
+tuples::in_value::from_serialized(const fragmented_temporary_buffer::view& value_view, const list_type_impl& type, const query_options& options) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but the deserialization does the validation (so we're fine).
       return with_linearized(value_view, [&] (bytes_view value) {
-        auto l = value_cast<list_type_impl::native_type>(type->deserialize(value, options.get_cql_serialization_format()));
-        auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type->get_elements_type());
+        auto l = value_cast<list_type_impl::native_type>(type.deserialize(value, options.get_cql_serialization_format()));
+        auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type.get_elements_type());
         assert(ttype);
 
         std::vector<std::vector<bytes_opt>> elements;
         elements.reserve(l.size());
-        for (auto&& element : l) {
-            auto tuple_buff = ttype->decompose(element);
-            auto tuple = ttype->split(tuple_buff);
-            std::vector<bytes_opt> elems;
-            elems.reserve(tuple.size());
-            for (auto&& e : tuple) {
-                elems.emplace_back(to_bytes_opt(e));
-            }
-            elements.emplace_back(std::move(elems));
+        for (auto&& e : l) {
+            elements.emplace_back(to_bytes_opt_vec(ttype->split(ttype->decompose(e))));
         }
         return tuples::in_value(elements);
       });
@@ -146,21 +139,21 @@ shared_ptr<terminal> tuples::in_marker::bind(const query_options& options) {
     } else if (value.is_unset_value()) {
         throw exceptions::invalid_request_exception(format("Invalid unset value for tuple {}", _receiver->name->text()));
     } else {
-        auto as_list_type = static_pointer_cast<const list_type_impl>(_receiver->type);
-        auto as_tuple_type = static_pointer_cast<const tuple_type_impl>(as_list_type->get_elements_type());
+        auto& type = static_cast<const list_type_impl&>(*_receiver->type);
+        auto& elem_type = static_cast<const tuple_type_impl&>(*type.get_elements_type());
         try {
             with_linearized(*value, [&] (bytes_view v) {
-                as_list_type->validate(v, options.get_cql_serialization_format());
-                auto l = value_cast<list_type_impl::native_type>(as_list_type->deserialize(v, options.get_cql_serialization_format()));
+                type.validate(v, options.get_cql_serialization_format());
+                auto l = value_cast<list_type_impl::native_type>(type.deserialize(v, options.get_cql_serialization_format()));
 
                 for (auto&& element : l) {
-                    as_tuple_type->validate(as_tuple_type->decompose(element), options.get_cql_serialization_format());
+                    elem_type.validate(elem_type.decompose(element), options.get_cql_serialization_format());
                 }
             });
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
-        return make_shared(tuples::in_value::from_serialized(*value, as_list_type, options));
+        return make_shared(tuples::in_value::from_serialized(*value, type, options));
     }
 }
 

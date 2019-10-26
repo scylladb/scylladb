@@ -21,6 +21,9 @@
 
 #pragma once
 
+#include "types/user.hh"
+#include "concrete_types.hh"
+
 #include "mutation_partition_view.hh"
 #include "mutation_partition.hh"
 #include "schema.hh"
@@ -35,8 +38,8 @@ class converting_mutation_partition_applier : public mutation_partition_visitor 
     const column_mapping& _visited_column_mapping;
     deletable_row* _current_row;
 private:
-    static bool is_compatible(const column_definition& new_def, const data_type& old_type, column_kind kind) {
-        return ::is_compatible(new_def.kind, kind) && new_def.type->is_value_compatible_with(*old_type);
+    static bool is_compatible(const column_definition& new_def, const abstract_type& old_type, column_kind kind) {
+        return ::is_compatible(new_def.kind, kind) && new_def.type->is_value_compatible_with(old_type);
     }
     static atomic_cell upgrade_cell(const abstract_type& new_type, const abstract_type& old_type, atomic_cell_view cell,
                                     atomic_cell::collection_member cm = atomic_cell::collection_member::no) {
@@ -49,32 +52,59 @@ private:
             return atomic_cell(new_type, cell);
         }
     }
-    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell) {
         if (!is_compatible(new_def, old_type, kind) || cell.timestamp() <= new_def.dropped_at()) {
             return;
         }
-        dst.apply(new_def, upgrade_cell(*new_def.type, *old_type, cell));
+        dst.apply(new_def, upgrade_cell(*new_def.type, old_type, cell));
     }
-    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, collection_mutation_view cell) {
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell) {
         if (!is_compatible(new_def, old_type, kind)) {
             return;
         }
-      cell.data.with_linearized([&] (bytes_view cell_bv) {
-        auto new_ctype = static_pointer_cast<const collection_type_impl>(new_def.type);
-        auto old_ctype = static_pointer_cast<const collection_type_impl>(old_type);
-        auto old_view = old_ctype->deserialize_mutation_form(cell_bv);
 
-        collection_type_impl::mutation new_view;
+      cell.with_deserialized(old_type, [&] (collection_mutation_view_description old_view) {
+        collection_mutation_description new_view;
         if (old_view.tomb.timestamp > new_def.dropped_at()) {
             new_view.tomb = old_view.tomb;
         }
-        for (auto& c : old_view.cells) {
-            if (c.second.timestamp() > new_def.dropped_at()) {
-                new_view.cells.emplace_back(c.first, upgrade_cell(*new_ctype->value_comparator(), *old_ctype->value_comparator(), c.second, atomic_cell::collection_member::yes));
+
+        visit(old_type, make_visitor(
+            [&] (const collection_type_impl& old_ctype) {
+                assert(new_def.type->is_collection()); // because is_compatible
+                auto& new_ctype = static_cast<const collection_type_impl&>(*new_def.type);
+
+                auto& new_value_type = *new_ctype.value_comparator();
+                auto& old_value_type = *old_ctype.value_comparator();
+
+                for (auto& c : old_view.cells) {
+                    if (c.second.timestamp() > new_def.dropped_at()) {
+                        new_view.cells.emplace_back(c.first, upgrade_cell(
+                                new_value_type, old_value_type, c.second, atomic_cell::collection_member::yes));
+                    }
+                }
+            },
+            [&] (const user_type_impl& old_utype) {
+                assert(new_def.type->is_user_type()); // because is_compatible
+                auto& new_utype = static_cast<const user_type_impl&>(*new_def.type);
+
+                for (auto& c : old_view.cells) {
+                    if (c.second.timestamp() > new_def.dropped_at()) {
+                        auto idx = deserialize_field_index(c.first);
+                        assert(idx < new_utype.size() && idx < old_utype.size());
+
+                        new_view.cells.emplace_back(c.first, upgrade_cell(
+                                *new_utype.type(idx), *old_utype.type(idx), c.second, atomic_cell::collection_member::yes));
+                    }
+                }
+            },
+            [&] (const abstract_type& o) {
+                throw std::runtime_error(format("not a multi-cell type: {}", o.name()));
             }
-        }
+        ));
+
         if (new_view.tomb || !new_view.cells.empty()) {
-            dst.apply(new_def, new_ctype->serialize_mutation_form(std::move(new_view)));
+            dst.apply(new_def, new_view.serialize(*new_def.type));
         }
       });
     }
@@ -100,7 +130,7 @@ public:
         const column_mapping_entry& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
-            accept_cell(_p._static_row.maybe_create(), column_kind::static_column, *def, col.type(), cell);
+            accept_cell(_p._static_row.maybe_create(), column_kind::static_column, *def, *col.type(), cell);
         }
     }
 
@@ -108,7 +138,7 @@ public:
         const column_mapping_entry& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
-            accept_cell(_p._static_row.maybe_create(), column_kind::static_column, *def, col.type(), collection);
+            accept_cell(_p._static_row.maybe_create(), column_kind::static_column, *def, *col.type(), collection);
         }
     }
 
@@ -131,7 +161,7 @@ public:
         const column_mapping_entry& col = _visited_column_mapping.regular_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
-            accept_cell(_current_row->cells(), column_kind::regular_column, *def, col.type(), cell);
+            accept_cell(_current_row->cells(), column_kind::regular_column, *def, *col.type(), cell);
         }
     }
 
@@ -139,7 +169,7 @@ public:
         const column_mapping_entry& col = _visited_column_mapping.regular_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
-            accept_cell(_current_row->cells(), column_kind::regular_column, *def, col.type(), collection);
+            accept_cell(_current_row->cells(), column_kind::regular_column, *def, *col.type(), collection);
         }
     }
 
@@ -147,9 +177,9 @@ public:
     // Cells must have monotonic names.
     static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell) {
         if (new_def.is_atomic()) {
-            accept_cell(dst, kind, new_def, old_def.type, cell.as_atomic_cell(old_def));
+            accept_cell(dst, kind, new_def, *old_def.type, cell.as_atomic_cell(old_def));
         } else {
-            accept_cell(dst, kind, new_def, old_def.type, cell.as_collection_mutation());
+            accept_cell(dst, kind, new_def, *old_def.type, cell.as_collection_mutation());
         }
     }
 };

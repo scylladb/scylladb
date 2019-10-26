@@ -124,24 +124,24 @@ lists::literal::to_string() const {
 }
 
 lists::value
-lists::value::from_serialized(const fragmented_temporary_buffer::view& val, list_type type, cql_serialization_format sf) {
+lists::value::from_serialized(const fragmented_temporary_buffer::view& val, const list_type_impl& type, cql_serialization_format sf) {
     return with_linearized(val, [&] (bytes_view v) {
         return from_serialized(v, type, sf);
     });
 }
 
 lists::value
-lists::value::from_serialized(bytes_view v, list_type type, cql_serialization_format sf) {
+lists::value::from_serialized(bytes_view v, const list_type_impl& type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol()?!
-        auto l = value_cast<list_type_impl::native_type>(type->deserialize(v, sf));
+        auto l = value_cast<list_type_impl::native_type>(type.deserialize(v, sf));
         std::vector<bytes_opt> elements;
         elements.reserve(l.size());
         for (auto&& element : l) {
             // elements can be null in lists that represent a set of IN values
-            elements.push_back(element.is_null() ? bytes_opt() : bytes_opt(type->get_elements_type()->decompose(element)));
+            elements.push_back(element.is_null() ? bytes_opt() : bytes_opt(type.get_elements_type()->decompose(element)));
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {
@@ -174,7 +174,7 @@ lists::value::equals(shared_ptr<list_type_impl> lt, const value& v) {
             [t = lt->get_elements_type()] (const bytes_opt& e1, const bytes_opt& e2) { return t->equal(*e1, *e2); });
 }
 
-std::vector<bytes_opt>
+const std::vector<bytes_opt>&
 lists::value::get_elements() {
     return _elements;
 }
@@ -227,7 +227,7 @@ lists::delayed_value::bind(const query_options& options) {
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
     const auto& value = options.get_value_at(_bind_index);
-    auto ltype = static_pointer_cast<const list_type_impl>(_receiver->type);
+    auto& ltype = static_cast<const list_type_impl&>(*_receiver->type);
     if (value.is_null()) {
         return nullptr;
     } else if (value.is_unset_value()) {
@@ -235,8 +235,8 @@ lists::marker::bind(const query_options& options) {
     } else {
         try {
             return with_linearized(*value, [&] (bytes_view v) {
-                ltype->validate(v, options.get_cql_serialization_format());
-                return make_shared(value::from_serialized(v, std::move(ltype), options.get_cql_serialization_format()));
+                ltype.validate(v, options.get_cql_serialization_format());
+                return make_shared(value::from_serialized(v, ltype, options.get_cql_serialization_format()));
             });
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(e.what());
@@ -270,12 +270,11 @@ lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const u
         return;
     }
     if (column.type->is_multi_cell()) {
-        // delete + append
-        collection_type_impl::mutation mut;
+        // Delete all cells first, then append new ones
+        collection_mutation_view_description mut;
         mut.tomb = params.make_tombstone_just_before();
-        auto ctype = static_pointer_cast<const list_type_impl>(column.type);
-        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
-        m.set_cell(prefix, column, std::move(col_mut));
+
+        m.set_cell(prefix, column, mut.serialize(*column.type));
     }
     do_append(value, m, prefix, column, params);
 }
@@ -315,16 +314,17 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
     }
-    auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
     auto&& existing_list = *existing_list_opt;
     // we verified that index is an int32_type
     if (idx < 0 || size_t(idx) >= existing_list.size()) {
         throw exceptions::invalid_request_exception(format("List index {:d} out of bound, list has size {:d}",
                 idx, existing_list.size()));
     }
+
+    auto ltype = static_cast<const list_type_impl*>(column.type.get());
     const data_value& eidx_dv = existing_list[idx].first;
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
-    list_type_impl::mutation mut;
+    collection_mutation_description mut;
     mut.cells.reserve(1);
     if (!value) {
         mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
@@ -332,8 +332,8 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         mut.cells.emplace_back(std::move(eidx),
                 params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
     }
-    auto smut = ltype->serialize_mutation_form(mut);
-    m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(smut)));
+
+    m.set_cell(prefix, column, mut.serialize(*ltype));
 }
 
 bool
@@ -353,15 +353,13 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
 
-    auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
+    auto ltype = static_cast<const list_type_impl*>(column.type.get());
 
-    list_type_impl::mutation mut;
+    collection_mutation_description mut;
     mut.cells.reserve(1);
     mut.cells.emplace_back(to_bytes(*index), params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
-    auto smut = ltype->serialize_mutation_form(mut);
-    m.set_cell(prefix, column,
-                    atomic_cell_or_collection::from_collection_mutation(
-                                    std::move(smut)));
+
+    m.set_cell(prefix, column, mut.serialize(*ltype));
 }
 
 void
@@ -381,7 +379,6 @@ lists::do_append(shared_ptr<term> value,
         const column_definition& column,
         const update_parameters& params) {
     auto&& list_value = dynamic_pointer_cast<lists::value>(value);
-    auto&& ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
     if (column.type->is_multi_cell()) {
         // If we append null, do nothing. Note that for Setter, we've
         // already removed the previous value so we're good here too
@@ -389,8 +386,10 @@ lists::do_append(shared_ptr<term> value,
             return;
         }
 
+        auto ltype = static_cast<const list_type_impl*>(column.type.get());
+
         auto&& to_add = list_value->_elements;
-        collection_type_impl::mutation appended;
+        collection_mutation_description appended;
         appended.cells.reserve(to_add.size());
         for (auto&& e : to_add) {
             auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
@@ -398,7 +397,7 @@ lists::do_append(shared_ptr<term> value,
             // FIXME: can e be empty?
             appended.cells.emplace_back(std::move(uuid), params.make_cell(*ltype->value_comparator(), *e, atomic_cell::collection_member::yes));
         }
-        m.set_cell(prefix, column, ltype->serialize_mutation_form(appended));
+        m.set_cell(prefix, column, appended.serialize(*ltype));
     } else {
         // for frozen lists, we're overwriting the whole cell value
         if (!value) {
@@ -422,11 +421,11 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
     assert(lvalue);
     auto time = precision_time::REFERENCE_TIME - (db_clock::now() - precision_time::REFERENCE_TIME);
 
-    collection_type_impl::mutation mut;
+    collection_mutation_description mut;
     mut.cells.reserve(lvalue->get_elements().size());
     // We reverse the order of insertion, so that the last element gets the lastest time
     // (lists are sorted by time)
-    auto&& ltype = static_cast<const list_type_impl*>(column.type.get());
+    auto ltype = static_cast<const list_type_impl*>(column.type.get());
     for (auto&& v : lvalue->_elements | boost::adaptors::reversed) {
         auto&& pt = precision_time::get_next(time);
         auto uuid = utils::UUID_gen::get_time_UUID_bytes(pt.millis.time_since_epoch().count(), pt.nanos);
@@ -434,7 +433,7 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
     }
     // now reverse again, to get the original order back
     std::reverse(mut.cells.begin(), mut.cells.end());
-    m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(ltype->serialize_mutation_form(std::move(mut))));
+    m.set_cell(prefix, column, mut.serialize(*ltype));
 }
 
 bool
@@ -449,8 +448,6 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
     auto&& existing_list = params.get_prefetched_list(m.key(), prefix, column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
     auto&& value = _t->bind(params._options);
-
-    auto&& ltype = static_pointer_cast<const list_type_impl>(column.type);
 
     if (!existing_list) {
         return;
@@ -469,12 +466,14 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
     auto lvalue = dynamic_pointer_cast<lists::value>(value);
     assert(lvalue);
 
+    auto ltype = static_cast<const list_type_impl*>(column.type.get());
+
     // Note: below, we will call 'contains' on this toDiscard list for each element of existingList.
     // Meaning that if toDiscard is big, converting it to a HashSet might be more efficient. However,
     // the read-before-write this operation requires limits its usefulness on big lists, so in practice
     // toDiscard will be small and keeping a list will be more efficient.
     auto&& to_discard = lvalue->_elements;
-    collection_type_impl::mutation mnew;
+    collection_mutation_description mnew;
     for (auto&& cell : elist) {
         auto has_value = [&] (bytes_view value) {
             return std::find_if(to_discard.begin(), to_discard.end(),
@@ -487,8 +486,7 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
             mnew.cells.emplace_back(std::move(eidx), params.make_dead_cell());
         }
     }
-    auto mnew_ser = ltype->serialize_mutation_form(mnew);
-    m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(mnew_ser)));
+    m.set_cell(prefix, column, mnew.serialize(*ltype));
 }
 
 bool
@@ -507,7 +505,6 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
         return;
     }
 
-    auto ltype = static_pointer_cast<const list_type_impl>(column.type);
     auto cvalue = dynamic_pointer_cast<constants::value>(index);
     assert(cvalue);
 
@@ -520,11 +517,11 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     if (idx < 0 || size_t(idx) >= existing_list.size()) {
         throw exceptions::invalid_request_exception(format("List index {:d} out of bound, list has size {:d}", idx, existing_list.size()));
     }
-    collection_type_impl::mutation mut;
+    collection_mutation_description mut;
     const data_value& eidx_dv = existing_list[idx].first;
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
     mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
-    m.set_cell(prefix, column, ltype->serialize_mutation_form(mut));
+    m.set_cell(prefix, column, mut.serialize(*column.type));
 }
 
 }

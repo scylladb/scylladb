@@ -25,26 +25,28 @@
 #include "types/tuple.hh"
 
 class user_type_impl : public tuple_type_impl {
-    using intern = type_interning_helper<user_type_impl, sstring, bytes, std::vector<bytes>, std::vector<data_type>>;
+    using intern = type_interning_helper<user_type_impl, sstring, bytes, std::vector<bytes>, std::vector<data_type>, bool>;
 public:
     const sstring _keyspace;
     const bytes _name;
 private:
-    std::vector<bytes> _field_names;
-    std::vector<sstring> _string_field_names;
+    const std::vector<bytes> _field_names;
+    const std::vector<sstring> _string_field_names;
+    const bool _is_multi_cell;
 public:
     using native_type = std::vector<data_value>;
-    user_type_impl(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types)
-            : tuple_type_impl(kind::user, make_name(keyspace, name, field_names, field_types, false /* frozen */), field_types)
-            , _keyspace(keyspace)
-            , _name(name)
-            , _field_names(field_names) {
-        for (const auto& field_name : _field_names) {
-            _string_field_names.emplace_back(utf8_type->to_string(field_name));
-        }
+    user_type_impl(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types, bool is_multi_cell)
+            : tuple_type_impl(kind::user, make_name(keyspace, name, field_names, field_types, is_multi_cell), field_types, false /* don't freeze inner */)
+            , _keyspace(std::move(keyspace))
+            , _name(std::move(name))
+            , _field_names(std::move(field_names))
+            , _string_field_names(boost::copy_range<std::vector<sstring>>(_field_names | boost::adaptors::transformed(
+                    [] (const bytes& field_name) { return utf8_type->to_string(field_name); })))
+            , _is_multi_cell(is_multi_cell) {
     }
-    static shared_ptr<const user_type_impl> get_instance(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
-        return intern::get_instance(std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types));
+    static shared_ptr<const user_type_impl> get_instance(sstring keyspace, bytes name,
+            std::vector<bytes> field_names, std::vector<data_type> field_types, bool multi_cell) {
+        return intern::get_instance(std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types), multi_cell);
     }
     data_type field_type(size_t i) const { return type(i); }
     const std::vector<data_type>& field_types() const { return _types; }
@@ -52,6 +54,9 @@ public:
     sstring field_name_as_string(size_t i) const { return _string_field_names[i]; }
     const std::vector<bytes>& field_names() const { return _field_names; }
     const std::vector<sstring>& string_field_names() const { return _string_field_names; }
+    std::optional<size_t> idx_of_field(const bytes& name) const;
+    bool is_multi_cell() const { return _is_multi_cell; }
+    virtual data_type freeze() const override;
     sstring get_name_as_string() const;
 
 private:
@@ -64,3 +69,10 @@ private:
 
 data_value make_user_value(data_type tuple_type, user_type_impl::native_type value);
 
+constexpr size_t max_udt_fields = std::numeric_limits<int16_t>::max();
+
+// The following two functions are used to translate field indices (used to identify fields inside non-frozen UDTs)
+// from/to a serialized bytes representation to be stored in mutations and sstables.
+// Refer to collection_mutation.hh for a detailed description on how the serialized indices are used inside mutations.
+bytes serialize_field_index(size_t);
+size_t deserialize_field_index(const bytes_view&);

@@ -24,6 +24,7 @@
 #include <boost/algorithm/string/join.hpp>
 
 #include "schema_builder.hh"
+#include "concrete_types.hh"
 
 namespace tests::data_model {
 
@@ -118,15 +119,27 @@ mutation mutation_description::build(schema_ptr s) const {
             },
             [&] (const collection& c) {
                 assert(!cdef->is_atomic());
-                auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
-                collection_type_impl::mutation mut;
+
+                auto get_value_type = visit(*cdef->type, make_visitor(
+                    [] (const collection_type_impl& ctype) -> std::function<const abstract_type&(bytes_view)> {
+                        return [&] (bytes_view) -> const abstract_type& { return *ctype.value_comparator(); };
+                    },
+                    [] (const user_type_impl& utype) -> std::function<const abstract_type&(bytes_view)> {
+                        return [&] (bytes_view key) -> const abstract_type& { return *utype.type(deserialize_field_index(key)); };
+                    },
+                    [] (const abstract_type& o) -> std::function<const abstract_type&(bytes_view)> {
+                        assert(false);
+                    }
+                ));
+
+                collection_mutation_description mut;
                 mut.tomb = c.tomb;
                 for (auto& [ key, value ] : c.elements) {
                     if (!value.expiring) {
-                        mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(), value.timestamp,
+                        mut.cells.emplace_back(key, atomic_cell::make_live(get_value_type(key), value.timestamp,
                                                                             value.value, atomic_cell::collection_member::yes));
                     } else {
-                        mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(),
+                        mut.cells.emplace_back(key, atomic_cell::make_live(get_value_type(key),
                                                                            value.timestamp,
                                                                            value.value,
                                                                            value.expiring->expiry_point,
@@ -134,7 +147,7 @@ mutation mutation_description::build(schema_ptr s) const {
                                                                            atomic_cell::collection_member::yes));
                     }
                 }
-                m.set_static_cell(*cdef, ctype->serialize_mutation_form(std::move(mut)));
+                m.set_static_cell(*cdef, mut.serialize(*cdef->type));
             }
         ), value_or_collection);
     }
@@ -156,15 +169,27 @@ mutation mutation_description::build(schema_ptr s) const {
                 },
             [&] (const collection& c) {
                     assert(!cdef->is_atomic());
-                    auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
-                    collection_type_impl::mutation mut;
+
+                    auto get_value_type = visit(*cdef->type, make_visitor(
+                        [] (const collection_type_impl& ctype) -> std::function<const abstract_type&(bytes_view)> {
+                            return [&] (bytes_view) -> const abstract_type& { return *ctype.value_comparator(); };
+                        },
+                        [] (const user_type_impl& utype) -> std::function<const abstract_type&(bytes_view)> {
+                            return [&] (bytes_view key) -> const abstract_type& { return *utype.type(deserialize_field_index(key)); };
+                        },
+                        [] (const abstract_type& o) -> std::function<const abstract_type&(bytes_view)> {
+                            assert(false);
+                        }
+                    ));
+
+                    collection_mutation_description mut;
                     mut.tomb = c.tomb;
                     for (auto& [ key, value ] : c.elements) {
                         if (!value.expiring) {
-                            mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(), value.timestamp,
+                            mut.cells.emplace_back(key, atomic_cell::make_live(get_value_type(key), value.timestamp,
                                                                             value.value, atomic_cell::collection_member::yes));
                         } else {
-                            mut.cells.emplace_back(key, atomic_cell::make_live(*ctype->value_comparator(),
+                            mut.cells.emplace_back(key, atomic_cell::make_live(get_value_type(key),
                                                                                value.timestamp,
                                                                                value.value,
                                                                                value.expiring->expiry_point,
@@ -173,7 +198,7 @@ mutation mutation_description::build(schema_ptr s) const {
                         }
 
                     }
-                    m.set_clustered_cell(ck, *cdef, ctype->serialize_mutation_form(std::move(mut)));
+                    m.set_clustered_cell(ck, *cdef, mut.serialize(*cdef->type));
                 }
             ), value_or_collection);
         }

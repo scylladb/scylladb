@@ -1347,15 +1347,14 @@ make_map_mutation(const Map& map,
     auto vtyp = column_type->get_values_type();
 
     if (column_type->is_multi_cell()) {
-        map_type_impl::mutation mut;
+        collection_mutation_description mut;
 
         for (auto&& entry : map) {
             auto te = f(entry);
             mut.cells.emplace_back(ktyp->decompose(data_value(te.first)), atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(te.second)), atomic_cell::collection_member::yes));
         }
 
-        auto col_mut = column_type->serialize_mutation_form(std::move(mut));
-        return atomic_cell_or_collection::from_collection_mutation(std::move(col_mut));
+        return mut.serialize(*column_type);
     } else {
         map_type_impl::native_type tmp;
         tmp.reserve(map.size());
@@ -1492,7 +1491,7 @@ make_list_mutation(const std::vector<T, Args...>& values,
     auto vtyp = column_type->get_elements_type();
 
     if (column_type->is_multi_cell()) {
-        list_type_impl::mutation m;
+        collection_mutation_description m;
         m.cells.reserve(values.size());
         m.tomb.timestamp = timestamp - 1;
         m.tomb.deletion_time = gc_clock::now();
@@ -1505,8 +1504,7 @@ make_list_mutation(const std::vector<T, Args...>& values,
                 atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(std::move(dv)), atomic_cell::collection_member::yes));
         }
 
-        auto list_mut = column_type->serialize_mutation_form(std::move(m));
-        return atomic_cell_or_collection::from_collection_mutation(std::move(list_mut));
+        return m.serialize(*column_type);
     } else {
         list_type_impl::native_type tmp;
         tmp.reserve(values.size());

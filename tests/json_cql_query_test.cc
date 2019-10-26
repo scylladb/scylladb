@@ -535,14 +535,14 @@ SEASTAR_TEST_CASE(test_json_tuple) {
     });
 }
 
-SEASTAR_TEST_CASE(test_json_udt) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+static future<> test_json_udt(bool frozen) {
+    return do_with_cql_env_thread([frozen] (cql_test_env& e) {
         e.execute_cql("CREATE TYPE utype (first int, second text, third float);").get();
-        e.execute_cql("CREATE TABLE t(id int PRIMARY KEY, v frozen<utype>);").get();
+        e.execute_cql(format("CREATE TABLE t(id int PRIMARY KEY, v {});", frozen ? "frozen<utype>" : "utype")).get();
 
         e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"first\": 5, \"third\": 2.5, \"second\": \"test123\"}}';").get();
 
-        auto ut = user_type_impl::get_instance("ks", "utype", std::vector{bytes("first"), bytes("second"), bytes("third")}, {int32_type, utf8_type, float_type});
+        auto ut = user_type_impl::get_instance("ks", "utype", std::vector{bytes("first"), bytes("second"), bytes("third")}, {int32_type, utf8_type, float_type}, !frozen);
 
         auto msg = e.execute_cql("SELECT * FROM t;").get0();
         assert_that(msg).is_rows().with_rows({{
@@ -569,7 +569,7 @@ SEASTAR_TEST_CASE(test_json_udt) {
         BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"first\": \"hi\", \"third\": 2.5, \"second\": \"test123\"}}';").get(), marshal_exception);
 
         e.execute_cql("CREATE TYPE utype2 (\"WeirdNameThatNeedsEscaping\\n,)\" int);").get();
-        e.execute_cql("CREATE TABLE t2(id int PRIMARY KEY, v frozen<utype2>);").get();
+        e.execute_cql(format("CREATE TABLE t2(id int PRIMARY KEY, v {});", frozen ? "frozen<utype2>" : "utype2")).get();
 
         e.execute_cql("INSERT INTO t2 (id, v) VALUES (1, (7));").get();
         msg = e.execute_cql("SELECT JSON * FROM t2 WHERE id = 1;").get0();
@@ -577,6 +577,14 @@ SEASTAR_TEST_CASE(test_json_udt) {
             utf8_type->decompose(sstring("{\"id\": 1, \"v\": {\"WeirdNameThatNeedsEscaping\\\\n,)\": 7}}"))
         }});
     });
+}
+
+SEASTAR_TEST_CASE(test_json_udt_frozen) {
+    return test_json_udt(true);
+}
+
+SEASTAR_TEST_CASE(test_json_udt_nonfrozen) {
+    return test_json_udt(false);
 }
 
 // Checks #4348
@@ -588,7 +596,7 @@ SEASTAR_TEST_CASE(test_unpack_decimal){
 
         auto ut = user_type_impl::get_instance("ks", to_bytes("ds"),
                 {to_bytes("d1"), to_bytes("d2"), to_bytes("d3")},
-                {decimal_type, varint_type, int32_type});
+                {decimal_type, varint_type, int32_type}, false);
         auto ut_val = make_user_value(ut,
                 user_type_impl::native_type({big_decimal{0, boost::multiprecision::cpp_int(1)},
                 boost::multiprecision::cpp_int(2),

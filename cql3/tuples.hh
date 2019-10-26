@@ -112,21 +112,19 @@ public:
         value(std::vector<bytes_opt> elements)
                 : _elements(std::move(elements)) {
         }
-        value(std::vector<bytes_view_opt> elements) {
-            for (auto&& e : elements) {
-                _elements.push_back(e ? bytes_opt(bytes(e->begin(), e->size())) : bytes_opt());
-            }
+        value(std::vector<bytes_view_opt> elements)
+            : value(to_bytes_opt_vec(std::move(elements))) {
         }
-        static value from_serialized(const fragmented_temporary_buffer::view& buffer, tuple_type type) {
+        static value from_serialized(const fragmented_temporary_buffer::view& buffer, const tuple_type_impl& type) {
           return with_linearized(buffer, [&] (bytes_view view) {
-            return value(type->split(view));
+              return value(type.split(view));
           });
         }
         virtual cql3::raw_value get(const query_options& options) override {
             return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
         }
 
-        virtual std::vector<bytes_opt> get_elements() override {
+        virtual const std::vector<bytes_opt>& get_elements() override {
             return _elements;
         }
         virtual sstring to_string() const override {
@@ -211,7 +209,7 @@ public:
             }
         }
 
-        static in_value from_serialized(const fragmented_temporary_buffer::view& value_view, list_type type, const query_options& options);
+        static in_value from_serialized(const fragmented_temporary_buffer::view& value_view, const list_type_impl& type, const query_options& options);
 
         virtual cql3::raw_value get(const query_options& options) override {
             throw exceptions::unsupported_operation_exception();
@@ -313,15 +311,15 @@ public:
             } else if (value.is_unset_value()) {
                 throw exceptions::invalid_request_exception(format("Invalid unset value for tuple {}", _receiver->name->text()));
             } else {
-                auto as_tuple_type = static_pointer_cast<const tuple_type_impl>(_receiver->type);
+                auto& type = static_cast<const tuple_type_impl&>(*_receiver->type);
                 try {
                     with_linearized(*value, [&] (bytes_view v) {
-                        as_tuple_type->validate(v, options.get_cql_serialization_format());
+                        type.validate(v, options.get_cql_serialization_format());
                     });
                 } catch (marshal_exception& e) {
                     throw exceptions::invalid_request_exception(e.what());
                 }
-                return make_shared(value::from_serialized(*value, as_tuple_type));
+                return make_shared(value::from_serialized(*value, type));
             }
         }
     };

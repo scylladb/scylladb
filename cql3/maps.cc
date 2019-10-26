@@ -153,17 +153,17 @@ maps::literal::to_string() const {
 }
 
 maps::value
-maps::value::from_serialized(const fragmented_temporary_buffer::view& fragmented_value, map_type type, cql_serialization_format sf) {
+maps::value::from_serialized(const fragmented_temporary_buffer::view& fragmented_value, const map_type_impl& type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserialize_for_native_protocol?!
       return with_linearized(fragmented_value, [&] (bytes_view value) {
-        auto m = value_cast<map_type_impl::native_type>(type->deserialize(value, sf));
-        std::map<bytes, bytes, serialized_compare> map(type->get_keys_type()->as_less_comparator());
+        auto m = value_cast<map_type_impl::native_type>(type.deserialize(value, sf));
+        std::map<bytes, bytes, serialized_compare> map(type.get_keys_type()->as_less_comparator());
         for (auto&& e : m) {
-            map.emplace(type->get_keys_type()->decompose(e.first),
-                        type->get_values_type()->decompose(e.second));
+            map.emplace(type.get_keys_type()->decompose(e.first),
+                        type.get_values_type()->decompose(e.second));
         }
         return maps::value { std::move(map) };
       });
@@ -269,8 +269,7 @@ maps::marker::bind(const query_options& options) {
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-    return ::make_shared<maps::value>(maps::value::from_serialized(*val, static_pointer_cast<const map_type_impl>(_receiver->type),
-                                      options.get_cql_serialization_format()));
+    return ::make_shared(maps::value::from_serialized(*val, static_cast<const map_type_impl&>(*_receiver->type), options.get_cql_serialization_format()));
 }
 
 void
@@ -285,12 +284,10 @@ maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
         return;
     }
     if (column.type->is_multi_cell()) {
-        // delete + put
-        collection_type_impl::mutation mut;
+        // Delete all cells first, then put new ones
+        collection_mutation_description mut;
         mut.tomb = params.make_tombstone_just_before();
-        auto ctype = static_pointer_cast<const map_type_impl>(column.type);
-        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
-        m.set_cell(row_key, column, std::move(col_mut));
+        m.set_cell(row_key, column, mut.serialize(*column.type));
     }
     do_put(m, row_key, params, value, column);
 }
@@ -310,13 +307,12 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
     if (!key) {
         throw invalid_request_exception("Invalid null map key");
     }
-    auto ctype = static_pointer_cast<const map_type_impl>(column.type);
+    auto ctype = static_cast<const map_type_impl*>(column.type.get());
     auto avalue = value ? params.make_cell(*ctype->get_values_type(), *value, atomic_cell::collection_member::yes) : params.make_dead_cell();
-    map_type_impl::mutation update;
+    collection_mutation_description update;
     update.cells.emplace_back(std::move(to_bytes(*key)), std::move(avalue));
-    // should have been verified as map earlier?
-    auto col_mut = ctype->serialize_mutation_form(std::move(update));
-    m.set_cell(prefix, column, std::move(col_mut));
+
+    m.set_cell(prefix, column, update.serialize(*ctype));
 }
 
 void
@@ -333,18 +329,18 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
         shared_ptr<term> value, const column_definition& column) {
     auto map_value = dynamic_pointer_cast<maps::value>(value);
     if (column.type->is_multi_cell()) {
-        collection_type_impl::mutation mut;
-
         if (!value) {
             return;
         }
 
-        auto ctype = static_pointer_cast<const map_type_impl>(column.type);
+        collection_mutation_description mut;
+
+        auto ctype = static_cast<const map_type_impl*>(column.type.get());
         for (auto&& e : map_value->map) {
             mut.cells.emplace_back(e.first, params.make_cell(*ctype->get_values_type(), fragmented_temporary_buffer::view(e.second), atomic_cell::collection_member::yes));
         }
-        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
-        m.set_cell(prefix, column, std::move(col_mut));
+
+        m.set_cell(prefix, column, mut.serialize(*ctype));
     } else {
         // for frozen maps, we're overwriting the whole cell
         if (!value) {
@@ -367,10 +363,10 @@ maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix
     if (key == constants::UNSET_VALUE) {
         throw exceptions::invalid_request_exception("Invalid unset map key");
     }
-    collection_type_impl::mutation mut;
+    collection_mutation_description mut;
     mut.cells.emplace_back(*key->get(params._options), params.make_dead_cell());
-    auto mtype = static_cast<const map_type_impl*>(column.type.get());
-    m.set_cell(prefix, column, mtype->serialize_mutation_form(mut));
+
+    m.set_cell(prefix, column, mut.serialize(*column.type));
 }
 
 }

@@ -78,16 +78,6 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-static std::optional<uint32_t> get_idx_of_field(user_type type, shared_ptr<column_identifier> field)
-{
-    for (uint32_t i = 0; i < type->field_names().size(); ++i) {
-        if (field->name() == type->field_names()[i]) {
-            return {i};
-        }
-    }
-    return {};
-}
-
 void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, bool is_local_only)
 {
     auto&& all_types = ks.metadata()->user_types()->get_all_types();
@@ -153,9 +143,13 @@ alter_type_statement::add_or_alter::add_or_alter(const ut_name& name, bool is_ad
 
 user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_update) const
 {
-    if (get_idx_of_field(to_update, _field_name)) {
+    if (to_update->idx_of_field(_field_name->name())) {
         throw exceptions::invalid_request_exception(format("Cannot add new field {} to type {}: a field of the same name already exists",
             _field_name->to_string(), _name.to_string()));
+    }
+
+    if (to_update->size() == max_udt_fields) {
+        throw exceptions::invalid_request_exception(format("Cannot add new field to type {}: maximum number of fields reached", _name));
     }
 
     std::vector<bytes> new_names(to_update->field_names());
@@ -163,15 +157,16 @@ user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_
     std::vector<data_type> new_types(to_update->field_types());
     auto&& add_type = _field_type->prepare(db, keyspace()).get_type();
     if (add_type->references_user_type(to_update->_keyspace, to_update->_name)) {
-        throw exceptions::invalid_request_exception(format("Cannot add new field {} of type {} to type {} as this would create a circular reference", _field_name->to_string(), _field_type->to_string(), _name.to_string()));
+        throw exceptions::invalid_request_exception(format("Cannot add new field {} of type {} to type {} as this would create a circular reference",
+                    *_field_name, *_field_type, _name.to_string()));
     }
     new_types.push_back(std::move(add_type));
-    return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), std::move(new_types));
+    return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), std::move(new_types), to_update->is_multi_cell());
 }
 
 user_type alter_type_statement::add_or_alter::do_alter(database& db, user_type to_update) const
 {
-    std::optional<uint32_t> idx = get_idx_of_field(to_update, _field_name);
+    auto idx = to_update->idx_of_field(_field_name->name());
     if (!idx) {
         throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", _field_name->to_string(), _name.to_string()));
     }
@@ -180,12 +175,12 @@ user_type alter_type_statement::add_or_alter::do_alter(database& db, user_type t
     auto new_type = _field_type->prepare(db, keyspace()).get_type();
     if (!new_type->is_compatible_with(*previous)) {
         throw exceptions::invalid_request_exception(format("Type {} in incompatible with previous type {} of field {} in user type {}",
-            _field_type->to_string(), previous->as_cql3_type().to_string(), _field_name->to_string(), _name.to_string()));
+            *_field_type, previous->as_cql3_type(), *_field_name, _name));
     }
 
     std::vector<data_type> new_types(to_update->field_types());
     new_types[*idx] = new_type;
-    return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, to_update->field_names(), std::move(new_types));
+    return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, to_update->field_names(), std::move(new_types), to_update->is_multi_cell());
 }
 
 user_type alter_type_statement::add_or_alter::make_updated_type(database& db, user_type to_update) const
@@ -208,13 +203,13 @@ user_type alter_type_statement::renames::make_updated_type(database& db, user_ty
     std::vector<bytes> new_names(to_update->field_names());
     for (auto&& rename : _renames) {
         auto&& from = rename.first;
-        std::optional<uint32_t> idx = get_idx_of_field(to_update, from);
+        auto idx = to_update->idx_of_field(from->name());
         if (!idx) {
             throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", from->to_string(), _name.to_string()));
         }
         new_names[*idx] = rename.second->name();
     }
-    auto&& updated = user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), to_update->field_types());
+    auto&& updated = user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), to_update->field_types(), to_update->is_multi_cell());
     create_type_statement::check_for_duplicate_names(updated);
     return updated;
 }

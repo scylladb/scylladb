@@ -1210,7 +1210,6 @@ private:
     table_schema_version _schema_version;
 #endif
 
-    friend class mutation_partition_applier;
     friend class converting_mutation_partition_applier;
 public:
     struct copy_comparators_only {};

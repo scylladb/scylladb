@@ -49,8 +49,6 @@ public:
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     using abstract_type::deserialize;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
-    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
-    virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
 };
 
 data_value make_list_value(data_type type, list_type_impl::native_type value);

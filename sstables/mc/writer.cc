@@ -686,7 +686,7 @@ private:
     // Writes information about row liveness (formerly 'row marker')
     void write_liveness_info(bytes_ostream& writer, const row_marker& marker);
 
-    // Writes a CQL collection (list, set or map)
+    // Writes a collection of cells, representing either a CQL collection or fields of a non-frozen user type
     void write_collection(bytes_ostream& writer, const clustering_key_prefix* clustering_key, const column_definition& cdef, collection_mutation_view collection,
         const row_time_properties& properties, bool has_complex_deletion);
 
@@ -1096,9 +1096,7 @@ void writer::write_collection(bytes_ostream& writer, const clustering_key_prefix
         const column_definition& cdef, collection_mutation_view collection, const row_time_properties& properties,
         bool has_complex_deletion) {
     uint64_t current_pos = writer.size();
-    auto& ctype = *static_pointer_cast<const collection_type_impl>(cdef.type);
-    collection.data.with_linearized([&] (bytes_view collection_bv) {
-        auto mview = ctype.deserialize_mutation_form(collection_bv);
+    collection.with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
         if (has_complex_deletion) {
             write_delta_deletion_time(writer, mview.tomb);
             _c_stats.update(mview.tomb);
@@ -1166,7 +1164,7 @@ void writer::write_row_body(bytes_ostream& writer, const clustering_row& row, bo
     return write_cells(writer, &row.key(), column_kind::regular_column, row.cells(), properties, has_complex_deletion);
 }
 
-// Find if any collection in the row contains a collection-wide tombstone
+// Find if any complex column (collection or non-frozen user type) in the row contains a column-wide tombstone
 static bool row_has_complex_deletion(const schema& s, const row& r, column_kind kind) {
     bool result = false;
     r.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& c) {
@@ -1174,9 +1172,7 @@ static bool row_has_complex_deletion(const schema& s, const row& r, column_kind 
         if (cdef.is_atomic()) {
             return stop_iteration::no;
         }
-        auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
-        return c.as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
-            auto mview = t->deserialize_mutation_form(c_bv);
+        return c.as_collection_mutation().with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
             if (mview.tomb) {
                 result = true;
             }
