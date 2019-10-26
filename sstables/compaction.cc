@@ -715,7 +715,7 @@ public:
                 _schema->full_slice(),
                 service::get_local_compaction_priority(),
                 no_resource_tracking(),
-                nullptr,
+                tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
                 _monitor_generator);

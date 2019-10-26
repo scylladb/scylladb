@@ -210,6 +210,7 @@ public:
         const query::partition_slice& slice,
         const io_priority_class& pc = default_priority_class(),
         reader_resource_tracker resource_tracker = no_resource_tracking(),
+        tracing::trace_state_ptr trace_state = {},
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         read_monitor& monitor = default_read_monitor());
 
@@ -225,6 +226,7 @@ public:
         const query::partition_slice& slice,
         const io_priority_class& pc = default_priority_class(),
         reader_resource_tracker resource_tracker = no_resource_tracking(),
+        tracing::trace_state_ptr trace_state = {},
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
         read_monitor& monitor = default_read_monitor());
@@ -622,7 +624,7 @@ private:
     // about the buffer size to read, and where exactly to stop reading
     // (even when a large buffer size is used).
     input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
-                                   reader_resource_tracker resource_tracker, lw_shared_ptr<file_input_stream_history> history);
+            reader_resource_tracker resource_tracker, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read

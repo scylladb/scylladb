@@ -339,7 +339,7 @@ public:
     int count_row_end = 0;
 
     test_row_consumer(int64_t t)
-        : row_consumer(no_resource_tracking()
+        : row_consumer(no_resource_tracking(), tracing::trace_state_ptr()
         , default_priority_class()), desired_timestamp(t) {
     }
 
@@ -460,7 +460,7 @@ public:
     int count_range_tombstone = 0;
 
     count_row_consumer()
-        : row_consumer(no_resource_tracking(), default_priority_class()) {
+        : row_consumer(no_resource_tracking(), tracing::trace_state_ptr(), default_priority_class()) {
     }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {

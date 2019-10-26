@@ -754,6 +754,7 @@ public:
                         schema->full_slice(),
                         default_priority_class(),
                         tracker,
+                        tracing::trace_state_ptr(),
                         streamed_mutation::forwarding::no,
                         mutation_reader::forwarding::yes)) {
     }
