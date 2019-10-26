@@ -14,7 +14,6 @@ print_usage() {
     echo "  --clean                 clean build directory"
     echo "  --compiler PATH         C++ compiler path"
     echo "  --c-compiler PATH       C compiler path"
-    echo "  --nodeps                skip installing dependencies"
     exit 1
 }
 
@@ -24,7 +23,6 @@ JOBS=
 CLEAN=
 COMPILER=
 CCOMPILER=
-NODEPS=
 while [ $# -gt 0 ]; do
     case "$1" in
         "--configure-flags")
@@ -52,7 +50,6 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--nodeps")
-            NODEPS=yes
             shift 1
             ;;
         *)
@@ -80,10 +77,6 @@ fi
 
 if [ -f build/$MODE/scylla-package.tar.gz ]; then
     rm build/$MODE/scylla-package.tar.gz
-fi
-
-if [ -z "$NODEPS" ]; then
-    sudo ./install-dependencies.sh
 fi
 
 NINJA=$(which ninja-build) &&:
