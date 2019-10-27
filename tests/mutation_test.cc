@@ -323,7 +323,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
-    // (a int, b text, c long)
+    // (a int, b text, c long, d text)
     auto ut = user_type_impl::get_instance("ks", to_bytes("ut"),
             {to_bytes("a"), to_bytes("b"), to_bytes("c"), to_bytes("d")},
             {int32_type, utf8_type, long_type, utf8_type},
