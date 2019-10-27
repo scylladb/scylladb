@@ -337,7 +337,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
 
     // {a: 0, c: 2}
     auto mut1 = make_collection_mutation({}, serialize_field_index(0), make_collection_member(int32_type, 0),
-            serialize_field_index(2), make_collection_member(long_type, 2));
+            serialize_field_index(2), make_collection_member(long_type, int64_t(2)));
     mutation m1(s, key);
     m1.set_static_cell(column, mut1.serialize(*ut));
     mt->apply(m1);
@@ -349,7 +349,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
     mt->apply(m2);
 
     // {c: 3}
-    auto mut3 = make_collection_mutation({}, serialize_field_index(2), make_collection_member(long_type, 3));
+    auto mut3 = make_collection_mutation({}, serialize_field_index(2), make_collection_member(long_type, int64_t(3)));
     mutation m3(s, key);
     m3.set_static_cell(column, mut3.serialize(*ut));
     mt->apply(m3);
@@ -370,7 +370,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
         auto cell_a = std::make_pair(serialize_field_index(0), make_collection_member(int32_type, 0));
         BOOST_REQUIRE(cells_equal(m.cells[0], std::pair<bytes_view, atomic_cell_view>(cell_a.first, cell_a.second)));
 
-        auto cell_c = std::make_pair(serialize_field_index(2), make_collection_member(long_type, 3));
+        auto cell_c = std::make_pair(serialize_field_index(2), make_collection_member(long_type, int64_t(3)));
         BOOST_REQUIRE(cells_equal(m.cells[1], std::pair<bytes_view, atomic_cell_view>(cell_c.first, cell_c.second)));
 
         auto cell_d = std::make_pair(serialize_field_index(3), make_collection_member(utf8_type, "text"));
