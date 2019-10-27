@@ -352,7 +352,7 @@ The usual cause is that GDB failed to find some libraries or that the library
 versions of those libraries GDB loaded don't match those the core was generated
 with. To see which libraries GDB found do:
 
-    (gdb) info sharedlibraries
+    (gdb) info sharedlibrary
 
 The listing will contain the path of the loaded libraries. If a library wasn't
 found by GDB that will also be visible in the listing. You can then use the
