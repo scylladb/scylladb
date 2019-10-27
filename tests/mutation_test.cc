@@ -361,7 +361,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
     i->as_collection_mutation().with_deserialized(*ut, [&] (collection_mutation_view_description m) {
         // one cell for each field that has been set. mut3 and mut1 should have been merged
         BOOST_REQUIRE(m.cells.size() == 3);
-        BOOST_REQUIRE(std::all_of(m.cells.begin(), m.cells.begin(), [] (const auto& c) { return c.second.is_live(); }));
+        BOOST_REQUIRE(std::all_of(m.cells.begin(), m.cells.end(), [] (const auto& c) { return c.second.is_live(); }));
 
         auto cells_equal = [] (const auto& c1, const auto& c2) {
             return c1.first == c2.first && c1.second.value().linearize() == c2.second.value().linearize();
