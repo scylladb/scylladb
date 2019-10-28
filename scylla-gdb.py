@@ -562,6 +562,103 @@ def get_text_range():
     raise Exception("Failed to find text start and end")
 
 
+class histogram:
+    """Simple histogram.
+
+    Aggregate items by their count and present them in a histogram format.
+    Example:
+
+        h = histogram()
+        h['item1'] = 20 # Set an absolute value
+        h.add('item2') # Equivalent to h['item2'] += 1
+        h.add('item2')
+        h.add('item3')
+        h.print()
+
+    Would print:
+        4 item1 ++++++++++++++++++++++++++++++++++++++++
+        2 item2 ++++
+        1 item1 ++
+
+    Note that the number of indicators ('+') is does not correspond to the
+    actual number of items, rather it is supposed to illustrate their relative
+    counts.
+    """
+    _column_count = 40
+
+    def __init__(self, counts = defaultdict(int), print_indicators = True, formatter=None):
+        """Constructor.
+
+        Params:
+        * counts: initial counts (default to empty).
+        * print_indicators: print the '+' characters to illustrate relative
+            count. Can be turned off when the item names are very long and would
+            thus make indicators unreadable.
+        * formatter: a callable that receives the item as its argument and is
+            expected to return the string to be printed in the second column.
+            By default, items are printed verbatim.
+        """
+        self._counts = counts
+        self._print_indicators = print_indicators
+
+        def default_formatter(value):
+            return str(value)
+        if formatter is None:
+            self._formatter = default_formatter
+        else:
+            self._formatter = formatter
+
+    def __len__(self):
+        return len(self._counts)
+
+    def __nonzero__(self):
+        return bool(len(self))
+
+    def __getitem__(self, item):
+        return self._counts[item]
+
+    def __setitem__(self, item, value):
+        self._counts[item] = value
+
+    def add(self, item):
+        self._counts[item] += 1
+
+    def __str__(self):
+        if not self._counts:
+            return ''
+
+        by_counts = defaultdict(list)
+        for k, v in self._counts.items():
+            by_counts[v].append(k)
+
+        counts_sorted = list(reversed(sorted(by_counts.keys())))
+        max_count = counts_sorted[0]
+
+        if max_count == 0:
+            count_per_column = 0
+        else:
+            count_per_column = self._column_count / max_count
+
+        lines = []
+
+        for count in counts_sorted:
+            items = by_counts[count]
+            if self._print_indicators:
+                indicator = '+' * max(1, int(count * count_per_column))
+            else:
+                indicator = ''
+            for item in items:
+                lines.append('{:9d} {} {}'.format(count, self._formatter(item), indicator))
+
+        return '\n'.join(lines)
+
+    def __repr__(self):
+        return 'histogram({})'.format(self._counts)
+
+    def print(self):
+        gdb.write(str(self) + '\n')
+
+
 class scylla(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND, True)
@@ -2712,6 +2809,92 @@ class scylla_generate_object_graph(gdb.Command):
             subprocess.check_call(['dot', '-T' + extension, dot_file, '-o', args.output_file])
 
 
+class scylla_smp_queues(gdb.Command):
+    """Summarize the shard's outgoing smp queues.
+
+    The summary takes the form of a histogram. Example:
+
+	(gdb) scylla smp-queues
+	    10747 17 ->  3 ++++++++++++++++++++++++++++++++++++++++
+	      721 17 -> 19 ++
+	      247 17 -> 20 +
+	      233 17 -> 10 +
+	      210 17 -> 14 +
+	      205 17 ->  4 +
+	      204 17 ->  5 +
+	      198 17 -> 16 +
+	      197 17 ->  6 +
+	      189 17 -> 11 +
+	      181 17 ->  1 +
+	      179 17 -> 13 +
+	      176 17 ->  2 +
+	      173 17 ->  0 +
+	      163 17 ->  8 +
+		1 17 ->  9 +
+
+    Each line has the following format
+
+        count from -> to ++++
+
+    Where:
+        count: the number of items in the queue;
+        from: the shard, from which the message was sent (this shard);
+        to: the shard, to which the message is sent;
+        ++++: visual illustration of the relative size of this queue;
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla smp-queues', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+        qs = std_unique_ptr(gdb.parse_and_eval('seastar::smp::_qs')).get()
+        self.queues = set()
+        for i in range(cpus()):
+            for j in range(cpus()):
+                self.queues.add(int(qs[i][j].address))
+        self._queue_type = gdb.lookup_type('seastar::smp_message_queue').pointer()
+        self._ptr_type = gdb.lookup_type('uintptr_t').pointer()
+
+    def invoke(self, arg, from_tty):
+        def formatter(q):
+            a, b = q
+            return '{:2} -> {:2}'.format(a, b)
+
+        h = histogram(formatter=formatter)
+        known_vptrs = dict()
+
+        for obj, vptr in find_vptrs():
+            obj = int(obj)
+            vptr = int(vptr)
+
+            if not vptr in known_vptrs:
+                name = resolve(vptr, cache=False)
+                if name is None or not name.startswith('vtable for seastar::smp_message_queue::async_work_item'):
+                    continue
+
+                known_vptrs[vptr] = None
+
+            offset = known_vptrs[vptr]
+
+            if offset is None:
+                q = None
+                ptr_meta = scylla_ptr.analyze(obj)
+                for offset in range(0, ptr_meta.size, self._ptr_type.sizeof):
+                    ptr = int(gdb.Value(obj + offset).reinterpret_cast(self._ptr_type).dereference())
+                    if ptr in self.queues:
+                        q = gdb.Value(ptr).reinterpret_cast(self._queue_type).dereference()
+                        break
+                known_vptrs[vptr] = offset
+                if q is None:
+                    continue
+            else:
+                ptr = int(gdb.Value(obj + offset).reinterpret_cast(self._ptr_type).dereference())
+                q = gdb.Value(ptr).reinterpret_cast(self._queue_type).dereference()
+
+            a = int(q['_completed']['remote']['_id'])
+            b = int(q['_pending']['remote']['_id'])
+            h[(a, b)] += 1
+
+        gdb.write('{}\n'.format(h))
+
+
 class scylla_gdb_func_dereference_lw_shared_ptr(gdb.Function):
     """Dereference the pointer guarded by the `seastar::lw_shared_ptr` instance.
 
@@ -2820,6 +3003,7 @@ scylla_cache()
 scylla_sstables()
 scylla_memtables()
 scylla_generate_object_graph()
+scylla_smp_queues()
 
 
 # Convenience functions
