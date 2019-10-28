@@ -685,13 +685,17 @@ public:
     }
 };
 
-static future<std::optional<paxos_response_handler::ballot_and_contention>> sleep_and_restart() {
+static future<> sleep_approx_50ms() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    std::uniform_int_distribution<> dist(0, 100);
-    return sleep(std::chrono::milliseconds(dist(re))).then([] {
+    static thread_local std::uniform_int_distribution<> dist(0, 100);
+    return seastar::sleep(std::chrono::milliseconds(dist(re)));
+}
+
+static future<std::optional<paxos_response_handler::ballot_and_contention>> sleep_and_restart() {
+    return sleep_approx_50ms().then([] {
          return std::optional<paxos_response_handler::ballot_and_contention>(); // continue
     });
-};
+}
 
 /**
  * Begin a Paxos session by sending a prepare request and completing any in-progress requests seen in the replies.
@@ -3877,6 +3881,106 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
         }
         return do_query(s, std::move(cmd), std::move(partition_ranges), cl_for_learn, std::move(query_options));
     }).finally([handler] {});
+}
+
+/**
+ * Apply mutations if and only if the current values in the row for the given key
+ * match the provided conditions. The algorithm is "raw" Paxos: that is, Paxos
+ * minus leader election -- any node in the cluster may propose changes for any row,
+ * which (that is, the row) is the unit of values being proposed, not single columns.
+ *
+ * The Paxos cohort is only the replicas for the given key, not the entire cluster.
+ * So we expect performance to be reasonable, but CAS is still intended to be used
+ * "when you really need it," not for all your updates.
+ *
+ * There are three phases to Paxos:
+ *  1. Prepare: the coordinator generates a ballot (timeUUID in our case) and asks replicas to (a) promise
+ *     not to accept updates from older ballots and (b) tell us about the most recent update it has already
+ *     accepted.
+ *  2. Accept: if a majority of replicas respond, the coordinator asks replicas to accept the value of the
+ *     highest proposal ballot it heard about, or a new value if no in-progress proposals were reported.
+ *  3. Commit (Learn): if a majority of replicas acknowledge the accept request, we can commit the new
+ *     value.
+ *
+ * Commit procedure is not covered in "Paxos Made Simple," and only briefly mentioned in "Paxos Made Live,"
+ * so here is our approach:
+ *  3a. The coordinator sends a commit message to all replicas with the ballot and value.
+ *  3b. Because of 1-2, this will be the highest-seen commit ballot. The replicas will note that,
+ *      and send it with subsequent promise replies. This allows us to discard acceptance records
+ *      for successfully committed replicas, without allowing incomplete proposals to commit erroneously
+ *      later on.
+ *
+ * Note that since we are performing a CAS rather than a simple update, we perform a read (of committed
+ * values) between the prepare and accept phases. This gives us a slightly longer window for another
+ * coordinator to come along and trump our own promise with a newer one but is otherwise safe.
+ */
+future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges, storage_proxy::coordinator_query_options query_options,
+        db::consistency_level cl_for_paxos, db::consistency_level cl_for_commit,
+        clock_type::time_point write_timeout, clock_type::time_point cas_timeout) {
+
+    assert(partition_ranges.size() == 1);
+    assert(query::is_single_partition(partition_ranges[0]));
+    assert(cl_for_paxos == db::consistency_level::LOCAL_SERIAL || cl_for_paxos == db::consistency_level::SERIAL);
+
+    auto handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
+        query_options.trace_state, query_options.permit, partition_ranges[0].start()->value().as_decorated_key(),
+        schema, cl_for_paxos, cl_for_commit, write_timeout, cas_timeout);
+
+    db::consistency_level cl = cl_for_paxos == db::consistency_level::LOCAL_SERIAL ?
+        db::consistency_level::LOCAL_QUORUM : db::consistency_level::QUORUM;
+
+    return do_with(unsigned(0), [this, handler, schema, cmd, request, partition_ranges = std::move(partition_ranges),
+            query_options = std::move(query_options), cl] (unsigned& contentions) mutable {
+        return repeat_until_value([this, handler, schema, cmd, request, partition_ranges = std::move(partition_ranges),
+                query_options = std::move(query_options), cl, &contentions] () mutable {
+            // Finish the previous PAXOS round, if any, and, as a side effect, compute
+            // a ballot (round identifier) which is a) unique b) has good chances of being
+            // recent enough.
+            return handler->begin_and_repair_paxos(query_options.cstate, true)
+                    .then([this, handler, schema, cmd, request, partition_ranges, query_options, cl, &contentions]
+                            (paxos_response_handler::ballot_and_contention v) mutable {
+                auto ballot = v.ballot;
+                contentions += v.contention;
+                // Read the current values and check they validate the conditions.
+                paxos::paxos_state::logger.debug("CAS[{}]: Reading existing values for CAS precondition", handler->id());
+                tracing::trace(handler->tr_state, "Reading existing values for CAS precondition");
+                return query(schema, cmd, std::move(partition_ranges), cl, query_options)
+                        .then([this, handler, schema, cmd, request, ballot, &contentions] (coordinator_query_result&& qr) {
+                    auto mutation = request->apply(*qr.query_result, cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
+                    if (!mutation) {
+                        paxos::paxos_state::logger.debug("CAS[{}] precondition does not match current values", handler->id());
+                        tracing::trace(handler->tr_state, "CAS precondition does not match current values");
+                        return make_ready_future<std::optional<bool>>(false);
+                    }
+                    return do_with(paxos::proposal(ballot, freeze(*mutation)),
+                            [handler, &contentions] (paxos::proposal& proposal) {
+                        paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
+                                handler->id(), proposal.ballot);
+                        tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}",
+                                proposal.ballot);
+                        return handler->accept_proposal(proposal).then([handler, &proposal, &contentions] (bool is_accepted) {
+                            if (is_accepted) {
+                                // The majority (aka a QUORUM) has promised the coordinator to
+                                // accept the action associated with the computed ballot.
+                                // Apply the mutation.
+                                return handler->learn_decision(std::move(proposal)).then([handler] {
+                                    paxos::paxos_state::logger.debug("CAS[{}] successful", handler->id());
+                                    tracing::trace(handler->tr_state, "CAS successful");
+                                    return std::optional<bool>(true);
+                                });
+                            }
+                            paxos::paxos_state::logger.debug("CAS[{}] PAXOS proposal not accepted (pre-empted by a higher ballot)",
+                                    handler->id());
+                            tracing::trace(handler->tr_state, "PAXOS proposal not accepted (pre-empted by a higher ballot)");
+                            ++contentions;
+                            return sleep_approx_50ms().then([] { return std::optional<bool>(); });
+                        });
+                    });
+                });
+            });
+        });
+    });
 }
 
 std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) {

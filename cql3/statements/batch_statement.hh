@@ -62,7 +62,7 @@ namespace statements {
  * A <code>BATCH</code> statement parsed from a CQL query.
  *
  */
-class batch_statement : public cql_statement_no_metadata {
+class batch_statement : public cql_statement_opt_metadata {
     static logging::logger _logger;
 public:
     using type = raw::batch_statement::type;
@@ -85,7 +85,19 @@ private:
     type _type;
     std::vector<single_statement> _statements;
     std::unique_ptr<attributes> _attrs;
+    // True if *any* statement of the batch has IF .. clause. In
+    // this case entire batch is considered a CAS batch.
     bool _has_conditions;
+    // If the BATCH has conditions, it must return columns which
+    // are involved in condition expressions in its result set.
+    // Unlike Cassandra, Scylla always returns all columns,
+    // regardless of whether the batch succeeds or not - this
+    // allows clients to prepare a CAS statement like any other
+    // statement, and trust the returned statement metadata.
+    // Cassandra returns a result set only if CAS succeeds. If
+    // any statement in the batch has IF EXISTS, we must return
+    // all columns of the table, including the primary key.
+    column_mask _columns_of_cas_result_set;
     cql_stats& _stats;
 public:
     /**
@@ -118,6 +130,10 @@ public:
 
     // Validates a prepared batch statement without validating its nested statements.
     void validate();
+
+    bool has_conditions() const { return _has_conditions; }
+
+    void build_cas_result_set_metadata();
 
     // The batch itself will be validated in either Parsed#prepare() - for regular CQL3 batches,
     //   or in QueryProcessor.processBatch() - for native protocol batches.

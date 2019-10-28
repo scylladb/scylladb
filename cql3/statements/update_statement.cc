@@ -373,8 +373,8 @@ update_statement::update_statement(            ::shared_ptr<cf_name> name,
                                                ::shared_ptr<attributes::raw> attrs,
                                                std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
                                                std::vector<relation_ptr> where_clause,
-                                               conditions_vector conditions)
-    : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, false)
+                                               conditions_vector conditions, bool if_exists)
+    : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
     , _updates(std::move(updates))
     , _where_clause(std::move(where_clause))
 { }

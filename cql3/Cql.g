@@ -524,6 +524,7 @@ usingClauseObjective[::shared_ptr<cql3::attributes::raw> attrs]
  */
 updateStatement returns [::shared_ptr<raw::update_statement> expr]
     @init {
+        bool if_exists = false;
         auto attrs = ::make_shared<cql3::attributes::raw>();
         std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, ::shared_ptr<cql3::operation::raw_update>>> operations;
     }
@@ -531,13 +532,14 @@ updateStatement returns [::shared_ptr<raw::update_statement> expr]
       ( usingClause[attrs] )?
       K_SET columnOperation[operations] (',' columnOperation[operations])*
       K_WHERE wclause=whereClause
-      ( K_IF conditions=updateConditions )?
+      ( K_IF (K_EXISTS{ if_exists = true; } | conditions=updateConditions) )?
       {
           return ::make_shared<raw::update_statement>(std::move(cf),
                                                   std::move(attrs),
                                                   std::move(operations),
                                                   std::move(wclause),
-                                                  std::move(conditions));
+                                                  std::move(conditions),
+                                                  if_exists);
      }
     ;
 
@@ -1464,16 +1466,16 @@ udtColumnOperation[operations_type& operations,
 columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
     : key=cident
-        ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, *op)); }
+        ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, {}, *op)); }
         | K_IN
-            ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(values)); }
-            | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(marker)); }
+            ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, {}, values)); }
+            | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, marker, {})); }
             )
         | '[' element=term ']'
-            ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::collection_condition(t, element, *op)); }
+            ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, element, *op)); }
             | K_IN
-                ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::collection_in_condition(element, values)); }
-                | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::collection_in_condition(element, marker)); }
+                ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, {}, values)); }
+                | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, marker, {})); }
                 )
             )
         )

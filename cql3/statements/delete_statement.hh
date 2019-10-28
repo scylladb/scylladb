@@ -63,25 +63,6 @@ public:
     virtual bool allow_clustering_key_slices() const override;
 
     virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) override;
-
-#if 0
-    protected void validateWhereClauseForConditions() throws InvalidRequestException
-    {
-        Iterator<ColumnDefinition> iterator = Iterators.concat(cfm.partitionKeyColumns().iterator(), cfm.clusteringColumns().iterator());
-        while (iterator.hasNext())
-        {
-            ColumnDefinition def = iterator.next();
-            Restriction restriction = processedKeys.get(def.name);
-            if (restriction == null || !(restriction.isEQ() || restriction.isIN()))
-            {
-                throw new InvalidRequestException(
-                        String.format("DELETE statements must restrict all PRIMARY KEY columns with equality relations in order " +
-                                      "to use IF conditions, but column '%s' is not restricted", def.name));
-            }
-        }
-
-    }
-#endif
 };
 
 }

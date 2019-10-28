@@ -130,6 +130,19 @@ public:
     bool empty() const;
 };
 
+// An instance of this class is passed as an argument to storage_proxy::cas().
+// The apply() method, which must be defined by the implementation, is supposed
+// to apply update operations to the rows fetched from the database and return
+// mutations corresponding to the update. If the update is impossible, because
+// the fetched rows doesn't match the values expected by the request, it must
+// return an empty optional object, which will signal cas() to return immediately.
+class cas_request {
+public:
+    virtual ~cas_request() = default;
+    virtual std::optional<mutation> apply(query::result& qr,
+            const query::partition_slice& slice, api::timestamp_type ts) = 0;
+};
+
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
@@ -500,6 +513,10 @@ public:
             tracing::trace_state_ptr trace_state = nullptr,
             uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 
+    future<bool> cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range_vector&& partition_ranges, coordinator_query_options query_options,
+            db::consistency_level cl_for_paxos, db::consistency_level cl_for_commit,
+            clock_type::time_point write_timeout, clock_type::time_point cas_timeout);
 
     future<> stop();
     future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
