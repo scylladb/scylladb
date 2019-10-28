@@ -62,7 +62,9 @@
 #include "cache_temperature.hh"
 #include "mutation_query.hh"
 #include "service_permit.hh"
+#include "service/paxos/proposal.hh"
 #include "service/client_state.hh"
+#include "service/paxos/prepare_summary.hh"
 
 
 namespace seastar::rpc {
@@ -87,6 +89,7 @@ class one_or_two_partition_ranges;
 namespace service {
 
 class abstract_write_response_handler;
+class paxos_response_handler;
 class abstract_read_executor;
 class mutation_holder;
 class view_update_write_response_handler;
@@ -204,6 +207,13 @@ public:
             , read_repair_decision(std::move(read_repair_decision)) {
         }
     };
+    // Holds  a list of endpoints participating in CAS request, for a given
+    // consistency level, token, and state of joining/leaving nodes.
+    struct paxos_participants {
+        std::vector<gms::inet_address> endpoints;
+        // How many participants are required for a quorum (i.e. is it SERIAL or LOCAL_SERIAL).
+        size_t required_participants;
+    };
 private:
     distributed<database>& _db;
     smp_service_group _read_smp_service_group;
@@ -258,10 +268,17 @@ private:
     void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
+    response_id_type create_write_response_handler_helper(schema_ptr s, const dht::token& token,
+            std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
+            service_permit permit);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
+    response_id_type create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token>& proposal,
+            db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
+    response_id_type create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>& meta,
+            db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
     size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;
@@ -311,6 +328,11 @@ private:
             service_permit permit);
 
     future<coordinator_query_result> do_query(schema_ptr,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl,
+        coordinator_query_options optional_params);
+    future<coordinator_query_result> do_query_with_paxos(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
@@ -399,6 +421,9 @@ public:
     * @param tr_state trace state handle
     */
     future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
+
+    paxos_participants
+    get_paxos_participants(const sstring& ks_name, const dht::token& token, db::consistency_level consistency_for_paxos);
 
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout, service_permit permit);
@@ -495,6 +520,90 @@ public:
     friend class speculating_read_executor;
     friend class view_update_backlog_broker;
     friend class view_update_write_response_handler;
+    friend class paxos_response_handler;
+    friend class mutation_holder;
+    friend class per_destination_mutation;
+    friend class shared_mutation;
+    friend class cas_mutation;
+};
+
+// A Paxos (AKA Compare And Swap, CAS) protocol involves multiple roundtrips between the coordinator
+// and endpoint participants. Some endpoints may be unavailable or slow, and this does not stop the
+// protocol progress. paxos_response_handler stores the shared state of the storage proxy associated
+// with all the futures associated with a Paxos protocol step (prepare, accept, learn), including
+// those outstanding by the time the step ends.
+//
+class paxos_response_handler : public enable_shared_from_this<paxos_response_handler> {
+private:
+    shared_ptr<storage_proxy> _proxy;
+    // The schema for the table the operation works upon.
+    schema_ptr _schema;
+    // SERIAL or LOCAL SERIAL - influences what endpoints become Paxos protocol participants,
+    // as well as Paxos quorum size. Is either set explicitly in the query or derived from
+    // the value set by SERIAL CONSISTENCY [SERIAL|LOCAL SERIAL] control statement.
+    db::consistency_level _cl_for_paxos;
+    // QUORUM, LOCAL_QUORUM, etc - defines how many replicas to wait for in LEARN step.
+    // Is either set explicitly or derived from the consistency level set in keyspace options.
+    db::consistency_level _cl_for_learn;
+    // Live endpoints, as per get_paxos_participants()
+    std::vector<gms::inet_address> _live_endpoints;
+    // How many endpoints need to respond favourably for the protocol to progress to the next step.
+    size_t _required_participants;
+    // A deadline when the entire CAS operation timeout expires, derived from write_request_timeout_in_ms
+    storage_proxy::clock_type::time_point _timeout;
+    // A deadline when the CAS operation gives up due to contention, derived from cas_contention_timeout_in_ms
+    storage_proxy::clock_type::time_point _cas_timeout;
+    // The key this request is working on.
+    dht::decorated_key _key;
+    // service permit from admission control
+    service_permit _permit;
+
+    // Unique request id generator.
+    static thread_local uint64_t next_id;
+
+    // Unique request id for logging purposes.
+    const uint64_t _id = next_id++;
+
+public:
+    tracing::trace_state_ptr tr_state;
+
+public:
+    paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, tracing::trace_state_ptr tr_state_arg,
+        service_permit permit_arg,
+        dht::decorated_key key_arg, schema_ptr schema_arg,
+        db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
+        storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg)
+
+        : _proxy(proxy_arg)
+        , _schema(std::move(schema_arg))
+        , _cl_for_paxos(cl_for_paxos_arg)
+        , _cl_for_learn(cl_for_learn_arg)
+        , _timeout(timeout_arg)
+        , _cas_timeout(cas_timeout_arg)
+        , _key(std::move(key_arg))
+        , _permit(std::move(permit_arg))
+        , tr_state(tr_state_arg) {
+        storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(_schema->ks_name(), _key.token(), _cl_for_paxos);
+        _live_endpoints = std::move(pp.endpoints);
+        _required_participants = pp.required_participants;
+    }
+
+    // Result of PREPARE step, i.e. begin_and_repair_paxos().
+    struct ballot_and_contention {
+        // Accepted ballot.
+        utils::UUID ballot;
+        // How many times we had to try with a newer ballot before it got accepted (for statistics).
+        unsigned contention;
+    };
+
+    // Steps of the Paxos protocol
+    future<ballot_and_contention> begin_and_repair_paxos(client_state& cs, bool is_write);
+    future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
+    future<bool> accept_proposal(const paxos::proposal& proposal, bool timeout_if_partially_accepted = true);
+    future<> learn_decision(paxos::proposal decision, bool allow_hints = false);
+    uint64_t id() {
+        return _id;
+    }
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;

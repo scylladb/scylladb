@@ -41,6 +41,7 @@
 #include "frozen_schema.hh"
 #include "repair/repair.hh"
 #include "digest_algorithm.hh"
+#include "service/paxos/proposal.hh"
 #include "idl/consistency_level.dist.hh"
 #include "idl/tracing.dist.hh"
 #include "idl/result.dist.hh"
@@ -61,6 +62,7 @@
 #include "idl/view.dist.hh"
 #include "idl/mutation.dist.hh"
 #include "idl/messaging_service.dist.hh"
+#include "idl/paxos.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
 #include "idl/consistency_level.dist.impl.hh"
@@ -82,6 +84,7 @@
 #include "idl/cache_temperature.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "idl/messaging_service.dist.impl.hh"
+#include "idl/paxos.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
@@ -440,6 +443,11 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::MIGRATION_REQUEST:
     case messaging_verb::SCHEMA_CHECK:
     case messaging_verb::COUNTER_MUTATION:
+    // Use the same RPC client for light weight transaction
+    // protocol steps as for standard mutations and read requests.
+    case messaging_verb::PAXOS_PREPARE:
+    case messaging_verb::PAXOS_ACCEPT:
+    case messaging_verb::PAXOS_LEARN:
         return 0;
     // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
     // sent on a different connection to avoid potential deadlocks
@@ -1218,6 +1226,53 @@ void messaging_service::unregister_repair_get_diff_algorithms() {
 }
 future<std::vector<row_level_diff_detect_algorithm>> messaging_service::send_repair_get_diff_algorithms(msg_addr id) {
     return send_message<future<std::vector<row_level_diff_detect_algorithm>>>(this, messaging_verb::REPAIR_GET_DIFF_ALGORITHMS, std::move(id));
+}
+
+void
+messaging_service::register_paxos_prepare(std::function<future<service::paxos::prepare_response>(
+        const rpc::client_info&, rpc::opt_time_point, utils::UUID schema_version, partition_key key, utils::UUID ballot,
+        std::optional<tracing::trace_info>)>&& func) {
+    register_handler(this, messaging_verb::PAXOS_PREPARE, std::move(func));
+}
+void messaging_service::unregister_paxos_prepare() {
+    _rpc->unregister_handler(netw::messaging_verb::PAXOS_PREPARE);
+}
+future<service::paxos::prepare_response>
+messaging_service::send_paxos_prepare(gms::inet_address peer, clock_type::time_point timeout,
+    utils::UUID schema_version, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+    return send_message_timeout<service::paxos::prepare_response>(this,
+        messaging_verb::PAXOS_PREPARE, netw::msg_addr(peer), timeout, schema_version, key, ballot, std::move(trace_info));
+}
+
+void messaging_service::register_paxos_accept(std::function<future<bool>(
+        const rpc::client_info&, rpc::opt_time_point, service::paxos::proposal proposal,
+        std::optional<tracing::trace_info>)>&& func) {
+    register_handler(this, messaging_verb::PAXOS_ACCEPT, std::move(func));
+}
+void messaging_service::unregister_paxos_accept() {
+    _rpc->unregister_handler(netw::messaging_verb::PAXOS_ACCEPT);
+}
+future<bool>
+messaging_service::send_paxos_accept(gms::inet_address peer, clock_type::time_point timeout,
+        const service::paxos::proposal& proposal, std::optional<tracing::trace_info> trace_info) {
+
+    return send_message_timeout<future<bool>>(this,
+        messaging_verb::PAXOS_ACCEPT, netw::msg_addr(peer), timeout, proposal, std::move(trace_info));
+}
+
+void messaging_service::register_paxos_learn(std::function<future<rpc::no_wait_type> (const rpc::client_info&,
+    rpc::opt_time_point, service::paxos::proposal decision, std::vector<inet_address> forward, inet_address reply_to,
+    unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info)>&& func) {
+    register_handler(this, netw::messaging_verb::PAXOS_LEARN, std::move(func));
+}
+void messaging_service::unregister_paxos_learn() {
+    _rpc->unregister_handler(netw::messaging_verb::PAXOS_LEARN);
+}
+future<> messaging_service::send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
+    std::vector<inet_address> forward, inet_address reply_to, unsigned shard, response_id_type response_id,
+    std::optional<tracing::trace_info> trace_info) {
+    return send_message_oneway_timeout(this, timeout, messaging_verb::PAXOS_LEARN, std::move(id), decision, std::move(forward),
+        std::move(reply_to), std::move(shard), std::move(response_id), std::move(trace_info));
 }
 
 } // namespace net

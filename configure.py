@@ -583,6 +583,10 @@ scylla_core = (['database.cc',
                 'service/priority_manager.cc',
                 'service/migration_manager.cc',
                 'service/storage_proxy.cc',
+                'service/paxos/proposal.cc',
+                'service/paxos/prepare_response.cc',
+                'service/paxos/paxos_state.cc',
+                'service/paxos/prepare_summary.cc',
                 'cql3/operator.cc',
                 'cql3/relation.cc',
                 'cql3/column_identifier.cc',
@@ -816,6 +820,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/cache_temperature.idl.hh',
         'idl/view.idl.hh',
         'idl/messaging_service.idl.hh',
+        'idl/paxos.idl.hh',
         ]
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
