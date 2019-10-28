@@ -277,7 +277,10 @@ query_processor::process(const sstring_view& query_string, service::query_state&
     auto p = get_statement(query_string, query_state.get_client_state());
     auto cql_statement = p->statement;
     if (cql_statement->get_bound_terms() != options.get_values_count()) {
-        throw exceptions::invalid_request_exception("Invalid amount of bind variables");
+        const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
+                cql_statement->get_bound_terms(),
+                options.get_values_count());
+        throw exceptions::invalid_request_exception(msg);
     }
     options.prepare(p->bound_names);
 
