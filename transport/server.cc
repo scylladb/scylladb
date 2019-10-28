@@ -807,8 +807,11 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_ex
     auto stmt = prepared->statement;
     tracing::trace(query_state.get_trace_state(), "Checking bounds");
     if (stmt->get_bound_terms() != options.get_values_count()) {
-        tracing::trace(query_state.get_trace_state(), "Invalid amount of bind variables: expected {:d} received {:d}", stmt->get_bound_terms(), options.get_values_count());
-        throw exceptions::invalid_request_exception("Invalid amount of bind variables");
+        const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
+                stmt->get_bound_terms(),
+                options.get_values_count());
+        tracing::trace(query_state.get_trace_state(), msg);
+        throw exceptions::invalid_request_exception(msg);
     }
 
     options.prepare(prepared->bound_names);
