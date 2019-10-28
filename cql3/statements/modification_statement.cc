@@ -94,7 +94,7 @@ bool modification_statement::uses_function(const sstring& ks_name, const sstring
             return true;
         }
     }
-    for (auto&& condition : _column_conditions) {
+    for (auto&& condition : _regular_conditions) {
         if (condition && condition->uses_function(ks_name, function_name)) {
             return true;
         }
@@ -225,7 +225,7 @@ bool modification_statement::applies_to(const update_parameters::prefetch_data::
         return cond->applies_to(value, options);
     };
     return (std::all_of(_static_conditions.begin(), _static_conditions.end(), condition_applies) &&
-            std::all_of(_column_conditions.begin(), _column_conditions.end(), condition_applies));
+            std::all_of(_regular_conditions.begin(), _regular_conditions.end(), condition_applies));
 }
 
 std::vector<mutation> modification_statement::apply_updates(
@@ -447,7 +447,7 @@ void modification_statement::build_cas_result_set_metadata() {
             _columns_of_cas_result_set.set(def.ordinal_id);
         }
     } else {
-        for (const auto& cond : _column_conditions) {
+        for (const auto& cond : _regular_conditions) {
             _columns_of_cas_result_set.set(cond->column.ordinal_id);
         }
         for (const auto& cond : _static_conditions) {
@@ -665,7 +665,7 @@ void modification_statement::add_condition(::shared_ptr<column_condition> cond) 
     } else {
         _has_regular_column_conditions = true;
         _sets_a_collection |= cond->column.type->is_collection();
-        _column_conditions.emplace_back(std::move(cond));
+        _regular_conditions.emplace_back(std::move(cond));
     }
 }
 
@@ -718,7 +718,7 @@ void modification_statement::validate_where_clause_for_conditions() const {
         }
 
         // All primary key parts must be specified, unless this statement has only static column conditions
-        if (_column_conditions.empty() == false) {
+        if (_regular_conditions.empty() == false) {
             throw exceptions::invalid_request_exception(
                     "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
                     " in order to use IF condition on non static columns");
