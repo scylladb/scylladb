@@ -69,25 +69,34 @@ bool cql3::untyped_result_set_row::has(const sstring& name) const {
 
 using cql_transport::messages::result_message;
 
+cql3::untyped_result_set::untyped_result_set(const cql3::result_set& rs) {
+    auto& cn = rs.get_metadata().get_names();
+    for (auto& r : rs.rows()) {
+        // r is const ref. TODO: make this more efficient by either wrapping result set
+        // or adding modifying accessors to it.
+        _rows.emplace_back(cn, r);
+    }
+}
+
 cql3::untyped_result_set::untyped_result_set(::shared_ptr<result_message> msg)
     : _rows([msg]{
     class visitor : public result_message::visitor_base {
     public:
-        rows_type rows;
+        std::optional<untyped_result_set> res;
         void visit(const result_message::rows& rmrs) override {
             auto& rs = rmrs.rs();
-            auto& cn = rs.get_metadata().get_names();
-            auto set = rs.result_set();
-            for (auto& r : set.rows()) {
-                rows.emplace_back(cn, std::move(r));
-            }
+            auto set = rs.result_set(); // accessor by value.
+            res.emplace(set); // construct untyped_result_set by const ref.
         }
     };
     visitor v;
     if (msg != nullptr) {
         msg->accept(v);
     }
-    return std::move(v.rows);
+    if (v.res) {
+        return std::move(v.res->_rows);
+    }
+    return rows_type{};
 }())
 {}
 
