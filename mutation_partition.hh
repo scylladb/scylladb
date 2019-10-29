@@ -1350,6 +1350,7 @@ private:
     uint32_t do_compact(const schema& s,
         gc_clock::time_point now,
         const std::vector<query::clustering_range>& row_ranges,
+        bool always_return_static_content,
         bool reverse,
         uint32_t row_limit,
         can_gc_fn&);
@@ -1381,7 +1382,8 @@ public:
     // The row_limit parameter must be > 0.
     //
     uint32_t compact_for_query(const schema& s, gc_clock::time_point query_time,
-        const std::vector<query::clustering_range>& row_ranges, bool reversed, uint32_t row_limit);
+        const std::vector<query::clustering_range>& row_ranges, bool always_return_static_content,
+        bool reversed, uint32_t row_limit);
 
     // Performs the following:
     //   - expires cells based on compaction_time

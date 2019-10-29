@@ -109,9 +109,11 @@ private:
     std::vector<::shared_ptr<column_condition>> _column_conditions;
     std::vector<::shared_ptr<column_condition>> _static_conditions;
 
-    // True if has _if_exists or _if_not_exists or other conditions.
+    // True if this statement has _if_exists or _if_not_exists or other
+    // conditions that apply to static/regular columns, respectively.
     // Pre-computed during statement prepare.
-    bool _has_conditions = false;
+    bool _has_static_column_conditions = false;
+    bool _has_regular_column_conditions = false;
     // True if any of update operations requires a prefetch.
     // Pre-computed during statement prepare.
     bool _requires_read = false;
@@ -210,8 +212,14 @@ public:
     virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache);
 
 private:
+    // Return true if this statement doesn't update or read any regular rows, only static rows.
+    // Note, it isn't enought to just check !_sets_regular_columns && _column_conditions.empty(),
+    // because a DELETE statement that deletes whole rows (DELETE FROM ...) technically doesn't
+    // have any column operations and hence doesn't have _sets_regular_columns set. It doesn't
+    // have _sets_static_columns set either so checking the latter flag too here guarantees that
+    // this function works as expected in all cases.
     bool applies_only_to_static_columns() const {
-        return _sets_static_columns && !_sets_regular_columns;
+        return _sets_static_columns && !_sets_regular_columns && _column_conditions.empty();
     }
 public:
     // True if any of update operations of this statement requires
@@ -254,7 +262,11 @@ private:
     friend class modification_statement_executor;
 public:
     // True if the statement has IF conditions. Pre-computed during prepare.
-    bool has_conditions() const { return _has_conditions; }
+    bool has_conditions() const { return _has_regular_column_conditions || _has_static_column_conditions; }
+    // True if the statement has IF conditions that apply to static columns.
+    bool has_static_column_conditions() const { return _has_static_column_conditions; }
+    // True if this statement needs to read only static column values to check if it can be applied.
+    bool has_only_static_column_conditions() const { return !_has_regular_column_conditions && _has_static_column_conditions; }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;

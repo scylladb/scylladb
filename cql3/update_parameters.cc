@@ -54,8 +54,8 @@ update_parameters::get_prefetched_list(const partition_key& pkey, const clusteri
         return nullptr;
     }
 
-    auto j = row->find(column.ordinal_id);
-    if (j == row->end()) {
+    auto j = row->cells.find(column.ordinal_id);
+    if (j == row->cells.end()) {
         return nullptr;
     }
     const data_value& cell = j->second;
@@ -101,7 +101,7 @@ class prefetch_data_builder {
     {
         auto i = key.begin(*_schema);
         for (auto&& col : _schema->partition_key_columns()) {
-            cells.emplace(col.ordinal_id, col.type->deserialize_value(*i));
+            cells.cells.emplace(col.ordinal_id, col.type->deserialize_value(*i));
             ++i;
         }
     }
@@ -114,7 +114,7 @@ class prefetch_data_builder {
             if (i == key.end(*_schema)) {
                 break;
             }
-            cells.emplace(col.ordinal_id, col.type->deserialize_value(*i));
+            cells.cells.emplace(col.ordinal_id, col.type->deserialize_value(*i));
             ++i;
         }
     }
@@ -134,7 +134,7 @@ class prefetch_data_builder {
             type = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
         }
         cell->with_linearized([&] (bytes_view cell_view) {
-            cells.emplace(def.ordinal_id, type->deserialize(cell_view));
+            cells.cells.emplace(def.ordinal_id, type->deserialize(cell_view));
         });
     };
 public:

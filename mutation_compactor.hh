@@ -150,7 +150,7 @@ class compact_mutation_state {
     bool _empty_partition_in_gc_consumer{};
     const dht::decorated_key* _dk{};
     dht::decorated_key _last_dk;
-    bool _has_ck_selector{};
+    bool _return_static_content_on_partition_with_no_rows{};
 
     std::optional<static_row> _last_static_row;
 
@@ -251,7 +251,9 @@ public:
     void consume_new_partition(const dht::decorated_key& dk) {
         auto& pk = dk.key();
         _dk = &dk;
-        _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, pk));
+        _return_static_content_on_partition_with_no_rows =
+            _slice.options.contains(query::partition_slice::option::always_return_static_content) ||
+            !has_ck_selector(_slice.row_ranges(_schema, pk));
         _empty_partition = true;
         _empty_partition_in_gc_consumer = true;
         _rows_in_current_partition = 0;
@@ -392,7 +394,8 @@ public:
         if (!_empty_partition) {
             // #589 - Do not add extra row for statics unless we did a CK range-less query.
             // See comment in query
-            if (_rows_in_current_partition == 0 && _static_row_live && !_has_ck_selector) {
+            if (_rows_in_current_partition == 0 && _static_row_live &&
+                    _return_static_content_on_partition_with_no_rows) {
                 ++_rows_in_current_partition;
             }
 

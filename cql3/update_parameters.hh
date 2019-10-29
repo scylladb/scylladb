@@ -60,6 +60,7 @@ public:
     static constexpr query::partition_slice::option_set options = query::partition_slice::option_set::of<
         query::partition_slice::option::send_partition_key,
         query::partition_slice::option::send_clustering_key,
+        query::partition_slice::option::always_return_static_content,
         query::partition_slice::option::collections_as_maps>();
 
     // Holder for data for
@@ -90,13 +91,32 @@ public:
                 return  tri_compare(k1.first, k1.second, k2.first, k2.second) < 0;
             }
         };
-        // Order CAS columns by ordinal column id.
-        using row = std::map<ordinal_column_id, data_value>;
+    public:
+        struct row {
+            // Order CAS columns by ordinal column id.
+            std::map<ordinal_column_id, data_value> cells;
+            // Set if the statement is used for checking conditions of a CAS request.
+            // Only those statements that have this flag set should be included into
+            // the CAS result set.
+            mutable bool is_in_cas_result_set = false;
+            // Return true if this row has at least one static column set.
+            bool has_static_columns(schema_ptr schema) const {
+                if (!schema->has_static_columns()) {
+                    return false;
+                }
+                // Static columns use a continuous range of ids so to efficiently check
+                // if a row has a static cell, we can look up the first cell with id >=
+                // first static column id and check if it's static.
+                auto it = cells.lower_bound(schema->static_begin()->ordinal_id);
+                if (it == cells.end() || !schema->column_at(it->first).is_static()) {
+                    return false;
+                }
+                return true;
+            }
+        };
         // Use an ordered map since CAS result set must be naturally ordered
         // when returned to the client.
-        using row_map = std::map<key, row, key_less>;
-    public:
-        row_map rows;
+        std::map<key, row, key_less> rows;
         schema_ptr schema;
     public:
         prefetch_data(schema_ptr schema);
