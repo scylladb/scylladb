@@ -796,8 +796,10 @@ static future<> repair_cf_range(repair_info& ri,
                     // still do our best to repair available replicas.
                     std::vector<gms::inet_address> live_neighbors;
                     std::vector<partition_checksum> live_neighbors_checksum;
+                    bool local_checksum_failed = false;
                     for (unsigned i = 0; i < checksums.size(); i++) {
                         if (checksums[i].failed()) {
+                            local_checksum_failed |= (i == 0);
                             rlogger.warn(
                                 "Checksum of ks={}, table={}, range={} on {} failed: {}",
                                 ri.keyspace, cf, range,
@@ -813,7 +815,7 @@ static future<> repair_cf_range(repair_info& ri,
                             live_neighbors_checksum.push_back(checksums[i].get0());
                         }
                     }
-                    if (checksums[0].failed() || live_neighbors.empty()) {
+                    if (local_checksum_failed || live_neighbors.empty()) {
                         return make_ready_future<>();
                     }
                     // If one of the available checksums is different, repair
