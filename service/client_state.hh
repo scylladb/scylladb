@@ -236,7 +236,7 @@ public:
      */
     api::timestamp_type get_timestamp_for_paxos(api::timestamp_type min_timestamp_to_use) {
         api::timestamp_type current = std::max(api::new_timestamp(), min_timestamp_to_use);
-        _last_timestamp_micros = _last_timestamp_micros > current ? _last_timestamp_micros + 1 : current;
+        _last_timestamp_micros = _last_timestamp_micros >= current ? _last_timestamp_micros + 1 : current;
         return _last_timestamp_micros;
     }
 
