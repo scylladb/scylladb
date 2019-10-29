@@ -173,10 +173,6 @@ public:
 
     void add_operation(::shared_ptr<operation> op);
 
-    void inc_cql_stats() {
-        ++_stats.statements[size_t(type)];
-    }
-
     const ::shared_ptr<restrictions::statement_restrictions>& restrictions() const {
         return _restrictions;
     }
