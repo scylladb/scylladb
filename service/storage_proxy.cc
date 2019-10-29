@@ -704,6 +704,7 @@ static future<std::optional<paxos_response_handler::ballot_and_contention>> slee
  * nodes have seen the most recent commit. Otherwise, return null.
  */
 future<paxos_response_handler::ballot_and_contention> paxos_response_handler::begin_and_repair_paxos(client_state& cs, bool is_write) {
+    _proxy->get_db().local().get_config().check_experimental("Paxos");
     return do_with(unsigned(0), api::timestamp_type(0), shared_from_this(), [this, &cs] (unsigned& contentions,
             api::timestamp_type& min_timestamp_micros_to_use, shared_ptr<paxos_response_handler>& prh) {
         return repeat_until_value([this, &contentions, &cs, &min_timestamp_micros_to_use] {
