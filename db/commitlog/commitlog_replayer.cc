@@ -111,7 +111,7 @@ public:
         return _column_mappings.stop();
     }
 
-    future<> process(stats*, fragmented_temporary_buffer buf, replay_position rp) const;
+    future<> process(stats*, commitlog::buffer_and_replay_position buf_rp) const;
     future<stats> recover(sstring file, const sstring& fname_prefix) const;
 
     typedef std::unordered_map<utils::UUID, replay_position> rp_map;
@@ -226,8 +226,8 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
     auto& exts = _db.local().extensions();
 
     return db::commitlog::read_log_file(file, fname_prefix, service::get_local_commitlog_priority(),
-            std::bind(&impl::process, this, s.get(), std::placeholders::_1,
-                    std::placeholders::_2), p, &exts).then([](auto s) {
+            std::bind(&impl::process, this, s.get(), std::placeholders::_1),
+            p, &exts).then([](auto s) {
         auto f = s->done();
         return f.finally([s = std::move(s)] {});
     }).then_wrapped([s](future<> f) {
@@ -242,7 +242,8 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
     });
 }
 
-future<> db::commitlog_replayer::impl::process(stats* s, fragmented_temporary_buffer buf, replay_position rp) const {
+future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_replay_position buf_rp) const {
+    auto&& [buf, rp] = buf_rp;
     try {
 
         commitlog_entry_reader cer(buf);

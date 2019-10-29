@@ -102,6 +102,11 @@ public:
     class segment;
 
     friend class rp_handle;
+
+    struct buffer_and_replay_position {
+        fragmented_temporary_buffer buffer;
+        replay_position position;
+    };
 private:
     ::shared_ptr<segment_manager> _segment_manager;
 public:
@@ -344,7 +349,7 @@ public:
     future<std::vector<sstring>> list_existing_segments() const;
     future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
 
-    typedef std::function<future<>(fragmented_temporary_buffer, replay_position)> commit_load_reader_func;
+    typedef std::function<future<>(buffer_and_replay_position)> commit_load_reader_func;
 
     class segment_error : public std::exception {};
 
@@ -380,7 +385,7 @@ public:
         }
     };
 
-    static future<std::unique_ptr<subscription<fragmented_temporary_buffer, replay_position>>> read_log_file(
+    static future<std::unique_ptr<subscription<buffer_and_replay_position>>> read_log_file(
             const sstring&, const sstring&, seastar::io_priority_class read_io_prio_class, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);
