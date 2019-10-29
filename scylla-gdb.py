@@ -81,13 +81,19 @@ class std_optional:
         self.ref = ref
 
     def get(self):
-        return self.ref['_M_payload']['_M_payload']['_M_value']
+        try:
+            return self.ref['_M_payload']['_M_payload']['_M_value']
+        except gdb.error:
+            return self.ref['_M_payload'] # Scylla 3.0 compatibility
 
     def __bool__(self):
         return self.__nonzero__()
 
     def __nonzero__(self):
-        return bool(self.ref['_M_payload']['_M_engaged'])
+        try:
+            return bool(self.ref['_M_payload']['_M_engaged'])
+        except gdb.error:
+            return bool(self.ref['_M_engaged']) # Scylla 3.0 compatibility
 
 
 class intrusive_set:
@@ -272,7 +278,10 @@ class static_vector:
     def __iter__(self):
         t = self.ref.type.strip_typedefs()
         value_type = t.template_argument(0)
-        data = self.ref['m_holder']['storage']['dummy']['dummy'].cast(value_type.pointer())
+        try:
+            data = self.ref['m_holder']['storage']['dummy']['dummy'].cast(value_type.pointer())
+        except gdb.error:
+            data = self.ref['m_holder']['storage']['dummy'].cast(value_type.pointer()) # Scylla 3.0 compatibility
         for i in range(self.__len__()):
             yield data[i]
 
@@ -1566,7 +1575,10 @@ class scylla_ptr(gdb.Command):
             ptr_meta.offset_in_object = ptr - span.start
 
         # FIXME: handle debug-mode build
-        index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._store._segments_base) / \'logalloc::segment\'::size' % (ptr))
+        try:
+            index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._store._segments_base) / \'logalloc::segment\'::size' % (ptr))
+        except gdb.error:
+            index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr)) # Scylla 3.0 compatibility
         desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
         ptr_meta.is_lsa = bool(desc['_region'])
 
@@ -1585,7 +1597,10 @@ class scylla_segment_descs(gdb.Command):
 
     def invoke(self, arg, from_tty):
         # FIXME: handle debug-mode build
-        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
+        try:
+            base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
+        except gdb.error:
+            base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
