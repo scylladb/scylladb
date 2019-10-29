@@ -198,8 +198,10 @@ private:
     streamed_mutation::forwarding _fwd_sm;
     mutation_reader::forwarding _fwd_mr;
 private:
+    void maybe_add_readers_at_partition_boundary();
     void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
     void add_readers(std::vector<flat_mutation_reader> new_readers);
+    future<> prepare_one(db::timeout_clock::time_point timeout, reader_and_last_fragment_kind rk);
     future<> prepare_next(db::timeout_clock::time_point timeout);
     // Collect all forwardable readers into _next, and remove them from
     // their previous containers (_halted_readers and _fragment_heap).
@@ -303,44 +305,51 @@ struct mutation_reader_merger::fragment_heap_compare {
     }
 };
 
+void mutation_reader_merger::maybe_add_readers_at_partition_boundary() {
+    // We are either crossing partition boundary or ran out of
+    // readers. If there are halted readers then we are just
+    // waiting for a fast-forward so there is nothing to do.
+    if (_fragment_heap.empty() && _halted_readers.empty()) {
+        if (_reader_heap.empty()) {
+            maybe_add_readers(std::nullopt);
+        } else {
+            maybe_add_readers(_reader_heap.front().fragment.as_partition_start().key());
+        }
+    }
+}
+
 future<> mutation_reader_merger::prepare_next(db::timeout_clock::time_point timeout) {
     return parallel_for_each(_next, [this, timeout] (reader_and_last_fragment_kind rk) {
-        return (*rk.reader)(timeout).then([this, rk] (mutation_fragment_opt mfo) {
-            if (mfo) {
-                if (mfo->is_partition_start()) {
-                    _reader_heap.emplace_back(rk.reader, std::move(*mfo));
-                    boost::push_heap(_reader_heap, reader_heap_compare(*_schema));
-                } else {
-                    _fragment_heap.emplace_back(rk.reader, std::move(*mfo));
-                    boost::range::push_heap(_fragment_heap, fragment_heap_compare(*_schema));
-                }
-            } else if (_fwd_sm == streamed_mutation::forwarding::yes && rk.last_kind != mutation_fragment::kind::partition_end) {
-                // When in streamed_mutation::forwarding mode we need
-                // to keep track of readers that returned
-                // end-of-stream to know what readers to ff. We can't
-                // just ff all readers as we might drop fragments from
-                // partitions we haven't even read yet.
-                // Readers whoose last emitted fragment was a partition
-                // end are out of data for good for the current range.
-                _halted_readers.push_back(rk);
-            } else if (_fwd_mr == mutation_reader::forwarding::no) {
-                _to_remove.splice(_to_remove.end(), _all_readers, rk.reader);
-                if (_to_remove.size() >= 4) {
-                    _to_remove.clear();
-                }
-            }
-        });
+        return prepare_one(timeout, rk);
     }).then([this] {
         _next.clear();
+        maybe_add_readers_at_partition_boundary();
+    });
+}
 
-        // We are either crossing partition boundary or ran out of
-        // readers. If there are halted readers then we are just
-        // waiting for a fast-forward so there is nothing to do.
-        if (_fragment_heap.empty() && _halted_readers.empty()) {
-            if (_reader_heap.empty()) {
-                maybe_add_readers(std::nullopt);
+future<> mutation_reader_merger::prepare_one(db::timeout_clock::time_point timeout, reader_and_last_fragment_kind rk) {
+    return (*rk.reader)(timeout).then([this, rk] (mutation_fragment_opt mfo) {
+        if (mfo) {
+            if (mfo->is_partition_start()) {
+                _reader_heap.emplace_back(rk.reader, std::move(*mfo));
+                boost::push_heap(_reader_heap, reader_heap_compare(*_schema));
             } else {
-                maybe_add_readers(_reader_heap.front().fragment.as_partition_start().key());
+                _fragment_heap.emplace_back(rk.reader, std::move(*mfo));
+                boost::range::push_heap(_fragment_heap, fragment_heap_compare(*_schema));
+            }
+        } else if (_fwd_sm == streamed_mutation::forwarding::yes && rk.last_kind != mutation_fragment::kind::partition_end) {
+            // When in streamed_mutation::forwarding mode we need
+            // to keep track of readers that returned
+            // end-of-stream to know what readers to ff. We can't
+            // just ff all readers as we might drop fragments from
+            // partitions we haven't even read yet.
+            // Readers whoose last emitted fragment was a partition
+            // end are out of data for good for the current range.
+            _halted_readers.push_back(rk);
+        } else if (_fwd_mr == mutation_reader::forwarding::no) {
+            _to_remove.splice(_to_remove.end(), _all_readers, rk.reader);
+            if (_to_remove.size() >= 4) {
+                _to_remove.clear();
             }
         }
     });
