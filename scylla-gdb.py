@@ -1084,8 +1084,105 @@ class span_checker(object):
 
 
 class scylla_memory(gdb.Command):
+    """Summarize the state of the shard's memory.
+
+    The goal of this summary is to provide a starting point when investigating
+    memory issues.
+
+    The summary consists of two parts:
+    * A high level overview.
+    * A per size-class population statistics.
+
+    In an OOM situation the latter usually shows the immediate symptoms, one
+    or more heavily populated size classes eating up all memory. The overview
+    can be used to identify the subsystem that owns these problematic objects.
+    """
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    @staticmethod
+    def summarize_inheriting_execution_stage(ies):
+        scheduling_group_names = {int(tq['_id']): str(tq['_name']) for tq in get_local_task_queues()}
+        per_sg_stages = []
+        i = 0
+        for es_opt in std_vector(ies['_stage_for_group']):
+            es_opt = std_optional(es_opt)
+            if not es_opt:
+                continue
+            es = es_opt.get()
+            enqueued = int(es['_stats']['function_calls_enqueued'])
+            executed = int(es['_stats']['function_calls_executed'])
+            size = enqueued - executed
+            if size > 0:
+                per_sg_stages.append((i, scheduling_group_names[i], size))
+            i += 1
+
+        return per_sg_stages
+
+    @staticmethod
+    def summarize_table_phased_barrier_users(db, barrier_name):
+        tables_by_count = defaultdict(list)
+        for table in for_each_table():
+            schema = schema_ptr(table['_schema'])
+            g = seastar_lw_shared_ptr(table[barrier_name]['_gate']).get()
+            count = int(g['_count'])
+            if count > 0:
+                tables_by_count[count].append(str(schema.table_name()).replace('"', ''))
+
+        return [(c, tables_by_count[c]) for c in reversed(sorted(tables_by_count.keys()))]
+
+    @staticmethod
+    def print_replica_stats():
+        db = sharded(gdb.parse_and_eval('::debug::db')).local()
+
+        gdb.write('Replica:\n')
+        gdb.write('  Read Concurrency Semaphores:\n'
+                '    user sstable reads:      {user_sst_rd_count:>3}/{user_sst_rd_max_count:>3}, remaining mem: {user_sst_rd_mem:>13} B, queued: {user_sst_rd_queued}\n'
+                '    streaming sstable reads: {streaming_sst_rd_count:>3}/{streaming_sst_rd_max_count:>3}, remaining mem: {system_sst_rd_mem:>13} B, queued: {streaming_sst_rd_queued}\n'
+                '    system sstable reads:    {system_sst_rd_count:>3}/{system_sst_rd_max_count:>3}, remaining mem: {system_sst_rd_mem:>13} B, queued: {system_sst_rd_queued}\n'
+                .format(
+                        user_sst_rd_count=int(gdb.parse_and_eval('database::max_count_concurrent_reads')) - int(db['_read_concurrency_sem']['_resources']['count']),
+                        user_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_concurrent_reads')),
+                        user_sst_rd_mem=int(db['_read_concurrency_sem']['_resources']['memory']),
+                        user_sst_rd_queued=int(db['_read_concurrency_sem']['_wait_list']['_size']),
+                        streaming_sst_rd_count=int(gdb.parse_and_eval('database::max_count_streaming_concurrent_reads')) - int(db['_streaming_concurrency_sem']['_resources']['count']),
+                        streaming_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_streaming_concurrent_reads')),
+                        streaming_sst_rd_mem=int(db['_streaming_concurrency_sem']['_resources']['memory']),
+                        streaming_sst_rd_queued=int(db['_streaming_concurrency_sem']['_wait_list']['_size']),
+                        system_sst_rd_count=int(gdb.parse_and_eval('database::max_count_system_concurrent_reads')) - int(db['_system_read_concurrency_sem']['_resources']['count']),
+                        system_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_system_concurrent_reads')),
+                        system_sst_rd_mem=int(db['_system_read_concurrency_sem']['_resources']['memory']),
+                        system_sst_rd_queued=int(db['_system_read_concurrency_sem']['_wait_list']['_size'])))
+
+        gdb.write('  Execution Stages:\n')
+        for es_path in [('_data_query_stage',), ('_mutation_query_stage', '_execution_stage'), ('_apply_stage',)]:
+            machine_name = es_path[0]
+            human_name = machine_name.replace('_', ' ').strip()
+            total = 0
+
+            gdb.write('    {}:\n'.format(human_name))
+            es = db
+            for path_component in es_path:
+                es = es[path_component]
+            for sg_id, sg_name, count in scylla_memory.summarize_inheriting_execution_stage(es):
+                total += count
+                gdb.write('      {:02} {:32} {}\n'.format(sg_id, sg_name, count))
+            gdb.write('         {:32} {}\n'.format('Total', total))
+
+        gdb.write('  Tables - Ongoing Operations:\n')
+        for machine_name in ['_pending_writes_phaser', '_pending_reads_phaser', '_pending_streams_phaser']:
+            human_name = machine_name.replace('_', ' ').strip()
+            gdb.write('    {} (top 10):\n'.format(human_name))
+            total = 0
+            i = 0
+            for count, tables in scylla_memory.summarize_table_phased_barrier_users(db, machine_name):
+                total += count
+                if i < 10:
+                    gdb.write('      {:9} {}\n'.format(count, ', '.join(tables)))
+                i += 1
+            gdb.write('      {:9} Total (all)\n'.format(total))
+        gdb.write('\n')
 
     def invoke(self, arg, from_tty):
         cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
@@ -1154,6 +1251,8 @@ class scylla_memory(gdb.Command):
                   bg_rd=int(sp['_stats']['reads']) - int(sp['_stats']['foreground_reads']),
                   regular=int(hm['_stats']['size_of_hints_in_progress']),
                   views=int(view_hm['_stats']['size_of_hints_in_progress'])))
+
+        scylla_memory.print_replica_stats()
 
         gdb.write('Small pools:\n')
         small_pools = cpu_mem['small_pools']
