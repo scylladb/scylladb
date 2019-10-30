@@ -137,6 +137,77 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(combined_reader_galloping_within_partition_test) {
+    simple_schema s;
+
+    const auto pk = s.make_pkey();
+    const auto ckeys = s.make_ckeys(10);
+
+    auto make_partition = [&] (auto&& ckey_indexes) -> mutation {
+        mutation mut(s.schema(), pk);
+        for (auto ckey_index : ckey_indexes) {
+            s.add_row(mut, ckeys[ckey_index], format("val_{:02d}", ckey_index), 1);
+        }
+        return mut;
+    };
+
+    std::vector<flat_mutation_reader> v;
+    v.push_back(flat_mutation_reader_from_mutations({make_partition(boost::irange(0, 5))}));
+    v.push_back(flat_mutation_reader_from_mutations({make_partition(boost::irange(5, 10))}));
+    assert_that(make_combined_reader(s.schema(), std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
+        .produces(make_partition(boost::irange(0, 10)))
+        .produces_end_of_stream();
+}
+
+template<typename Collection>
+mutation make_partition_with_clustering_rows(simple_schema& s, const dht::decorated_key& pkey, Collection&& ckey_nums) {
+    mutation mut(s.schema(), pkey);
+    for (auto i : ckey_nums) {
+        s.add_row(mut, s.make_ckey(i), format("val_{:02d}", i), 1);
+    }
+    return mut;
+}
+
+SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_galloping_over_multiple_partitions_test) {
+    simple_schema s;
+
+    const auto k = s.make_pkeys(2);
+
+    std::vector<flat_mutation_reader> v;
+    v.push_back(flat_mutation_reader_from_mutations({
+        make_partition_with_clustering_rows(s, k[0], boost::irange(5, 10)),
+        make_partition_with_clustering_rows(s, k[1], boost::irange(0, 5))
+    }));
+    v.push_back(flat_mutation_reader_from_mutations({
+        make_partition_with_clustering_rows(s, k[0], boost::irange(0, 5)),
+        make_partition_with_clustering_rows(s, k[1], boost::irange(5, 10))
+    }));
+    assert_that(make_combined_reader(s.schema(), std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
+        .produces(make_partition_with_clustering_rows(s, k[0], boost::irange(0, 10)))
+        .produces(make_partition_with_clustering_rows(s, k[1], boost::irange(0, 10)))
+        .produces_end_of_stream();
+}
+
+SEASTAR_THREAD_TEST_CASE(combined_reader_galloping_changing_multiple_partitions_test) {
+    simple_schema s;
+
+    const auto k = s.make_pkeys(2);
+
+    std::vector<flat_mutation_reader> v;
+    v.push_back(flat_mutation_reader_from_mutations({
+        make_partition_with_clustering_rows(s, k[0], boost::irange(0, 5)),
+        make_partition_with_clustering_rows(s, k[1], boost::irange(0, 5))
+    }));
+    v.push_back(flat_mutation_reader_from_mutations({
+        make_partition_with_clustering_rows(s, k[0], boost::irange(5, 10)),
+        make_partition_with_clustering_rows(s, k[1], boost::irange(5, 10)),
+    }));
+    assert_that(make_combined_reader(s.schema(), std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
+        .produces(make_partition_with_clustering_rows(s, k[0], boost::irange(0, 10)))
+        .produces(make_partition_with_clustering_rows(s, k[1], boost::irange(0, 10)))
+        .produces_end_of_stream();
+}
+
 static mutation make_mutation_with_key(schema_ptr s, dht::decorated_key dk) {
     mutation m(s, std::move(dk));
     m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
@@ -326,6 +397,42 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_fast_forwarding_combining_reader_with_galloping) {
+    simple_schema s;
+
+    const auto pkeys = s.make_pkeys(7);
+    const auto ckeys = s.make_ckeys(10);
+    auto ring = to_ring_positions(pkeys);
+
+    auto make_n_mutations = [&] (auto ckeys, int n) {
+        std::vector<mutation> ret;
+        for (int i = 0; i < n; i++) {
+            ret.push_back(make_partition_with_clustering_rows(s, pkeys[i], ckeys));
+        }
+        return ret;
+    };
+
+    auto pr = dht::partition_range::make(ring[0], ring[0]);
+    std::vector<flat_mutation_reader> v;
+    v.push_back(flat_mutation_reader_from_mutations(make_n_mutations(boost::irange(0, 5), 7), pr));
+    v.push_back(flat_mutation_reader_from_mutations(make_n_mutations(boost::irange(5, 10), 7), pr));
+
+    assert_that(make_combined_reader(s.schema(), std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+            .produces(make_partition_with_clustering_rows(s, pkeys[0], boost::irange(0, 10)))
+            .produces_end_of_stream()
+            .fast_forward_to(dht::partition_range::make(ring[1], ring[1]))
+            .produces(make_partition_with_clustering_rows(s, pkeys[1], boost::irange(0, 10)))
+            .produces_end_of_stream()
+            .fast_forward_to(dht::partition_range::make(ring[3], ring[4]))
+            .produces(make_partition_with_clustering_rows(s, pkeys[3], boost::irange(0, 10)))
+    .fast_forward_to(dht::partition_range::make({ ring[4], false }, ring[5]))
+            .produces(make_partition_with_clustering_rows(s, pkeys[5], boost::irange(0, 10)))
+            .produces_end_of_stream()
+    .fast_forward_to(dht::partition_range::make_starting_with(ring[6]))
+            .produces(make_partition_with_clustering_rows(s, pkeys[6], boost::irange(0, 10)))
+            .produces_end_of_stream();
+}
+
 SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
     return seastar::async([] {
         storage_service_for_tests ssft;
@@ -383,6 +490,59 @@ SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
                 .produces_row_with_key(ckeys[3])
                 .produces_end_of_stream();
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sm_fast_forwarding_combining_reader_with_galloping) {
+    simple_schema s;
+
+    const auto pkeys = s.make_pkeys(3);
+    const auto ckeys = s.make_ckeys(10);
+    auto ring = to_ring_positions(pkeys);
+
+    auto make_n_mutations = [&] (auto ckeys, int n) {
+        std::vector<mutation> ret;
+        for (int i = 0; i < n; i++) {
+            ret.push_back(make_partition_with_clustering_rows(s, pkeys[i], ckeys));
+        }
+        return ret;
+    };
+
+    auto pr = dht::partition_range::make(ring[0], ring[0]);
+    std::vector<flat_mutation_reader> v;
+    v.push_back(flat_mutation_reader_from_mutations(make_n_mutations(boost::irange(0, 5), 3), streamed_mutation::forwarding::yes));
+    v.push_back(flat_mutation_reader_from_mutations(make_n_mutations(boost::irange(5, 10), 3), streamed_mutation::forwarding::yes));
+
+    auto reader = make_combined_reader(s.schema(), std::move(v), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+    auto assertions = assert_that(std::move(reader));
+    assertions.produces_partition_start(pkeys[0])
+            .produces_end_of_stream()
+            .fast_forward_to(position_range::all_clustered_rows())
+            .produces_row_with_key(ckeys[0])
+            .produces_row_with_key(ckeys[1])
+            .produces_row_with_key(ckeys[2])
+            .produces_row_with_key(ckeys[3])
+            .next_partition()
+            .produces_partition_start(pkeys[1])
+            .produces_end_of_stream()
+            .fast_forward_to(position_range(position_in_partition::before_key(ckeys[0]), position_in_partition::after_key(ckeys[3])))
+            .produces_row_with_key(ckeys[0])
+            .produces_row_with_key(ckeys[1])
+            .produces_row_with_key(ckeys[2])
+            .produces_row_with_key(ckeys[3])
+            .produces_end_of_stream()
+            .fast_forward_to(position_range(position_in_partition::after_key(ckeys[6]), position_in_partition::after_all_clustered_rows()))
+            .produces_row_with_key(ckeys[7])
+            .produces_row_with_key(ckeys[8])
+            .produces_row_with_key(ckeys[9])
+            .produces_end_of_stream()
+            .next_partition()
+            .produces_partition_start(pkeys[2])
+            .fast_forward_to(position_range::all_clustered_rows());
+
+    for (int i = 0; i < 10; i++) {
+        assertions.produces_row_with_key(ckeys[i]);
+    }
+    assertions.produces_end_of_stream();
 }
 
 struct sst_factory {
