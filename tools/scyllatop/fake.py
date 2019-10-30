@@ -29,15 +29,19 @@ class FakeMetric(Metric):
 
     @classmethod
     def discover(self, unused):
-        results = []
+        results = {}
+
+        def _add_metric(metric, results):
+            m = FakeMetric(metric, None)
+            m.add_to_results(results)
+
         for cpu in range(4):
-            results += [
-                FakeMetric('localhost/cpu-{}/cache'.format(cpu), None),
-                FakeMetric('localhost/cpu-{}/storage_proxy'.format(cpu), None),
-                FakeMetric('localhost/cpu-{}/transport'.format(cpu), None)]
+            _add_metric('localhost/cpu-{}/cache'.format(cpu))
+            _add_metric('localhost/cpu-{}/storage_proxy'.format(cpu))
+            _add_metric('localhost/cpu-{}/transport'.format(cpu))
 
         for x in range(100):
-            results.append(FakeMetric('localhost/fake_{}/{}'.format(x, random.choice('abcdefghijklmnopqrstuvwxyz')), None))
+            _add_metric('localhost/fake_{}/{}'.format(x, random.choice('abcdefghijklmnopqrstuvwxyz')))
         return results
 
 

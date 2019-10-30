@@ -1,5 +1,6 @@
 import livedata
 import views.stdout
+import logging
 
 
 class _FakeLoop:
@@ -8,6 +9,7 @@ class _FakeLoop:
         self._liveData = liveData
 
     def draw_screen(self):
+        logging.debug("iterations={}".format(self._iterations))
         if self._iterations is None:
             return
 
@@ -16,9 +18,9 @@ class _FakeLoop:
             self._liveData.stop()
 
 
-def dumpToStdout(metricPatterns, interval, collectd, iterations):
+def dumpToStdout(metricPatterns, interval, collectd, iterations, ttl=None):
     stdout = views.stdout.Stdout()
-    liveData = livedata.LiveData(metricPatterns, interval, collectd)
+    liveData = livedata.LiveData(metricPatterns, interval, collectd, ttl)
     liveData.addView(stdout)
 
     loop = _FakeLoop(liveData, iterations)

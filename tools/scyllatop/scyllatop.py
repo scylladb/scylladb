@@ -26,7 +26,7 @@ def shell():
         logging.error('shell mode requires IPython to be installed')
 
 
-def fancyUserInterface(metricPatterns, interval, metric_source):
+def fancyUserInterface(metricPatterns, interval, metric_source, ttl):
     aggregateView = views.aggregate.Aggregate()
     simpleView = views.simple.Simple()
     userInput = userinput.UserInput()
@@ -34,7 +34,7 @@ def fancyUserInterface(metricPatterns, interval, metric_source):
     userInput.setLoop(loop)
     userInput.setMap(M=aggregateView, S=simpleView)
     try:
-        liveData = livedata.LiveData(metricPatterns, interval, metric_source)
+        liveData = livedata.LiveData(metricPatterns, interval, metric_source, ttl)
     except Exception as inst:
         print("scyllatop failed connecting to Scylla With an error: {error}".format(error=inst))
         sys.exit(1)
@@ -80,6 +80,7 @@ if __name__ == '__main__':
     parser.add_argument('-F', '--fake', action='store_true', help="fake metric updates - this is for developers only")
     parser.add_argument('-n', '--iterations', type=int, default=None, help="Exit after a given number of iterations. This is only relevant if output is redirected")
     parser.add_argument('-b', '--batch', action='store_true', help="batch mode - dump metrics to stdout instead of using an interactive user session")
+    parser.add_argument('-t', '--ttl', type=int, default=60, help="Keep absent metrics for ttl seconds (default=60)")
     arguments = parser.parse_args()
     stream_log = logging.StreamHandler()
     stream_log.setLevel(logging.ERROR)
@@ -110,13 +111,14 @@ if __name__ == '__main__':
         shell()
         quit()
     if arguments.list:
-        pprint.pprint([m.symbol + m.help for m in metric.Metric.discover_with_help(metric_source)])
+        pprint.pprint([m.symbol + m.help for m in metric.Metric.discover_with_help(metric_source).values()])
         quit()
 
+    logging.debug('arguments={} isatty={}'.format(arguments, sys.stdout.isatty()))
     try:
         if not sys.stdout.isatty() or arguments.batch:
-            dumptostdout.dumpToStdout(arguments.metricPattern, arguments.interval, metric_source, arguments.iterations)
+            dumptostdout.dumpToStdout(arguments.metricPattern, arguments.interval, metric_source, arguments.iterations, arguments.ttl)
         else:
-            fancyUserInterface(arguments.metricPattern, arguments.interval, metric_source)
+            fancyUserInterface(arguments.metricPattern, arguments.interval, metric_source, arguments.ttl)
     except KeyboardInterrupt:
         pass

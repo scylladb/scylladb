@@ -7,35 +7,43 @@ import defaults
 
 
 class LiveData(object):
-    def __init__(self, metricPatterns, interval, metric_source):
-        logging.info('will query metric_source every {0} seconds'.format(interval))
+    def __init__(self, metricPatterns, interval, metric_source, ttl=None):
+        logging.info('will query metric_source {} every {} seconds'.format(metric_source, interval))
+        if ttl:
+            logging.info('absent data will be kept for {} seconds'.format(ttl))
         self._startedAt = time.time()
-        self._measurements = []
+        self._results = {}
         self._interval = interval
+        self._ttl = ttl
         self._metric_source = metric_source
-        self._initializeMetrics(metricPatterns)
+        if metricPatterns and len(metricPatterns) > 0:
+            self._metricPatterns = metricPatterns
+        else:
+            self._metricPatterns = defaults.DEFAULT_METRIC_PATTERNS
+        self._results = self._discoverMetrics()
         self._views = []
         self._stop = False
 
     def addView(self, view):
+        logging.debug('addView {}'.format(view))
         self._views.append(view)
 
     @property
+    def results(self):
+        return self._results
+
+    @property
     def measurements(self):
-        return self._measurements
+        return self._results.values()
 
-    def _initializeMetrics(self, metricPatterns):
-        if len(metricPatterns) > 0:
-            self._setupUserSpecifiedMetrics(metricPatterns)
-        else:
-            self._setupUserSpecifiedMetrics(defaults.DEFAULT_METRIC_PATTERNS)
-
-    def _setupUserSpecifiedMetrics(self, metricPatterns):
-        availableSymbols = [m.symbol for m in metric.Metric.discover(self._metric_source)]
-        symbols = [symbol for symbol in availableSymbols if self._matches(symbol, metricPatterns)]
-        for symbol in symbols:
-                logging.info('adding {0}'.format(symbol))
-                self._measurements.append(metric.Metric(symbol, self._metric_source, ""))
+    def _discoverMetrics(self):
+        results = metric.Metric.discover(self._metric_source)
+        logging.debug('_discoverMetrics: {} results discovered'.format(len(results)))
+        for symbol in results:
+            if not self._matches(symbol, self._metricPatterns):
+                results.pop(symbol)
+        logging.debug('_initializeMetrics: {} results matched'.format(len(results)))
+        return results
 
     def _matches(self, symbol, metricPatterns):
         for pattern in metricPatterns:
@@ -45,13 +53,36 @@ class LiveData(object):
         return False
 
     def go(self, mainLoop):
+        num_updated = 0
+        num_absent = 0
+        num_expired = 0
+        num_added = 0
+        now = time.time()
         while not self._stop:
-            for metric_obj in self._measurements:
-                self._update(metric_obj)
+            new_results = self._discoverMetrics();
+            expiration = time.time() + self._ttl if self._ttl else None
+            for metric in self._results:
+                if not metric in new_results:
+                    metric_obj = self._results[metric]
+                    if not metric_obj.is_absent:
+                        metric_obj.markAbsent(expiration)
+                        num_absent += 1
+                    elif metric_obj.expiration and now >= metric_obj.expiration:
+                        self._results.pop(metric)
+                        num_expired += 1
+                    else:
+                        num_absent += 1
+            num_updated = len(self._results) - num_absent
+            num_added = len(new_results) - num_updated
+            self._results.update(new_results)
+            logging.debug('go: updated {} measurements, added {}, {} marked absent, {} expired'.format(num_updated, num_added, num_absent, num_expired))
 
             for view in self._views:
+                logging.debug('go: updating view {}'.format(view))
                 view.update(self)
+            logging.debug('go: sleeping for {} seconds'.format(self._interval))
             time.sleep(self._interval)
+            logging.debug('go: drawing screen...')
             mainLoop.draw_screen()
 
     def _update(self, metric_obj):
