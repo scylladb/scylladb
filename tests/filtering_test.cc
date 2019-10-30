@@ -1083,6 +1083,22 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_in_on_regular_column) {
     });
 }
 
+SEASTAR_TEST_CASE(test_filtering_on_empty_partition_with_a_static_row) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (p int, c int, s int static, PRIMARY KEY(p, c));");
+        cquery_nofail(e, "INSERT INTO t (p, s) VALUES (1, 1);");
+        auto msg = cquery_nofail(e, "SELECT * FROM t WHERE s = 2 ALLOW FILTERING;");
+        assert_that(msg).is_rows().is_empty();
+        msg = cquery_nofail(e, "SELECT * FROM t WHERE c = 1 ALLOW FILTERING");
+        assert_that(msg).is_rows().is_empty();
+        cquery_nofail(e, "INSERT INTO t (p, c, s) VALUES (2, 2, 2);");
+        msg = cquery_nofail(e, "SELECT * FROM t WHERE s = 1 ALLOW FILTERING");
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(1), {}, int32_type->decompose(1)}
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_filtering) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE cf (k int, v int,m int,n int,o int,p int static, PRIMARY KEY ((k,v),m,n));").get();
