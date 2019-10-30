@@ -247,62 +247,40 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         });
     });
 
-    sp::get_cas_read_timeouts.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        // cas is not supported yet, so just return 0
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_read_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_read_timeouts);
     });
 
-    sp::get_cas_read_unavailables.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        // cas is not supported yet, so just return 0
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_read_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_read_unavailables);
     });
 
-    sp::get_cas_write_timeouts.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        // cas is not supported yet, so just return 0
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_write_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_write_timeouts);
     });
 
-    sp::get_cas_write_unavailables.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        // cas is not supported yet, so just return 0
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_write_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_write_unavailables);
     });
 
-    sp::get_cas_write_metrics_unfinished_commit.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_write_metrics_unfinished_commit.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::cas_write_unfinished_commit);
     });
 
-    sp::get_cas_write_metrics_contention.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_write_metrics_contention.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_estimated_histogram(ctx, &proxy::stats::cas_write_contention);
     });
 
-    sp::get_cas_write_metrics_condition_not_met.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_write_metrics_condition_not_met.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::cas_write_condition_not_met);
     });
 
-    sp::get_cas_read_metrics_unfinished_commit.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_read_metrics_unfinished_commit.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::cas_read_unfinished_commit);
     });
 
-    sp::get_cas_read_metrics_contention.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_read_metrics_contention.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_estimated_histogram(ctx, &proxy::stats::cas_read_contention);
     });
 
     sp::get_read_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
@@ -373,19 +351,11 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return sum_timer_stats(ctx.sp, &proxy::stats::write);
     });
     sp::get_cas_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        // cas is not supported yet, so just return empty moving average
-
-        return make_ready_future<json::json_return_type>(get_empty_moving_average());
+        return sum_timer_stats(ctx.sp, &proxy::stats::cas_write);
     });
 
     sp::get_cas_read_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        // cas is not supported yet, so just return empty moving average
-
-        return make_ready_future<json::json_return_type>(get_empty_moving_average());
+        return sum_timer_stats(ctx.sp, &proxy::stats::cas_read);
     });
 
     sp::get_view_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {

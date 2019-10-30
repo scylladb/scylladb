@@ -92,6 +92,14 @@ struct write_stats {
     utils::timed_rate_moving_average_and_histogram write;
     utils::estimated_histogram estimated_write;
 
+    utils::timed_rate_moving_average cas_write_unavailables;
+    utils::timed_rate_moving_average cas_write_timeouts;
+
+    utils::timed_rate_moving_average_and_histogram cas_write;
+    utils::estimated_histogram estimated_cas_write;
+
+    utils::estimated_histogram cas_write_contention;
+
     uint64_t writes = 0;
     // A CQL write query arrived to a non-replica node and was
     // forwarded by a coordinator to a replica
@@ -105,6 +113,10 @@ struct write_stats {
     uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
     uint64_t throttled_base_writes = 0; // current number of base writes delayed due to view update backlog
     uint64_t background_writes_failed = 0;
+
+    uint64_t cas_write_unfinished_commit = 0;
+    uint64_t cas_write_condition_not_met = 0;
+
     std::chrono::microseconds last_mv_flow_control_delay; // delay added for MV flow control in the last request
 public:
     write_stats();
@@ -119,6 +131,11 @@ struct stats : public write_stats {
     utils::timed_rate_moving_average read_unavailables;
     utils::timed_rate_moving_average range_slice_timeouts;
     utils::timed_rate_moving_average range_slice_unavailables;
+
+    utils::timed_rate_moving_average cas_read_timeouts;
+    utils::timed_rate_moving_average cas_read_unavailables;
+
+    utils::estimated_histogram cas_read_contention;
 
     uint64_t read_repair_attempts = 0;
     uint64_t read_repair_repaired_blocking = 0;
@@ -146,11 +163,17 @@ struct stats : public write_stats {
     utils::timed_rate_moving_average_and_histogram range;
     utils::estimated_histogram estimated_read;
     utils::estimated_histogram estimated_range;
+
+    utils::timed_rate_moving_average_and_histogram cas_read;
+    utils::estimated_histogram estimated_cas_read;
+
     uint64_t reads = 0;
     uint64_t foreground_reads = 0; // client still waits for the read
     uint64_t read_retries = 0; // read is retried with new limit
     uint64_t speculative_digest_reads = 0;
     uint64_t speculative_data_reads = 0;
+
+    uint64_t cas_read_unfinished_commit = 0;
 
     // Data read attempts
     split_stats data_read_attempts;

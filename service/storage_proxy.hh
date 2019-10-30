@@ -605,16 +605,8 @@ public:
         _required_participants = pp.required_participants;
     }
 
-    // Result of PREPARE step, i.e. begin_and_repair_paxos().
-    struct ballot_and_contention {
-        // Accepted ballot.
-        utils::UUID ballot;
-        // How many times we had to try with a newer ballot before it got accepted (for statistics).
-        unsigned contention;
-    };
-
     // Steps of the Paxos protocol
-    future<ballot_and_contention> begin_and_repair_paxos(client_state& cs, bool is_write);
+    future<utils::UUID> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
     future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
     future<bool> accept_proposal(const paxos::proposal& proposal, bool timeout_if_partially_accepted = true);
     future<> learn_decision(paxos::proposal decision, bool allow_hints = false);

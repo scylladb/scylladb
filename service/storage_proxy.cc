@@ -691,9 +691,9 @@ static future<> sleep_approx_50ms() {
     return seastar::sleep(std::chrono::milliseconds(dist(re)));
 }
 
-static future<std::optional<paxos_response_handler::ballot_and_contention>> sleep_and_restart() {
+static future<std::optional<utils::UUID>> sleep_and_restart() {
     return sleep_approx_50ms().then([] {
-         return std::optional<paxos_response_handler::ballot_and_contention>(); // continue
+         return std::optional<utils::UUID>(); // continue
     });
 }
 
@@ -703,13 +703,13 @@ static future<std::optional<paxos_response_handler::ballot_and_contention>> slee
  * @return the Paxos ballot promised by the replicas if no in-progress requests were seen and a quorum of
  * nodes have seen the most recent commit. Otherwise, return null.
  */
-future<paxos_response_handler::ballot_and_contention> paxos_response_handler::begin_and_repair_paxos(client_state& cs, bool is_write) {
+future<utils::UUID> paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
     _proxy->get_db().local().get_config().check_experimental("Paxos");
-    return do_with(unsigned(0), api::timestamp_type(0), shared_from_this(), [this, &cs] (unsigned& contentions,
-            api::timestamp_type& min_timestamp_micros_to_use, shared_ptr<paxos_response_handler>& prh) {
-        return repeat_until_value([this, &contentions, &cs, &min_timestamp_micros_to_use] {
+    return do_with(api::timestamp_type(0), shared_from_this(), [this, &cs, &contentions, is_write]
+            (api::timestamp_type& min_timestamp_micros_to_use, shared_ptr<paxos_response_handler>& prh) {
+        return repeat_until_value([this, &contentions, &cs, &min_timestamp_micros_to_use, is_write] {
             if (storage_proxy::clock_type::now() > _cas_timeout) {
-                return make_exception_future<std::optional<ballot_and_contention>>(
+                return make_exception_future<std::optional<utils::UUID>>(
                         mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl_for_paxos, 0,
                                 _required_participants, db::write_type::CAS)
                         );
@@ -731,7 +731,7 @@ future<paxos_response_handler::ballot_and_contention> paxos_response_handler::be
             tracing::trace(tr_state, "Preparing {}", ballot);
 
             return prepare_ballot(ballot)
-                    .then([this, &contentions, ballot, &min_timestamp_micros_to_use] (paxos::prepare_summary summary) {
+                    .then([this, &contentions, ballot, &min_timestamp_micros_to_use, is_write] (paxos::prepare_summary summary) {
                 if (!summary.promised) {
                     paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
                     tracing::trace(tr_state, "Some replicas have already promised a higher ballot than ours; aborting");
@@ -751,27 +751,21 @@ future<paxos_response_handler::ballot_and_contention> paxos_response_handler::be
                          in_progress->ballot.timestamp() > summary.most_recent_commit->ballot.timestamp()))) {
                     paxos::paxos_state::logger.debug("CAS[{}] Finishing incomplete paxos round {}", _id, *in_progress);
                     tracing::trace(tr_state, "Finishing incomplete paxos round {}", *in_progress);
-#if 0
-                    if(_is_write)
-                        cas_write_metrics.unfinished_commit.inc();
-                    else
-                        cas_read_metrics.unfinished_commit.inc();
-#endif
-
+                    if (is_write) {
+                        ++_proxy->_stats.cas_write_unfinished_commit;
+                    } else {
+                        ++_proxy->_stats.cas_read_unfinished_commit;
+                    }
                     return do_with(paxos::proposal(ballot, std::move(in_progress->update)),
                             [this, &contentions] (paxos::proposal& refreshed_in_progress) {
                         return accept_proposal(refreshed_in_progress, false).then([this, &contentions, &refreshed_in_progress] (bool is_accepted) mutable {
                             if (is_accepted) {
                                 return learn_decision(std::move(refreshed_in_progress), false).then([] {
-                                        return make_ready_future<std::optional<ballot_and_contention>>(std::optional<ballot_and_contention>());
-                                }).handle_exception_type([this, &contentions] (mutation_write_timeout_exception& e) {
-#if 0
-                                    if(contentions > 0)
-                                        cas_write_metrics.contention.update(contentions);
-#endif
+                                        return make_ready_future<std::optional<utils::UUID>>(std::optional<utils::UUID>());
+                                }).handle_exception_type([] (mutation_write_timeout_exception& e) {
                                     e.type = db::write_type::CAS;
                                     // we're still doing preparation for the paxos rounds, so we want to use the CAS (see cASSANDRA-8672)
-                                    return make_exception_future<std::optional<ballot_and_contention>>(std::move(e));
+                                    return make_exception_future<std::optional<utils::UUID>>(std::move(e));
                                 });
                             } else {
                                 paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
@@ -812,11 +806,11 @@ future<paxos_response_handler::ballot_and_contention> paxos_response_handler::be
                         } else {
                             f.ignore_ready_future();
                         }
-                        return std::optional<ballot_and_contention>(); // continue
+                        return std::optional<utils::UUID>(); // continue
                     });
                 }
 
-                return make_ready_future<std::optional<ballot_and_contention>>(ballot_and_contention{ballot, contentions});
+                return make_ready_future<std::optional<utils::UUID>>(ballot);
             });
         });
     });
@@ -1345,6 +1339,8 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"), [this]{ return _stats.estimated_read.get_histogram(16, 20);}),
         sm::make_histogram("write_latency", sm::description("The general write latency histogram"), [this]{return _stats.estimated_write.get_histogram(16, 20);}),
+        sm::make_histogram("cas_read_latency", sm::description("Transactional read latency histogram"), [this]{ return _stats.estimated_cas_read.get_histogram(16, 20);}),
+        sm::make_histogram("cas_write_latency", sm::description("Transactional write latency histogram"), [this]{return _stats.estimated_cas_write.get_histogram(16, 20);}),
         sm::make_queue_length("foreground_writes", [this] { return _stats.writes - _stats.background_writes; },
                        sm::description("number of currently pending foreground write requests")),
 
@@ -1399,6 +1395,12 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         sm::make_total_operations("write_unavailable", _stats.write_unavailables._count,
                        sm::description("number write requests failed due to an \"unavailable\" error")),
 
+        sm::make_total_operations("cas_write_timeouts", _stats.cas_write_timeouts._count,
+                       sm::description("number of transactional write request failed due to a timeout")),
+
+        sm::make_total_operations("cas_write_unavailable", _stats.cas_write_unavailables._count,
+                       sm::description("number of transactional write requests failed due to an \"unavailable\" error")),
+
         sm::make_total_operations("read_timeouts", _stats.read_timeouts._count,
                        sm::description("number of read request failed due to a timeout")),
 
@@ -1411,6 +1413,12 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         sm::make_total_operations("range_unavailable", _stats.range_slice_unavailables._count,
                        sm::description("number of range read operations failed due to an \"unavailable\" error")),
 
+        sm::make_total_operations("cas_read_timeouts", _stats.cas_read_timeouts._count,
+                       sm::description("number of transactional read request failed due to a timeout")),
+
+        sm::make_total_operations("cas_read_unavailable", _stats.cas_read_unavailables._count,
+                       sm::description("number of transactional read requests failed due to an \"unavailable\" error")),
+
         sm::make_total_operations("speculative_digest_reads", _stats.speculative_digest_reads,
                        sm::description("number of speculative digest read requests that were sent")),
 
@@ -1419,6 +1427,21 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
 
         sm::make_total_operations("background_writes_failed", _stats.background_writes_failed,
                        sm::description("number of write requests that failed after CL was reached")),
+
+        sm::make_total_operations("cas_read_unfinished_commit", _stats.cas_read_unfinished_commit,
+                       sm::description("number of transaction commit attempts that occurred on read")),
+
+        sm::make_total_operations("cas_write_unfinished_commit", _stats.cas_write_unfinished_commit,
+                       sm::description("number of transaction commit attempts that occurred on write")),
+
+        sm::make_total_operations("cas_write_condition_not_met", _stats.cas_write_condition_not_met,
+                       sm::description("number of transaction preconditions that did not match current values")),
+
+        sm::make_histogram("cas_read_contention", sm::description("how many contended reads were encountered"),
+                [this]{ return _stats.cas_read_contention.get_histogram(1, 8);}),
+
+        sm::make_histogram("cas_write_contention", sm::description("how many contended writes were encountered"),
+                [this]{ return _stats.cas_write_contention.get_histogram(1, 8);}),
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {
@@ -3864,27 +3887,55 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     db::timeout_clock::time_point cas_timeout = db::timeout_clock::now() +
             std::chrono::milliseconds(_db.local().get_config().cas_contention_timeout_in_ms());
 
-    auto handler = seastar::make_shared<service::paxos_response_handler>(
-            shared_from_this(), query_options.trace_state, query_options.permit,
-            partition_ranges[0].start()->value().as_decorated_key(), s, cl, cl_for_learn, timeout, cas_timeout);
+    shared_ptr<paxos_response_handler> handler;
+    try {
+        handler = seastar::make_shared<service::paxos_response_handler>(
+                shared_from_this(), query_options.trace_state, query_options.permit,
+                partition_ranges[0].start()->value().as_decorated_key(), s, cl, cl_for_learn, timeout, cas_timeout);
+    } catch (exceptions::unavailable_exception& ex) {
+        _stats.cas_read_unavailables.mark();
+        throw;
+    }
 
-    return handler->begin_and_repair_paxos(query_options.cstate, false)
-            .then_wrapped([this, s, cmd = std::move(cmd), partition_ranges = std::move(partition_ranges), cl_for_learn,
-                           query_options = std::move(query_options)] (future<service::paxos_response_handler::ballot_and_contention> f) mutable {
-        if (f.failed()) {
-            try {
-                f.get();
-                __builtin_unreachable();
-            } catch (mutation_write_timeout_exception& ex) {
-                return make_exception_future<storage_proxy::coordinator_query_result>(
-                        read_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, false));
-            } catch (mutation_write_failure_exception& ex) {
-                return make_exception_future<storage_proxy::coordinator_query_result>(
-                        read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false));
+    return do_with(unsigned(0), [this, s = std::move(s), cmd = std::move(cmd), partition_ranges = std::move(partition_ranges),
+            query_options = std::move(query_options), cl_for_learn, handler = std::move(handler)] (unsigned& contentions) {
+        utils::latency_counter lc;
+        lc.start();
+        return handler->begin_and_repair_paxos(query_options.cstate, contentions, false).then_wrapped([this, s = std::move(s),
+                cmd = std::move(cmd), partition_ranges = std::move(partition_ranges), query_options = std::move(query_options),
+                cl_for_learn] (future<utils::UUID> f) mutable {
+            if (f.failed()) {
+                try {
+                    f.get();
+                    __builtin_unreachable();
+                } catch (mutation_write_timeout_exception& ex) {
+                    return make_exception_future<storage_proxy::coordinator_query_result>(
+                            read_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, false));
+                } catch (mutation_write_failure_exception& ex) {
+                    return make_exception_future<storage_proxy::coordinator_query_result>(
+                            read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false));
+                }
             }
-        }
-        return do_query(s, std::move(cmd), std::move(partition_ranges), cl_for_learn, std::move(query_options));
-    }).finally([handler] {});
+            return do_query(s, std::move(cmd), std::move(partition_ranges), cl_for_learn, std::move(query_options));
+        }).then_wrapped([this, lc, &contentions, handler = std::move(handler)] (future<storage_proxy::coordinator_query_result> f) mutable {
+            _stats.cas_read.mark(lc.stop().latency());
+            if (lc.is_start()) {
+                _stats.estimated_cas_read.add(lc.latency(), _stats.cas_read.hist.count);
+            }
+            if (contentions > 0) {
+                _stats.cas_read_contention.add(contentions);
+            }
+            try {
+                return make_ready_future<storage_proxy::coordinator_query_result>(f.get0());
+            } catch (request_timeout_exception& ex) {
+                _stats.cas_read_timeouts.mark();
+                return make_exception_future<storage_proxy::coordinator_query_result>(std::move(ex));
+            } catch (exceptions::unavailable_exception& ex) {
+                _stats.cas_read_unavailables.mark();
+                return make_exception_future<storage_proxy::coordinator_query_result>(std::move(ex));
+            }
+        });
+    });
 }
 
 /**
@@ -3927,25 +3978,32 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     assert(query::is_single_partition(partition_ranges[0]));
     assert(cl_for_paxos == db::consistency_level::LOCAL_SERIAL || cl_for_paxos == db::consistency_level::SERIAL);
 
-    auto handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
-        query_options.trace_state, query_options.permit, partition_ranges[0].start()->value().as_decorated_key(),
-        schema, cl_for_paxos, cl_for_commit, write_timeout, cas_timeout);
+    shared_ptr<paxos_response_handler> handler;
+    try {
+        handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
+                query_options.trace_state, query_options.permit,
+                partition_ranges[0].start()->value().as_decorated_key(),
+                schema, cl_for_paxos, cl_for_commit, write_timeout, cas_timeout);
+    } catch (exceptions::unavailable_exception& ex) {
+        _stats.cas_write_unavailables.mark();
+        throw;
+    }
 
     db::consistency_level cl = cl_for_paxos == db::consistency_level::LOCAL_SERIAL ?
         db::consistency_level::LOCAL_QUORUM : db::consistency_level::QUORUM;
 
     return do_with(unsigned(0), [this, handler, schema, cmd, request, partition_ranges = std::move(partition_ranges),
             query_options = std::move(query_options), cl] (unsigned& contentions) mutable {
+        utils::latency_counter lc;
+        lc.start();
         return repeat_until_value([this, handler, schema, cmd, request, partition_ranges = std::move(partition_ranges),
                 query_options = std::move(query_options), cl, &contentions] () mutable {
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
             // a ballot (round identifier) which is a) unique b) has good chances of being
             // recent enough.
-            return handler->begin_and_repair_paxos(query_options.cstate, true)
+            return handler->begin_and_repair_paxos(query_options.cstate, contentions, true)
                     .then([this, handler, schema, cmd, request, partition_ranges, query_options, cl, &contentions]
-                            (paxos_response_handler::ballot_and_contention v) mutable {
-                auto ballot = v.ballot;
-                contentions += v.contention;
+                            (utils::UUID ballot) mutable {
                 // Read the current values and check they validate the conditions.
                 paxos::paxos_state::logger.debug("CAS[{}]: Reading existing values for CAS precondition", handler->id());
                 tracing::trace(handler->tr_state, "Reading existing values for CAS precondition");
@@ -3955,6 +4013,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                     if (!mutation) {
                         paxos::paxos_state::logger.debug("CAS[{}] precondition does not match current values", handler->id());
                         tracing::trace(handler->tr_state, "CAS precondition does not match current values");
+                        ++_stats.cas_write_condition_not_met;
                         return make_ready_future<std::optional<bool>>(false);
                     }
                     return do_with(paxos::proposal(ballot, freeze(*mutation)),
@@ -3983,6 +4042,23 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                     });
                 });
             });
+        }).then_wrapped([this, lc, &contentions] (future<bool> f) mutable {
+            _stats.cas_write.mark(lc.stop().latency());
+            if (lc.is_start()) {
+                _stats.estimated_cas_write.add(lc.latency(), _stats.cas_write.hist.count);
+            }
+            if (contentions > 0) {
+                _stats.cas_write_contention.add(contentions);
+            }
+            try {
+                return make_ready_future<bool>(f.get0());
+            } catch (request_timeout_exception& ex) {
+                _stats.cas_write_timeouts.mark();
+                return make_exception_future<bool>(std::move(ex));
+            } catch (exceptions::unavailable_exception& ex) {
+                _stats.cas_write_unavailables.mark();
+                return make_exception_future<bool>(std::move(ex));
+            }
         });
     });
 }

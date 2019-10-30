@@ -296,11 +296,11 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 
     if (has_conditions()) {
+        ++_stats.cas_statements[size_t(type)];
         return execute_with_condition(proxy, qs, options);
     }
 
-    inc_cql_stats();
-
+    ++_stats.statements[size_t(type)];
     return execute_without_condition(proxy, qs, options).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
                 ::shared_ptr<cql_transport::messages::result_message>{});

@@ -189,12 +189,11 @@ future<std::vector<mutation>> batch_statement::get_mutations(service::storage_pr
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
     return do_with(mutation_set_type(), [this, &storage, &options, timeout, now, local, &query_state] (auto& result) mutable {
         result.reserve(_statements.size());
-        _stats.statements_in_batches += _statements.size();
         return do_for_each(boost::make_counting_iterator<size_t>(0),
                            boost::make_counting_iterator<size_t>(_statements.size()),
                            [this, &storage, &options, now, local, &result, timeout, &query_state] (size_t i) {
             auto&& statement = _statements[i].statement;
-            statement->inc_cql_stats();
+            ++_stats.statements[size_t(statement->type)];
             auto&& statement_options = options.for_statement(i);
             auto timestamp = _attrs->get_timestamp(now, statement_options);
             return statement->get_mutations(storage, statement_options, timeout, local, timestamp, query_state).then([&result] (auto&& more) {
@@ -265,7 +264,6 @@ static thread_local inheriting_concrete_execution_stage<
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
         service::storage_proxy& storage, service::query_state& state, const query_options& options) {
-    ++_stats.batches;
     return batch_stage(this, seastar::ref(storage), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));
 }
@@ -283,8 +281,13 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
         throw new InvalidRequestException("Invalid empty serial consistency level");
 #endif
     if (_has_conditions) {
+        ++_stats.cas_batches;
+        _stats.statements_in_cas_batches += _statements.size();
         return execute_with_conditions(storage, options, query_state);
     }
+
+    ++_stats.batches;
+    _stats.statements_in_batches += _statements.size();
 
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     return get_mutations(storage, options, timeout, local, now, query_state).then([this, &storage, &options, timeout, tr_state = query_state.get_trace_state(),
@@ -354,7 +357,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         modification_statement& statement = *_statements[i].statement;
         const query_options& statement_options = options.for_statement(i);
 
-        statement.inc_cql_stats();
+        ++_stats.cas_statements[size_t(statement.type)];
         modification_statement::json_cache_opt json_cache = statement.maybe_prepare_json_cache(statement_options);
         // At most one key
         std::vector<dht::partition_range> keys = statement.build_partition_keys(statement_options, json_cache);
