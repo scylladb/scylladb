@@ -77,6 +77,7 @@ public:
     std::vector<index> list_indexes() const;
     bool is_index(view_ptr) const;
     bool is_index(const schema& s) const;
+    bool is_global_index(const schema& s) const;
 private:
     void add_index(const index_metadata& im);
 };
