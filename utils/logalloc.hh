@@ -541,6 +541,10 @@ public:
         return _total_space ? float(used_space()) / total_space() : 0;
     }
 
+    explicit operator bool() const {
+        return _total_space > 0;
+    }
+
     friend std::ostream& operator<<(std::ostream&, const occupancy_stats&);
 };
 
