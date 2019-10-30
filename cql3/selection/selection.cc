@@ -380,7 +380,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                                                          const std::vector<bytes>& partition_key,
                                                          const std::vector<bytes>& clustering_key,
                                                          const query::result_row_view& static_row,
-                                                         const query::result_row_view& row) const {
+                                                         const query::result_row_view* row) const {
     static logging::logger rlogger("restrictions_filter");
 
     if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0 || _per_partition_remaining == 0) {
@@ -395,14 +395,17 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
     }
 
     auto static_row_iterator = static_row.iterator();
-    auto row_iterator = row.iterator();
+    auto row_iterator = row ? std::optional<query::result_row_view::iterator_type>(row->iterator()) : std::nullopt;
     auto non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
     for (auto&& cdef : selection.get_columns()) {
         switch (cdef->kind) {
         case column_kind::static_column:
             // fallthrough
         case column_kind::regular_column: {
-            auto& cell_iterator = (cdef->kind == column_kind::static_column) ? static_row_iterator : row_iterator;
+            if (cdef->kind == column_kind::regular_column && !row_iterator) {
+                continue;
+            }
+            auto& cell_iterator = (cdef->kind == column_kind::static_column) ? static_row_iterator : *row_iterator;
             std::optional<query::result_bytes_view> result_view_opt;
             if (cdef->type->is_multi_cell()) {
                 result_view_opt = cell_iterator.next_collection_cell();
@@ -458,6 +461,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (restr_it == clustering_key_restrictions_map.end()) {
                 continue;
             }
+            if (clustering_key.empty()) {
+                return false;
+            }
             restrictions::single_column_restriction& restriction = *restr_it->second;
             const bytes& value_to_check = clustering_key[cdef->id];
             bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, _options);
@@ -477,7 +483,7 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
                                                          const std::vector<bytes>& partition_key,
                                                          const std::vector<bytes>& clustering_key,
                                                          const query::result_row_view& static_row,
-                                                         const query::result_row_view& row) const {
+                                                         const query::result_row_view* row) const {
     const bool accepted = do_filter(selection, partition_key, clustering_key, static_row, row);
     if (!accepted) {
         ++_rows_dropped;
