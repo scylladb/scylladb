@@ -83,7 +83,7 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
 cql3::statements::select_statement& view_info::select_statement() const {
     if (!_select_statement) {
         shared_ptr<cql3::statements::raw::select_statement> raw;
-        if (is_index()) {
+        if (service::get_local_storage_service().db().local().find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
             // Token column is the first clustering column
             auto token_column_it = boost::range::find_if(_schema.all_columns(), std::mem_fn(&column_definition::is_clustering_key));
             auto real_columns = _schema.all_columns() | boost::adaptors::filtered([this, token_column_it](const column_definition& cdef) {
