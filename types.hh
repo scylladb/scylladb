@@ -966,6 +966,12 @@ shared_ptr<const abstract_type> data_type_for<db_clock::time_point>() {
 
 template <>
 inline
+shared_ptr<const abstract_type> data_type_for<ascii_native_type>() {
+    return ascii_type;
+}
+
+template <>
+inline
 shared_ptr<const abstract_type> data_type_for<time_native_type>() {
     return time_type;
 }
