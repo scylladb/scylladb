@@ -114,9 +114,9 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
     }
     _metrics.add_group("query_processor", qp_group);
 
-    sm::label request_type_label("type");
-    auto cas_label_instance = request_type_label("cas");
-    auto non_cas_label_instance = request_type_label("non-cas");
+    sm::label cas_label("conditional");
+    auto cas_label_instance = cas_label("yes");
+    auto non_cas_label_instance = cas_label("no");
 
     _metrics.add_group(
             "cql",
