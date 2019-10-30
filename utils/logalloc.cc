@@ -1749,6 +1749,10 @@ void region::ground_evictable_occupancy() {
     get_impl().ground_evictable_occupancy();
 }
 
+occupancy_stats region::evictable_occupancy() {
+    return get_impl().evictable_occupancy();
+}
+
 const eviction_fn& region::evictor() const {
     return get_impl().evictor();
 }
