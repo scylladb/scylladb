@@ -56,7 +56,7 @@ $ ./configure.py --help
 
 The most important option is:
 
-- `--{enable,disable}-dpdk`: [DPDK](http://dpdk.org/) is a set of libraries and drivers for fast packet processing. During development, it's not necessary to enable support even if it is supported by your platform.
+- `--enable-dpdk`: [DPDK](http://dpdk.org/) is a set of libraries and drivers for fast packet processing. During development, it's not necessary to enable support even if it is supported by your platform.
 
 Source files and build targets are tracked manually in `configure.py`, so the script needs to be updated when new files or targets are added or removed.
 
