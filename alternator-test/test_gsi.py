@@ -481,7 +481,7 @@ def test_gsi_5(test_table_gsi_5):
 # "ProjectionType:: KEYS_ONLY" works. We note that it projects both
 # the index's key, *and* the base table's key. So items which had different
 # base-table keys cannot suddenly become the same item in the index.
-@pytest.mark.xfail(reason="GSI not supported")
+@pytest.mark.skip(reason="Leaves sstable in bogus format, preventing Scylla restart")
 def test_gsi_projection_keys_only(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -509,7 +509,7 @@ def test_gsi_projection_keys_only(dynamodb):
 # Test for "ProjectionType:: INCLUDE". The secondary table includes the
 # its own and the base's keys (as in KEYS_ONLY) plus the extra keys given
 # in NonKeyAttributes.
-@pytest.mark.xfail(reason="GSI not supported")
+@pytest.mark.skip(reason="Leaves sstable in bogus format, preventing Scylla restart")
 def test_gsi_projection_include(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -672,7 +672,7 @@ def test_gsi_backfill(dynamodb):
     table.delete()
 
 # Test deleting an existing GSI using UpdateTable
-@pytest.mark.xfail(reason="GSI not supported")
+@pytest.mark.skip(reason="Leaves sstable in bogus format, preventing Scylla restart")
 def test_gsi_delete(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
