@@ -21,3 +21,4 @@ __pycache__CMakeLists.txt.user
 resources
 .pytest_cache
 /expressions.tokens
+tags
