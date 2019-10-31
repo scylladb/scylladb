@@ -154,6 +154,10 @@ functions::init() {
     declare(aggregate_fcts::make_max_function<timeuuid_native_type>());
     declare(aggregate_fcts::make_min_function<timeuuid_native_type>());
 
+    declare(aggregate_fcts::make_count_function<time_native_type>());
+    declare(aggregate_fcts::make_max_function<time_native_type>());
+    declare(aggregate_fcts::make_min_function<time_native_type>());
+
     declare(aggregate_fcts::make_count_function<utils::UUID>());
     declare(aggregate_fcts::make_max_function<utils::UUID>());
     declare(aggregate_fcts::make_min_function<utils::UUID>());
@@ -165,6 +169,10 @@ functions::init() {
     declare(aggregate_fcts::make_count_function<bool>());
     declare(aggregate_fcts::make_max_function<bool>());
     declare(aggregate_fcts::make_min_function<bool>());
+
+    declare(aggregate_fcts::make_count_function<net::inet_address>());
+    declare(aggregate_fcts::make_max_function<net::inet_address>());
+    declare(aggregate_fcts::make_min_function<net::inet_address>());
 
     // FIXME: more count/min/max
 

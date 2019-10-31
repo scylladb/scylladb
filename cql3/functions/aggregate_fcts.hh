@@ -247,6 +247,25 @@ struct aggregate_type_for<timeuuid_native_type> {
     using type = timeuuid_native_type::primary_type;
 };
 
+template<>
+struct aggregate_type_for<time_native_type> {
+    using type = time_native_type::primary_type;
+};
+
+template <typename Type>
+const Type& max_wrapper(const Type& t1, const Type& t2) {
+    using std::max;
+    return max(t1, t2);
+}
+
+inline const net::inet_address& max_wrapper(const net::inet_address& t1, const net::inet_address& t2) {
+    using family = seastar::net::inet_address::family;
+    const size_t len =
+            (t1.in_family() == family::INET || t2.in_family() == family::INET)
+            ? sizeof(::in_addr) : sizeof(::in6_addr);
+    return std::memcmp(t1.data(), t2.data(), len) >= 0 ? t1 : t2;
+}
+
 template <typename Type>
 class impl_max_function_for final : public aggregate_function::aggregate {
    std::optional<typename aggregate_type_for<Type>::type> _max{};
@@ -268,7 +287,7 @@ public:
         if (!_max) {
             _max = val;
         } else {
-            _max = std::max(*_max, val);
+            _max = max_wrapper(*_max, val);
         }
     }
 };
@@ -295,6 +314,20 @@ make_max_function() {
 }
 
 template <typename Type>
+const Type& min_wrapper(const Type& t1, const Type& t2) {
+    using std::min;
+    return min(t1, t2);
+}
+
+inline const net::inet_address& min_wrapper(const net::inet_address& t1, const net::inet_address& t2) {
+    using family = seastar::net::inet_address::family;
+    const size_t len =
+            (t1.in_family() == family::INET || t2.in_family() == family::INET)
+            ? sizeof(::in_addr) : sizeof(::in6_addr);
+    return std::memcmp(t1.data(), t2.data(), len) <= 0 ? t1 : t2;
+}
+
+template <typename Type>
 class impl_min_function_for final : public aggregate_function::aggregate {
    std::optional<typename aggregate_type_for<Type>::type> _min{};
 public:
@@ -315,7 +348,7 @@ public:
         if (!_min) {
             _min = val;
         } else {
-            _min = std::min(*_min, val);
+            _min = min_wrapper(*_min, val);
         }
     }
 };
