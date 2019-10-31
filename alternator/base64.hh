@@ -21,8 +21,14 @@
 
 #pragma once
 
-#include <string>
+#include <string_view>
 #include "bytes.hh"
+#include "rjson.hh"
 
 std::string base64_encode(bytes_view);
+
 bytes base64_decode(std::string_view);
+
+inline bytes base64_decode(const rjson::value& v) {
+  return base64_decode(std::string_view(v.GetString(), v.GetStringLength()));
+}

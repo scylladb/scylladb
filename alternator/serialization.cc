@@ -67,7 +67,7 @@ struct from_json_visitor {
         bo.write(t.from_string(sstring_view(v.GetString(), v.GetStringLength())));
     }
     void operator()(const bytes_type_impl& t) const {
-        bo.write(base64_decode(std::string_view(v.GetString(), v.GetStringLength())));
+        bo.write(base64_decode(v));
     }
     void operator()(const boolean_type_impl& t) const {
         bo.write(boolean_type->decompose(v.GetBool()));
@@ -177,7 +177,7 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
                         expected_type, column.name_as_text(), it->name.GetString()));
     }
     if (column.type == bytes_type) {
-        return base64_decode(it->value.GetString());
+        return base64_decode(it->value);
     } else {
         return column.type->from_string(it->value.GetString());
     }
