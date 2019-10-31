@@ -240,7 +240,6 @@ def test_update_expected_1_le(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "LT":
-@pytest.mark.xfail(reason="ComparisonOperator=LT in Expected not yet implemented")
 def test_update_expected_1_lt(test_table_s):
     p = random_string()
     # LT should work for string, number, and binary type
