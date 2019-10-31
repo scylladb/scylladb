@@ -257,7 +257,7 @@ private:
 public:
     class nop_filter {
     public:
-        inline bool operator()(const selection&, const std::vector<bytes>&, const std::vector<bytes>&, const query::result_row_view&, const query::result_row_view&) const {
+        inline bool operator()(const selection&, const std::vector<bytes>&, const std::vector<bytes>&, const query::result_row_view&, const query::result_row_view*) const {
             return true;
         }
         void reset(const partition_key* = nullptr) {
@@ -300,13 +300,13 @@ public:
             , _rows_fetched_for_last_partition(rows_fetched_for_last_partition)
             , _last_pkey(std::move(last_pkey))
         { }
-        bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view& row) const;
+        bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view* row) const;
         void reset(const partition_key* key = nullptr);
         uint32_t get_rows_dropped() const {
             return _rows_dropped;
         }
     private:
-        bool do_filter(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view& row) const;
+        bool do_filter(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view* row) const;
     };
 
     result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf,
@@ -379,7 +379,7 @@ public:
         void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
             auto static_row_iterator = static_row.iterator();
             auto row_iterator = row.iterator();
-            if (!_filter(_selection, _partition_key, _clustering_key, static_row, row)) {
+            if (!_filter(_selection, _partition_key, _clustering_key, static_row, &row)) {
                 return;
             }
             _builder.new_row();
@@ -409,6 +409,9 @@ public:
 
         uint32_t accept_partition_end(const query::result_row_view& static_row) {
             if (_row_count == 0) {
+                if (!_filter(_selection, _partition_key, _clustering_key, static_row, nullptr)) {
+                    return _filter.get_rows_dropped();
+                }
                 _builder.new_row();
                 auto static_row_iterator = static_row.iterator();
                 for (auto&& def : _selection.get_columns()) {
