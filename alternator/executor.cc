@@ -1041,31 +1041,11 @@ static rjson::value set_diff(const rjson::value& v1, const rjson::value& v2) {
     return ret;
 }
 
-// Check if a given JSON object encodes a number (i.e., it is a {"N": [...]}
-// and returns an object representing it.
-static big_decimal unwrap_number(const rjson::value& v) {
-    if (!v.IsObject() || v.MemberCount() != 1) {
-        throw api_error("ValidationException", "UpdateExpression: invalid number object");
-    }
-    auto it = v.MemberBegin();
-    if (it->name != "N") {
-        throw api_error("ValidationException",
-                format("UpdateExpression: expected number, found type '{}'", it->name));
-    }
-    if (it->value.IsNumber()) {
-        return big_decimal(rjson::print(it->value)); // FIXME(sarna): should use big_decimal constructor with numeric values directly
-    }
-    if (!it->value.IsString()) {
-        throw api_error("ValidationException", "UpdateExpression: improperly formatted number constant");
-    }
-    return big_decimal(it->value.GetString());
-}
-
 // Take two JSON-encoded numeric values ({"N": "thenumber"}) and return the
 // sum, again as a JSON-encoded number.
 static rjson::value number_add(const rjson::value& v1, const rjson::value& v2) {
-    auto n1 = unwrap_number(v1);
-    auto n2 = unwrap_number(v2);
+    auto n1 = unwrap_number(v1, "UpdateExpression");
+    auto n2 = unwrap_number(v2, "UpdateExpression");
     rjson::value ret = rjson::empty_object();
     std::string str_ret = std::string((n1 + n2).to_string());
     rjson::set(ret, "N", rjson::from_string(str_ret));
@@ -1073,8 +1053,8 @@ static rjson::value number_add(const rjson::value& v1, const rjson::value& v2) {
 }
 
 static rjson::value number_subtract(const rjson::value& v1, const rjson::value& v2) {
-    auto n1 = unwrap_number(v1);
-    auto n2 = unwrap_number(v2);
+    auto n1 = unwrap_number(v1, "UpdateExpression");
+    auto n2 = unwrap_number(v2, "UpdateExpression");
     rjson::value ret = rjson::empty_object();
     std::string str_ret = std::string((n1 - n2).to_string());
     rjson::set(ret, "N", rjson::from_string(str_ret));

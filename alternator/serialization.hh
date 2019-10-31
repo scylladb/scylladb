@@ -22,10 +22,12 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include "types.hh"
 #include "schema.hh"
 #include "keys.hh"
 #include "rjson.hh"
+#include "utils/big_decimal.hh"
 
 namespace alternator {
 
@@ -58,4 +60,7 @@ rjson::value json_key_column_value(bytes_view cell, const column_definition& col
 partition_key pk_from_json(const rjson::value& item, schema_ptr schema);
 clustering_key ck_from_json(const rjson::value& item, schema_ptr schema);
 
+// If v encodes a number (i.e., it is a {"N": [...]}, returns an object representing it.  Otherwise,
+// raises ValidationException with diagnostic.
+big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic);
 }

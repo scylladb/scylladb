@@ -227,4 +227,22 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema) {
     return clustering_key::from_exploded(raw_ck);
 }
 
+big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        throw api_error("ValidationException", format("{}: invalid number object", diagnostic));
+    }
+    auto it = v.MemberBegin();
+    if (it->name != "N") {
+        throw api_error("ValidationException", format("{}: expected number, found type '{}'", diagnostic, it->name));
+    }
+    if (it->value.IsNumber()) {
+         // FIXME(sarna): should use big_decimal constructor with numeric values directly:
+        return big_decimal(rjson::print(it->value));
+    }
+    if (!it->value.IsString()) {
+        throw api_error("ValidationException", format("{}: improperly formatted number constant", diagnostic));
+    }
+    return big_decimal(it->value.GetString());
+}
+
 }
