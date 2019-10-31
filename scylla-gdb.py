@@ -826,19 +826,33 @@ def find_vptrs():
 
 
 def find_single_sstable_readers():
+    def _lookup_type(type_name):
+        return {'name': type_name, 'ptr_type': gdb.lookup_type(type_name).pointer()}
+
+    types = []
     try:
         # For Scylla < 2.1
         # FIXME: this only finds range readers
-        ptr_type = gdb.lookup_type('sstable_range_wrapping_reader').pointer()
-        vtable_name = 'vtable for sstable_range_wrapping_reader'
+        types = [_lookup_type('sstable_range_wrapping_reader')]
     except Exception:
-        ptr_type = gdb.lookup_type('sstables::sstable_mutation_reader').pointer()
-        vtable_name = 'vtable for sstables::sstable_mutation_reader'
+        types = [_lookup_type('sstables::sstable_mutation_reader<sstables::data_consume_rows_context_m, sstables::mp_row_consumer_m>'),
+                 _lookup_type('sstables::sstable_mutation_reader<sstables::data_consume_rows_context, sstables::mp_row_consumer_k_l>')]
+
+    def _lookup_obj(obj_addr, vtable_addr):
+        vtable_pfx = 'vtable for '
+        name = resolve(vtable_addr)
+        if not name or not name.startswith(vtable_pfx):
+            return None
+        name = name[len(vtable_pfx):]
+        for t in types:
+            if name.startswith(t['name']):
+                ptr_type = t['ptr_type']
+                return obj_addr.reinterpret_cast(ptr_type)
 
     for obj_addr, vtable_addr in find_vptrs():
-        name = resolve(vtable_addr)
-        if name and name.startswith(vtable_name):
-            yield obj_addr.reinterpret_cast(ptr_type)
+        obj = _lookup_obj(obj_addr, vtable_addr)
+        if obj:
+            yield obj
 
 def find_active_sstables():
     """ Yields sstable* once for each active sstable reader. """
