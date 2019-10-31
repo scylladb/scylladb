@@ -215,16 +215,19 @@ static bool check_NOT_NULL(const rjson::value* val) {
     return val != nullptr;
 }
 
-// Check if two JSON-encoded values match with the LT relation
-static bool check_LT(const rjson::value* v1, const rjson::value& v2) {
+// Check if two JSON-encoded values match with cmp.
+template <typename Comparator>
+bool check_compare(const rjson::value* v1, const rjson::value& v2, const Comparator& cmp) {
     if (!v2.IsObject() || v2.MemberCount() != 1) {
         throw api_error("ValidationException",
-                        "LT operator requires a single AttributeValue of type String, Number, or Binary");
+                        format("{} requires a single AttributeValue of type String, Number, or Binary",
+                               cmp.diagnostic()));
     }
     const auto& kv2 = *v2.MemberBegin();
     if (kv2.name != "S" && kv2.name != "N" && kv2.name != "B") {
         throw api_error("ValidationException",
-                        "LT operator requires a single AttributeValue of type String, Number, or Binary");
+                        format("{} requires a single AttributeValue of type String, Number, or Binary",
+                               cmp.diagnostic()));
     }
     if (!v1 || !v1->IsObject() || v1->MemberCount() != 1) {
         return false;
@@ -234,18 +237,23 @@ static bool check_LT(const rjson::value* v1, const rjson::value& v2) {
         return false;
     }
     if (kv1.name == "N") {
-        return unwrap_number(*v1, "LT operator") < unwrap_number(v2, "LT operator");
+        return cmp(unwrap_number(*v1, cmp.diagnostic()), unwrap_number(v2, cmp.diagnostic()));
     }
     if (kv1.name == "S") {
-        return std::string_view(kv1.value.GetString(), kv1.value.GetStringLength())
-                < std::string_view(kv2.value.GetString(), kv2.value.GetStringLength());
+        return cmp(std::string_view(kv1.value.GetString(), kv1.value.GetStringLength()),
+                   std::string_view(kv2.value.GetString(), kv2.value.GetStringLength()));
     }
     if (kv1.name == "B") {
-        return base64_decode(kv1.value) < base64_decode(kv2.value);
+        return cmp(base64_decode(kv1.value), base64_decode(kv2.value));
     }
-    clogger.error("check_LT panic: LHS type equals RHS type, but one is in {N,S,B} while the other isn't");
+    clogger.error("check_compare panic: LHS type equals RHS type, but one is in {N,S,B} while the other isn't");
     return false;
 }
+
+struct cmp_lt {
+    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs < rhs; }
+    const char* diagnostic() const { return "LT operator"; }
+};
 
 // Verify one Expect condition on one attribute (whose content is "got")
 // for the verify_expected() below.
@@ -291,7 +299,7 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
             return check_NE(got, (*attribute_value_list)[0]);
         case comparison_operator_type::LT:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_LT(got, (*attribute_value_list)[0]);
+            return check_compare(got, (*attribute_value_list)[0], cmp_lt{});
         case comparison_operator_type::BEGINS_WITH:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
