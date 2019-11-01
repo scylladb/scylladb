@@ -346,6 +346,45 @@ SEASTAR_TEST_CASE(test_user_function_counter_return) {
     });
 }
 
+SEASTAR_TEST_CASE(test_user_function_timestamp_return) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 9223372036854775807);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return val';").get();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({
+            {serialized(db_clock::time_point(db_clock::duration(int64_t(9223372036854775807))))}
+        });
+
+        e.execute_cql("CREATE FUNCTION my_func2(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return \"2011-02-03 04:05:06+0000\"';").get();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(db_clock::time_point(db_clock::duration(int64_t(0x12de9b1e550))))}});
+
+        e.execute_cql("CREATE FUNCTION my_func5(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return {year = 2011, month = 2, day = 3, hour = 4, min = 5, sec = 6 }';").get();
+        res = e.execute_cql("SELECT my_func5(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({
+            {serialized(db_clock::time_point(db_clock::duration(int64_t(0x12de9b1e550))))}
+        });
+
+        e.execute_cql("CREATE FUNCTION my_func6(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return {year = 10000, month = 2, day = 3, hour = 4, min = 5, sec = 6 }';").get();
+        auto fut = e.execute_cql("SELECT my_func6(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), boost::wrapexcept<boost::gregorian::bad_year>, message_equals("Year is out of valid range: 1400..9999"));
+
+        e.execute_cql("CREATE FUNCTION my_func3(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return \"abc\"';").get();
+        fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
+        // FIXME: the exception message is redundant.
+        BOOST_REQUIRE_EXCEPTION(fut.get(), marshal_exception, message_equals("marshaling error: unable to parse date 'abc': marshaling error: Unable to parse timestamp from 'abc'"));
+
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('bar', 9223372036854775808);").get();
+        fut = e.execute_cql("SELECT my_func(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("timestamp value must fit in signed 64 bits"));
+
+        e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return 42.2';").get();
+        fut = e.execute_cql("SELECT my_func4(val) FROM my_table;");
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("timestamp must be a string, integer or date table"));
+    });
+}
+
 SEASTAR_TEST_CASE(test_user_function_tuple_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();

@@ -419,6 +419,91 @@ static sstring get_string(lua_State *l, int index) {
 static data_value convert_from_lua(lua_slice_state &l, const data_type& type);
 
 namespace {
+struct lua_date_table {
+    // The lua date table is documented at https://www.lua.org/pil/22.1.html
+    // date::year uses a int64_t, but there is no reason to try to
+    // support 64 bit years. In practice the limitations are
+    // * year_month_day::to_days hits a signed integer overflow for
+    //   large years.
+    // * boost::gregorian only supports the years [1400,9999]
+    int32_t year;
+
+    // Both date::month and date::day use unsigned char.
+    unsigned char month;
+    unsigned char day;
+    std::optional<int32_t> hour;
+    std::optional<int32_t> minute;
+    std::optional<int32_t> second;
+};
+
+static lua_date_table get_lua_date_table(lua_State* l, int index) {
+    std::optional<int32_t> year;
+    std::optional<unsigned char> month;
+    std::optional<unsigned char> day;
+    std::optional<int32_t> hour;
+    std::optional<int32_t> minute;
+    std::optional<int32_t> second;
+
+    lua_pushnil(l);
+    while (lua_next(l, index - 1) != 0) {
+        auto k = get_string(l, index - 1);
+        auto v = get_varint(l, index);
+        lua_pop(l, 1);
+        if (k == "month") {
+            month = (unsigned char)v;
+            if (*month != v) {
+                throw exceptions::invalid_request_exception(format("month is too large: '{}'", v));
+            }
+        } else if (k == "day") {
+            day = (unsigned char)v;
+            if (*day != v) {
+                throw exceptions::invalid_request_exception(format("day is too large: '{}'", v));
+            }
+        } else {
+            int32_t vint(v);
+            if (vint != v) {
+                throw exceptions::invalid_request_exception(format("{} is too large: '{}'", k, v));
+            }
+            if (k == "year") {
+                year = vint;
+            } else if (k == "hour") {
+                hour = vint;
+            } else if (k == "min") {
+                minute = vint;
+            } else if (k == "sec") {
+                second = vint;
+            } else {
+                throw exceptions::invalid_request_exception(format("invalid date table field: '{}'", k));
+            }
+        }
+    }
+    if (!year || !month || !day) {
+        throw exceptions::invalid_request_exception("date table must have year, month and day");
+    }
+    return lua_date_table{*year, *month, *day, hour, minute, second};
+}
+
+struct from_lua_visitor;
+
+struct timestamp_return_visitor {
+    from_lua_visitor &outer;
+    template <typename T>
+    db_clock::time_point operator()(const T&) {
+        throw exceptions::invalid_request_exception("timestamp must be a string, integer or date table");
+    }
+    db_clock::time_point operator()(const boost::multiprecision::cpp_int& v) {
+        int64_t v2 = int64_t(v);
+        if (v2 == v) {
+            return db_clock::time_point(db_clock::duration(v2));
+        }
+        throw exceptions::invalid_request_exception("timestamp value must fit in signed 64 bits");
+    }
+    db_clock::time_point operator()(const std::string_view& v) {
+        return timestamp_type_impl::from_sstring(v);
+    }
+    db_clock::time_point operator()(const lua_table&);
+};
+
 struct from_lua_visitor {
     lua_slice_state& l;
 
@@ -628,7 +713,7 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const timestamp_date_base_class& t) {
-        assert(0 && "not implemented");
+        return visit_lua_value(l, -1, timestamp_return_visitor{*this});
     }
 
     data_value operator()(const time_type_impl& t) {
@@ -649,6 +734,15 @@ struct from_lua_visitor {
         assert(0 && "not implemented");
     }
 };
+
+db_clock::time_point timestamp_return_visitor::operator()(const lua_table&) {
+    auto table = get_lua_date_table(outer.l, -1);
+    boost::gregorian::date date(table.year, table.month, table.day);
+    boost::posix_time::time_duration time(table.hour.value_or(12), table.minute.value_or(0), table.second.value_or(0));
+    boost::posix_time::ptime timestamp(date, time);
+    int64_t msec = (timestamp - boost::posix_time::from_time_t(0)).total_milliseconds();
+    return (*this)(boost::multiprecision::cpp_int(msec));
+}
 }
 
 static data_value convert_from_lua(lua_slice_state &l, const data_type& type) {

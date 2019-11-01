@@ -329,6 +329,10 @@ static int64_t timestamp_from_string(sstring_view s) {
     }
 }
 
+db_clock::time_point timestamp_type_impl::from_sstring(sstring_view s) {
+    return db_clock::time_point(db_clock::duration(timestamp_from_string(s)));
+}
+
 simple_date_type_impl::simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, {}} {}
 
 static date::year_month_day get_simple_date_time(const std::smatch& sm) {
@@ -2334,7 +2338,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, db_clock::time_point(db_clock::duration(timestamp_from_string(s))));
+        return serialize_value(t, timestamp_type_impl::from_sstring(s));
     }
     bytes operator()(const simple_date_type_impl& t) {
         if (s.empty()) {
