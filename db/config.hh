@@ -26,7 +26,6 @@
 #include <unordered_map>
 
 #include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>

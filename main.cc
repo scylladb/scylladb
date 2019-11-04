@@ -23,7 +23,6 @@
 #include "database.hh"
 #include <seastar/core/app-template.hh>
 #include <seastar/core/distributed.hh>
-#include "thrift/server.hh"
 #include "transport/server.hh"
 #include <seastar/http/httpd.hh>
 #include "api/api_init.hh"
@@ -54,15 +53,12 @@
 #include <seastar/core/file.hh>
 #include <sys/time.h>
 #include <sys/resource.h>
-#include "disk-error-handler.hh"
 #include "tracing/tracing.hh"
 #include "tracing/tracing_backend_registry.hh"
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
 #include <seastar/net/dns.hh>
-#include <seastar/core/memory.hh>
 #include <seastar/core/io_queue.hh>
-#include <seastar/util/log-cli.hh>
 
 #include "db/view/view_update_generator.hh"
 #include "service/cache_hitrate_calculator.hh"
@@ -71,7 +67,6 @@
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
 #include "cql3/cql_config.hh"
-#include "serializer.hh"
 
 #include "alternator/server.hh"
 
