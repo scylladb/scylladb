@@ -464,7 +464,6 @@ inline auto defer_with_log_on_error(Func&& func) {
 }
 
 int main(int ac, char** av) {
-  int return_value = 0;
   try {
     // early check to avoid triggering
     if (!cpu_sanity()) {
@@ -545,8 +544,8 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator,
-                               &feature_service] {
+        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx,
+                &prometheus_server, &cf_cache_hitrate_calculator, &feature_service] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
