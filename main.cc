@@ -560,9 +560,9 @@ int main(int ac, char** av) {
 
             cfg->broadcast_to_all_shards().get();
 
-            ::sighup_handler sigup_handler(opts, *cfg);
-            auto stop_sighup_handler = defer_with_log_on_error([&] {
-                sigup_handler.stop().get();
+            ::sighup_handler sighup_handler(opts, *cfg);
+            auto stop_sighup_handler = defer_verbose_shutdown("sighup", [&] {
+                sighup_handler.stop().get();
             });
 
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
