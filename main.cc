@@ -748,17 +748,16 @@ int main(int ac, char** av) {
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
             dbcfg.available_memory = memory::stats().total_memory();
             db.start(std::ref(*cfg), dbcfg).get();
-            auto stop_database_and_sstables = defer_with_log_on_error([&db] {
+            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
                 // call stop on each db instance, but leave the shareded<database> pointers alive.
-                startlog.info("Shutdown database started");
                 stop_database(db).then([&db] {
                     return db.invoke_on_all([](auto& db) {
                         return db.stop();
                     });
                 }).then([] {
-                    startlog.info("Shutdown database finished");
+                    startlog.info("Shutting down database: waiting for background jobs...");
                     return sstables::await_background_jobs_on_all_shards();
                 }).get();
             });
