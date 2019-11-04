@@ -617,10 +617,10 @@ int main(int ac, char** av) {
             std::any stop_prometheus;
             if (pport) {
                 prometheus_server.start("prometheus").get();
-                stop_prometheus = ::make_shared(defer([&prometheus_server] {
-                    startlog.info("stopping prometheus API server");
+                stop_prometheus = ::make_shared(defer_verbose_shutdown("prometheus API server", [&prometheus_server, pport] {
                     prometheus_server.stop().get();
                 }));
+
                 //FIXME discarded future
                 prometheus::config pctx;
                 pctx.metric_help = "Scylla server statistics";
