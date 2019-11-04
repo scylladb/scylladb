@@ -437,19 +437,6 @@ public:
 };
 
 template <typename Func>
-inline auto defer_with_log_on_error(Func&& func) {
-    auto func_with_log = [func = std::forward<Func>(func)] () mutable {
-        try {
-            std::forward<Func>(func)();
-        } catch (...) {
-            startlog.error("Unexpected error on shutdown from {}: {}", typeid(func).name(), std::current_exception());
-            throw;
-        }
-    };
-    return deferred_action(std::move(func_with_log));
-}
-
-template <typename Func>
 inline auto defer_verbose_shutdown(const char* what, Func&& func) {
     auto vfunc = [what, func = std::forward<Func>(func)] () mutable {
         startlog.info("Shutting down {}", what);
