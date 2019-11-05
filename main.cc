@@ -78,12 +78,6 @@ using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
 
-namespace tracing {
-
-void register_tracing_keyspace_backend(backend_registry& br);
-
-}
-
 // Must live in a seastar::thread
 class stop_signal {
     bool _caught = false;
