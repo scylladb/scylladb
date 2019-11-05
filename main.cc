@@ -750,7 +750,7 @@ int main(int ac, char** av) {
                 }).get();
             });
             verify_seastar_io_scheduler(opts.count("max-io-requests"), opts.count("io-properties") || opts.count("io-properties-file"),
-                                        db.local().get_config().developer_mode()).get();
+                                        cfg->developer_mode()).get();
             supervisor::notify("creating data directories");
             dirs.touch_and_lock(db.local().get_config().data_file_directories()).get();
             supervisor::notify("creating commitlog directory");
