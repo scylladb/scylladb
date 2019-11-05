@@ -505,7 +505,6 @@ int main(int ac, char** av) {
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy);
     httpd::http_server_control prometheus_server;
-    prometheus::config pctx;
     directories dirs;
     sharded<gms::feature_service> feature_service;
 
@@ -534,7 +533,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx,
+        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &feature_service] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
@@ -604,14 +603,15 @@ int main(int ac, char** av) {
             uint16_t pport = cfg->prometheus_port();
             std::any stop_prometheus;
             if (pport) {
-                pctx.metric_help = "Scylla server statistics";
-                pctx.prefix = cfg->prometheus_prefix();
                 prometheus_server.start("prometheus").get();
                 stop_prometheus = ::make_shared(defer([&prometheus_server] {
                     startlog.info("stopping prometheus API server");
                     prometheus_server.stop().get();
                 }));
                 //FIXME discarded future
+                prometheus::config pctx;
+                pctx.metric_help = "Scylla server statistics";
+                pctx.prefix = cfg->prometheus_prefix();
                 (void)prometheus::start(prometheus_server, pctx);
                 with_scheduling_group(maintenance_scheduling_group, [&] {
                   return prometheus_server.listen(socket_address{prom_addr, pport}).handle_exception([pport, &cfg] (auto ep) {
