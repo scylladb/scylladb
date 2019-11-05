@@ -138,11 +138,6 @@ V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, con
     return def;
 }
 
-static fs::path relative_conf_dir(fs::path path) {
-    static auto conf_dir = db::config::get_conf_dir(); // this is not gonna change in our life time
-    return conf_dir / path;
-}
-
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     sstring file;
@@ -150,7 +145,7 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     if (opts.count("options-file") > 0) {
         file = opts["options-file"].as<sstring>();
     } else {
-        file = relative_conf_dir("scylla.yaml").string();
+        file = db::config::get_conf_sub("scylla.yaml").string();
     }
     return check_direct_io_support(file).then([file, &cfg] {
         return cfg.read_from_file(file, [](auto & opt, auto & msg, auto status) {
@@ -673,8 +668,8 @@ int main(int ac, char** av) {
             auto ceo = cfg->client_encryption_options();
             if (is_true(get_or_default(ceo, "enabled", "false"))) {
                 ceo["enabled"] = "true";
-                ceo["certificate"] = get_or_default(ceo, "certificate", relative_conf_dir("scylla.crt").string());
-                ceo["keyfile"] = get_or_default(ceo, "keyfile", relative_conf_dir("scylla.key").string());
+                ceo["certificate"] = get_or_default(ceo, "certificate", db::config::get_conf_sub("scylla.crt").string());
+                ceo["keyfile"] = get_or_default(ceo, "keyfile", db::config::get_conf_sub("scylla.key").string());
                 ceo["require_client_auth"] = is_true(get_or_default(ceo, "require_client_auth", "false")) ? "true" : "false";
             } else {
                 ceo["enabled"] = "false";
@@ -824,8 +819,8 @@ int main(int ac, char** av) {
             auto tcp_nodelay_inter_dc = cfg->inter_dc_tcp_nodelay();
             auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
             auto trust_store = get_or_default(ssl_opts, "truststore");
-            auto cert = get_or_default(ssl_opts, "certificate", relative_conf_dir("scylla.crt").string());
-            auto key = get_or_default(ssl_opts, "keyfile", relative_conf_dir("scylla.key").string());
+            auto cert = get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
+            auto key = get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
             auto prio = get_or_default(ssl_opts, "priority_string", sstring());
             auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
             if (cluster_name.empty()) {

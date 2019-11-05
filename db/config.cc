@@ -779,6 +779,10 @@ db::fs::path db::config::get_conf_dir() {
     return confdir;
 }
 
+db::fs::path db::config::get_conf_sub(db::fs::path sub) {
+    return get_conf_dir() / sub;
+}
+
 void db::config::check_experimental(const sstring& what) const {
     if (!experimental()) {
         throw std::runtime_error(format("{} is currently disabled. Start Scylla with --experimental=on to enable.", what));

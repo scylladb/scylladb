@@ -93,6 +93,7 @@ public:
      *         according the environment variables definitions.
      */
     static fs::path get_conf_dir();
+    static fs::path get_conf_sub(fs::path);
 
     using string_map = std::unordered_map<sstring, sstring>;
                     //program_options::string_map;
