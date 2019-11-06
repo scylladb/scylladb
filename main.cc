@@ -582,7 +582,6 @@ int main(int ac, char** av) {
                 }
             };
             auto maintenance_scheduling_group = make_sched_group("streaming", 200);
-            auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
@@ -1066,7 +1065,7 @@ int main(int ac, char** av) {
             with_scheduling_group(dbcfg.statement_scheduling_group, [] {
                 return service::get_local_storage_service().start_native_transport();
             }).get();
-            if (start_thrift) {
+            if (cfg->start_rpc()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [] {
                     return service::get_local_storage_service().start_rpc_server();
                 }).get();
