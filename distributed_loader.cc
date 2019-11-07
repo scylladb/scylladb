@@ -467,12 +467,28 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                             }
                         }).then([&cf, sstables] {
                             // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
-                            (void)sstables::delete_atomically(std::move(sstables)).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
+                            (void)sstables::delete_atomically(sstables).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
                                 try {
                                     std::rethrow_exception(eptr);
                                 } catch (...) {
                                     dblog.warn("Exception in resharding when deleting sstable file: {}", eptr);
                                 }
+                            }).then([cf, sstables = std::move(sstables)] {
+                                // Refresh cache's snapshot of shards involved in resharding to prevent the cache from
+                                // holding reference to deleted files which results in disk space not being released.
+                                std::unordered_set<shard_id> owner_shards;
+                                for (auto& sst : sstables) {
+                                    const auto& shards = sst->get_shards_for_this_sstable();
+                                    owner_shards.insert(shards.begin(), shards.end());
+                                    if (owner_shards.size() == smp::count) {
+                                        break;
+                                    }
+                                }
+                                return parallel_for_each(std::move(owner_shards), [cf] (shard_id shard) {
+                                    return smp::submit_to(shard, [cf] () mutable {
+                                        cf->_cache.refresh_snapshot();
+                                    });
+                                });
                             });
                         });
                     });
