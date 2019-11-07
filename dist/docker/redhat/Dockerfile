@@ -4,6 +4,9 @@ MAINTAINER Avi Kivity <avi@cloudius-systems.com>
 
 ENV container docker
 
+# The SCYLLA_REPO_URL argument specifies the URL to the RPM repository this Docker image uses to install Scylla. The default value is the Scylla's unstable RPM repository, which contains the daily build.
+ARG SCYLLA_REPO_URL=http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo
+
 ADD scylla_bashrc /scylla_bashrc
 
 # Scylla configuration:
@@ -28,7 +31,7 @@ ADD commandlineparser.py /commandlineparser.py
 ADD docker-entrypoint.py /docker-entrypoint.py
 ADD node_exporter_install /node_exporter_install
 # Install Scylla:
-RUN curl http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo -o /etc/yum.repos.d/scylla.repo && \
+RUN curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
     yum -y install epel-release && \
     yum -y clean expire-cache && \
     yum -y update && \
