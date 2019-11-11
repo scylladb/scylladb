@@ -824,6 +824,7 @@ public:
     column_count_type clustering_key_size() const { return _clustering_key_size; }
     column_count_type static_columns_count() const { return _static_column_count; }
     column_count_type regular_columns_count() const { return _regular_column_count; }
+    column_count_type all_columns_count() const { return _raw._columns.size(); }
     // Returns a range of column definitions
     const_iterator_range_type partition_key_columns() const;
     // Returns a range of column definitions
