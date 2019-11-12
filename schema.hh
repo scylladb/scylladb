@@ -58,7 +58,7 @@ std::ostream& operator<<(std::ostream& os, ordinal_column_id id);
 // identified by ordinal_id.
 //
 // @sa column_definition::ordinal_id.
-class column_mask {
+class column_set {
 public:
     using bitset = boost::dynamic_bitset<uint64_t>;
     using size_type = bitset::size_type;
@@ -94,7 +94,7 @@ public:
         return static_cast<ordinal_column_id>(_mask.find_next(static_cast<column_count_type>(pos)));
     }
     // Logical or
-    void union_with(const column_mask& with);
+    void union_with(const column_set& with);
 private:
     bitset _mask;
 };

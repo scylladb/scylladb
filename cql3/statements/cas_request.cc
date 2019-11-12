@@ -82,7 +82,7 @@ std::optional<mutation> cas_request::apply_updates(api::timestamp_type ts) const
 
 lw_shared_ptr<query::read_command> cas_request::read_command() const {
 
-    column_mask columns_to_read;
+    column_set columns_to_read;
     std::vector<query::clustering_range> ranges;
 
     for (const cas_row_update& op : _updates) {

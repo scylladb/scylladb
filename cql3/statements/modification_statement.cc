@@ -380,7 +380,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 
 seastar::shared_ptr<cql_transport::messages::result_message>
 modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
-        const column_mask& columns,
+        const column_set& columns,
         bool is_applied,
         const update_parameters::prefetch_data& rows) {
 
@@ -393,7 +393,7 @@ modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata>
         std::vector<bytes_opt> row;
         row.reserve(metadata->value_count());
         row.emplace_back(boolean_type->decompose(is_applied));
-        for (ordinal_column_id id = columns.find_first(); id != column_mask::npos; id = columns.find_next(id)) {
+        for (ordinal_column_id id = columns.find_first(); id != column_set::npos; id = columns.find_next(id)) {
             const auto it = cell_map.cells.find(id);
             if (it == cell_map.cells.end()) {
                 row.emplace_back(bytes_opt{});

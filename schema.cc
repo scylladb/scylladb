@@ -37,13 +37,13 @@
 
 constexpr int32_t schema::NAME_LENGTH;
 
-void column_mask::union_with(const column_mask& with) {
+void column_set::union_with(const column_set& with) {
 
     // boost::dynamic_bitset doesn't support logical
     // or of bitsets of different sizes, work this around.
     if (_mask.size() > with._mask.size()) {
         if (with._mask.size()) {
-            column_mask::bitset tmp = with._mask;
+            column_set::bitset tmp = with._mask;
             tmp.resize(_mask.size());
             _mask |= tmp;
         }
