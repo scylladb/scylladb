@@ -390,6 +390,9 @@ void batch_statement::build_cas_result_set_metadata() {
         return;
     }
     const auto& schema = *_statements.front().statement->s;
+
+    _columns_of_cas_result_set.resize(schema.all_columns_count());
+
     // Add the mandatory [applied] column to result set metadata
     std::vector<shared_ptr<column_specification>> columns;
 

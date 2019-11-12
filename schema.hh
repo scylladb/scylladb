@@ -69,20 +69,23 @@ public:
     static_assert(static_cast<column_count_type>(boost::dynamic_bitset<uint64_t>::npos) == ~static_cast<column_count_type>(0));
     static constexpr ordinal_column_id npos = static_cast<ordinal_column_id>(bitset::npos);
 
+    explicit column_set(column_count_type num_bits = 0)
+        : _mask(num_bits)
+    {
+    }
+
+    void resize(column_count_type num_bits) {
+        _mask.resize(num_bits);
+    }
+
     // Set the appropriate bit for column id.
     void set(ordinal_column_id id) {
         column_count_type bit = static_cast<column_count_type>(id);
-        if (_mask.size() <= bit) {
-            _mask.resize(bit + 1);
-        }
         _mask.set(bit);
     }
     // Test the mask for use of a given column id.
     bool test(ordinal_column_id id) const {
         column_count_type bit = static_cast<column_count_type>(id);
-        if (_mask.size() <= bit) {
-            return false;
-        }
         return _mask.test(bit);
     }
     // @sa boost::dynamic_bistet docs
@@ -94,7 +97,10 @@ public:
         return static_cast<ordinal_column_id>(_mask.find_next(static_cast<column_count_type>(pos)));
     }
     // Logical or
-    void union_with(const column_set& with);
+    void union_with(const column_set& with) {
+        _mask |= with._mask;
+    }
+
 private:
     bitset _mask;
 };

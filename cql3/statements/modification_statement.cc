@@ -76,6 +76,8 @@ modification_statement::modification_statement(statement_type type_, uint32_t bo
     : cql_statement_opt_metadata(modification_statement_timeout(*schema_))
     , type{type_}
     , _bound_terms{bound_terms}
+    , _columns_to_read(schema_->all_columns_count())
+    , _columns_of_cas_result_set(schema_->all_columns_count())
     , s{schema_}
     , attrs{std::move(attrs_)}
     , _column_operations{}
