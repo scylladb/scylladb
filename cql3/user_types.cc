@@ -243,6 +243,10 @@ shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     auto value = _t->bind(params._options);
+    execute(m, row_key, params, column, std::move(value));
+}
+
+void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value) {
     if (value == constants::UNSET_VALUE) {
         return;
     }
