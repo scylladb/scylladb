@@ -166,15 +166,22 @@ future<> modification_statement::check_access(const service::client_state& state
 
 future<std::vector<mutation>>
 modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) {
+    auto cl = options.get_consistency();
     auto json_cache = maybe_prepare_json_cache(options);
     auto keys = build_partition_keys(options, json_cache);
     auto ranges = create_clustering_ranges(options, json_cache);
     auto f = make_ready_future<update_parameters::prefetch_data>(s);
 
+    if (is_counter()) {
+        db::validate_counter_for_write(*s, cl);
+    } else {
+        db::validate_for_write(cl);
+    }
+
     if (requires_read()) {
-        lw_shared_ptr<query::read_command> cmd = read_command(ranges, options.get_consistency());
+        lw_shared_ptr<query::read_command> cmd = read_command(ranges, cl);
         // FIXME: ignoring "local"
-        f = proxy.query(s, cmd, dht::partition_range_vector(keys), options.get_consistency(),
+        f = proxy.query(s, cmd, dht::partition_range_vector(keys), cl,
                 {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
 
                 [this, cmd] (auto cqr) {
@@ -312,12 +319,6 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
 future<>
 modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     auto cl = options.get_consistency();
-    if (is_counter()) {
-        db::validate_counter_for_write(*s, cl);
-    } else {
-        db::validate_for_write(cl);
-    }
-
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
         if (mutations.empty()) {
