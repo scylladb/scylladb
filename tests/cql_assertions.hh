@@ -36,6 +36,7 @@ public:
     rows_assertions with_size(size_t size);
     rows_assertions is_empty();
     rows_assertions is_not_empty();
+    rows_assertions with_column_types(std::initializer_list<data_type> column_types);
     rows_assertions with_row(std::initializer_list<bytes_opt> values);
 
     // Verifies that the result has the following rows and only that rows, in that order.

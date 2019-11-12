@@ -114,6 +114,10 @@ functions::init() {
     declare(aggregate_fcts::make_max_function<sstring>());
     declare(aggregate_fcts::make_min_function<sstring>());
 
+    declare(aggregate_fcts::make_count_function<ascii_native_type>());
+    declare(aggregate_fcts::make_max_function<ascii_native_type>());
+    declare(aggregate_fcts::make_min_function<ascii_native_type>());
+
     declare(aggregate_fcts::make_count_function<simple_date_native_type>());
     declare(aggregate_fcts::make_max_function<simple_date_native_type>());
     declare(aggregate_fcts::make_min_function<simple_date_native_type>());

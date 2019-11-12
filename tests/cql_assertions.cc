@@ -92,6 +92,24 @@ rows_assertions::rows_assertions::is_not_null() {
     return is_not_empty();
 }
 
+rows_assertions
+rows_assertions::with_column_types(std::initializer_list<data_type> column_types) {
+    auto meta = _rows->rs().result_set().get_metadata();
+    const auto& columns = meta.get_names();
+    if (column_types.size() != columns.size()) {
+        fail(format("Expected {:d} columns, got {:d}", column_types.size(), meta.column_count()));
+    }
+    auto expected_it = column_types.begin();
+    auto actual_it = columns.begin();
+    for (int i = 0; i < (int)columns.size(); i++) {
+        const auto& expected_type = *expected_it++;
+        const auto& actual_spec = *actual_it++;
+        if (expected_type != actual_spec->type) {
+            fail(format("Column {:d}: expected type {}, got {}", i, expected_type->name(), actual_spec->type->name()));
+        }
+    }
+    return {*this};
+}
 
 rows_assertions
 rows_assertions::with_row(std::initializer_list<bytes_opt> values) {

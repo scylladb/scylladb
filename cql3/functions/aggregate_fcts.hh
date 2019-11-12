@@ -233,6 +233,11 @@ struct aggregate_type_for {
 };
 
 template<>
+struct aggregate_type_for<ascii_native_type> {
+    using type = ascii_native_type::primary_type;
+};
+
+template<>
 struct aggregate_type_for<simple_date_native_type> {
     using type = simple_date_native_type::primary_type;
 };
