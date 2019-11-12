@@ -381,6 +381,50 @@ SEASTAR_TEST_CASE(test_insert_json_collections) {
     });
 }
 
+SEASTAR_TEST_CASE(test_insert_json_null_frozen_collections) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create type ut (a int, b int)").get();
+
+        e.execute_cql(
+            "CREATE TABLE collections ("
+                "    k int primary key,"
+                "    l frozen<list<int>>,"
+                "    m frozen<map<int, int>>,"
+                "    s frozen<set<int>>,"
+                "    u frozen<ut>"
+                ");").get();
+
+        e.require_table_exists("ks", "collections").get();
+
+        e.execute_cql("INSERT INTO collections JSON '{\"k\": 0}'").get();
+        e.execute_cql("INSERT INTO collections JSON '{\"k\": 1, \"m\": null, \"s\": null, \"l\": null, \"u\": null}'").get();
+
+        assert_that(e.execute_cql("SELECT JSON * FROM collections WHERE k = 0").get0()).is_rows().with_rows({
+            {
+                utf8_type->decompose(
+                    "{\"k\": 0, "
+                    "\"l\": null, "
+                    "\"m\": null, "
+                    "\"s\": null, "
+                    "\"u\": null}"
+                )
+            }
+         });
+
+        assert_that(e.execute_cql("SELECT JSON * FROM collections WHERE k = 1").get0()).is_rows().with_rows({
+            {
+                utf8_type->decompose(
+                    "{\"k\": 1, "
+                    "\"l\": null, "
+                    "\"m\": null, "
+                    "\"s\": null, "
+                    "\"u\": null}"
+                )
+            }
+         });
+    });
+}
+
 SEASTAR_TEST_CASE(test_prepared_json) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto prepared = e.execute_cql(
