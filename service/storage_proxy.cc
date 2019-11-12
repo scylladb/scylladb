@@ -3979,7 +3979,9 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
     assert(partition_ranges.size() == 1);
     assert(query::is_single_partition(partition_ranges[0]));
-    assert(cl_for_paxos == db::consistency_level::LOCAL_SERIAL || cl_for_paxos == db::consistency_level::SERIAL);
+
+    db::validate_for_cas(cl_for_paxos);
+    db::validate_for_cas_commit(cl_for_commit, schema->ks_name());
 
     shared_ptr<paxos_response_handler> handler;
     try {

@@ -348,10 +348,6 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 
     auto cl_for_commit = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
-
-    db::validate_for_write(cl_for_commit);
-    db::validate_for_cas(cl_for_paxos);
-
     db::timeout_clock::time_point now = db::timeout_clock::now();
     const timeout_config& cfg = options.get_timeout_config();
 

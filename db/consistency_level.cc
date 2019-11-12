@@ -317,22 +317,16 @@ void validate_for_write(consistency_level cl) {
     }
 }
 
-#if 0
-    // This is the same than validateForWrite really, but we include a slightly different error message for SERIAL/LOCAL_SERIAL
-    public void validateForCasCommit(String keyspaceName) throws InvalidRequestException
-    {
-        switch (this)
-        {
-            case EACH_QUORUM:
-                requireNetworkTopologyStrategy(keyspaceName);
-                break;
-            case SERIAL:
-            case LOCAL_SERIAL:
-                throw new InvalidRequestException(this + " is not supported as conditional update commit consistency. Use ANY if you mean \"make sure it is accepted but I don't care how many replicas commit it for non-SERIAL reads\"");
-        }
+// This is the same than validateForWrite really, but we include a slightly different error message for SERIAL/LOCAL_SERIAL
+void validate_for_cas_commit(consistency_level cl, const sstring& keyspace) {
+    switch (cl) {
+    case consistency_level::SERIAL:
+    case consistency_level::LOCAL_SERIAL:
+        throw exceptions::invalid_request_exception(format("{} is not supported as conditional update commit consistency. Use ANY if you mean \"make sure it is accepted but I don't care how many replicas commit it for non-SERIAL reads\"", cl));
+    default:
+        break;
     }
-
-#endif
+}
 
 bool is_serial_consistency(consistency_level cl) {
     return cl == consistency_level::SERIAL || cl == consistency_level::LOCAL_SERIAL;
@@ -355,14 +349,5 @@ void validate_counter_for_write(const schema& s, consistency_level cl) {
         throw exceptions::invalid_request_exception("Counter operations are inherently non-serializable");
     }
 }
-
-#if 0
-    private void requireNetworkTopologyStrategy(String keyspaceName) throws InvalidRequestException
-    {
-        AbstractReplicationStrategy strategy = Keyspace.open(keyspaceName).getReplicationStrategy();
-        if (!(strategy instanceof NetworkTopologyStrategy))
-            throw new InvalidRequestException(String.format("consistency level %s not compatible with replication strategy (%s)", this, strategy.getClass().getName()));
-    }
-#endif
 
 }
