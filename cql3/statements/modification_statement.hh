@@ -106,7 +106,7 @@ protected:
     std::vector<::shared_ptr<operation>> _column_operations;
 private:
     // Separating normal and static conditions makes things somewhat easier
-    std::vector<::shared_ptr<column_condition>> _column_conditions;
+    std::vector<::shared_ptr<column_condition>> _regular_conditions;
     std::vector<::shared_ptr<column_condition>> _static_conditions;
 
     // True if this statement has _if_exists or _if_not_exists or other
@@ -120,9 +120,14 @@ private:
     bool _if_not_exists = false;
     bool _if_exists = false;
 
+    // True if this statement has column operations that apply to static/regular
+    // columns, respectively.
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
-    bool _sets_a_collection = false;
+    // True if this statement has column operations or conditions for a column
+    // that stores a collection.
+    bool _selects_a_collection = false;
+
     std::optional<bool> _is_raw_counter_shard_write;
 
     const std::function<const column_definition&(::shared_ptr<column_condition>)> get_column_for_condition =
@@ -209,13 +214,13 @@ public:
 
 private:
     // Return true if this statement doesn't update or read any regular rows, only static rows.
-    // Note, it isn't enought to just check !_sets_regular_columns && _column_conditions.empty(),
+    // Note, it isn't enought to just check !_sets_regular_columns && _regular_conditions.empty(),
     // because a DELETE statement that deletes whole rows (DELETE FROM ...) technically doesn't
     // have any column operations and hence doesn't have _sets_regular_columns set. It doesn't
     // have _sets_static_columns set either so checking the latter flag too here guarantees that
     // this function works as expected in all cases.
     bool applies_only_to_static_columns() const {
-        return _sets_static_columns && !_sets_regular_columns && _column_conditions.empty();
+        return _sets_static_columns && !_sets_regular_columns && _regular_conditions.empty();
     }
 public:
     // True if any of update operations of this statement requires

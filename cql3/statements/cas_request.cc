@@ -64,7 +64,7 @@ std::optional<mutation> cas_request::apply_updates(api::timestamp_type ts) const
     // to pass a mutation onward.
     std::optional<mutation> mutation_set;
     for (const cas_row_update& op: _updates) {
-        update_parameters params(_schema, op.options, ts, op.statement.get_time_to_live(op.options), *_rows);
+        update_parameters params(_schema, op.options, ts, op.statement.get_time_to_live(op.options), _rows);
 
         std::vector<mutation> statement_mutations = op.statement.apply_updates(_key, op.ranges, params, op.json_cache);
         // Append all mutations (in fact only one) to the consolidated one.
@@ -144,7 +144,7 @@ bool cas_request::applies_to() const {
         // ended on both sides).
         const auto& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
             op.ranges.front().start()->value() : empty_ckey;
-        const auto* row = _rows->find_row(pkey, ckey);
+        const auto* row = _rows.find_row(pkey, ckey);
         if (row) {
             row->is_in_cas_result_set = true;
             is_cas_result_set_empty = false;
@@ -165,7 +165,7 @@ bool cas_request::applies_to() const {
         //   INSERT INTO t(p, s) VALUES(1, 1);
         //   DELETE v FROM t WHERE p=1 AND c=1 IF v=1 AND s=1;
         // In this case the conditional DELETE must return [applied=False, v=null, s=1].
-        const auto* row = _rows->find_row(pkey, empty_ckey);
+        const auto* row = _rows.find_row(pkey, empty_ckey);
         if (row) {
             row->is_in_cas_result_set = true;
         }
