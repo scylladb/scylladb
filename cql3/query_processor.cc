@@ -96,14 +96,22 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
                                      std::chrono::milliseconds(_db.get_config().permissions_update_interval_in_ms()),
                                      mcfg.authorized_prepared_cache_size, authorized_prepared_statements_cache_log) {
     namespace sm = seastar::metrics;
+    namespace stm = statements;
     using clevel = db::consistency_level;
     sm::label cl_label("consistency_level");
+
+    sm::label who_label("who");  // Who queried system tables
+    const auto user_who_label_instance = who_label("user");
+    const auto internal_who_label_instance = who_label("internal");
+
+    sm::label ks_label("ks");
+    const auto system_ks_label_instance = ks_label("system");
 
     std::vector<sm::metric_definition> qp_group;
     qp_group.push_back(sm::make_derive(
         "statements_prepared",
         _stats.prepare_invocations,
-        sm::description("Counts a total number of parsed CQL requests.")));
+        sm::description("Counts the total number of parsed CQL requests.")));
     for (auto cl = size_t(clevel::MIN_VALUE); cl <= size_t(clevel::MAX_VALUE); ++cl) {
         qp_group.push_back(
             sm::make_derive(
@@ -123,44 +131,166 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
             {
                     sm::make_derive(
                             "reads",
-                            _cql_stats.statements[size_t(statement_type::SELECT)],
-                            sm::description("Counts the total number of CQL SELECT requests.")),
+                            sm::description("Counts the total number of CQL SELECT requests."),
+                            [this] {
+                                // Reads fall into `cond_selector::NO_CONDITIONS' pigeonhole
+                                return _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::SELECT)
+                                        + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::SELECT)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::SELECT)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::SELECT);
+                            }),
 
                     sm::make_derive(
                             "inserts",
-                            _cql_stats.statements[size_t(statement_type::INSERT)],
-                            sm::description("Counts the total number of CQL INSERT requests without conditions."),
-                            {non_cas_label_instance}),
-
+                            sm::description("Counts the total number of CQL INSERT requests with/without conditions."),
+                            {non_cas_label_instance},
+                            [this] {
+                                return _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::INSERT)
+                                        + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::INSERT)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::INSERT)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::INSERT);
+                            }),
                     sm::make_derive(
                             "inserts",
-                            _cql_stats.cas_statements[size_t(statement_type::INSERT)],
-                            sm::description("Counts the total number of CQL INSERT requests with conditions."),
-                            {cas_label_instance}),
+                            sm::description("Counts the total number of CQL INSERT requests with/without conditions."),
+                            {cas_label_instance},
+                            [this] {
+                                return _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT)
+                                        + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT);
+                            }),
 
                     sm::make_derive(
                             "updates",
-                            _cql_stats.statements[size_t(statement_type::UPDATE)],
-                            sm::description("Counts the total number of CQL UPDATE requests without conditions."),
-                            {non_cas_label_instance}),
-
+                            sm::description("Counts the total number of CQL UPDATE requests with/without conditions."),
+                            {non_cas_label_instance},
+                            [this] {
+                                return _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::UPDATE)
+                                        + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::UPDATE)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::UPDATE)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::UPDATE);
+                            }),
                     sm::make_derive(
                             "updates",
-                            _cql_stats.cas_statements[size_t(statement_type::UPDATE)],
-                            sm::description("Counts the total number of CQL UPDATE requests with conditions."),
-                            {cas_label_instance}),
+                            sm::description("Counts the total number of CQL UPDATE requests with/without conditions."),
+                            {cas_label_instance},
+                            [this] {
+                                return _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE)
+                                        + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE);
+                            }),
 
                     sm::make_derive(
                             "deletes",
-                            _cql_stats.statements[size_t(statement_type::DELETE)],
-                            sm::description("Counts the total number of CQL DELETE requests without conditions."),
-                            {non_cas_label_instance}),
-
+                            sm::description("Counts the total number of CQL DELETE requests with/without conditions."),
+                            {non_cas_label_instance},
+                            [this] {
+                                return _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::DELETE)
+                                        + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::DELETE)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::DELETE)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::DELETE);
+                            }),
                     sm::make_derive(
                             "deletes",
-                            _cql_stats.cas_statements[size_t(statement_type::DELETE)],
-                            sm::description("Counts the total number of CQL DELETE requests with conditions."),
-                            {cas_label_instance}),
+                            sm::description("Counts the total number of CQL DELETE requests with/without conditions."),
+                            {cas_label_instance},
+                            [this] {
+                                return _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE)
+                                        + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE)
+                                        + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE);
+                            }),
+
+                    sm::make_derive(
+                            "reads_per_ks",
+                            // Reads fall into `cond_selector::NO_CONDITIONS' pigeonhole
+                            _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::SELECT),
+                            sm::description("Counts the number of CQL SELECT requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {user_who_label_instance, system_ks_label_instance}),
+                    sm::make_derive(
+                            "reads_per_ks",
+                            _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::SELECT),
+                            sm::description("Counts the number of CQL SELECT requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {internal_who_label_instance, system_ks_label_instance}),
+
+                    sm::make_derive(
+                            "inserts_per_ks",
+                            _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::INSERT),
+                            sm::description("Counts the number of CQL INSERT requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)."),
+                            {user_who_label_instance, system_ks_label_instance, non_cas_label_instance}),
+                    sm::make_derive(
+                            "inserts_per_ks",
+                            _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::INSERT),
+                            sm::description("Counts the number of CQL INSERT requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)."),
+                            {internal_who_label_instance, system_ks_label_instance, non_cas_label_instance}),
+                    sm::make_derive(
+                            "inserts_per_ks",
+                            _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT),
+                            sm::description("Counts the number of CQL INSERT requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)."),
+                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                    sm::make_derive(
+                            "inserts_per_ks",
+                            _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT),
+                            sm::description("Counts the number of CQL INSERT requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)."),
+                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}),
+
+                    sm::make_derive(
+                            "updates_per_ks",
+                            _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::UPDATE),
+                            sm::description("Counts the number of CQL UPDATE requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {user_who_label_instance, system_ks_label_instance, non_cas_label_instance}),
+                    sm::make_derive(
+                            "updates_per_ks",
+                            _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::UPDATE),
+                            sm::description("Counts the number of CQL UPDATE requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {internal_who_label_instance, system_ks_label_instance, non_cas_label_instance}),
+                    sm::make_derive(
+                            "updates_per_ks",
+                            _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE),
+                            sm::description("Counts the number of CQL UPDATE requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                    sm::make_derive(
+                            "updates_per_ks",
+                            _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE),
+                            sm::description("Counts the number of CQL UPDATE requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}),
+
+                    sm::make_derive(
+                            "deletes_per_ks",
+                            _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::DELETE),
+                            sm::description("Counts the number of CQL DELETE requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {user_who_label_instance, system_ks_label_instance, non_cas_label_instance}),
+                    sm::make_derive(
+                            "deletes_per_ks",
+                            _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::NO_CONDITIONS, stm::statement_type::DELETE),
+                            sm::description("Counts the number of CQL DELETE requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {internal_who_label_instance, system_ks_label_instance, non_cas_label_instance}),
+                    sm::make_derive(
+                            "deletes_per_ks",
+                            _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE),
+                            sm::description("Counts the number of CQL DELETE requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                    sm::make_derive(
+                            "deletes_per_ks",
+                            _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE),
+                            sm::description("Counts the number of CQL DELETE requests executed on particular keyspaces. "
+                                            "Label `who' indicates where the reqs come from (clients or DB internals)"),
+                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}),
 
                     sm::make_derive(
                             "batches",
@@ -293,8 +423,17 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
 
                     sm::make_counter(
                             "unpaged_select_queries",
-                            _cql_stats.unpaged_select_queries,
-                            sm::description("Counts number of unpaged CQL SELECT requests.")),
+                            [this] {
+                                return _cql_stats.unpaged_select_queries(ks_selector::NONSYSTEM)
+                                        + _cql_stats.unpaged_select_queries(ks_selector::SYSTEM);
+                            },
+                            sm::description("Counts the total number of unpaged CQL SELECT requests.")),
+
+                    sm::make_counter(
+                            "unpaged_select_queries_per_ks",
+                            _cql_stats.unpaged_select_queries(ks_selector::SYSTEM),
+                            sm::description("Counts the number of unpaged CQL SELECT requests against particular keyspaces."),
+                            {system_ks_label_instance})
 
             });
 

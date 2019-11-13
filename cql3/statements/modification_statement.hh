@@ -104,10 +104,12 @@ public:
 
 protected:
     std::vector<::shared_ptr<operation>> _column_operations;
+    cql_stats& _stats;
 private:
     // Separating normal and static conditions makes things somewhat easier
     std::vector<::shared_ptr<column_condition>> _column_conditions;
     std::vector<::shared_ptr<column_condition>> _static_conditions;
+    const ks_selector _ks_sel;
 
     // True if this statement has _if_exists or _if_not_exists or other
     // conditions that apply to static/regular columns, respectively.
@@ -130,13 +132,17 @@ private:
             return cond->column;
         };
 
-    cql_stats& _stats;
 protected:
     ::shared_ptr<restrictions::statement_restrictions> _restrictions;
 public:
     typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
 
-    modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, cql_stats& stats);
+    modification_statement(
+            statement_type type_,
+            uint32_t bound_terms,
+            schema_ptr schema_,
+            std::unique_ptr<attributes> attrs_,
+            cql_stats& stats_);
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 
@@ -172,6 +178,8 @@ public:
     virtual bool depends_on_column_family(const sstring& cf_name) const override;
 
     void add_operation(::shared_ptr<operation> op);
+
+    void inc_cql_stats(bool is_internal);
 
     const ::shared_ptr<restrictions::statement_restrictions>& restrictions() const {
         return _restrictions;

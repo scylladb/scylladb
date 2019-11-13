@@ -48,12 +48,13 @@ namespace cql3 {
 namespace statements {
 
 class statement_type final {
-    enum class type {
-        insert,
+    enum class type : size_t {
+        insert = 0,
         update,
         del,
         select,
-        max_value = select
+
+        last  // Keep me as last entry
     };
     const type _type;
 
@@ -80,7 +81,7 @@ public:
     static const statement_type DELETE;
     static const statement_type SELECT;
 
-    static constexpr size_t MAX_VALUE = size_t(type::max_value);
+    static constexpr size_t MAX_VALUE = size_t(type::last) - 1;
 
     explicit operator size_t() const {
         return size_t(_type);
@@ -100,6 +101,8 @@ public:
         case type::update: return os << "UPDATE";
         case type::del: return os << "DELETE";
         case type::select : return os << "SELECT";
+
+        case type::last : return os << "LAST";
         }
         return os;
     }
