@@ -124,96 +124,96 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
                     sm::make_derive(
                             "reads",
                             _cql_stats.statements[size_t(statement_type::SELECT)],
-                            sm::description("Counts a total number of CQL read requests.")),
+                            sm::description("Counts the total number of CQL SELECT requests.")),
 
                     sm::make_derive(
                             "inserts",
                             _cql_stats.statements[size_t(statement_type::INSERT)],
-                            sm::description("Counts a total number of CQL INSERT requests without conditions."),
+                            sm::description("Counts the total number of CQL INSERT requests without conditions."),
                             {non_cas_label_instance}),
 
                     sm::make_derive(
                             "inserts",
                             _cql_stats.cas_statements[size_t(statement_type::INSERT)],
-                            sm::description("Counts a total number of CQL INSERT requests with conditions."),
+                            sm::description("Counts the total number of CQL INSERT requests with conditions."),
                             {cas_label_instance}),
 
                     sm::make_derive(
                             "updates",
                             _cql_stats.statements[size_t(statement_type::UPDATE)],
-                            sm::description("Counts a total number of CQL UPDATE requests without conditions."),
+                            sm::description("Counts the total number of CQL UPDATE requests without conditions."),
                             {non_cas_label_instance}),
 
                     sm::make_derive(
                             "updates",
                             _cql_stats.cas_statements[size_t(statement_type::UPDATE)],
-                            sm::description("Counts a total number of CQL UPDATE requests with conditions."),
+                            sm::description("Counts the total number of CQL UPDATE requests with conditions."),
                             {cas_label_instance}),
 
                     sm::make_derive(
                             "deletes",
                             _cql_stats.statements[size_t(statement_type::DELETE)],
-                            sm::description("Counts a total number of CQL DELETE requests without conditions."),
+                            sm::description("Counts the total number of CQL DELETE requests without conditions."),
                             {non_cas_label_instance}),
 
                     sm::make_derive(
                             "deletes",
                             _cql_stats.cas_statements[size_t(statement_type::DELETE)],
-                            sm::description("Counts a total number of CQL DELETE requests with conditions."),
+                            sm::description("Counts the total number of CQL DELETE requests with conditions."),
                             {cas_label_instance}),
 
                     sm::make_derive(
                             "batches",
                             _cql_stats.batches,
-                            sm::description("Counts a total number of CQL BATCH requests without conditions."),
+                            sm::description("Counts the total number of CQL BATCH requests without conditions."),
                             {non_cas_label_instance}),
 
                     sm::make_derive(
                             "batches",
                             _cql_stats.cas_batches,
-                            sm::description("Counts a total number of CQL BATCH requests with conditions."),
+                            sm::description("Counts the total number of CQL BATCH requests with conditions."),
                             {cas_label_instance}),
 
                     sm::make_derive(
                             "statements_in_batches",
                             _cql_stats.statements_in_batches,
-                            sm::description("Counts a total number of sub-statements in CQL BATCH requests without conditions."),
+                            sm::description("Counts the total number of sub-statements in CQL BATCH requests without conditions."),
                             {non_cas_label_instance}),
 
                     sm::make_derive(
                             "statements_in_batches",
                             _cql_stats.statements_in_cas_batches,
-                            sm::description("Counts a total number of sub-statements in CQL BATCH requests with conditions."),
+                            sm::description("Counts the total number of sub-statements in CQL BATCH requests with conditions."),
                             {cas_label_instance}),
 
                     sm::make_derive(
                             "batches_pure_logged",
                             _cql_stats.batches_pure_logged,
                             sm::description(
-                                    "Counts a total number of LOGGED batches that were executed as LOGGED batches.")),
+                                    "Counts the total number of LOGGED batches that were executed as LOGGED batches.")),
 
                     sm::make_derive(
                             "batches_pure_unlogged",
                             _cql_stats.batches_pure_unlogged,
                             sm::description(
-                                    "Counts a total number of UNLOGGED batches that were executed as UNLOGGED "
+                                    "Counts the total number of UNLOGGED batches that were executed as UNLOGGED "
                                     "batches.")),
 
                     sm::make_derive(
                             "batches_unlogged_from_logged",
                             _cql_stats.batches_unlogged_from_logged,
-                            sm::description("Counts a total number of LOGGED batches that were executed as UNLOGGED "
+                            sm::description("Counts the total number of LOGGED batches that were executed as UNLOGGED "
                                             "batches.")),
 
                     sm::make_derive(
                             "rows_read",
                             _cql_stats.rows_read,
-                            sm::description("Counts a total number of rows read during CQL requests.")),
+                            sm::description("Counts the total number of rows read during CQL requests.")),
 
                     sm::make_derive(
                             "prepared_cache_evictions",
                             [] { return prepared_statements_cache::shard_stats().prepared_cache_evictions; },
-                            sm::description("Counts a number of prepared statements cache entries evictions.")),
+                            sm::description("Counts the number of prepared statements cache entries evictions.")),
 
                     sm::make_gauge(
                             "prepared_cache_size",
@@ -228,58 +228,58 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
                     sm::make_derive(
                             "secondary_index_creates",
                             _cql_stats.secondary_index_creates,
-                            sm::description("Counts a total number of CQL CREATE INDEX requests.")),
+                            sm::description("Counts the total number of CQL CREATE INDEX requests.")),
 
                     sm::make_derive(
                             "secondary_index_drops",
                             _cql_stats.secondary_index_drops,
-                            sm::description("Counts a total number of CQL DROP INDEX requests.")),
+                            sm::description("Counts the total number of CQL DROP INDEX requests.")),
 
                     // secondary_index_reads total count is also included in all cql reads
                     sm::make_derive(
                             "secondary_index_reads",
                             _cql_stats.secondary_index_reads,
-                            sm::description("Counts a total number of CQL read requests performed using secondary indexes.")),
+                            sm::description("Counts the total number of CQL read requests performed using secondary indexes.")),
 
                     // secondary_index_rows_read total count is also included in all cql rows read
                     sm::make_derive(
                             "secondary_index_rows_read",
                             _cql_stats.secondary_index_rows_read,
-                            sm::description("Counts a total number of rows read during CQL requests performed using secondary indexes.")),
+                            sm::description("Counts the total number of rows read during CQL requests performed using secondary indexes.")),
 
                     // read requests that required ALLOW FILTERING
                     sm::make_derive(
                             "filtered_read_requests",
                             _cql_stats.filtered_reads,
-                            sm::description("Counts a total number of CQL read requests that required ALLOW FILTERING. See filtered_rows_read_total to compare how many rows needed to be filtered.")),
+                            sm::description("Counts the total number of CQL read requests that required ALLOW FILTERING. See filtered_rows_read_total to compare how many rows needed to be filtered.")),
 
                     // rows read with filtering enabled (because ALLOW FILTERING was required)
                     sm::make_derive(
                             "filtered_rows_read_total",
                             _cql_stats.filtered_rows_read_total,
-                            sm::description("Counts a total number of rows read during CQL requests that required ALLOW FILTERING. See filtered_rows_matched_total and filtered_rows_dropped_total for information how accurate filtering queries are.")),
+                            sm::description("Counts the total number of rows read during CQL requests that required ALLOW FILTERING. See filtered_rows_matched_total and filtered_rows_dropped_total for information how accurate filtering queries are.")),
 
                     // rows read with filtering enabled and accepted by the filter
                     sm::make_derive(
                             "filtered_rows_matched_total",
                             _cql_stats.filtered_rows_matched_total,
-                            sm::description("Counts a number of rows read during CQL requests that required ALLOW FILTERING and accepted by the filter. Number similar to filtered_rows_read_total indicates that filtering is accurate.")),
+                            sm::description("Counts the number of rows read during CQL requests that required ALLOW FILTERING and accepted by the filter. Number similar to filtered_rows_read_total indicates that filtering is accurate.")),
 
                     // rows read with filtering enabled and rejected by the filter
                     sm::make_derive(
                             "filtered_rows_dropped_total",
                             [this]() {return _cql_stats.filtered_rows_read_total - _cql_stats.filtered_rows_matched_total;},
-                            sm::description("Counts a number of rows read during CQL requests that required ALLOW FILTERING and dropped by the filter. Number similar to filtered_rows_read_total indicates that filtering is not accurate and might cause performance degradation.")),
+                            sm::description("Counts the number of rows read during CQL requests that required ALLOW FILTERING and dropped by the filter. Number similar to filtered_rows_read_total indicates that filtering is not accurate and might cause performance degradation.")),
 
                     sm::make_derive(
                             "authorized_prepared_statements_cache_evictions",
                             [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_cache_evictions; },
-                            sm::description("Counts a number of authenticated prepared statements cache entries evictions.")),
+                            sm::description("Counts the number of authenticated prepared statements cache entries evictions.")),
 
                     sm::make_gauge(
                             "authorized_prepared_statements_cache_size",
                             [this] { return _authorized_prepared_cache.size(); },
-                            sm::description("A number of entries in the authenticated prepared statements cache.")),
+                            sm::description("Number of entries in the authenticated prepared statements cache.")),
 
                     sm::make_gauge(
                             "user_prepared_auth_cache_footprint",
@@ -289,7 +289,7 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
                     sm::make_counter(
                             "reverse_queries",
                             _cql_stats.reverse_queries,
-                            sm::description("Counts number of CQL SELECT requests with ORDER BY DESC.")),
+                            sm::description("Counts the number of CQL SELECT requests with reverse ORDER BY order.")),
 
                     sm::make_counter(
                             "unpaged_select_queries",
