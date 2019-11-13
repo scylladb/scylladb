@@ -1592,8 +1592,9 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto m1 = m1_;
             m1.partition().make_fully_continuous();
 
+            mutation_application_stats app_stats;
             auto m2 = mutation(m1.schema(), m1.decorated_key());
-            m2.partition().apply(*s, m2_.partition(), *s);
+            m2.partition().apply(*s, m2_.partition(), *s, app_stats);
             m2.partition().make_fully_continuous();
 
             test(m1, m2, false);

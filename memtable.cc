@@ -110,20 +110,22 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
     }
 }
 
-memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list,
-    seastar::scheduling_group compaction_scheduling_group)
+memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, table_stats& table_stats,
+    memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
         : logalloc::region(dmm.region_group())
         , _dirty_mgr(dmm)
-        , _cleaner(*this, no_cache_tracker, compaction_scheduling_group)
+        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
-        , partitions(memtable_entry::compare(_schema)) {
+        , partitions(memtable_entry::compare(_schema))
+        , _table_stats(table_stats) {
 }
 
 static thread_local dirty_memory_manager mgr_for_tests;
+static thread_local table_stats stats_for_tests;
 
 memtable::memtable(schema_ptr schema)
-        : memtable(std::move(schema), mgr_for_tests, nullptr)
+        : memtable(std::move(schema), mgr_for_tests, stats_for_tests)
 { }
 
 memtable::~memtable() {
@@ -208,8 +210,10 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
         memtable_entry* entry = current_allocator().construct<memtable_entry>(
             _schema, dht::decorated_key(key), mutation_partition(_schema));
         partitions.insert_before(i, *entry);
+        ++_table_stats.memtable_partition_insertions;
         return entry->partition();
     } else {
+        ++_table_stats.memtable_partition_hits;
         upgrade_entry(*i);
     }
     return i->partition();
@@ -708,7 +712,7 @@ memtable::apply(const mutation& m, db::rp_handle&& h) {
           with_linearized_managed_bytes([&] {
             auto& p = find_or_create_partition(m.decorated_key());
             _stats_collector.update(*m.schema(), m.partition());
-            p.apply(*_schema, m.partition(), *m.schema());
+            p.apply(*_schema, m.partition(), *m.schema(), _table_stats.memtable_app_stats);
           });
         });
     });
@@ -725,7 +729,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_han
             partition_builder pb(*m_schema, mp);
             m.partition().accept(*m_schema, pb);
             _stats_collector.update(*m_schema, mp);
-            p.apply(*_schema, std::move(mp), *m_schema);
+            p.apply(*_schema, std::move(mp), *m_schema, _table_stats.memtable_app_stats);
           });
         });
     });

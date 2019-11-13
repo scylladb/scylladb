@@ -50,9 +50,15 @@ row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, con
     return src.make_reader(_schema, pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
 }
 
+static thread_local mutation_application_stats dummy_app_stats;
+
 cache_tracker::cache_tracker()
-    : _garbage(_region, this)
-    , _memtable_cleaner(_region, nullptr)
+    : cache_tracker(dummy_app_stats)
+{}
+
+cache_tracker::cache_tracker(mutation_application_stats& app_stats)
+    : _garbage(_region, this, app_stats)
+    , _memtable_cleaner(_region, nullptr, app_stats)
 {
     setup_metrics();
 

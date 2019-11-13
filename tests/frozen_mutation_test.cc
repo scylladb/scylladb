@@ -60,6 +60,7 @@ SEASTAR_TEST_CASE(test_writing_and_reading) {
 
 SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_applying_regular_mutation) {
     return seastar::async([] {
+        mutation_application_stats app_stats;
         storage_service_for_tests ssft;
         schema_ptr s = new_table()
                 .with_column("pk_col", bytes_type, column_kind::partition_key)
@@ -85,16 +86,16 @@ SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_appl
         m2.set_static_cell("static_1", data_value(bytes("val5")), new_timestamp());
 
         mutation m_frozen(s, key);
-        m_frozen.partition().apply(*s, freeze(m1).partition(), *s);
-        m_frozen.partition().apply(*s, freeze(m2).partition(), *s);
+        m_frozen.partition().apply(*s, freeze(m1).partition(), *s, app_stats);
+        m_frozen.partition().apply(*s, freeze(m2).partition(), *s, app_stats);
 
         mutation m_unfrozen(s, key);
-        m_unfrozen.partition().apply(*s, m1.partition(), *s);
-        m_unfrozen.partition().apply(*s, m2.partition(), *s);
+        m_unfrozen.partition().apply(*s, m1.partition(), *s, app_stats);
+        m_unfrozen.partition().apply(*s, m2.partition(), *s, app_stats);
 
         mutation m_refrozen(s, key);
-        m_refrozen.partition().apply(*s, freeze(m1).unfreeze(s).partition(), *s);
-        m_refrozen.partition().apply(*s, freeze(m2).unfreeze(s).partition(), *s);
+        m_refrozen.partition().apply(*s, freeze(m1).unfreeze(s).partition(), *s, app_stats);
+        m_refrozen.partition().apply(*s, freeze(m2).unfreeze(s).partition(), *s, app_stats);
 
         assert_that(m_unfrozen).is_equal_to(m_refrozen);
         assert_that(m_unfrozen).is_equal_to(m_frozen);

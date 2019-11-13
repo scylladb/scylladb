@@ -1156,6 +1156,17 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
 };
 
+struct mutation_application_stats {
+    uint64_t row_hits = 0;
+    uint64_t row_writes = 0;
+
+    mutation_application_stats& operator+=(const mutation_application_stats& other) {
+        row_hits += other.row_hits;
+        row_writes += other.row_writes;
+        return *this;
+    }
+};
+
 // Represents a set of writes made to a single partition.
 //
 // The object is schema-dependent. Each instance is governed by some
@@ -1305,12 +1316,14 @@ public:
     // is not representable in this_schema is dropped, thus apply() loses commutativity.
     //
     // Weak exception guarantees.
-    void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema);
+    void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema,
+            mutation_application_stats& app_stats);
     // Use in case this instance and p share the same schema.
     // Same guarantees as apply(const schema&, mutation_partition&&, const schema&);
-    void apply(const schema& s, mutation_partition&& p);
+    void apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats);
     // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
-    void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema);
+    void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema,
+            mutation_application_stats& app_stats);
 
     // Applies p to this instance.
     //
@@ -1329,14 +1342,19 @@ public:
     //   while (apply_monotonically(..., is_preemtable::yes) == stop_iteration::no) { }
     //
     // If is_preemptible::no is passed as argument then stop_iteration::no is never returned.
-    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*, is_preemptible = is_preemptible::no);
-    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema, is_preemptible = is_preemptible::no);
+    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*,
+            mutation_application_stats& app_stats, is_preemptible = is_preemptible::no);
+    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
+            mutation_application_stats& app_stats, is_preemptible = is_preemptible::no);
 
     // Weak exception guarantees.
     // Assumes this and p are not owned by a cache_tracker.
-    void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema);
-    void apply_weak(const schema& s, mutation_partition&&);
-    void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema);
+    void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema,
+            mutation_application_stats& app_stats);
+    void apply_weak(const schema& s, mutation_partition&&,
+            mutation_application_stats& app_stats);
+    void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema,
+            mutation_application_stats& app_stats);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.
@@ -1451,6 +1469,8 @@ public:
 
     bool is_static_row_live(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
+
+    size_t row_count() const;
 
     size_t external_memory_usage(const schema&) const;
 private:

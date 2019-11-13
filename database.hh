@@ -173,19 +173,22 @@ private:
     dirty_memory_manager* _dirty_memory_manager;
     std::optional<shared_promise<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
+    table_stats& _table_stats;
 public:
     memtable_list(
             seal_immediate_fn_type seal_immediate_fn,
             seal_delayed_fn_type seal_delayed_fn,
             std::function<schema_ptr()> cs,
             dirty_memory_manager* dirty_memory_manager,
+            table_stats& table_stats,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
         : _memtables({})
         , _seal_immediate_fn(seal_immediate_fn)
         , _seal_delayed_fn(seal_delayed_fn)
         , _current_schema(cs)
         , _dirty_memory_manager(dirty_memory_manager)
-        , _compaction_scheduling_group(compaction_scheduling_group) {
+        , _compaction_scheduling_group(compaction_scheduling_group)
+        , _table_stats(table_stats) {
         add_memtable();
     }
 
@@ -193,12 +196,15 @@ public:
             seal_immediate_fn_type seal_immediate_fn,
             std::function<schema_ptr()> cs,
             dirty_memory_manager* dirty_memory_manager,
+            table_stats& table_stats,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
-        : memtable_list(std::move(seal_immediate_fn), {}, std::move(cs), dirty_memory_manager, compaction_scheduling_group) {
+        : memtable_list(std::move(seal_immediate_fn), {}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
     }
 
-    memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager, seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
-        : memtable_list({}, {}, std::move(cs), dirty_memory_manager, compaction_scheduling_group) {
+    memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager,
+            table_stats& table_stats,
+            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
+        : memtable_list({}, {}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
     }
 
     bool may_flush() const {
@@ -312,8 +318,39 @@ struct cf_stats {
 
 class table;
 using column_family = table;
+struct table_stats;
+using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
+
+struct table_stats {
+    /** Number of times flush has resulted in the memtable being switched out. */
+    int64_t memtable_switch_count = 0;
+    /** Estimated number of tasks pending for this column family */
+    int64_t pending_flushes = 0;
+    int64_t live_disk_space_used = 0;
+    int64_t total_disk_space_used = 0;
+    int64_t live_sstable_count = 0;
+    /** Estimated number of compactions pending for this column family */
+    int64_t pending_compactions = 0;
+    int64_t memtable_partition_insertions = 0;
+    int64_t memtable_partition_hits = 0;
+    mutation_application_stats memtable_app_stats;
+    utils::timed_rate_moving_average_and_histogram reads{256};
+    utils::timed_rate_moving_average_and_histogram writes{256};
+    utils::timed_rate_moving_average_and_histogram cas_prepare{256};
+    utils::timed_rate_moving_average_and_histogram cas_propose{256};
+    utils::timed_rate_moving_average_and_histogram cas_commit{256};
+    utils::estimated_histogram estimated_read;
+    utils::estimated_histogram estimated_write;
+    utils::estimated_histogram estimated_cas_prepare;
+    utils::estimated_histogram estimated_cas_propose;
+    utils::estimated_histogram estimated_cas_commit;
+    utils::estimated_histogram estimated_sstable_per_read{35};
+    utils::timed_rate_moving_average_and_histogram tombstone_scanned;
+    utils::timed_rate_moving_average_and_histogram live_scanned;
+    utils::estimated_histogram estimated_coordinator_read;
+};
 
 class table : public enable_lw_shared_from_this<table> {
 public:
@@ -345,31 +382,6 @@ public:
         db::data_listeners* data_listeners = nullptr;
     };
     struct no_commitlog {};
-    struct stats {
-        /** Number of times flush has resulted in the memtable being switched out. */
-        int64_t memtable_switch_count = 0;
-        /** Estimated number of tasks pending for this column family */
-        int64_t pending_flushes = 0;
-        int64_t live_disk_space_used = 0;
-        int64_t total_disk_space_used = 0;
-        int64_t live_sstable_count = 0;
-        /** Estimated number of compactions pending for this column family */
-        int64_t pending_compactions = 0;
-        utils::timed_rate_moving_average_and_histogram reads{256};
-        utils::timed_rate_moving_average_and_histogram writes{256};
-        utils::timed_rate_moving_average_and_histogram cas_prepare{256};
-        utils::timed_rate_moving_average_and_histogram cas_propose{256};
-        utils::timed_rate_moving_average_and_histogram cas_commit{256};
-        utils::estimated_histogram estimated_read;
-        utils::estimated_histogram estimated_write;
-        utils::estimated_histogram estimated_cas_prepare;
-        utils::estimated_histogram estimated_cas_propose;
-        utils::estimated_histogram estimated_cas_commit;
-        utils::estimated_histogram estimated_sstable_per_read{35};
-        utils::timed_rate_moving_average_and_histogram tombstone_scanned;
-        utils::timed_rate_moving_average_and_histogram live_scanned;
-        utils::estimated_histogram estimated_coordinator_read;
-    };
 
     struct snapshot_details {
         int64_t total;
@@ -382,7 +394,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    mutable stats _stats;
+    mutable table_stats _stats;
     mutable db::view::stats _view_stats;
     mutable row_locker::stats _row_locker_stats;
 
@@ -857,7 +869,7 @@ public:
         return _compaction_strategy;
     }
 
-    stats& get_stats() const {
+    table_stats& get_stats() const {
         return _stats;
     }
 

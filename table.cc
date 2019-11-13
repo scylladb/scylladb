@@ -1096,6 +1096,10 @@ void table::set_metrics() {
     if (_config.enable_metrics_reporting) {
         _metrics.add_group("column_family", {
                 ms::make_derive("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks),
+                ms::make_counter("memtable_partition_writes", [this] () { return _stats.memtable_partition_insertions + _stats.memtable_partition_hits; }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks),
+                ms::make_counter("memtable_partition_hits", _stats.memtable_partition_hits, ms::description("Number of times a write operation was issued on an existing partition in memtables"))(cf)(ks),
+                ms::make_counter("memtable_row_writes", _stats.memtable_app_stats.row_writes, ms::description("Number of row writes performed in memtables"))(cf)(ks),
+                ms::make_counter("memtable_row_hits", _stats.memtable_app_stats.row_hits, ms::description("Number of rows overwritten by write operations in memtables"))(cf)(ks),
                 ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
                 ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
                 ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
@@ -1536,7 +1540,7 @@ inline bool table::manifest_json_filter(const fs::path&, const directory_entry& 
 lw_shared_ptr<memtable_list>
 table::make_memory_only_memtable_list() {
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager, _config.memory_compaction_scheduling_group);
+    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager, _stats, _config.memory_compaction_scheduling_group);
 }
 
 lw_shared_ptr<memtable_list>
@@ -1545,7 +1549,7 @@ table::make_memtable_list() {
         return seal_active_memtable(std::move(permit));
     };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _config.memory_compaction_scheduling_group);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _stats, _config.memory_compaction_scheduling_group);
 }
 
 lw_shared_ptr<memtable_list>
@@ -1554,7 +1558,7 @@ table::make_streaming_memtable_list() {
         return seal_active_streaming_memtable_immediate(std::move(permit));
     };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager, _config.streaming_scheduling_group);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager, _stats, _config.streaming_scheduling_group);
 }
 
 lw_shared_ptr<memtable_list>
@@ -1563,7 +1567,7 @@ table::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
         return seal_active_streaming_memtable_big(smb, std::move(permit));
     };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager, _config.streaming_scheduling_group);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager, _stats, _config.streaming_scheduling_group);
 }
 
 table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,

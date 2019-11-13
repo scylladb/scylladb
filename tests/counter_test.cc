@@ -317,26 +317,28 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         BOOST_REQUIRE_EQUAL(fm2.unfreeze(s), m2);
         BOOST_REQUIRE_EQUAL(fm3.unfreeze(s), m3);
 
+        mutation_application_stats app_stats;
+
         auto m0 = m1;
-        m0.partition().apply(*s, fm2.partition(), *s);
+        m0.partition().apply(*s, fm2.partition(), *s, app_stats);
         m = m1;
         m.apply(m2);
         BOOST_REQUIRE_EQUAL(m, m0);
 
         m0 = m2;
-        m0.partition().apply(*s, fm1.partition(), *s);
+        m0.partition().apply(*s, fm1.partition(), *s, app_stats);
         m = m2;
         m.apply(m1);
         BOOST_REQUIRE_EQUAL(m, m0);
 
         m0 = m1;
-        m0.partition().apply(*s, fm3.partition(), *s);
+        m0.partition().apply(*s, fm3.partition(), *s, app_stats);
         m = m1;
         m.apply(m3);
         BOOST_REQUIRE_EQUAL(m, m0);
 
         m0 = m3;
-        m0.partition().apply(*s, fm1.partition(), *s);
+        m0.partition().apply(*s, fm1.partition(), *s, app_stats);
         m = m3;
         m.apply(m1);
         BOOST_REQUIRE_EQUAL(m, m0);

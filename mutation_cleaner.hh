@@ -43,17 +43,20 @@ private:
     mutation_cleaner* _cleaner;
     partition_version_list _versions;
     lw_shared_ptr<worker> _worker_state;
+    mutation_application_stats& _app_stats;
     seastar::scheduling_group _scheduling_group;
 private:
     stop_iteration merge_some(partition_snapshot& snp) noexcept;
     stop_iteration merge_some() noexcept;
     void start_worker();
 public:
-    mutation_cleaner_impl(logalloc::region& r, cache_tracker* t, mutation_cleaner* cleaner, seastar::scheduling_group sg = seastar::current_scheduling_group())
+    mutation_cleaner_impl(logalloc::region& r, cache_tracker* t, mutation_cleaner* cleaner,
+            mutation_application_stats& app_stats, seastar::scheduling_group sg = seastar::current_scheduling_group())
         : _region(r)
         , _tracker(t)
         , _cleaner(cleaner)
         , _worker_state(make_lw_shared<worker>())
+        , _app_stats(app_stats)
         , _scheduling_group(sg)
     {
         start_worker();
@@ -113,8 +116,9 @@ void mutation_cleaner_impl::merge_and_destroy(partition_snapshot& ps) noexcept {
 class mutation_cleaner final {
     lw_shared_ptr<mutation_cleaner_impl> _impl;
 public:
-    mutation_cleaner(logalloc::region& r, cache_tracker* t, seastar::scheduling_group sg = seastar::current_scheduling_group())
-        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, this, sg)) {
+    mutation_cleaner(logalloc::region& r, cache_tracker* t, mutation_application_stats& app_stats,
+            seastar::scheduling_group sg = seastar::current_scheduling_group())
+        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, this, app_stats, sg)) {
     }
 
     mutation_cleaner(mutation_cleaner&&) = delete;

@@ -248,16 +248,19 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
     }
 }
 
-void mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
-    apply_weak(s, p, p_schema);
+void mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema,
+        mutation_application_stats& app_stats) {
+    apply_weak(s, p, p_schema, app_stats);
 }
 
-void mutation_partition::apply(const schema& s, mutation_partition&& p) {
-    apply_weak(s, std::move(p));
+void mutation_partition::apply(const schema& s, mutation_partition&& p,
+        mutation_application_stats& app_stats) {
+    apply_weak(s, std::move(p), app_stats);
 }
 
-void mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
-    apply_weak(s, p, p_schema);
+void mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema,
+        mutation_application_stats& app_stats) {
+    apply_weak(s, p, p_schema, app_stats);
 }
 
 struct mutation_fragment_applier {
@@ -303,7 +306,8 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
     mf.visit(applier);
 }
 
-stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker, is_preemptible preemptible) {
+stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker,
+        mutation_application_stats& app_stats, is_preemptible preemptible) {
 #ifdef SEASTAR_DEBUG
     assert(s.version() == _schema_version);
     assert(p._schema_version == _schema_version);
@@ -357,8 +361,10 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
                 memory::on_alloc_point();
                 i->_row.apply_monotonically(s, std::move(src_e._row));
             }
+            ++app_stats.row_hits;
             p_i = p._rows.erase_and_dispose(p_i, del);
         }
+        ++app_stats.row_writes;
         if (preemptible && need_preempt() && p_i != p._rows.end()) {
             // We cannot leave p with the clustering range up to p_i->position()
             // marked as continuous because some of its sub-ranges may have originally been discontinuous.
@@ -383,32 +389,35 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     return stop_iteration::yes;
 }
 
-stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema, is_preemptible preemptible) {
+stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
+        mutation_application_stats& app_stats, is_preemptible preemptible) {
     if (s.version() == p_schema.version()) {
-        return apply_monotonically(s, std::move(p), no_cache_tracker, preemptible);
+        return apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, preemptible);
     } else {
         mutation_partition p2(s, p);
         p2.upgrade(p_schema, s);
-        return apply_monotonically(s, std::move(p2), no_cache_tracker, is_preemptible::no); // FIXME: make preemptible
+        return apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no); // FIXME: make preemptible
     }
 }
 
 void
-mutation_partition::apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema) {
+mutation_partition::apply_weak(const schema& s, mutation_partition_view p,
+        const schema& p_schema, mutation_application_stats& app_stats) {
     // FIXME: Optimize
     mutation_partition p2(*this, copy_comparators_only{});
     partition_builder b(p_schema, p2);
     p.accept(p_schema, b);
-    apply_monotonically(s, std::move(p2), p_schema);
+    apply_monotonically(s, std::move(p2), p_schema, app_stats);
 }
 
-void mutation_partition::apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema) {
+void mutation_partition::apply_weak(const schema& s, const mutation_partition& p,
+        const schema& p_schema, mutation_application_stats& app_stats) {
     // FIXME: Optimize
-    apply_monotonically(s, mutation_partition(s, p), p_schema);
+    apply_monotonically(s, mutation_partition(s, p), p_schema, app_stats);
 }
 
-void mutation_partition::apply_weak(const schema& s, mutation_partition&& p) {
-    apply_monotonically(s, std::move(p), no_cache_tracker);
+void mutation_partition::apply_weak(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
+    apply_monotonically(s, std::move(p), no_cache_tracker, app_stats);
 }
 
 tombstone
@@ -1487,6 +1496,11 @@ mutation_partition::live_row_count(const schema& s, gc_clock::time_point query_t
     }
 
     return count;
+}
+
+size_t
+mutation_partition::row_count() const {
+    return _rows.calculate_size();
 }
 
 rows_entry::rows_entry(rows_entry&& o) noexcept
@@ -2593,7 +2607,7 @@ stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexce
             }
             try {
                 return _worker_state->alloc_section(region, [&] {
-                    return snp.merge_partition_versions();
+                    return snp.merge_partition_versions(_app_stats);
                 });
             } catch (...) {
                 // Merging failed, give up as there is no guarantee of forward progress.

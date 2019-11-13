@@ -192,7 +192,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_load.set(r, [&ctx](std::unique_ptr<request> req) {
-        return get_cf_stats(ctx, &column_family::stats::live_disk_space_used);
+        return get_cf_stats(ctx, &column_family_stats::live_disk_space_used);
     });
 
     ss::get_load_map.set(r, [] (std::unique_ptr<request> req) {
@@ -867,7 +867,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_metrics_load.set(r, [&ctx](std::unique_ptr<request> req) {
-        return get_cf_stats(ctx, &column_family::stats::live_disk_space_used);
+        return get_cf_stats(ctx, &column_family_stats::live_disk_space_used);
     });
 
     ss::get_exceptions.set(r, [](const_req req) {

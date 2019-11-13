@@ -182,11 +182,13 @@ mutation::upgrade(const schema_ptr& new_schema) {
 }
 
 void mutation::apply(mutation&& m) {
-    partition().apply(*schema(), std::move(m.partition()), *m.schema());
+    mutation_application_stats app_stats;
+    partition().apply(*schema(), std::move(m.partition()), *m.schema(), app_stats);
 }
 
 void mutation::apply(const mutation& m) {
-    partition().apply(*schema(), m.partition(), *m.schema());
+    mutation_application_stats app_stats;
+    partition().apply(*schema(), m.partition(), *m.schema(), app_stats);
 }
 
 void mutation::apply(const mutation_fragment& mf) {

@@ -112,9 +112,9 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
     // streamed_mutation::forwarding is set to no. Therefore, we cannot use
     // run_mutation_source_tests() to test it.
     return seastar::async([] {
-        auto make_memtable = [] (dirty_memory_manager& mgr, std::vector<mutation> muts) {
+        auto make_memtable = [] (dirty_memory_manager& mgr, table_stats& tbl_stats, std::vector<mutation> muts) {
             assert(!muts.empty());
-            auto mt = make_lw_shared<memtable>(muts.front().schema(), mgr);
+            auto mt = make_lw_shared<memtable>(muts.front().schema(), mgr, tbl_stats);
             for (auto& m : muts) {
                 mt->apply(m);
             }
@@ -123,6 +123,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
         auto test_random_streams = [&] (random_mutation_generator&& gen) {
             for (auto i = 0; i < 4; i++) {
+                table_stats tbl_stats;
                 dirty_memory_manager mgr;
                 const auto muts = gen(4);
                 const auto now = gc_clock::now();
@@ -132,7 +133,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 }
 
                 BOOST_TEST_MESSAGE("Simple read");
-                auto mt = make_memtable(mgr, muts);
+                auto mt = make_memtable(mgr, tbl_stats, muts);
 
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
                     .produces_compacted(compacted_muts[0], now)
@@ -142,7 +143,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                     .produces_end_of_stream();
 
                 BOOST_TEST_MESSAGE("Read with next_partition() calls between partition");
-                mt = make_memtable(mgr, muts);
+                mt = make_memtable(mgr, tbl_stats, muts);
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
                     .next_partition()
                     .produces_compacted(compacted_muts[0], now)
@@ -156,7 +157,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                     .produces_end_of_stream();
 
                 BOOST_TEST_MESSAGE("Read with next_partition() calls inside partitions");
-                mt = make_memtable(mgr, muts);
+                mt = make_memtable(mgr, tbl_stats, muts);
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
@@ -231,8 +232,9 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
                 .build();
 
         dirty_memory_manager mgr;
+        table_stats tbl_stats;
 
-        auto mt = make_lw_shared<memtable>(s, mgr);
+        auto mt = make_lw_shared<memtable>(s, mgr, tbl_stats);
 
         std::vector<mutation> ring = make_ring(s, 3);
         std::vector<mutation> current_ring;
@@ -359,9 +361,10 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
                 .with_column("col", bytes_type, column_kind::regular_column)
                 .build();
 
+        table_stats tbl_stats;
         dirty_memory_manager mgr;
 
-        auto mt = make_lw_shared<memtable>(s, mgr);
+        auto mt = make_lw_shared<memtable>(s, mgr, tbl_stats);
 
         const int rows_per_partition = 300;
         const int partitions = 3;
