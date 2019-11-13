@@ -125,11 +125,11 @@ partition_slice::partition_slice(clustering_row_ranges row_ranges,
     , _partition_row_limit(partition_row_limit)
 {}
 
-partition_slice::partition_slice(clustering_row_ranges ranges, const schema& s, const column_mask& mask, option_set options)
+partition_slice::partition_slice(clustering_row_ranges ranges, const schema& s, const column_set& columns, option_set options)
     : partition_slice(ranges, query::column_id_vector{}, query::column_id_vector{}, options)
 {
-    regular_columns.reserve(mask.count());
-    for (ordinal_column_id id = mask.find_first(); id != column_mask::npos; id = mask.find_next(id)) {
+    regular_columns.reserve(columns.count());
+    for (ordinal_column_id id = columns.find_first(); id != column_set::npos; id = columns.find_next(id)) {
         const column_definition& def = s.column_at(id);
         if (def.is_static()) {
             static_columns.push_back(def.id);

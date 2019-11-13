@@ -90,14 +90,14 @@ private:
     // columns, to match Cassandra behaviour.
     // This bitset contains a mask of ordinal_id identifiers
     // of the required columns.
-    column_mask _columns_to_read;
+    column_set _columns_to_read;
     // A CAS statement returns a result set with the columns
     // used in condition expression. This is a mask of ordinal_id
     // identifiers of the required columns. Contains all columns
     // of a schema if we have IF EXISTS/IF NOT EXISTS. Does *not*
     // contain LIST columns prefetched to apply updates, unless
     // these columns are also used in conditions.
-    column_mask _columns_of_cas_result_set;
+    column_set _columns_of_cas_result_set;
 public:
     const schema_ptr s;
     const std::unique_ptr<attributes> attrs;
@@ -201,7 +201,7 @@ public:
     // CAS.
     static seastar::shared_ptr<cql_transport::messages::result_message>
     build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
-            const column_mask& mask, bool is_applied,
+            const column_set& mask, bool is_applied,
             const update_parameters::prefetch_data& rows);
 public:
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache);
@@ -223,11 +223,11 @@ public:
     bool requires_read() const { return _requires_read; }
 
     // Columns used in this statement conditions or operations.
-    const column_mask& columns_to_read() const { return _columns_to_read; }
+    const column_set& columns_to_read() const { return _columns_to_read; }
 
     // Columns of the statement result set (only CAS statement
     // returns a result set).
-    const column_mask& columns_of_cas_result_set() { return _columns_of_cas_result_set; }
+    const column_set& columns_of_cas_result_set() { return _columns_of_cas_result_set; }
 
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
