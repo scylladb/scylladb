@@ -434,7 +434,9 @@ public:
     }
     void on_released() {
         _expire_timer.cancel();
-        _mutation_holder->release_mutation();
+        if (_targets.size() == 0) {
+            _mutation_holder->release_mutation();
+        }
     }
     void timeout_cb() {
         if (_cl_achieved || _cl == db::consistency_level::ANY) {
