@@ -67,7 +67,7 @@ struct from_json_visitor {
         bo.write(t.from_string(sstring_view(v.GetString(), v.GetStringLength())));
     }
     void operator()(const bytes_type_impl& t) const {
-        bo.write(base64_decode(std::string_view(v.GetString(), v.GetStringLength())));
+        bo.write(base64_decode(v));
     }
     void operator()(const boolean_type_impl& t) const {
         bo.write(boolean_type->decompose(v.GetBool()));
@@ -177,7 +177,7 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
                         expected_type, column.name_as_text(), it->name.GetString()));
     }
     if (column.type == bytes_type) {
-        return base64_decode(it->value.GetString());
+        return base64_decode(it->value);
     } else {
         return column.type->from_string(it->value.GetString());
     }
@@ -225,6 +225,24 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema) {
     }
 
     return clustering_key::from_exploded(raw_ck);
+}
+
+big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        throw api_error("ValidationException", format("{}: invalid number object", diagnostic));
+    }
+    auto it = v.MemberBegin();
+    if (it->name != "N") {
+        throw api_error("ValidationException", format("{}: expected number, found type '{}'", diagnostic, it->name));
+    }
+    if (it->value.IsNumber()) {
+         // FIXME(sarna): should use big_decimal constructor with numeric values directly:
+        return big_decimal(rjson::print(it->value));
+    }
+    if (!it->value.IsString()) {
+        throw api_error("ValidationException", format("{}: improperly formatted number constant", diagnostic));
+    }
+    return big_decimal(it->value.GetString());
 }
 
 }
