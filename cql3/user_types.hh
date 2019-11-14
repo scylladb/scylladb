@@ -117,6 +117,7 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
+        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value);
     };
 
     class setter_by_field : public operation {

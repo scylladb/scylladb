@@ -191,16 +191,16 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
     if (!value) {
         visit(*column.type, make_visitor(
         [&] (const list_type_impl&) {
-            lists::setter::execute(m, prefix, params, column, ::make_shared<lists::value>(std::vector<bytes_opt>()));
+            lists::setter::execute(m, prefix, params, column, {});
         },
         [&] (const set_type_impl&) {
-            sets::setter::execute(m, prefix, params, column, ::make_shared<sets::value>(std::set<bytes, serialized_compare>(serialized_compare(empty_type))));
+            sets::setter::execute(m, prefix, params, column, {});
         },
         [&] (const map_type_impl&) {
-            maps::setter::execute(m, prefix, params, column, ::make_shared<maps::value>(std::map<bytes, bytes, serialized_compare>(serialized_compare(empty_type))));
+            maps::setter::execute(m, prefix, params, column, {});
         },
         [&] (const user_type_impl&) {
-            user_types::setter(column, ::make_shared<user_types::value>(std::vector<bytes_opt>())).execute(m, prefix, params);
+            user_types::setter::execute(m, prefix, params, column, {});
         },
         [&] (const abstract_type& type) {
             if (type.is_collection()) {
@@ -227,9 +227,8 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
                 ::make_shared(maps::value::from_serialized(fragmented_temporary_buffer::view(*value), mtype, sf)));
     },
     [&] (const user_type_impl& utype) {
-        user_types::setter(column,
-                ::make_shared(user_types::value::from_serialized(fragmented_temporary_buffer::view(*value), utype)))
-            .execute(m, prefix, params);
+        user_types::setter::execute(m, prefix, params, column,
+                ::make_shared(user_types::value::from_serialized(fragmented_temporary_buffer::view(*value), utype)));
     },
     [&] (const abstract_type& type) {
         if (type.is_collection()) {
