@@ -2699,7 +2699,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
     static std::regex la_mc("(la|mc)-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
-    static std::regex dir(".*/([^/]*)/(\\w+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
+    static std::regex dir(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
 
     std::smatch match;
 
