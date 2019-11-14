@@ -51,28 +51,28 @@
 /// constructor parameter).
 class reader_concurrency_semaphore {
 public:
-    struct resources {
+    struct reader_resources {
         int count = 0;
         ssize_t memory = 0;
 
-        resources() = default;
+        reader_resources() = default;
 
-        resources(int count, ssize_t memory)
+        reader_resources(int count, ssize_t memory)
             : count(count)
             , memory(memory) {
         }
 
-        bool operator>=(const resources& other) const {
+        bool operator>=(const reader_resources& other) const {
             return count >= other.count && memory >= other.memory;
         }
 
-        resources& operator-=(const resources& other) {
+        reader_resources& operator-=(const reader_resources& other) {
             count -= other.count;
             memory -= other.memory;
             return *this;
         }
 
-        resources& operator+=(const resources& other) {
+        reader_resources& operator+=(const reader_resources& other) {
             count += other.count;
             memory += other.memory;
             return *this;
@@ -83,11 +83,13 @@ public:
         }
     };
 
+    using resources = reader_resources;
+
     class reader_permit {
         reader_concurrency_semaphore& _semaphore;
-        const resources _base_cost;
+        const reader_resources _base_cost;
     public:
-        reader_permit(reader_concurrency_semaphore& semaphore, resources base_cost);
+        reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost);
         ~reader_permit();
 
         reader_permit(const reader_permit&) = delete;
