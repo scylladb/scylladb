@@ -87,14 +87,8 @@ public:
         reader_concurrency_semaphore& _semaphore;
         const resources _base_cost;
     public:
-        reader_permit(reader_concurrency_semaphore& semaphore, resources base_cost)
-            : _semaphore(semaphore)
-            , _base_cost(base_cost) {
-        }
-
-        ~reader_permit() {
-            _semaphore.signal(_base_cost);
-        }
+        reader_permit(reader_concurrency_semaphore& semaphore, resources base_cost);
+        ~reader_permit();
 
         reader_permit(const reader_permit&) = delete;
         reader_permit& operator=(const reader_permit&) = delete;
@@ -102,13 +96,8 @@ public:
         reader_permit(reader_permit&& other) = delete;
         reader_permit& operator=(reader_permit&& other) = delete;
 
-        void consume_memory(size_t memory) {
-            _semaphore.consume_memory(memory);
-        }
-
-        void signal_memory(size_t memory) {
-            _semaphore.signal_memory(memory);
-        }
+        void consume_memory(size_t memory);
+        void signal_memory(size_t memory);
     };
 
     class inactive_read {

@@ -24,6 +24,23 @@
 
 #include "reader_concurrency_semaphore.hh"
 
+reader_concurrency_semaphore::reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, resources base_cost)
+    : _semaphore(semaphore)
+    , _base_cost(base_cost) {
+}
+
+reader_concurrency_semaphore::reader_permit::~reader_permit() {
+    _semaphore.signal(_base_cost);
+}
+
+void reader_concurrency_semaphore::reader_permit::consume_memory(size_t memory) {
+    _semaphore.consume_memory(memory);
+}
+
+void reader_concurrency_semaphore::reader_permit::signal_memory(size_t memory) {
+    _semaphore.signal_memory(memory);
+}
+
 void reader_concurrency_semaphore::signal(const resources& r) {
     _resources += r;
     while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
