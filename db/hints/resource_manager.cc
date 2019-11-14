@@ -51,13 +51,20 @@ future<bool> is_mountpoint(const fs::path& path) {
     });
 }
 
-future<semaphore_units<semaphore_default_exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
+future<semaphore_units<semaphore_default_exception_factory>> resource_manager::get_send_units_for(gms::inet_address addr, size_t buf_size) {
+    // Find or create a semaphore appropriate for this node
+    auto it = _send_limiters.find(addr);
+    if (it == _send_limiters.end()) {
+        it = _send_limiters.emplace(addr, std::make_unique<seastar::semaphore>(_max_send_in_flight_memory)).first;
+    }
+    seastar::semaphore& limiter = *it->second;
+
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
     size_t hint_memory_budget = std::max(_min_send_hint_budget, buf_size);
     // Allow a very big mutation to be sent out by consuming the whole shard budget
     hint_memory_budget = std::min(hint_memory_budget, _max_send_in_flight_memory);
-    resource_manager_logger.trace("memory budget: need {} have {}", hint_memory_budget, _send_limiter.available_units());
-    return get_units(_send_limiter, hint_memory_budget);
+    resource_manager_logger.trace("memory budget for {}: need {} have {}", addr, hint_memory_budget, limiter.available_units());
+    return get_units(limiter, hint_memory_budget);
 }
 
 const std::chrono::seconds space_watchdog::_watchdog_period = std::chrono::seconds(1);
