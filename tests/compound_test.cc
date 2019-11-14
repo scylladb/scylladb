@@ -26,6 +26,7 @@
 #include "compound_compat.hh"
 #include "tests/range_assert.hh"
 #include "schema_builder.hh"
+#include "dht/murmur3_partitioner.hh"
 
 static std::vector<bytes> to_bytes_vec(std::vector<sstring> values) {
     std::vector<bytes> result;
@@ -190,6 +191,51 @@ BOOST_AUTO_TEST_CASE(test_conversion_to_legacy_form) {
 
     BOOST_REQUIRE_EQUAL(to_legacy(two_components, two_components.serialize_value(to_bytes_vec({"el1", ""}))),
         bytes({'\x00', '\x03', 'e', 'l', '1', '\x00', '\x00', '\x00', '\x00'}));
+}
+
+BOOST_AUTO_TEST_CASE(test_conversion_to_legacy_form_same_token_singular) {
+    auto s = schema_builder("ks", "cf")
+                .with_column("c", int32_type, column_kind::partition_key)
+                .with_column("v", int32_type)
+                .build();
+    auto s1 = schema_builder("ks", "cf")
+                  .with_column("c", byte_type, column_kind::partition_key)
+                  .with_column("v", int32_type)
+                  .build();
+
+    std::srand(std::time(nullptr));
+    dht::murmur3_partitioner partitioner;
+    auto key = partition_key::from_deeply_exploded(*s, {std::rand()});
+    auto dk = partitioner.decorate_key(*s, key);
+
+    auto b = to_legacy(*key.get_compound_type(*s), key.representation());
+    auto key1 = partition_key::from_single_value(*s1, b);
+    auto dk1 = partitioner.decorate_key(*s1, key1);
+
+    BOOST_REQUIRE_EQUAL(dk._token, dk1._token);
+}
+
+BOOST_AUTO_TEST_CASE(test_conversion_to_legacy_form_same_token_two_components) {
+    auto s = schema_builder("ks", "cf")
+                .with_column("c1", int32_type, column_kind::partition_key)
+                .with_column("c2", int32_type, column_kind::partition_key)
+                .with_column("v", int32_type)
+                .build();
+    auto s1 = schema_builder("ks", "cf")
+                  .with_column("c", byte_type, column_kind::partition_key)
+                  .with_column("v", int32_type)
+                  .build();
+
+    std::srand(std::time(nullptr));
+    dht::murmur3_partitioner partitioner;
+    auto key = partition_key::from_deeply_exploded(*s, {std::rand(), std::rand()});
+    auto dk = partitioner.decorate_key(*s, key);
+
+    auto b = to_legacy(*key.get_compound_type(*s), key.representation());
+    auto key1 = partition_key::from_single_value(*s1, b);
+    auto dk1 = partitioner.decorate_key(*s1, key1);
+
+    BOOST_REQUIRE_EQUAL(dk._token, dk1._token);
 }
 
 BOOST_AUTO_TEST_CASE(test_legacy_ordering_of_singular) {
