@@ -116,22 +116,21 @@ private:
 
 class resource_manager {
     const size_t _max_send_in_flight_memory;
-    const size_t _min_send_hint_budget;
     std::unordered_map<gms::inet_address, std::unique_ptr<seastar::semaphore>> _send_limiters;
 
     space_watchdog::shard_managers_set _shard_managers;
     space_watchdog::per_device_limits_map _per_device_limits_map;
     space_watchdog _space_watchdog;
+    shared_ptr<gms::gossiper> _gossiper_ptr; // Initialized in start()
 
 public:
     static constexpr size_t hint_segment_size_in_mb = 32;
     static constexpr size_t max_hints_per_ep_size_mb = 128; // 4 files 32MB each
-    static constexpr size_t max_hints_send_queue_length = 128;
+    static constexpr size_t max_hints_send_queue_length = 20;
 
 public:
     resource_manager(size_t max_send_in_flight_memory)
         : _max_send_in_flight_memory(std::max(max_send_in_flight_memory, max_hints_send_queue_length))
-        , _min_send_hint_budget(_max_send_in_flight_memory / max_hints_send_queue_length)
         , _space_watchdog(_shard_managers, _per_device_limits_map)
     {}
 

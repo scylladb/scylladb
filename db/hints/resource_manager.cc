@@ -59,8 +59,15 @@ future<semaphore_units<semaphore_default_exception_factory>> resource_manager::g
     }
     seastar::semaphore& limiter = *it->second;
 
+    // Take into account that hints may be sent in parallel by many nodes. In the worst case all other nodes may be
+    // sending hints to the same shard on the same node, so scale by live members count (excluding the destination).
+    const size_t live_members_count = _gossiper_ptr->get_live_members_count();
+    // The line below is conceptually equivalent to max(live_members_count - 1, 1), but avoids underflow in the case
+    // when live_members_count == 0
+    const size_t scale_factor = (live_members_count > 1) ? live_members_count - 1 : 1;
+    const size_t min_send_hint_budget = std::max(max_hints_send_queue_length / scale_factor, size_t(1));
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
-    size_t hint_memory_budget = std::max(_min_send_hint_budget, buf_size);
+    size_t hint_memory_budget = std::max(min_send_hint_budget, buf_size);
     // Allow a very big mutation to be sent out by consuming the whole shard budget
     hint_memory_budget = std::min(hint_memory_budget, _max_send_in_flight_memory);
     resource_manager_logger.trace("memory budget for {}: need {} have {}", addr, hint_memory_budget, limiter.available_units());
@@ -180,6 +187,7 @@ void space_watchdog::on_timer() {
 }
 
 future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
+    _gossiper_ptr = gossiper_ptr;
     return parallel_for_each(_shard_managers, [proxy_ptr, gossiper_ptr, ss_ptr](manager& m) {
         return m.start(proxy_ptr, gossiper_ptr, ss_ptr);
     }).then([this]() {
