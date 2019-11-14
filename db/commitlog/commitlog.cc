@@ -1236,6 +1236,34 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
     }
 }
 
+/// \brief Helper for ensuring a file is closed if an exception is thrown.
+///
+/// The file provided by the file_fut future is passed to func.
+/// * If func throws an exception E, the file is closed and we return
+///   a failed future with E.
+/// * If func returns a value V, the file is not closed and we return
+///   a future with V.
+/// Note that when an exception is not thrown, it is the
+/// responsibility of func to make sure the file will be closed. It
+/// can close the file itself, return it, or store it somewhere.
+///
+/// \tparam Func The type of function this wraps
+/// \param file_fut A future that produces a file
+/// \param func A function that uses a file
+/// \return A future that passes the file produced by file_fut to func
+///         and closes it if func fails
+template <typename Func>
+static auto close_on_failure(future<file> file_fut, Func func) {
+    return file_fut.then([func = std::move(func)](file f) {
+        return futurize_apply(func, f).handle_exception([f] (std::exception_ptr e) mutable {
+            return f.close().then_wrapped([f, e = std::move(e)] (future<> x) {
+                using futurator = futurize<std::result_of_t<Func(file)>>;
+                return futurator::make_exception_future(e);
+            });
+        });
+    });
+}
+
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(const descriptor& d, sstring filename, open_flags flags, bool active) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
@@ -1262,7 +1290,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         return fut;
     });
 
-    return fut.then([this, d, active, filename](file f) {
+    return close_on_failure(std::move(fut), [this, d, active, filename] (file f) {
         f = make_checked_file(commit_error_handler, f);
         // xfs doesn't like files extended betond eof, so enlarge the file
         return f.truncate(max_size).then([this, d, active, f, filename] () mutable {
