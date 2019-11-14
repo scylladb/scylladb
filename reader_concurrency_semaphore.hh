@@ -86,20 +86,34 @@ public:
     using resources = reader_resources;
 
     class reader_permit {
-        reader_concurrency_semaphore& _semaphore;
-        const reader_resources _base_cost;
+        struct impl {
+            reader_concurrency_semaphore& semaphore;
+            reader_resources base_cost;
+
+            impl(reader_concurrency_semaphore& semaphore, resources base_cost);
+            ~impl();
+        };
+
+        friend reader_permit no_reader_permit();
+    private:
+        lw_shared_ptr<impl> _impl;
+
+    private:
+        reader_permit() = default;
+
     public:
         reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost);
-        ~reader_permit();
 
-        reader_permit(const reader_permit&) = delete;
-        reader_permit& operator=(const reader_permit&) = delete;
-
-        reader_permit(reader_permit&& other) = delete;
-        reader_permit& operator=(reader_permit&& other) = delete;
+        bool operator==(const reader_permit& o) const {
+            return _impl == o._impl;
+        }
+        operator bool() const {
+            return bool(_impl);
+        }
 
         void consume_memory(size_t memory);
         void signal_memory(size_t memory);
+        void release();
     };
 
     class inactive_read {
@@ -138,9 +152,9 @@ public:
 
 private:
     struct entry {
-        promise<lw_shared_ptr<reader_permit>> pr;
+        promise<reader_permit> pr;
         resources res;
-        entry(promise<lw_shared_ptr<reader_permit>>&& pr, resources r) : pr(std::move(pr)), res(r) {}
+        entry(promise<reader_permit>&& pr, resources r) : pr(std::move(pr)), res(r) {}
     };
 
     class expiry_handler {
@@ -245,10 +259,10 @@ public:
         return _inactive_read_stats;
     }
 
-    future<lw_shared_ptr<reader_permit>> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
+    future<reader_permit> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
 
     /// Consume the specific amount of resources without waiting.
-    lw_shared_ptr<reader_permit> consume_resources(resources r);
+    reader_permit consume_resources(resources r);
 
     const resources available_resources() const {
         return _resources;
@@ -259,11 +273,12 @@ public:
     }
 };
 
+reader_concurrency_semaphore::reader_permit no_reader_permit();
+
 class reader_resource_tracker {
-    lw_shared_ptr<reader_concurrency_semaphore::reader_permit> _permit;
+    reader_concurrency_semaphore::reader_permit _permit;
 public:
-    reader_resource_tracker() = default;
-    explicit reader_resource_tracker(lw_shared_ptr<reader_concurrency_semaphore::reader_permit> permit)
+    explicit reader_resource_tracker(reader_concurrency_semaphore::reader_permit permit)
         : _permit(std::move(permit)) {
     }
 
@@ -273,11 +288,11 @@ public:
 
     file track(file f) const;
 
-    lw_shared_ptr<reader_concurrency_semaphore::reader_permit> get_permit() const {
+    reader_concurrency_semaphore::reader_permit get_permit() const {
         return _permit;
     }
 };
 
 inline reader_resource_tracker no_resource_tracking() {
-    return {};
+    return reader_resource_tracker{no_reader_permit()};
 }
