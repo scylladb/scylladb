@@ -228,7 +228,13 @@ if __name__ == "__main__":
     }
 
     test_to_run = []
-    modes_to_run =  ['debug', 'release', 'dev'] if not args.modes else args.modes
+    modes_to_run =  args.modes
+    if not modes_to_run:
+        out = subprocess.Popen(['ninja', 'mode_list'], stdout=subprocess.PIPE).communicate()[0].decode()
+        # [1/1] List configured modes
+        # debug release dev
+        modes_to_run = out.split('\n')[1].split(' ')
+
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
         standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()

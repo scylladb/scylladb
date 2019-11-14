@@ -1488,6 +1488,10 @@ with open(buildfile_tmp, 'w') as f:
             command = rm -rf build
             description = CLEAN
         build clean: clean
+        rule mode_list
+            command = echo {modes_list}
+            description = List configured modes
+        build mode_list: mode_list
         default {modes_list}
         ''').format(modes_list=' '.join(default_modes), **globals()))
     f.write(textwrap.dedent('''\
