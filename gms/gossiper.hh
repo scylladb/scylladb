@@ -265,6 +265,7 @@ public:
     void unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
     std::set<inet_address> get_live_members();
+    size_t get_live_members_count() const;
 
     std::set<inet_address> get_live_token_owners();
 

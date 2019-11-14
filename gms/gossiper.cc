@@ -797,6 +797,18 @@ std::set<inet_address> gossiper::get_live_members() {
     return live_members;
 }
 
+size_t gossiper::get_live_members_count() const {
+    const auto myip = get_broadcast_address();
+    size_t count = _live_endpoints.size();
+    if (std::find(_live_endpoints.begin(), _live_endpoints.end(), myip) == _live_endpoints.end()) {
+        ++count;
+    }
+    if (is_shutdown(myip)) {
+        --count;
+    }
+    return count;
+}
+
 std::set<inet_address> gossiper::get_live_token_owners() {
     std::set<inet_address> token_owners;
     for (auto& member : get_live_members()) {

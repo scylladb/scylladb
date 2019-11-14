@@ -4208,7 +4208,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
         // Since the truncate operation is so aggressive and is typically only
         // invoked by an admin, for simplicity we require that all nodes are up
         // to perform the operation.
-        auto live_members = gossiper.get_live_members().size();
+        auto live_members = gossiper.get_live_members_count();
 
         throw exceptions::unavailable_exception(db::consistency_level::ALL,
                 live_members + gossiper.get_unreachable_members().size(),
