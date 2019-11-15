@@ -328,14 +328,7 @@ def run_all_tests(tests_to_run, args):
     return failed_tests, results
 
 
-if __name__ == "__main__":
-
-    args = usage()
-
-    tests_to_run = find_tests(args)
-
-    failed_tests, results = run_all_tests(tests_to_run, args)
-
+def print_summary(failed_tests, total_tests):
     if not failed_tests:
         print('\nOK.')
     else:
@@ -345,22 +338,35 @@ if __name__ == "__main__":
         print('\n\nThe following test(s) have failed:')
         for test, test_args, _ in failed_tests:
             print('  {} {}'.format(test, ' '.join(test_args)))
-        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(results)))
+        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
+
+def write_xunit_report(results):
+    other_results = [r for r in results if r[2] != 'boost']
+    num_other_failed = sum(1 for r in other_results if not r[3])
+
+    xml_results = ET.Element('testsuite', name='non-boost tests',
+            tests=str(len(other_results)), failures=str(num_other_failed), errors='0')
+
+    for test_path, test_args, _, success, out in other_results:
+        xml_res = ET.SubElement(xml_results, 'testcase', name=test_path)
+        if not success:
+            xml_fail = ET.SubElement(xml_res, 'failure')
+            xml_fail.text = "Test {} {} failed:\n{}".format(test_path, ' '.join(test_args), out)
+    with open(args.xunit, "w") as f:
+        ET.ElementTree(xml_results).write(f, encoding="unicode")
+
+if __name__ == "__main__":
+
+    args = usage()
+
+    tests_to_run = find_tests(args)
+
+    failed_tests, results = run_all_tests(tests_to_run, args)
+
+    print_summary(failed_tests, len(tests_to_run))
 
     if args.xunit:
-        other_results = [r for r in results if r[2] != 'boost']
-        num_other_failed = sum(1 for r in other_results if not r[3])
-
-        xml_results = ET.Element('testsuite', name='non-boost tests',
-                tests=str(len(other_results)), failures=str(num_other_failed), errors='0')
-
-        for test_path, test_args, _, success, out in other_results:
-            xml_res = ET.SubElement(xml_results, 'testcase', name=test_path)
-            if not success:
-                xml_fail = ET.SubElement(xml_res, 'failure')
-                xml_fail.text = "Test {} {} failed:\n{}".format(test_path, ' '.join(test_args), out)
-        with open(args.xunit, "w") as f:
-            ET.ElementTree(xml_results).write(f, encoding="unicode")
+        write_xunit_report(results)
 
     if failed_tests:
         sys.exit(1)
