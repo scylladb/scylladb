@@ -171,7 +171,7 @@ def print_progress(test_path, test_args, success, cookie, verbose):
 
 def run_test(path, repeat, type, args, exec_args):
     boost_args = []
-    # avoid modifying in-place, it will change test_to_run
+    # avoid modifying in-place, it will change tests_to_run
     exec_args = exec_args + '--collectd 0'.split()
     file = io.StringIO()
     if args.jenkins and type == 'boost':
@@ -270,46 +270,46 @@ def find_tests(args):
         "mutation_reader_test": ['-c{}'.format(min(os.cpu_count(), 3)), '-m2G'],
     }
 
-    test_to_run = []
+    tests_to_run = []
 
     for mode in args.modes:
         prefix = os.path.join('build', mode, 'tests')
         standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
         seastar_args = '-c2 -m2G'.split()
         for test in other_tests:
-            test_to_run.append((os.path.join(prefix, test), 'other', custom_seastar_args.get(test, seastar_args) + standard_args))
+            tests_to_run.append((os.path.join(prefix, test), 'other', custom_seastar_args.get(test, seastar_args) + standard_args))
         for test in boost_tests:
-            test_to_run.append((os.path.join(prefix, test), 'boost', custom_seastar_args.get(test, seastar_args) + standard_args))
+            tests_to_run.append((os.path.join(prefix, test), 'boost', custom_seastar_args.get(test, seastar_args) + standard_args))
 
     for m in ['release', 'dev']:
         if m in args.modes:
-            test_to_run.append(('build/' + m + '/tests/lsa_async_eviction_test', 'other',
+            tests_to_run.append(('build/' + m + '/tests/lsa_async_eviction_test', 'other',
                                 '-c1 -m200M --size 1024 --batch 3000 --count 2000000'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
+            tests_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
                                 '-c1 -m100M --count 10 --standard-object-size 3000000'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
+            tests_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
                                 '-c1 -m100M --count 24000 --standard-object-size 2048'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
+            tests_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
                                 '-c1 -m1G --count 4000000 --standard-object-size 128'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/row_cache_alloc_stress', 'other',
+            tests_to_run.append(('build/' + m + '/tests/row_cache_alloc_stress', 'other',
                                 '-c1 -m2G'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split() + standard_args))
+            tests_to_run.append(('build/' + m + '/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split() + standard_args))
 
     if args.name:
-        test_to_run = [t for t in test_to_run if args.name in t[0]]
-        if not test_to_run:
+        tests_to_run = [t for t in tests_to_run if args.name in t[0]]
+        if not tests_to_run:
             print("Test {} not found".format(args.name))
             sys.exit(1)
 
-    return test_to_run
+    return tests_to_run
 
 
-def run_all_tests(test_to_run, args):
+def run_all_tests(tests_to_run, args):
     failed_tests = []
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
     futures = []
-    for n, test in enumerate(test_to_run):
+    for n, test in enumerate(tests_to_run):
         path = test[0]
         test_type = test[1]
         exec_args = test[2] if len(test) >= 3 else []
@@ -332,9 +332,9 @@ if __name__ == "__main__":
 
     args = usage()
 
-    test_to_run = find_tests(args)
+    tests_to_run = find_tests(args)
 
-    failed_tests, results = run_all_tests(test_to_run, args)
+    failed_tests, results = run_all_tests(tests_to_run, args)
 
     if not failed_tests:
         print('\nOK.')
