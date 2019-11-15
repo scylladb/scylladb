@@ -683,7 +683,7 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         mutation_source_and_params reader_factory;
     };
     struct admitted_state {
-        reader_concurrency_semaphore::reader_permit permit;
+        reader_permit permit;
         flat_mutation_reader reader;
     };
     std::variant<pending_state, admitted_state> _state;
@@ -703,7 +703,7 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         }
 
         return std::get<pending_state>(_state).semaphore.wait_admission(new_reader_base_cost,
-                timeout).then([this, fn = std::move(fn)] (reader_concurrency_semaphore::reader_permit permit) mutable {
+                timeout).then([this, fn = std::move(fn)] (reader_permit permit) mutable {
             auto reader_factory = std::move(std::get<pending_state>(_state).reader_factory);
             _state.emplace<admitted_state>(admitted_state{permit, reader_factory(reader_resource_tracker(permit))});
             return fn(std::get<admitted_state>(_state).reader);

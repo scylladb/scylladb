@@ -679,7 +679,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         BOOST_CHECK_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 0);
 
         // Drain all resources of the semaphore
-        std::vector<reader_concurrency_semaphore::reader_permit> permits;
+        std::vector<reader_permit> permits;
         const auto resources = semaphore.available_resources();
         permits.reserve(resources.count);
         const auto per_permit_memory  = resources.memory / resources.count;

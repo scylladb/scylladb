@@ -25,7 +25,9 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
 #include "db/timeout_clock.hh"
-#include "seastarx.hh"
+#include "reader_permit.hh"
+
+using namespace seastar;
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -51,70 +53,9 @@
 /// constructor parameter).
 class reader_concurrency_semaphore {
 public:
-    struct reader_resources {
-        int count = 0;
-        ssize_t memory = 0;
-
-        reader_resources() = default;
-
-        reader_resources(int count, ssize_t memory)
-            : count(count)
-            , memory(memory) {
-        }
-
-        bool operator>=(const reader_resources& other) const {
-            return count >= other.count && memory >= other.memory;
-        }
-
-        reader_resources& operator-=(const reader_resources& other) {
-            count -= other.count;
-            memory -= other.memory;
-            return *this;
-        }
-
-        reader_resources& operator+=(const reader_resources& other) {
-            count += other.count;
-            memory += other.memory;
-            return *this;
-        }
-
-        explicit operator bool() const {
-            return count >= 0 && memory >= 0;
-        }
-    };
-
     using resources = reader_resources;
 
-    class reader_permit {
-        struct impl {
-            reader_concurrency_semaphore& semaphore;
-            reader_resources base_cost;
-
-            impl(reader_concurrency_semaphore& semaphore, resources base_cost);
-            ~impl();
-        };
-
-        friend reader_permit no_reader_permit();
-    private:
-        lw_shared_ptr<impl> _impl;
-
-    private:
-        reader_permit() = default;
-
-    public:
-        reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost);
-
-        bool operator==(const reader_permit& o) const {
-            return _impl == o._impl;
-        }
-        operator bool() const {
-            return bool(_impl);
-        }
-
-        void consume_memory(size_t memory);
-        void signal_memory(size_t memory);
-        void release();
-    };
+    friend class reader_permit;
 
     class inactive_read {
     public:
@@ -273,12 +214,10 @@ public:
     }
 };
 
-reader_concurrency_semaphore::reader_permit no_reader_permit();
-
 class reader_resource_tracker {
-    reader_concurrency_semaphore::reader_permit _permit;
+    reader_permit _permit;
 public:
-    explicit reader_resource_tracker(reader_concurrency_semaphore::reader_permit permit)
+    explicit reader_resource_tracker(reader_permit permit)
         : _permit(std::move(permit)) {
     }
 
@@ -288,7 +227,7 @@ public:
 
     file track(file f) const;
 
-    reader_concurrency_semaphore::reader_permit get_permit() const {
+    reader_permit get_permit() const {
         return _permit;
     }
 };

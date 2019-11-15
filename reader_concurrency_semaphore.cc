@@ -24,32 +24,32 @@
 
 #include "reader_concurrency_semaphore.hh"
 
-reader_concurrency_semaphore::reader_permit::impl::impl(reader_concurrency_semaphore& semaphore, resources base_cost) : semaphore(semaphore), base_cost(base_cost) {
+reader_permit::impl::impl(reader_concurrency_semaphore& semaphore, reader_resources base_cost) : semaphore(semaphore), base_cost(base_cost) {
 }
 
-reader_concurrency_semaphore::reader_permit::impl::~impl() {
+reader_permit::impl::~impl() {
     semaphore.signal(base_cost);
 }
 
-reader_concurrency_semaphore::reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, resources base_cost)
-    : _impl(make_lw_shared<reader_concurrency_semaphore::reader_permit::impl>(semaphore, base_cost)) {
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost)
+    : _impl(make_lw_shared<reader_permit::impl>(semaphore, base_cost)) {
 }
 
-void reader_concurrency_semaphore::reader_permit::consume_memory(size_t memory) {
+void reader_permit::consume_memory(size_t memory) {
     _impl->semaphore.consume_memory(memory);
 }
 
-void reader_concurrency_semaphore::reader_permit::signal_memory(size_t memory) {
+void reader_permit::signal_memory(size_t memory) {
     _impl->semaphore.signal_memory(memory);
 }
 
-void reader_concurrency_semaphore::reader_permit::release() {
+void reader_permit::release() {
     _impl->semaphore.signal(_impl->base_cost);
     _impl->base_cost = {};
 }
 
-reader_concurrency_semaphore::reader_permit no_reader_permit() {
-    return reader_concurrency_semaphore::reader_permit{};
+reader_permit no_reader_permit() {
+    return reader_permit{};
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) {
@@ -103,7 +103,7 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
     return true;
 }
 
-future<reader_concurrency_semaphore::reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory,
+future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory,
         db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         if (_prethrow_action) {
@@ -133,7 +133,7 @@ future<reader_concurrency_semaphore::reader_permit> reader_concurrency_semaphore
     return fut;
 }
 
-reader_concurrency_semaphore::reader_permit reader_concurrency_semaphore::consume_resources(resources r) {
+reader_permit reader_concurrency_semaphore::consume_resources(resources r) {
     _resources -= r;
     return reader_permit(*this, r);
 }
@@ -142,13 +142,13 @@ reader_concurrency_semaphore::reader_permit reader_concurrency_semaphore::consum
 // operations.
 class tracking_file_impl : public file_impl {
     file _tracked_file;
-    reader_concurrency_semaphore::reader_permit _permit;
+    reader_permit _permit;
 
     // Shouldn't be called if semaphore is NULL.
     temporary_buffer<uint8_t> make_tracked_buf(temporary_buffer<uint8_t> buf) {
         return seastar::temporary_buffer<uint8_t>(buf.get_write(),
                 buf.size(),
-                make_deleter(buf.release(), std::bind(&reader_concurrency_semaphore::reader_permit::signal_memory, _permit, buf.size())));
+                make_deleter(buf.release(), std::bind(&reader_permit::signal_memory, _permit, buf.size())));
     }
 
 public:
