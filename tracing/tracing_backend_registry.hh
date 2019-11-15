@@ -60,5 +60,6 @@ void backend_registry::register_backend(sstring name) {
     });
 }
 
+void register_tracing_keyspace_backend(backend_registry&);
 
 }

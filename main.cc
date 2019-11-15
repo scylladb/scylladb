@@ -23,7 +23,6 @@
 #include "database.hh"
 #include <seastar/core/app-template.hh>
 #include <seastar/core/distributed.hh>
-#include "thrift/server.hh"
 #include "transport/server.hh"
 #include <seastar/http/httpd.hh>
 #include "api/api_init.hh"
@@ -54,15 +53,12 @@
 #include <seastar/core/file.hh>
 #include <sys/time.h>
 #include <sys/resource.h>
-#include "disk-error-handler.hh"
 #include "tracing/tracing.hh"
 #include "tracing/tracing_backend_registry.hh"
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
 #include <seastar/net/dns.hh>
-#include <seastar/core/memory.hh>
 #include <seastar/core/io_queue.hh>
-#include <seastar/util/log-cli.hh>
 
 #include "db/view/view_update_generator.hh"
 #include "service/cache_hitrate_calculator.hh"
@@ -71,7 +67,6 @@
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
 #include "cql3/cql_config.hh"
-#include "serializer.hh"
 
 #include "alternator/server.hh"
 
@@ -82,12 +77,6 @@ seastar::metrics::metric_groups app_metrics;
 using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
-
-namespace tracing {
-
-void register_tracing_keyspace_backend(backend_registry& br);
-
-}
 
 // Must live in a seastar::thread
 class stop_signal {
@@ -138,11 +127,6 @@ V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, con
     return def;
 }
 
-static fs::path relative_conf_dir(fs::path path) {
-    static auto conf_dir = db::config::get_conf_dir(); // this is not gonna change in our life time
-    return conf_dir / path;
-}
-
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     sstring file;
@@ -150,7 +134,7 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     if (opts.count("options-file") > 0) {
         file = opts["options-file"].as<sstring>();
     } else {
-        file = relative_conf_dir("scylla.yaml").string();
+        file = db::config::get_conf_sub("scylla.yaml").string();
     }
     return check_direct_io_support(file).then([file, &cfg] {
         return cfg.read_from_file(file, [](auto & opt, auto & msg, auto status) {
@@ -464,7 +448,6 @@ inline auto defer_with_log_on_error(Func&& func) {
 }
 
 int main(int ac, char** av) {
-  int return_value = 0;
   try {
     // early check to avoid triggering
     if (!cpu_sanity()) {
@@ -516,7 +499,6 @@ int main(int ac, char** av) {
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy);
     httpd::http_server_control prometheus_server;
-    prometheus::config pctx;
     directories dirs;
     sharded<gms::feature_service> feature_service;
 
@@ -545,8 +527,8 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator,
-                               &feature_service] {
+        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs,
+                &prometheus_server, &cf_cache_hitrate_calculator, &feature_service] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
@@ -593,7 +575,6 @@ int main(int ac, char** av) {
                 }
             };
             auto maintenance_scheduling_group = make_sched_group("streaming", 200);
-            auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
@@ -616,14 +597,15 @@ int main(int ac, char** av) {
             uint16_t pport = cfg->prometheus_port();
             std::any stop_prometheus;
             if (pport) {
-                pctx.metric_help = "Scylla server statistics";
-                pctx.prefix = cfg->prometheus_prefix();
                 prometheus_server.start("prometheus").get();
                 stop_prometheus = ::make_shared(defer([&prometheus_server] {
                     startlog.info("stopping prometheus API server");
                     prometheus_server.stop().get();
                 }));
                 //FIXME discarded future
+                prometheus::config pctx;
+                pctx.metric_help = "Scylla server statistics";
+                pctx.prefix = cfg->prometheus_prefix();
                 (void)prometheus::start(prometheus_server, pctx);
                 with_scheduling_group(maintenance_scheduling_group, [&] {
                   return prometheus_server.listen(socket_address{prom_addr, pport}).handle_exception([pport, &cfg] (auto ep) {
@@ -674,8 +656,8 @@ int main(int ac, char** av) {
             auto ceo = cfg->client_encryption_options();
             if (is_true(get_or_default(ceo, "enabled", "false"))) {
                 ceo["enabled"] = "true";
-                ceo["certificate"] = get_or_default(ceo, "certificate", relative_conf_dir("scylla.crt").string());
-                ceo["keyfile"] = get_or_default(ceo, "keyfile", relative_conf_dir("scylla.key").string());
+                ceo["certificate"] = get_or_default(ceo, "certificate", db::config::get_conf_sub("scylla.crt").string());
+                ceo["keyfile"] = get_or_default(ceo, "keyfile", db::config::get_conf_sub("scylla.key").string());
                 ceo["require_client_auth"] = is_true(get_or_default(ceo, "require_client_auth", "false")) ? "true" : "false";
             } else {
                 ceo["enabled"] = "false";
@@ -762,7 +744,7 @@ int main(int ac, char** av) {
                 }).get();
             });
             verify_seastar_io_scheduler(opts.count("max-io-requests"), opts.count("io-properties") || opts.count("io-properties-file"),
-                                        db.local().get_config().developer_mode()).get();
+                                        cfg->developer_mode()).get();
             supervisor::notify("creating data directories");
             dirs.touch_and_lock(db.local().get_config().data_file_directories()).get();
             supervisor::notify("creating commitlog directory");
@@ -825,8 +807,8 @@ int main(int ac, char** av) {
             auto tcp_nodelay_inter_dc = cfg->inter_dc_tcp_nodelay();
             auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
             auto trust_store = get_or_default(ssl_opts, "truststore");
-            auto cert = get_or_default(ssl_opts, "certificate", relative_conf_dir("scylla.crt").string());
-            auto key = get_or_default(ssl_opts, "keyfile", relative_conf_dir("scylla.key").string());
+            auto cert = get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
+            auto key = get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
             auto prio = get_or_default(ssl_opts, "priority_string", sstring());
             auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
             if (cluster_name.empty()) {
@@ -1077,7 +1059,7 @@ int main(int ac, char** av) {
             with_scheduling_group(dbcfg.statement_scheduling_group, [] {
                 return service::get_local_storage_service().start_native_transport();
             }).get();
-            if (start_thrift) {
+            if (cfg->start_rpc()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [] {
                     return service::get_local_storage_service().start_rpc_server();
                 }).get();

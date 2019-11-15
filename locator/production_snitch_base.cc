@@ -56,12 +56,7 @@ production_snitch_base::production_snitch_base(const sstring& prop_file_name)
     if (!prop_file_name.empty()) {
         _prop_file_name = prop_file_name;
     } else {
-        using namespace db::fs;
-
-        path def_prop_file(db::config::get_conf_dir());
-        def_prop_file /= path(snitch_properties_filename);
-
-        _prop_file_name = def_prop_file.string();
+        _prop_file_name = db::config::get_conf_sub(snitch_properties_filename).string();
     }
 }
 

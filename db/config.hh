@@ -26,7 +26,6 @@
 #include <unordered_map>
 
 #include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>
@@ -93,6 +92,7 @@ public:
      *         according the environment variables definitions.
      */
     static fs::path get_conf_dir();
+    static fs::path get_conf_sub(fs::path);
 
     using string_map = std::unordered_map<sstring, sstring>;
                     //program_options::string_map;
