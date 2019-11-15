@@ -188,9 +188,9 @@ def alarm_handler(signum, frame):
     raise Alarm
 
 
-if __name__ == "__main__":
+def usage():
+    """ Print usage and process command line options. """
     all_modes = ['debug', 'release', 'dev', 'sanitize']
-
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     testmem = 2e9
     cpus_per_test_job = 1
@@ -217,7 +217,11 @@ if __name__ == "__main__":
                         help="Number of jobs to use for running the tests")
     parser.add_argument('--xunit', action="store",
                         help="Name of a file to write results of non-boost tests to in xunit format")
-    args = parser.parse_args()
+    return parser.parse_args()
+
+if __name__ == "__main__":
+
+    args = usage()
 
     print_progress = print_status_verbose if args.verbose else print_progress_succint
 
