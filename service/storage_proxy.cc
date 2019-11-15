@@ -107,6 +107,13 @@ using namespace exceptions;
 using fbu = utils::fb_utilities;
 
 static inline
+query::digest_algorithm digest_algorithm() {
+    return service::get_local_storage_service().cluster_supports_xxhash_digest_algorithm()
+         ? query::digest_algorithm::xxHash
+         : query::digest_algorithm::MD5;
+}
+
+static inline
 const dht::token& start_token(const dht::partition_range& r) {
     static const dht::token min_token = dht::minimum_token();
     return r.start() ? r.start()->value().token() : min_token;
@@ -2942,12 +2949,6 @@ public:
         return std::move(_diffs);
     }
 };
-
-query::digest_algorithm digest_algorithm() {
-    return service::get_local_storage_service().cluster_supports_xxhash_digest_algorithm()
-         ? query::digest_algorithm::xxHash
-         : query::digest_algorithm::MD5;
-}
 
 class abstract_read_executor : public enable_shared_from_this<abstract_read_executor> {
 protected:
