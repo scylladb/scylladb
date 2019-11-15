@@ -700,9 +700,9 @@ static future<> sleep_approx_50ms() {
     return seastar::sleep(std::chrono::milliseconds(dist(re)));
 }
 
-static future<std::optional<utils::UUID>> sleep_and_restart() {
+static future<std::optional<paxos_response_handler::ballot_and_data>> sleep_and_restart() {
     return sleep_approx_50ms().then([] {
-         return std::optional<utils::UUID>(); // continue
+         return std::optional<paxos_response_handler::ballot_and_data>(); // continue
     });
 }
 
@@ -712,13 +712,14 @@ static future<std::optional<utils::UUID>> sleep_and_restart() {
  * @return the Paxos ballot promised by the replicas if no in-progress requests were seen and a quorum of
  * nodes have seen the most recent commit. Otherwise, return null.
  */
-future<utils::UUID> paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
+future<paxos_response_handler::ballot_and_data>
+paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
     _proxy->get_db().local().get_config().check_experimental("Paxos");
     return do_with(api::timestamp_type(0), shared_from_this(), [this, &cs, &contentions, is_write]
             (api::timestamp_type& min_timestamp_micros_to_use, shared_ptr<paxos_response_handler>& prh) {
         return repeat_until_value([this, &contentions, &cs, &min_timestamp_micros_to_use, is_write] {
             if (storage_proxy::clock_type::now() > _cas_timeout) {
-                return make_exception_future<std::optional<utils::UUID>>(
+                return make_exception_future<std::optional<ballot_and_data>>(
                         mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl_for_paxos, 0,
                                 _required_participants, db::write_type::CAS)
                         );
@@ -770,11 +771,11 @@ future<utils::UUID> paxos_response_handler::begin_and_repair_paxos(client_state&
                         return accept_proposal(refreshed_in_progress, false).then([this, &contentions, &refreshed_in_progress] (bool is_accepted) mutable {
                             if (is_accepted) {
                                 return learn_decision(std::move(refreshed_in_progress), false).then([] {
-                                        return make_ready_future<std::optional<utils::UUID>>(std::optional<utils::UUID>());
+                                        return make_ready_future<std::optional<ballot_and_data>>(std::optional<ballot_and_data>());
                                 }).handle_exception_type([] (mutation_write_timeout_exception& e) {
                                     e.type = db::write_type::CAS;
                                     // we're still doing preparation for the paxos rounds, so we want to use the CAS (see cASSANDRA-8672)
-                                    return make_exception_future<std::optional<utils::UUID>>(std::move(e));
+                                    return make_exception_future<std::optional<ballot_and_data>>(std::move(e));
                                 });
                             } else {
                                 paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
@@ -815,11 +816,11 @@ future<utils::UUID> paxos_response_handler::begin_and_repair_paxos(client_state&
                         } else {
                             f.ignore_ready_future();
                         }
-                        return std::optional<utils::UUID>(); // continue
+                        return std::optional<ballot_and_data>(); // continue
                     });
                 }
 
-                return make_ready_future<std::optional<utils::UUID>>(ballot);
+                return make_ready_future<std::optional<ballot_and_data>>(ballot_and_data{ballot, std::move(summary.data)});
             });
         });
     });
@@ -832,6 +833,10 @@ template<class T> struct dependent_false : std::false_type {};
 future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUID ballot) {
     struct {
         size_t errors = 0;
+        // Whether the value of the requested key received from participating replicas match.
+        bool digests_match = true;
+        // Digest corresponding to the value of the requested key received from participating replicas.
+        std::optional<query::result_digest> digest;
         // the promise can be set before all replies are received at which point
         // the optional will be disengaged so further replies are ignored
         std::optional<promise<paxos::prepare_summary>> p = promise<paxos::prepare_summary>();
@@ -853,11 +858,15 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: sending ballot {} to {}", _id, ballot, _live_endpoints);
         return parallel_for_each(_live_endpoints, [this, &summary, ballot, &request_tracker] (gms::inet_address peer) mutable {
             return futurize_apply([&] {
+                // To generate less network traffic, only the closest replica (first one in the list of participants)
+                // sends query result content while other replicas send digests needed to check consistency.
+                bool only_digest = peer != _live_endpoints[0];
+                auto da = digest_algorithm();
                 if (fbu::is_me(peer)) {
-                    return paxos::paxos_state::prepare(tr_state, _schema, _key.key(), ballot, _timeout);
+                    return paxos::paxos_state::prepare(tr_state, _schema, _cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     netw::messaging_service& ms = netw::get_local_messaging_service();
-                    return ms.send_paxos_prepare(peer, _timeout, _schema->version(), _key.key(), ballot,
+                    return ms.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
                             tracing::make_trace_info(tr_state));
                 }
             }).then_wrapped([this, &summary, &request_tracker, peer, ballot]
@@ -924,6 +933,33 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                             // So find the highest accepted proposal here.
                             if (!summary.most_recent_proposal || response.accepted_proposal > summary.most_recent_proposal) {
                                 summary.most_recent_proposal = std::move(response.accepted_proposal);
+                            }
+                        }
+
+                        // Check if the query result attached to the promise matches query results received from other participants.
+                        if (request_tracker.digests_match) {
+                            if (response.data_or_digest) {
+                                foreign_ptr<lw_shared_ptr<query::result>> data;
+                                if (std::holds_alternative<foreign_ptr<lw_shared_ptr<query::result>>>(*response.data_or_digest)) {
+                                    data = std::move(std::get<foreign_ptr<lw_shared_ptr<query::result>>>(*response.data_or_digest));
+                                }
+                                auto& digest = data ? data->digest() : std::get<query::result_digest>(*response.data_or_digest);
+                                if (request_tracker.digest) {
+                                    if (*request_tracker.digest != digest) {
+                                        request_tracker.digests_match = false;
+                                    }
+                                } else {
+                                    request_tracker.digest = digest;
+                                }
+                                if (request_tracker.digests_match && !summary.data && data) {
+                                    summary.data = std::move(data);
+                                }
+                            } else {
+                                request_tracker.digests_match = false;
+                            }
+                            if (!request_tracker.digests_match) {
+                                request_tracker.digest.reset();
+                                summary.data.reset();
                             }
                         }
 
@@ -1911,6 +1947,13 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
                 "Cannot perform LWT operation as there is more than one ({}) pending range movement", pending_endpoints.size()),
                 cl_for_paxos, participants + 1, live_endpoints.size());
     }
+
+    // Apart from the ballot, paxos_state::prepare() also sends the current value of the requested key.
+    // If the values received from different replicas match, we skip a separate query stage thus saving
+    // one network round trip. To generate less traffic, only closest replicas send data, others send
+    // digests that are used to check consistency. For this optimization to work, we need to sort the
+    // list of participants by proximity to this instance.
+    sort_endpoints_by_proximity(live_endpoints);
 
     return paxos_participants{std::move(live_endpoints), required_participants};
 }
@@ -3895,7 +3938,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     try {
         handler = seastar::make_shared<service::paxos_response_handler>(
                 shared_from_this(), query_options.trace_state, query_options.permit,
-                partition_ranges[0].start()->value().as_decorated_key(), s, cl, cl_for_learn, timeout, cas_timeout);
+                partition_ranges[0].start()->value().as_decorated_key(), s, cmd, cl, cl_for_learn, timeout, cas_timeout);
     } catch (exceptions::unavailable_exception& ex) {
         _stats.cas_read_unavailables.mark();
         throw;
@@ -3907,7 +3950,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
         lc.start();
         return handler->begin_and_repair_paxos(query_options.cstate, contentions, false).then_wrapped([this, s = std::move(s),
                 cmd = std::move(cmd), partition_ranges = std::move(partition_ranges), query_options = std::move(query_options),
-                cl_for_learn] (future<utils::UUID> f) mutable {
+                cl_for_learn] (future<paxos_response_handler::ballot_and_data> f) mutable {
             if (f.failed()) {
                 try {
                     f.get();
@@ -3919,6 +3962,10 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
                     return make_exception_future<storage_proxy::coordinator_query_result>(
                             read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false));
                 }
+            }
+            auto v = f.get0();
+            if (v.data) {
+                return make_ready_future<storage_proxy::coordinator_query_result>(storage_proxy::coordinator_query_result(std::move(v.data)));
             }
             return do_query(s, std::move(cmd), std::move(partition_ranges), cl_for_learn, std::move(query_options));
         }).then_wrapped([this, lc, &contentions, handler = std::move(handler)] (future<storage_proxy::coordinator_query_result> f) mutable {
@@ -3989,7 +4036,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
                 query_options.trace_state, query_options.permit,
                 partition_ranges[0].start()->value().as_decorated_key(),
-                schema, cl_for_paxos, cl_for_commit, write_timeout, cas_timeout);
+                schema, cmd, cl_for_paxos, cl_for_commit, write_timeout, cas_timeout);
     } catch (exceptions::unavailable_exception& ex) {
         _stats.cas_write_unavailables.mark();
         throw;
@@ -4009,13 +4056,16 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
             // recent enough.
             return handler->begin_and_repair_paxos(query_options.cstate, contentions, true)
                     .then([this, handler, schema, cmd, request, partition_ranges, query_options, cl, &contentions]
-                            (utils::UUID ballot) mutable {
+                            (paxos_response_handler::ballot_and_data v) mutable {
                 // Read the current values and check they validate the conditions.
                 paxos::paxos_state::logger.debug("CAS[{}]: Reading existing values for CAS precondition", handler->id());
                 tracing::trace(handler->tr_state, "Reading existing values for CAS precondition");
-                return query(schema, cmd, std::move(partition_ranges), cl, query_options)
-                        .then([this, handler, schema, cmd, request, ballot, &contentions] (coordinator_query_result&& qr) {
-                    auto mutation = request->apply(*qr.query_result, cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
+                auto f = v.data ? make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(std::move(v.data)) :
+                    query(schema, cmd, std::move(partition_ranges), cl, query_options).then([] (coordinator_query_result&& qr) {
+                        return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(std::move(qr.query_result));
+                    });
+                return f.then([this, handler, schema, cmd, request, ballot = v.ballot, &contentions] (auto&& qr) {
+                    auto mutation = request->apply(*qr, cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
                     if (!mutation) {
                         paxos::paxos_state::logger.debug("CAS[{}] precondition does not match current values", handler->id());
                         tracing::trace(handler->tr_state, "CAS precondition does not match current values");
@@ -4527,8 +4577,9 @@ void storage_proxy::init_messaging_service() {
     });
 
     // Register PAXOS verb handlers
-    ms.register_paxos_prepare([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, utils::UUID schema_version,
-            partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+    ms.register_paxos_prepare([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+                query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
+                std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
         tracing::trace_state_ptr tr_state;
         if (trace_info) {
@@ -4536,9 +4587,9 @@ void storage_proxy::init_messaging_service() {
             tracing::begin(tr_state);
         }
 
-        return get_schema_for_read(schema_version, src_addr).then([tr_state = std::move(tr_state),
-                                                              key = std::move(key), ballot, timeout] (schema_ptr schema) {
-            return paxos::paxos_state::prepare(tr_state, std::move(schema), std::move(key), ballot, *timeout);
+        return get_schema_for_read(cmd.schema_version, src_addr).then([cmd = make_lw_shared<query::read_command>(std::move(cmd)),
+                key = std::move(key), ballot, only_digest, da, timeout, tr_state = std::move(tr_state)] (schema_ptr schema) {
+            return paxos::paxos_state::prepare(tr_state, std::move(schema), cmd, std::move(key), ballot, only_digest, da, *timeout);
         });
     });
     ms.register_paxos_accept([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,

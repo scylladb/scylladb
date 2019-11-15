@@ -76,6 +76,10 @@ public:
     // only then proposing the new ballot and new mutation. May be empty if there is no such cell for
     // this key in the paxos table on any of the replicas.
     std::optional<paxos::proposal> most_recent_proposal;
+    // Value of the requested key received from participating replicas during the prepare phase.
+    // May be none in case data hadn't been received before a consensus was reached or digests
+    // received from different replicas didn't match.
+    foreign_ptr<lw_shared_ptr<query::result>> data;
 
 public:
     prepare_summary(size_t node_count);

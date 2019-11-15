@@ -42,6 +42,7 @@
 
 #pragma once
 #include <variant>
+#include "query-result.hh"
 #include "service/paxos/proposal.hh"
 
 namespace service {
@@ -59,10 +60,39 @@ struct promise {
     // table) by the time of this prepare request. Empty on first round or if previous round data
     // has expired.
     std::optional<proposal> most_recent_commit;
+    // Local query result with digest or just digest, depending on the caller's choice, or none
+    // if the query failed. It is used to skip a separate query after the prepare phase provided
+    // results from all PAXOS participants match.
+    std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>> data_or_digest;
 
-    promise(std::optional<proposal> accepted_arg, std::optional<proposal> chosen_arg)
+    std::optional<std::variant<std::reference_wrapper<query::result>, query::result_digest>> get_data_or_digest() const {
+        if (!data_or_digest) {
+            return std::optional<std::variant<std::reference_wrapper<query::result>, query::result_digest>>();
+        } else if (std::holds_alternative<foreign_ptr<lw_shared_ptr<query::result>>>(*data_or_digest)) {
+            return *std::get<foreign_ptr<lw_shared_ptr<query::result>>>(*data_or_digest);
+        } else {
+            return std::get<query::result_digest>(*data_or_digest);
+        }
+    }
+
+    promise(std::optional<proposal> accepted_arg, std::optional<proposal> chosen_arg,
+            std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>> data_or_digest_arg)
         : accepted_proposal(std::move(accepted_arg))
-        , most_recent_commit(std::move(chosen_arg)) {}
+        , most_recent_commit(std::move(chosen_arg))
+        , data_or_digest(std::move(data_or_digest_arg)) {}
+
+    promise(std::optional<proposal> accepted_arg, std::optional<proposal> chosen_arg,
+            std::optional<std::variant<query::result, query::result_digest>> data_or_digest_arg)
+        : accepted_proposal(std::move(accepted_arg))
+        , most_recent_commit(std::move(chosen_arg)) {
+        if (data_or_digest_arg) {
+            if (std::holds_alternative<query::result>(*data_or_digest_arg)) {
+                data_or_digest = make_foreign(make_lw_shared<query::result>(std::move(std::get<query::result>(*data_or_digest_arg))));
+            } else {
+                data_or_digest = std::move(std::get<query::result_digest>(*data_or_digest_arg));
+            }
+        }
+    }
 };
 
 // If the prepare request is rejected we return timeUUID of the most recently promised ballot, so
