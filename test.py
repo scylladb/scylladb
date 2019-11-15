@@ -303,15 +303,9 @@ def find_tests(args):
 
     return test_to_run
 
-if __name__ == "__main__":
 
-    args = usage()
-
-    test_to_run = find_tests(args)
-
+def run_all_tests(test_to_run, args):
     failed_tests = []
-
-    n_total = len(test_to_run)
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
     futures = []
@@ -331,6 +325,16 @@ if __name__ == "__main__":
         cookie = print_progress(test_path, test_args, success, cookie, args.verbose)
         if not success:
             failed_tests.append((test_path, test_args, out))
+    return failed_tests, results
+
+
+if __name__ == "__main__":
+
+    args = usage()
+
+    test_to_run = find_tests(args)
+
+    failed_tests, results = run_all_tests(test_to_run, args)
 
     if not failed_tests:
         print('\nOK.')
