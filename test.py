@@ -216,10 +216,8 @@ def usage():
 
     return args
 
-if __name__ == "__main__":
 
-    args = usage()
-
+def find_tests(args):
     custom_seastar_args = {
         "sstable_test": ['-c1', '-m2G'],
         'sstable_datafile_test': ['-c1', '-m2G'],
@@ -257,6 +255,14 @@ if __name__ == "__main__":
         if not test_to_run:
             print("Test {} not found".format(args.name))
             sys.exit(1)
+
+    return test_to_run
+
+if __name__ == "__main__":
+
+    args = usage()
+
+    test_to_run = find_tests(args)
 
     failed_tests = []
 
