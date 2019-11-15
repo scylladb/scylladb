@@ -153,13 +153,13 @@ def status_to_string(success):
 
     return status
 
-def print_progress_succint(test_path, test_args, success, cookie):
+def print_progress(test_path, test_args, success, cookie, verbose):
     if type(cookie) is int:
         cookie = (0, 1, cookie)
 
     last_len, n, n_total = cookie
     msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test_path, ' '.join(test_args))
-    if sys.stdout.isatty():
+    if verbose == False and sys.stdout.isatty():
         print('\r' + ' ' * last_len, end='')
         last_len = len(msg)
         print('\r' + msg, end='')
@@ -167,17 +167,6 @@ def print_progress_succint(test_path, test_args, success, cookie):
         print(msg)
 
     return (last_len, n + 1, n_total)
-
-
-def print_status_verbose(test_path, test_args, success, cookie):
-    if type(cookie) is int:
-        cookie = (1, cookie)
-
-    n, n_total = cookie
-    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test_path, ' '.join(test_args))
-    print(msg)
-
-    return (n + 1, n_total)
 
 
 class Alarm(Exception):
@@ -230,8 +219,6 @@ def usage():
 if __name__ == "__main__":
 
     args = usage()
-
-    print_progress = print_status_verbose if args.verbose else print_progress_succint
 
     custom_seastar_args = {
         "sstable_test": ['-c1', '-m2G'],
@@ -334,7 +321,7 @@ if __name__ == "__main__":
         result = future.result()
         results.append(result)
         test_path, test_args, _, success, out = result
-        cookie = print_progress(test_path, test_args, success, cookie)
+        cookie = print_progress(test_path, test_args, success, cookie, args.verbose)
         if not success:
             failed_tests.append((test_path, test_args, out))
 
