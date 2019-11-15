@@ -613,7 +613,7 @@ public:
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         if (!_reader) {
-            _reader = _source.make_reader(_schema, pr, _slice, _pc, std::move(_trace_state), streamed_mutation::forwarding::no,
+            _reader = _source.make_reader(_schema, no_reader_permit(), pr, _slice, _pc, std::move(_trace_state), streamed_mutation::forwarding::no,
                     mutation_reader::forwarding::yes);
             _end_of_stream = false;
             return make_ready_future<>();
@@ -663,7 +663,7 @@ public:
             tracing::trace_state_ptr trace_state)
         : impl(s)
         , _generator(std::move(generator))
-        , _reader(source.make_reader(s, first_range, slice, pc, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+        , _reader(source.make_reader(s, no_reader_permit(), first_range, slice, pc, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
     {
     }
 
@@ -737,7 +737,7 @@ make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::pa
             return make_empty_flat_reader(std::move(s));
         }
     } else if (ranges.size() == 1) {
-        return source.make_reader(std::move(s), ranges.front(), slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+        return source.make_reader(std::move(s), no_reader_permit(), ranges.front(), slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
     } else {
         return make_flat_mutation_reader<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(source),
                 ranges.front(), adapter(std::next(ranges.cbegin()), ranges.cend()), slice, pc, std::move(trace_state));

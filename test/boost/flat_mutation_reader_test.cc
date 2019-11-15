@@ -412,7 +412,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
             return m;
         }));
 
-        auto source = mutation_source([&] (schema_ptr, const dht::partition_range& range) {
+        auto source = mutation_source([&] (schema_ptr, reader_permit, const dht::partition_range& range) {
             return flat_mutation_reader_from_mutations(ms, range);
         });
 
@@ -745,6 +745,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_as_mutation_source)
     auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
         return mutation_source([=] (
                 schema_ptr schema,
+                reader_permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class&,
@@ -761,6 +762,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source)
     auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
         return mutation_source([=] (
                 schema_ptr schema,
+                reader_permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class&,

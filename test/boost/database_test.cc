@@ -143,6 +143,7 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
             cf.flush().get();
             cf.get_row_cache().invalidate([] {}).get();
             return mutation_source([&] (schema_ptr s,
+                    reader_permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,

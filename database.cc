@@ -1960,6 +1960,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
         }
     };
     auto ms = mutation_source([&db, &partitioner] (schema_ptr s,
+            reader_permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
             const io_priority_class& pc,

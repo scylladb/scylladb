@@ -117,6 +117,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
             }
 
             return mutation_source([memtables] (schema_ptr s,
+                    reader_permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,

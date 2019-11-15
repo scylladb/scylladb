@@ -1231,11 +1231,11 @@ void view_builder::initialize_reader_at_current_token(build_step& step) {
     step.prange = dht::partition_range(dht::ring_position::starting_at(step.current_token()), dht::ring_position::max());
     step.reader = make_local_shard_sstable_reader(
             step.base->schema(),
+            no_reader_permit(),
             make_lw_shared(sstables::sstable_set(step.base->get_sstable_set())),
             step.prange,
             step.pslice,
             default_priority_class(),
-            no_resource_tracking(),
             nullptr,
             streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);

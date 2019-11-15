@@ -710,11 +710,11 @@ public:
 
     flat_mutation_reader make_sstable_reader() const override {
         return ::make_local_shard_sstable_reader(_schema,
+                no_reader_permit(),
                 _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
                 service::get_local_compaction_priority(),
-                no_resource_tracking(),
                 tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
@@ -967,11 +967,11 @@ public:
     // Use reader that makes sure no non-local mutation will not be filtered out.
     flat_mutation_reader make_sstable_reader() const override {
         return ::make_range_sstable_reader(_schema,
+                no_reader_permit(),
                 _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
                 service::get_local_compaction_priority(),
-                no_resource_tracking(),
                 nullptr,
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no);
