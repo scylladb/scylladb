@@ -840,8 +840,8 @@ def find_single_sstable_readers():
 
     def _lookup_obj(obj_addr, vtable_addr):
         vtable_pfx = 'vtable for '
-        name = resolve(vtable_addr)
-        if not name or not name.startswith(vtable_pfx):
+        name = resolve(vtable_addr, startswith=vtable_pfx)
+        if not name:
             return None
         name = name[len(vtable_pfx):]
         for t in types:
@@ -994,8 +994,8 @@ def find_instances(type_name):
     ptr_type = gdb.lookup_type(type_name).pointer()
     vtable_name = 'vtable for %s ' % type_name
     for obj_addr, vtable_addr in find_vptrs():
-        name = resolve(vtable_addr)
-        if name and name.startswith(vtable_name):
+        name = resolve(vtable_addr, startswith=vtable_name)
+        if name:
             yield gdb.Value(obj_addr).cast(ptr_type)
 
 
@@ -1769,7 +1769,7 @@ class scylla_lsa(gdb.Command):
 names = {}  # addr (int) -> name (str)
 
 
-def resolve(addr, cache=True):
+def resolve(addr, cache=True, startswith=None):
     if addr in names:
         return names[addr]
 
@@ -1778,6 +1778,8 @@ def resolve(addr, cache=True):
         name = None
     else:
         name = infosym[:infosym.find('in section')]
+    if startswith and not name.startswith(startswith):
+        return None
     if cache:
         names[addr] = name
     return name
@@ -2993,11 +2995,9 @@ class scylla_smp_queues(gdb.Command):
             vptr = int(vptr)
 
             if not vptr in known_vptrs:
-                name = resolve(vptr, cache=False)
-                if name is None or not name.startswith('vtable for seastar::smp_message_queue::async_work_item'):
-                    continue
-
-                known_vptrs[vptr] = None
+                name = resolve(vptr, startswith='vtable for seastar::smp_message_queue::async_work_item')
+                if name:
+                    known_vptrs[vptr] = None
 
             offset = known_vptrs[vptr]
 
@@ -3087,7 +3087,7 @@ class scylla_gdb_func_downcast_vptr(gdb.Function):
         if not isinstance(ptr, gdb.Value):
             ptr = gdb.parse_and_eval(ptr)
 
-        symbol_name = resolve(ptr.reinterpret_cast(self._vptr_type).dereference(), cache=False)
+        symbol_name = resolve(ptr.reinterpret_cast(self._vptr_type).dereference(), startswith='vtable for ')
         if symbol_name is None:
             raise ValueError("Failed to resolve first word of virtual object @ {} as a vtable symbol".format(int(ptr)))
 
