@@ -86,4 +86,5 @@ void assert_that_failed(future<T...>&& f)
 shared_ptr<cql_transport::messages::result_message> cquery_nofail(
         cql_test_env& env,
         const char* query,
+        std::unique_ptr<cql3::query_options>&& qo = nullptr,
         const std::experimental::source_location& loc = std::experimental::source_location::current());
