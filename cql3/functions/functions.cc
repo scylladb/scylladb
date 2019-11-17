@@ -34,11 +34,34 @@
 #include "types/list.hh"
 #include "types/user.hh"
 #include "concrete_types.hh"
+#include "as_json_function.hh"
+
+namespace std {
+std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_types) {
+    for (size_t i = 0; i < arg_types.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << arg_types[i]->as_cql3_type().to_string();
+    }
+    return os;
+}
+}
 
 namespace cql3 {
 namespace functions {
 
+static logging::logger log("cql3_fuctions");
+
+bool abstract_function::requires_thread() const { return false; }
+
+bool as_json_function::requires_thread() const { return false; }
+
 thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
+
+void functions::clear_functions() {
+    functions::_declared = init();
+}
 
 std::unordered_multimap<function_name, shared_ptr<function>>
 functions::init() {
@@ -168,6 +191,33 @@ functions::init() {
     MigrationManager.instance.register(new FunctionsMigrationListener());
 #endif
     return ret;
+}
+
+void functions::add_function(shared_ptr<function> func) {
+    if (find(func->name(), func->arg_types())) {
+        throw std::logic_error(format("duplicated function {}", func));
+    }
+    _declared.emplace(func->name(), func);
+}
+
+template <typename F>
+void functions::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f) {
+    auto i = find_iter(name, arg_types);
+    if (i == _declared.end() || i->second->is_native()) {
+        log.error("attempted to remove or alter non existent user defined function {}({})", name, arg_types);
+        return;
+    }
+    f(i);
+}
+
+void functions::replace_function(shared_ptr<function> func) {
+    with_udf_iter(func->name(), func->arg_types(), [func] (functions::declared_t::iterator i) {
+        i->second = std::move(func);
+    });
+}
+
+void functions::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
+    with_udf_iter(name, arg_types, [] (functions::declared_t::iterator i) { _declared.erase(i); });
 }
 
 shared_ptr<column_specification>
@@ -310,23 +360,30 @@ functions::get(database& db,
     return std::move(compatibles[0]);
 }
 
-std::vector<shared_ptr<function>>
+boost::iterator_range<functions::declared_t::iterator>
 functions::find(const function_name& name) {
-    auto range = _declared.equal_range(name);
-    std::vector<shared_ptr<function>> ret;
-    for (auto i = range.first; i != range.second; ++i) {
-        ret.push_back(i->second);
+    assert(name.has_keyspace()); // : "function name not fully qualified";
+    auto pair = _declared.equal_range(name);
+    return boost::make_iterator_range(pair.first, pair.second);
+}
+
+functions::declared_t::iterator
+functions::find_iter(const function_name& name, const std::vector<data_type>& arg_types) {
+    auto range = find(name);
+    auto i = std::find_if(range.begin(), range.end(), [&] (const std::pair<const function_name, shared_ptr<function>>& d) {
+        return type_equals(d.second->arg_types(), arg_types);
+    });
+    if (i == range.end()) {
+        return _declared.end();
     }
-    return ret;
+    return i;
 }
 
 shared_ptr<function>
 functions::find(const function_name& name, const std::vector<data_type>& arg_types) {
-    assert(name.has_keyspace()); // : "function name not fully qualified";
-    for (auto&& f : find(name)) {
-        if (type_equals(f->arg_types(), arg_types)) {
-            return f;
-        }
+    auto i = find_iter(name, arg_types);
+    if (i != _declared.end()) {
+        return i->second;
     }
     return {};
 }
@@ -396,15 +453,7 @@ functions::match_arguments(database& db, const sstring& keyspace,
 
 bool
 functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2) {
-#if 0
-    if (t1.size() != t2.size())
-        return false;
-    for (int i = 0; i < t1.size(); i ++)
-        if (!typeEquals(t1.get(i), t2.get(i)))
-            return false;
-    return true;
-#endif
-    abort();
+    return t1 == t2;
 }
 
 bool

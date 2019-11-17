@@ -45,6 +45,7 @@ boost_tests = [
     'cdc_test',
     'cql_query_test',
     'user_types_test',
+    'user_function_test',
     'secondary_index_test',
     'json_cql_query_test',
     'filtering_test',

@@ -122,6 +122,8 @@ protected:
             _first = true;
         }
 
+        virtual bool requires_thread() override { return false; }
+
         virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
             return std::move(_current);
         }
@@ -176,11 +178,17 @@ protected:
     private:
         ::shared_ptr<selector_factories> _factories;
         std::vector<::shared_ptr<selector>> _selectors;
+        bool _requires_thread;
     public:
         selectors_with_processing(::shared_ptr<selector_factories> factories)
             : _factories(std::move(factories))
             , _selectors(_factories->new_instances())
+            , _requires_thread(boost::algorithm::any_of(_selectors, [] (auto& s) { return s->requires_thread(); }))
         { }
+
+        virtual bool requires_thread() override {
+            return _requires_thread;
+        }
 
         virtual void reset() override {
             for (auto&& s : _selectors) {

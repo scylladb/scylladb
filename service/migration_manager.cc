@@ -675,14 +675,22 @@ future<> migration_manager::announce_type_update(user_type updated_type, bool an
     return do_announce_new_type(updated_type, announce_locally);
 }
 
-#if 0
-public static void announceNewFunction(UDFunction udf, boolean announceLocally)
-{
-    mlogger.info(String.format("Create scalar function '%s'", udf.name()));
-    KSMetaData ksm = Schema.instance.getKSMetaData(udf.name().keyspace);
-    announce(LegacySchemaTables.makeCreateFunctionMutation(ksm, udf, FBUtilities.timestampMicros()), announceLocally);
+future<> migration_manager::announce_new_function(shared_ptr<cql3::functions::user_function> func, bool announce_locally) {
+    auto& db = get_local_storage_proxy().get_db().local();
+    auto&& keyspace = db.find_keyspace(func->name().keyspace);
+    auto mutations = db::schema_tables::make_create_function_mutations(func, api::new_timestamp());
+    return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations), announce_locally);
 }
 
+future<> migration_manager::announce_function_drop(
+        shared_ptr<cql3::functions::user_function> func, bool announce_locally) {
+    auto& db = get_local_storage_proxy().get_db().local();
+    auto&& keyspace = db.find_keyspace(func->name().keyspace);
+    auto mutations = db::schema_tables::make_drop_function_mutations(func, api::new_timestamp());
+    return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations), announce_locally);
+}
+
+#if 0
 public static void announceNewAggregate(UDAggregate udf, boolean announceLocally)
 {
     mlogger.info(String.format("Create aggregate function '%s'", udf.name()));
@@ -864,13 +872,6 @@ future<> migration_manager::announce_view_drop(const sstring& ks_name,
 }
 
 #if 0
-public static void announceFunctionDrop(UDFunction udf, boolean announceLocally)
-{
-    mlogger.info(String.format("Drop scalar function overload '%s' args '%s'", udf.name(), udf.argTypes()));
-    KSMetaData ksm = Schema.instance.getKSMetaData(udf.name().keyspace);
-    announce(LegacySchemaTables.makeDropFunctionMutation(ksm, udf, FBUtilities.timestampMicros()), announceLocally);
-}
-
 public static void announceAggregateDrop(UDAggregate udf, boolean announceLocally)
 {
     mlogger.info(String.format("Drop aggregate function overload '%s' args '%s'", udf.name(), udf.argTypes()));

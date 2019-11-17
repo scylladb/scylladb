@@ -92,14 +92,17 @@ struct duration_type_impl final : public concrete_type<cql_duration> {
 
 struct timestamp_type_impl final : public simple_type_impl<db_clock::time_point> {
     timestamp_type_impl();
+    static db_clock::time_point from_sstring(sstring_view s);
 };
 
 struct simple_date_type_impl final : public simple_type_impl<uint32_t> {
     simple_date_type_impl();
+    static uint32_t from_sstring(sstring_view s);
 };
 
 struct time_type_impl final : public simple_type_impl<int64_t> {
     time_type_impl();
+    static int64_t from_sstring(sstring_view s);
 };
 
 struct string_type_impl : public concrete_type<sstring> {
@@ -129,6 +132,7 @@ using timestamp_date_base_class = concrete_type<db_clock::time_point>;
 
 struct timeuuid_type_impl final : public concrete_type<utils::UUID> {
     timeuuid_type_impl();
+    static utils::UUID from_sstring(sstring_view s);
 };
 
 struct varint_type_impl final : public concrete_type<boost::multiprecision::cpp_int> {
@@ -137,10 +141,13 @@ struct varint_type_impl final : public concrete_type<boost::multiprecision::cpp_
 
 struct inet_addr_type_impl final : public concrete_type<seastar::net::inet_address> {
     inet_addr_type_impl();
+    static sstring to_sstring(const seastar::net::inet_address& addr);
+    static seastar::net::inet_address from_sstring(sstring_view s);
 };
 
 struct uuid_type_impl final : public concrete_type<utils::UUID> {
     uuid_type_impl();
+    static utils::UUID from_sstring(sstring_view s);
 };
 
 template <typename Func> using visit_ret_type = std::invoke_result_t<Func, const ascii_type_impl&>;
@@ -240,4 +247,29 @@ static inline visit_ret_type<Func> visit(const abstract_type& t, Func&& f) {
         return f(*static_cast<const varint_type_impl*>(&t));
     }
     __builtin_unreachable();
+}
+
+template <typename Func> struct data_value_visitor {
+    const void* v;
+    Func& f;
+    auto operator()(const empty_type_impl& t) { return f(t, v); }
+    auto operator()(const counter_type_impl& t) { return f(t, v); }
+    auto operator()(const reversed_type_impl& t) { return f(t, v); }
+    template <typename T> auto operator()(const T& t) {
+        return f(t, reinterpret_cast<const typename T::native_type*>(v));
+    }
+};
+
+// Given an abstract_type and a void pointer to an object of that
+// type, call f with the runtime type of t and v casted to the
+// corresponding native type.
+// This takes an abstract_type and a void pointer instead of a
+// data_value to support reversed_type_impl without requiring that
+// each visitor create a new data_value just to recurse.
+template <typename Func> inline auto visit(const abstract_type& t, const void* v, Func&& f) {
+    return ::visit(t, data_value_visitor<Func>{v, f});
+}
+
+template <typename Func> inline auto visit(const data_value& v, Func&& f) {
+    return ::visit(*v.type(), v._value, f);
 }

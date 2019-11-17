@@ -48,6 +48,10 @@
 #include <iosfwd>
 #include <boost/functional/hash.hpp>
 
+namespace std {
+    std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_types);
+}
+
 namespace cql3 {
 
 namespace functions {
@@ -66,6 +70,9 @@ protected:
     }
 
 public:
+
+    virtual bool requires_thread() const;
+
     virtual const function_name& name() const override {
         return _name;
     }
@@ -103,12 +110,7 @@ inline
 void
 abstract_function::print(std::ostream& os) const {
     os << _name << " : (";
-    for (size_t i = 0; i < _arg_types.size(); ++i) {
-        if (i > 0) {
-            os << ", ";
-        }
-        os << _arg_types[i]->as_cql3_type().to_string();
-    }
+    os << _arg_types;
     os << ") -> " << _return_type->as_cql3_type().to_string();
 }
 

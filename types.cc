@@ -90,7 +90,7 @@ sstring boolean_to_string(const bool b) {
     return b ? "true" : "false";
 }
 
-sstring inet_to_string(const seastar::net::inet_address& addr) {
+sstring inet_addr_type_impl::to_sstring(const seastar::net::inet_address& addr) {
     std::ostringstream out;
     out << addr;
     return out.str();
@@ -329,6 +329,10 @@ static int64_t timestamp_from_string(sstring_view s) {
     }
 }
 
+db_clock::time_point timestamp_type_impl::from_sstring(sstring_view s) {
+    return db_clock::time_point(db_clock::duration(timestamp_from_string(s)));
+}
+
 simple_date_type_impl::simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, {}} {}
 
 static date::year_month_day get_simple_date_time(const std::smatch& sm) {
@@ -347,7 +351,7 @@ static uint32_t serialize(const std::string& input, int64_t days) {
     days += 1UL << 31;
     return static_cast<uint32_t>(days);
 }
-static uint32_t days_from_string(sstring_view s) {
+uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
     std::string str;
     str.resize(s.size());
     std::transform(s.begin(), s.end(), str.begin(), ::tolower);
@@ -367,7 +371,7 @@ static uint32_t days_from_string(sstring_view s) {
 
 time_type_impl::time_type_impl() : simple_type_impl{kind::time, time_type_name, {}} {}
 
-static int64_t parse_time(sstring_view s) {
+int64_t time_type_impl::from_sstring(sstring_view s) {
     static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
     auto hours_end = s.find(':');
     if (hours_end == std::string::npos) {
@@ -494,29 +498,6 @@ static std::tuple<common_counter_type, common_counter_type, common_counter_type>
 
 empty_type_impl::empty_type_impl()
     : abstract_type(kind::empty, empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
-
-namespace {
-template <typename Func> struct data_value_visitor {
-    const void* v;
-    Func& f;
-    auto operator()(const empty_type_impl& t) { return f(t, v); }
-    auto operator()(const counter_type_impl& t) { return f(t, v); }
-    auto operator()(const reversed_type_impl& t) { return f(t, v); }
-    template <typename T> auto operator()(const T& t) {
-        return f(t, reinterpret_cast<const typename T::native_type*>(v));
-    }
-};
-}
-
-// Given an abstract_type and a void pointer to an object of that
-// type, call f with the runtime type of t and v casted to the
-// corresponding native type.
-// This takes an abstract_type and a void pointer instead of a
-// data_value to support reversed_type_impl without requiring that
-// each visitor create a new data_value just to recurse.
-template <typename Func> static auto visit(const abstract_type& t, const void* v, Func&& f) {
-    return ::visit(t, data_value_visitor<Func>{v, f});
-}
 
 logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
@@ -1933,7 +1914,9 @@ struct deserialize_visitor {
     data_value operator()(const bytes_type_impl& t) {
         return t.make_value(std::make_unique<bytes_type_impl::native_type>(v.begin(), v.end()));
     }
-    data_value operator()(const counter_type_impl& t) { fail(unimplemented::cause::COUNTERS); }
+    data_value operator()(const counter_type_impl& t) {
+        return static_cast<const long_type_impl&>(*long_type).make_value(read_simple_exactly<int64_t>(v));
+    }
     data_value operator()(const list_type_impl& t) {
         return t.deserialize(v, cql_serialization_format::internal());
     }
@@ -2315,6 +2298,34 @@ static bytes serialize_value(const T& t, const typename T::native_type& v) {
     return b;
 }
 
+seastar::net::inet_address inet_addr_type_impl::from_sstring(sstring_view s) {
+    try {
+        return inet_address(std::string(s.data(), s.size()));
+    } catch (...) {
+        throw marshal_exception(format("Failed to parse inet_addr from '{}'", s));
+    }
+}
+
+utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
+    static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+    if (!std::regex_match(s.begin(), s.end(), re)) {
+        throw marshal_exception(format("Cannot parse uuid from '{}'", s));
+    }
+    return utils::UUID(s);
+}
+
+utils::UUID timeuuid_type_impl::from_sstring(sstring_view s) {
+    static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+    if (!std::regex_match(s.begin(), s.end(), re)) {
+        throw marshal_exception(format("Invalid UUID format ({})", s));
+    }
+    utils::UUID v(s);
+    if (v.version() != 1) {
+        throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
+    }
+    return v;
+}
+
 namespace {
 struct from_string_visitor {
     sstring_view s;
@@ -2341,44 +2352,31 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-        if (!std::regex_match(s.begin(), s.end(), re)) {
-            throw marshal_exception(format("Invalid UUID format ({})", s));
-        }
-        utils::UUID v(s);
-        if (v.version() != 1) {
-            throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
-        }
-        return v.serialize();
+        return timeuuid_type_impl::from_sstring(s).serialize();
     }
     bytes operator()(const timestamp_date_base_class& t) {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, db_clock::time_point(db_clock::duration(timestamp_from_string(s))));
+        return serialize_value(t, timestamp_type_impl::from_sstring(s));
     }
     bytes operator()(const simple_date_type_impl& t) {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, days_from_string(s));
+        return serialize_value(t, simple_date_type_impl::from_sstring(s));
     }
     bytes operator()(const time_type_impl& t) {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, parse_time(s));
+        return serialize_value(t, time_type_impl::from_sstring(s));
     }
     bytes operator()(const uuid_type_impl&) {
         if (s.empty()) {
             return bytes();
         }
-        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-        if (!std::regex_match(s.begin(), s.end(), re)) {
-            throw marshal_exception(format("Cannot parse uuid from '{}'", s));
-        }
-        utils::UUID v(s);
-        return v.serialize();
+        return uuid_type_impl::from_sstring(s).serialize();
     }
     template <typename T> bytes operator()(const floating_type_impl<T>& t) {
         if (s.empty()) {
@@ -2435,12 +2433,7 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        try {
-            auto ip = inet_address(std::string(s.data(), s.size()));
-            return serialize_value(t, ip);
-        } catch (...) {
-            throw marshal_exception(format("Failed to parse inet_addr from '{}'", s));
-        }
+        return serialize_value(t, t.from_sstring(s));
     }
     bytes operator()(const tuple_type_impl& t) {
         std::vector<sstring_view> field_strings = split_field_strings(s);
@@ -2525,7 +2518,7 @@ struct to_string_impl_visitor {
     }
     sstring operator()(const empty_type_impl&, const void*) { return sstring(); }
     sstring operator()(const inet_addr_type_impl& a, const inet_addr_type_impl::native_type* v) {
-        return format_if_not_empty(a, v, inet_to_string);
+        return format_if_not_empty(a, v, inet_addr_type_impl::to_sstring);
     }
     sstring operator()(const list_type_impl& l, const list_type_impl::native_type* v) {
         return format_if_not_empty(
@@ -3595,7 +3588,7 @@ std::function<data_value(data_value)> make_castas_fctn_from_boolean_to_string() 
 
 std::function<data_value(data_value)> make_castas_fctn_from_inet_to_string() {
     return [](data_value from) -> data_value {
-        return inet_to_string(value_cast<inet_address>(from));
+        return inet_addr_type_impl::to_sstring(value_cast<inet_address>(from));
     };
 }
 

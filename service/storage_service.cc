@@ -100,6 +100,7 @@ static const sstring SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
 static const sstring CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
 static const sstring WRITE_FAILURE_REPLY_FEATURE = "WRITE_FAILURE_REPLY";
 static const sstring XXHASH_FEATURE = "XXHASH";
+static const sstring UDF_FEATURE = "UDF";
 static const sstring ROLES_FEATURE = "ROLES";
 static const sstring LA_SSTABLE_FEATURE = "LA_SSTABLE_FORMAT";
 static const sstring STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
@@ -160,6 +161,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _correct_non_compound_range_tombstones(_feature_service, CORRECT_NON_COMPOUND_RANGE_TOMBSTONES)
         , _write_failure_reply_feature(_feature_service, WRITE_FAILURE_REPLY_FEATURE)
         , _xxhash_feature(_feature_service, XXHASH_FEATURE)
+        , _udf_feature(_feature_service, UDF_FEATURE)
         , _roles_feature(_feature_service, ROLES_FEATURE)
         , _la_sstable_feature(_feature_service, LA_SSTABLE_FEATURE)
         , _stream_with_rpc_stream_feature(_feature_service, STREAM_WITH_RPC_STREAM)
@@ -219,6 +221,7 @@ void storage_service::enable_all_features() {
         std::ref(_correct_non_compound_range_tombstones),
         std::ref(_write_failure_reply_feature),
         std::ref(_xxhash_feature),
+        std::ref(_udf_feature),
         std::ref(_roles_feature),
         std::ref(_la_sstable_feature),
         std::ref(_stream_with_rpc_stream_feature),
@@ -348,6 +351,11 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
         if (config.enable_sstables_mc_format()) {
             features.insert(MC_SSTABLE_FEATURE);
         }
+        if (config.enable_user_defined_functions()) {
+            db.local().get_config().check_experimental("UDF");
+            features.insert(UDF_FEATURE);
+        }
+
         if (config.experimental()) {
             // push additional experimental features
             features.insert(CDC_FEATURE);

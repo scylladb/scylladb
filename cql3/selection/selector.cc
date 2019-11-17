@@ -34,6 +34,7 @@ selector::factory::get_column_specification(schema_ptr schema) {
         get_return_type());
 }
 
+bool selector::requires_thread() { return false; }
 }
 
 }
