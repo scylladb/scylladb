@@ -4620,8 +4620,8 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
 
             auto cleanup_compaction = true;
             auto descriptor = sstables::compaction_descriptor({std::move(sst)}, compaction_descriptor::default_level,
-                compaction_descriptor::default_max_sstable_bytes, run_identifier);
-            auto ret = sstables::compact_sstables(std::move(descriptor), *cf, sst_gen, sstables::replacer_fn_no_op(), cleanup_compaction).get0();
+                compaction_descriptor::default_max_sstable_bytes, run_identifier, cleanup_compaction);
+            auto ret = sstables::compact_sstables(std::move(descriptor), *cf, sst_gen, sstables::replacer_fn_no_op()).get0();
 
             BOOST_REQUIRE(ret.total_keys_written == total_partitions);
             BOOST_REQUIRE(ret.new_sstables.size() == 1);

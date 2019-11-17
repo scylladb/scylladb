@@ -1288,13 +1288,13 @@ void table::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancesto
 }
 
 future<>
-table::compact_sstables(sstables::compaction_descriptor descriptor, bool cleanup) {
+table::compact_sstables(sstables::compaction_descriptor descriptor) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
         return make_ready_future<>();
     }
 
-    return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor), cleanup] () mutable {
+    return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor)] () mutable {
         auto create_sstable = [this] {
                 auto sst = make_sstable();
                 sst->set_unshared();
@@ -1310,7 +1310,7 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, bool cleanup
             }
         };
 
-        return sstables::compact_sstables(std::move(descriptor), *this, create_sstable, replace_sstables, cleanup);
+        return sstables::compact_sstables(std::move(descriptor), *this, create_sstable, replace_sstables);
     }).then([this] (auto info) {
         if (info.type != sstables::compaction_type::Compaction) {
             return make_ready_future<>();
@@ -1371,9 +1371,9 @@ future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor, boo
                 auto sstable_level = sst->get_sstable_level();
                 auto run_identifier = sst->run_identifier();
                 auto descriptor = sstables::compaction_descriptor({ std::move(sst) }, sstable_level,
-                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier);
+                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, is_actual_cleanup);
                 descriptor.release_exhausted = release_fn;
-                return this->compact_sstables(std::move(descriptor), is_actual_cleanup);
+                return this->compact_sstables(std::move(descriptor));
             });
         });
     });
