@@ -163,7 +163,7 @@ def status_to_string(success):
     return status
 
 class UnitTest:
-    standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
+    standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0'.split()
     seastar_args = '-c2 -m2G'
 
     def __init__(self, test, kind, prefix):
@@ -193,8 +193,6 @@ def print_progress(test_path, test_args, success, cookie, verbose):
 
 def run_test(test, repeat, args):
     boost_args = []
-    # avoid modifying in-place, it will change tests_to_run
-    exec_args = test.args + '--collectd 0'.split()
     file = io.StringIO()
     if args.jenkins and test.kind == 'boost':
         mode = 'release'
@@ -213,7 +211,7 @@ def run_test(test, repeat, args):
             print('=== stdout END ===', file=file)
     success = False
     try:
-        subprocess.check_output([test.path] + boost_args + exec_args,
+        subprocess.check_output([test.path] + boost_args + test.args,
                 stderr=subprocess.STDOUT,
                 timeout=args.timeout,
                 env=dict(os.environ,
@@ -233,7 +231,7 @@ def run_test(test, repeat, args):
         def report_subcause(e):
             print('  with error {e}\n'.format(e=e), file=file)
         report_error(e, e, report_subcause=report_subcause)
-    return (test.path, boost_args + exec_args, test.kind, success, file.getvalue())
+    return (test.path, boost_args + test.args, test.kind, success, file.getvalue())
 
 
 class Alarm(Exception):
