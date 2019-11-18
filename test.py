@@ -301,6 +301,8 @@ def find_tests(args):
             print("Test {} not found".format(args.name))
             sys.exit(1)
 
+    tests_to_run = [t for t in tests_to_run for _ in range(args.repeat)]
+
     return tests_to_run
 
 
@@ -313,8 +315,7 @@ def run_all_tests(tests_to_run, args):
         path = test[0]
         test_type = test[1]
         exec_args = test[2] if len(test) >= 3 else []
-        for repeat in range(args.repeat):
-            futures.append(executor.submit(run_test, path, repeat, test_type, args, exec_args))
+        futures.append(executor.submit(run_test, path, n, test_type, args, exec_args))
 
     results = []
     cookie = len(futures)
