@@ -461,6 +461,9 @@ static sstring get_string(lua_State *l, int index) {
         [] (const lua_table&) -> sstring {
             throw exceptions::invalid_request_exception("unexpected value");
         },
+        [] (const boost::multiprecision::cpp_int& p) {
+            return sstring(p.str());
+        },
         [] (const auto& v) {
             return format("{}", v);
         }));
@@ -506,17 +509,17 @@ static lua_date_table get_lua_date_table(lua_State* l, int index) {
         if (k == "month") {
             month = (unsigned char)v;
             if (*month != v) {
-                throw exceptions::invalid_request_exception(format("month is too large: '{}'", v));
+                throw exceptions::invalid_request_exception(format("month is too large: '{}'", v.str()));
             }
         } else if (k == "day") {
             day = (unsigned char)v;
             if (*day != v) {
-                throw exceptions::invalid_request_exception(format("day is too large: '{}'", v));
+                throw exceptions::invalid_request_exception(format("day is too large: '{}'", v.str()));
             }
         } else {
             int32_t vint(v);
             if (vint != v) {
-                throw exceptions::invalid_request_exception(format("{} is too large: '{}'", k, v));
+                throw exceptions::invalid_request_exception(format("{} is too large: '{}'", k, v.str()));
             }
             if (k == "year") {
                 year = vint;
@@ -626,17 +629,17 @@ struct from_lua_visitor {
                     if (k == "months") {
                         months = int32_t(v);
                         if (v != months) {
-                            throw exceptions::invalid_request_exception(format("{} months doesn't fit in a 32 bit integer", v));
+                            throw exceptions::invalid_request_exception(format("{} months doesn't fit in a 32 bit integer", v.str()));
                         }
                     } else if (k == "days") {
                         days = int32_t(v);
                         if (v != days) {
-                            throw exceptions::invalid_request_exception(format("{} days doesn't fit in a 32 bit integer", v));
+                            throw exceptions::invalid_request_exception(format("{} days doesn't fit in a 32 bit integer", v.str()));
                         }
                     } else if (k == "nanoseconds") {
                         nanoseconds = int64_t(v);
                         if (v != nanoseconds) {
-                            throw exceptions::invalid_request_exception(format("{} nanoseconds doesn't fit in a 64 bit integer", v));
+                            throw exceptions::invalid_request_exception(format("{} nanoseconds doesn't fit in a 64 bit integer", v.str()));
                         }
                     } else {
                         throw exceptions::invalid_request_exception(format("invalid duration field: '{}'", k));
@@ -726,7 +729,7 @@ struct from_lua_visitor {
             auto k_varint = get_varint(l, -2);
             if (k_varint > num_elements || k_varint < 1) {
                 throw exceptions::invalid_request_exception(
-                        format("key {} is not valid for a sequence of size {}", k_varint, num_elements));
+                        format("key {} is not valid for a sequence of size {}", k_varint.str(), num_elements));
             }
             size_t k = size_t(k_varint);
             opt_elements[k - 1] = convert_from_lua(l, t.type(k - 1));
