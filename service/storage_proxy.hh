@@ -301,6 +301,7 @@ private:
     bool hints_enabled(db::write_type type) noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
     std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
+    static void sort_endpoints_by_proximity(std::vector<gms::inet_address>& eps);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,

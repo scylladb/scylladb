@@ -4077,14 +4077,18 @@ std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, c
     return eps;
 }
 
-std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) {
-    auto eps = get_live_endpoints(ks, token);
+void storage_proxy::sort_endpoints_by_proximity(std::vector<gms::inet_address>& eps) {
     locator::i_endpoint_snitch::get_local_snitch_ptr()->sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
     // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
     auto it = boost::range::find(eps, utils::fb_utilities::get_broadcast_address());
     if (it != eps.end() && it != eps.begin()) {
         std::iter_swap(it, eps.begin());
     }
+}
+
+std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) {
+    auto eps = get_live_endpoints(ks, token);
+    sort_endpoints_by_proximity(eps);
     return eps;
 }
 
