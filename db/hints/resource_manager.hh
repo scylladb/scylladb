@@ -117,7 +117,7 @@ private:
 class resource_manager {
     const size_t _max_send_in_flight_memory;
     const size_t _min_send_hint_budget;
-    seastar::semaphore _send_limiter;
+    seastar::named_semaphore _send_limiter;
 
     space_watchdog::shard_managers_set _shard_managers;
     space_watchdog::per_device_limits_map _per_device_limits_map;
@@ -132,14 +132,14 @@ public:
     resource_manager(size_t max_send_in_flight_memory)
         : _max_send_in_flight_memory(std::max(max_send_in_flight_memory, max_hints_send_queue_length))
         , _min_send_hint_budget(_max_send_in_flight_memory / max_hints_send_queue_length)
-        , _send_limiter(_max_send_in_flight_memory)
+        , _send_limiter(_max_send_in_flight_memory, named_semaphore_exception_factory{"send limiter"})
         , _space_watchdog(_shard_managers, _per_device_limits_map)
     {}
 
     resource_manager(resource_manager&&) = delete;
     resource_manager& operator=(resource_manager&&) = delete;
 
-    future<semaphore_units<semaphore_default_exception_factory>> get_send_units_for(size_t buf_size);
+    future<semaphore_units<named_semaphore::exception_factory>> get_send_units_for(size_t buf_size);
 
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     void allow_replaying() noexcept;
