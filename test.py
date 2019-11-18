@@ -276,10 +276,13 @@ def find_tests(args):
         prefix = os.path.join('build', mode, 'tests')
         standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
         seastar_args = '-c2 -m2G'.split()
+        def add_test(test, kind):
+            tests_to_run.append((os.path.join(prefix, test), kind, custom_seastar_args.get(test, seastar_args) + standard_args))
+
         for test in other_tests:
-            tests_to_run.append((os.path.join(prefix, test), 'other', custom_seastar_args.get(test, seastar_args) + standard_args))
+            add_test(test, 'other')
         for test in boost_tests:
-            tests_to_run.append((os.path.join(prefix, test), 'boost', custom_seastar_args.get(test, seastar_args) + standard_args))
+            add_test(test, 'boost')
 
         if mode in ['release', 'dev']:
             tests_to_run.append(('build/' + mode + '/tests/lsa_async_eviction_test', 'other',
