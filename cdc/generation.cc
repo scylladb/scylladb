@@ -30,6 +30,7 @@
 #include "dht/i_partitioner.hh"
 #include "locator/token_metadata.hh"
 #include "locator/snitch_base.hh"
+#include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
 
@@ -298,6 +299,17 @@ db_clock::time_point make_new_cdc_generation(
     sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tm.count_normal_token_owners() }).get();
 
     return ts;
+}
+
+std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper& g) {
+    auto streams_ts_string = g.get_application_state_value(endpoint, gms::application_state::CDC_STREAMS_TIMESTAMP);
+    cdc_log.trace("endpoint={}, streams_ts_string={}", endpoint, streams_ts_string);
+
+    if (streams_ts_string.empty()) {
+        return {};
+    }
+
+    return db_clock::time_point(db_clock::duration(std::stoll(streams_ts_string)));
 }
 
 } // namespace cdc

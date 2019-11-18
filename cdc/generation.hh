@@ -144,4 +144,11 @@ db_clock::time_point make_new_cdc_generation(
         std::chrono::milliseconds ring_delay,
         bool for_testing);
 
+/* Retrieves CDC streams generation timestamp from the given endpoint's application state (broadcasted through gossip).
+ * We might be during a rolling upgrade, so the timestamp might not be there (if the other node didn't upgrade yet),
+ * but if the cluster already supports CDC, then every newly joining node will propose a new CDC generation,
+ * which means it will gossip the generation's timestamp.
+ */
+std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper&);
+
 } // namespace cdc
