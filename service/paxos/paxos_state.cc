@@ -44,11 +44,11 @@ void paxos_state::release_semaphore_for_key(const dht::token& key) {
     }
 }
 
-future<prepare_response> paxos_state::prepare_impl(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token,
-        partition_key key, utils::UUID ballot, clock_type::time_point timeout) {
+future<prepare_response> paxos_state::prepare_impl(tracing::trace_state_ptr tr_state, schema_ptr schema,
+        const dht::token& token, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout) {
     utils::latency_counter lc;
     lc.start();
-    return with_locked_key(token, timeout, [ballot, key = std::move(key), schema, tr_state, timeout] () mutable {
+    return with_locked_key(token, timeout, [&key, ballot, schema, tr_state, timeout] () mutable {
         // When preparing, we need to use the same time as "now" (that's the time we use to decide if something
         // is expired or not) across nodes, otherwise we may have a window where a Most Recent Decision shows up
         // on some replica and not others during a new proposal (in storage_proxy::begin_and_repair_paxos()), and no
@@ -56,7 +56,7 @@ future<prepare_response> paxos_state::prepare_impl(tracing::trace_state_ptr tr_s
         // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
         auto f = db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
-        return f.then([ballot, key = std::move(key), tr_state, schema, timeout] (paxos_state state) {
+        return f.then([&key, ballot, tr_state, schema, timeout] (paxos_state state) {
             // If received ballot is newer that the one we already accepted it has to be accepted as well,
             // but we will return the previously accepted proposal so that the new coordinator will use it instead of
             // its own.
@@ -96,19 +96,19 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
     // consensus and, as a result, invalid CAS outcome.
     return get_storage_proxy().invoke_on(shard, [gt = tracing::global_trace_state_ptr(tr_state),
             gs = global_schema_ptr(schema), token = std::move(token), key = std::move(key), ballot, timeout] (auto& sp) {
-        return paxos_state::prepare_impl(gt, gs, std::move(token), std::move(key), ballot, timeout);
+        return paxos_state::prepare_impl(gt, gs, token, key, ballot, timeout);
     });
 }
 
-future<bool> paxos_state::accept_impl(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token,
-        proposal proposal, clock_type::time_point timeout) {
+future<bool> paxos_state::accept_impl(tracing::trace_state_ptr tr_state, schema_ptr schema,
+        const dht::token& token, const proposal& proposal, clock_type::time_point timeout) {
     utils::latency_counter lc;
     lc.start();
-    return with_locked_key(token, timeout, [proposal = std::move(proposal), schema, tr_state, timeout] () mutable {
+    return with_locked_key(token, timeout, [&proposal, schema, tr_state, timeout] () mutable {
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
         auto f = db::system_keyspace::load_paxos_state(proposal.update.decorated_key(*schema).key(), schema,
                 gc_clock::time_point(now_in_sec), timeout);
-        return f.then([proposal = std::move(proposal), tr_state, schema, timeout] (paxos_state state) {
+        return f.then([&proposal, tr_state, schema, timeout] (paxos_state state) {
             // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
             // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
             if (proposal.ballot == state._promised_ballot || proposal.ballot.timestamp() > state._promised_ballot.timestamp()) {
@@ -140,7 +140,7 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
     // Make sure the key is locked on the right shard.
     return get_storage_proxy().invoke_on(shard, [gt = tracing::global_trace_state_ptr(tr_state),
             gs = global_schema_ptr(schema), token = std::move(token), proposal = std::move(proposal), timeout] (auto& sp) {
-        return paxos_state::accept_impl(gt, gs, std::move(token), std::move(proposal), timeout);
+        return paxos_state::accept_impl(gt, gs, token, proposal, timeout);
     });
 }
 

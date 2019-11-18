@@ -79,10 +79,10 @@ class paxos_state {
     std::optional<proposal> _accepted_proposal;
     std::optional<proposal> _most_recent_commit;
 
-    static future<prepare_response> prepare_impl(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token,
-            partition_key key, utils::UUID ballot, clock_type::time_point timeout);
-    static future<bool> accept_impl(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token,
-            proposal proposal, clock_type::time_point timeout);
+    static future<prepare_response> prepare_impl(tracing::trace_state_ptr tr_state, schema_ptr schema,
+            const dht::token& token, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout);
+    static future<bool> accept_impl(tracing::trace_state_ptr tr_state, schema_ptr schema,
+            const dht::token& token, const proposal& proposal, clock_type::time_point timeout);
 
 public:
     static logging::logger logger;

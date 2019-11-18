@@ -469,7 +469,7 @@ public:
 
     future<service::paxos::prepare_response> send_paxos_prepare(
         gms::inet_address peer, clock_type::time_point timeout, utils::UUID schema_version,
-        partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
+        const partition_key& key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
 
     void register_paxos_accept(std::function<future<bool>(const rpc::client_info&, rpc::opt_time_point,
             service::paxos::proposal proposal, std::optional<tracing::trace_info>)>&& func);

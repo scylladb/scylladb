@@ -1239,7 +1239,7 @@ void messaging_service::unregister_paxos_prepare() {
 }
 future<service::paxos::prepare_response>
 messaging_service::send_paxos_prepare(gms::inet_address peer, clock_type::time_point timeout,
-    utils::UUID schema_version, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+    utils::UUID schema_version, const partition_key& key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
     return send_message_timeout<service::paxos::prepare_response>(this,
         messaging_verb::PAXOS_PREPARE, netw::msg_addr(peer), timeout, schema_version, key, ballot, std::move(trace_info));
 }
