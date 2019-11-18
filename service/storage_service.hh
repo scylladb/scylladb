@@ -101,10 +101,10 @@ using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
 class feature_enabled_listener : public gms::feature::listener {
     storage_service& _s;
-    seastar::semaphore& _sem;
+    seastar::named_semaphore& _sem;
     sstables::sstable_version_types _format;
 public:
-    feature_enabled_listener(storage_service& s, seastar::semaphore& sem, sstables::sstable_version_types format)
+    feature_enabled_listener(storage_service& s, seastar::named_semaphore& sem, sstables::sstable_version_types format)
         : _s(s)
         , _sem(sem)
         , _format(format)
@@ -342,7 +342,7 @@ private:
     gms::feature _nonfrozen_udts;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
-    seastar::semaphore _feature_listeners_sem = {1};
+    seastar::named_semaphore _feature_listeners_sem = {1, named_semaphore_exception_factory{"feature listeners"}};
     feature_enabled_listener _la_feature_listener;
     feature_enabled_listener _mc_feature_listener;
 public:

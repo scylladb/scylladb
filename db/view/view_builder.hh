@@ -153,7 +153,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     // Ensures bookkeeping operations are serialized, meaning that while we execute
     // a build step we don't consider newly added or removed views. This simplifies
     // the algorithms. Also synchronizes an operation wrt. a call to stop().
-    seastar::semaphore _sem{1};
+    seastar::named_semaphore _sem{1, named_semaphore_exception_factory{"view builder"}};
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.

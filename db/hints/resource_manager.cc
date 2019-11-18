@@ -51,7 +51,7 @@ future<bool> is_mountpoint(const fs::path& path) {
     });
 }
 
-future<semaphore_units<semaphore_default_exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
+future<semaphore_units<named_semaphore::exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
     size_t hint_memory_budget = std::max(_min_send_hint_budget, buf_size);
     // Allow a very big mutation to be sent out by consuming the whole shard budget

@@ -479,7 +479,7 @@ private:
     // sstables deleted by compaction in parallel, a race condition which could
     // easily result in failure.
     // Locking order: must be acquired either independently or after _sstables_lock
-    seastar::semaphore _sstable_deletion_sem = {1};
+    seastar::named_semaphore _sstable_deletion_sem = {1, named_semaphore_exception_factory{"sstable deletion"}};
     // There are situations in which we need to stop writing sstables. Flushers will take
     // the read lock, and the ones that wish to stop that process will take the write lock.
     rwlock _sstables_lock;
@@ -1267,7 +1267,7 @@ private:
     reader_concurrency_semaphore _streaming_concurrency_sem;
     reader_concurrency_semaphore _system_read_concurrency_sem;
 
-    semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
+    named_semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads(), named_semaphore_exception_factory{"sstable load concurrency"}};
 
     db::timeout_semaphore _view_update_concurrency_sem{max_memory_pending_view_updates()};
 
@@ -1504,7 +1504,7 @@ public:
     std::unordered_set<sstring> get_initial_tokens();
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
-    semaphore& sstable_load_concurrency_sem() {
+    named_semaphore& sstable_load_concurrency_sem() {
         return _sstable_load_concurrency_sem;
     }
     void register_connection_drop_notifier(netw::messaging_service& ms);
