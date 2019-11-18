@@ -40,7 +40,7 @@ boost_tests = [
     'mvcc_test',
     'schema_registry_test',
     'range_test',
-    'mutation_reader_test',
+    ('mutation_reader_test', '-c{} -m2G'.format(min(os.cpu_count(), 3))),
     'serialized_action_test',
     'cdc_test',
     'cql_query_test',
@@ -114,10 +114,10 @@ boost_tests = [
     'cql_auth_syntax_test',
     'querier_cache',
     'limiting_data_source_test',
-    'sstable_test',
-    'sstable_datafile_test',
+    ('sstable_test', '-c1 -m2G'),
+    ('sstable_datafile_test', '-c1 -m2G'),
     'broken_sstable_test',
-    'sstable_3_x_test',
+    ('sstable_3_x_test', '-c1 -m2G'),
     'meta_test',
     'reusable_buffer_test',
     'mutation_writer_test',
@@ -263,21 +263,17 @@ def usage():
 
 
 def find_tests(args):
-    custom_seastar_args = {
-        "sstable_test": ['-c1', '-m2G'],
-        'sstable_datafile_test': ['-c1', '-m2G'],
-        "sstable_3_x_test": ['-c1', '-m2G'],
-        "mutation_reader_test": ['-c{}'.format(min(os.cpu_count(), 3)), '-m2G'],
-    }
 
     tests_to_run = []
 
     for mode in args.modes:
         prefix = os.path.join('build', mode, 'tests')
         standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
-        seastar_args = '-c2 -m2G'.split()
+        seastar_args = '-c2 -m2G'
         def add_test(test, kind):
-            tests_to_run.append((os.path.join(prefix, test), kind, custom_seastar_args.get(test, seastar_args) + standard_args))
+            if type(test) is str:
+                test = (test, seastar_args)
+            tests_to_run.append((os.path.join(prefix, test[0]), kind, test[1].split() + standard_args))
 
         for test in other_tests:
             add_test(test, 'other')
