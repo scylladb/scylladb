@@ -284,14 +284,14 @@ def find_tests(args):
                 test = (test, seastar_args)
             tests_to_run.append((os.path.join(prefix, test[0]), kind, test[1].split() + standard_args))
 
-        for test in other_tests:
-            add_test(test, 'other')
-        for test in boost_tests:
-            add_test(test, 'boost')
+        def add_test_list(lst, kind):
+            for t in lst:
+                add_test(t, kind)
 
+        add_test_list(other_tests, 'other')
+        add_test_list(boost_tests, 'boost')
         if mode in ['release', 'dev']:
-            for test in long_tests:
-                add_test(test, 'other')
+            add_test_list(long_tests, 'other')
 
     if args.name:
         tests_to_run = [t for t in tests_to_run if args.name in t[0]]
