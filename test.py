@@ -281,19 +281,18 @@ def find_tests(args):
         for test in boost_tests:
             tests_to_run.append((os.path.join(prefix, test), 'boost', custom_seastar_args.get(test, seastar_args) + standard_args))
 
-    for m in ['release', 'dev']:
-        if m in args.modes:
-            tests_to_run.append(('build/' + m + '/tests/lsa_async_eviction_test', 'other',
+        if mode in ['release', 'dev']:
+            tests_to_run.append(('build/' + mode + '/tests/lsa_async_eviction_test', 'other',
                                 '-c1 -m200M --size 1024 --batch 3000 --count 2000000'.split() + standard_args))
-            tests_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
+            tests_to_run.append(('build/' + mode + '/tests/lsa_sync_eviction_test', 'other',
                                 '-c1 -m100M --count 10 --standard-object-size 3000000'.split() + standard_args))
-            tests_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
+            tests_to_run.append(('build/' + mode + '/tests/lsa_sync_eviction_test', 'other',
                                 '-c1 -m100M --count 24000 --standard-object-size 2048'.split() + standard_args))
-            tests_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
+            tests_to_run.append(('build/' + mode + '/tests/lsa_sync_eviction_test', 'other',
                                 '-c1 -m1G --count 4000000 --standard-object-size 128'.split() + standard_args))
-            tests_to_run.append(('build/' + m + '/tests/row_cache_alloc_stress', 'other',
+            tests_to_run.append(('build/' + mode + '/tests/row_cache_alloc_stress', 'other',
                                 '-c1 -m2G'.split() + standard_args))
-            tests_to_run.append(('build/' + m + '/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split() + standard_args))
+            tests_to_run.append(('build/' + mode + '/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split() + standard_args))
 
     if args.name:
         tests_to_run = [t for t in tests_to_run if args.name in t[0]]
