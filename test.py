@@ -162,6 +162,19 @@ def status_to_string(success):
 
     return status
 
+class UnitTest:
+    standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
+    seastar_args = '-c2 -m2G'
+
+    def __init__(self, test, kind, prefix):
+        if type(test) is str:
+            test = (test, UnitTest.seastar_args)
+        self.name = test[0]
+        self.path = os.path.join(prefix, self.name)
+        self.kind = kind
+        self.args = test[1].split() + UnitTest.standard_args
+
+
 def print_progress(test_path, test_args, success, cookie, verbose):
     if type(cookie) is int:
         cookie = (0, 1, cookie)
@@ -178,18 +191,18 @@ def print_progress(test_path, test_args, success, cookie, verbose):
     return (last_len, n + 1, n_total)
 
 
-def run_test(path, repeat, type, args, exec_args):
+def run_test(test, repeat, args):
     boost_args = []
     # avoid modifying in-place, it will change tests_to_run
-    exec_args = exec_args + '--collectd 0'.split()
+    exec_args = test.args + '--collectd 0'.split()
     file = io.StringIO()
-    if args.jenkins and type == 'boost':
+    if args.jenkins and test.kind == 'boost':
         mode = 'release'
-        if path.startswith(os.path.join('build', 'debug')):
+        if test.path.startswith(os.path.join('build', 'debug')):
             mode = 'debug'
-        xmlout = (args.jenkins + "." + mode + "." + os.path.basename(path.split()[0]) + "." + str(repeat) + ".boost.xml")
+        xmlout = (args.jenkins + "." + mode + "." + os.path.basename(test.path.split()[0]) + "." + str(repeat) + ".boost.xml")
         boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
-    if type == 'boost':
+    if test.kind == 'boost':
         boost_args += ['--']
 
     def report_error(exc, out, report_subcause):
@@ -200,7 +213,7 @@ def run_test(path, repeat, type, args, exec_args):
             print('=== stdout END ===', file=file)
     success = False
     try:
-        subprocess.check_output([path] + boost_args + exec_args,
+        subprocess.check_output([test.path] + boost_args + exec_args,
                 stderr=subprocess.STDOUT,
                 timeout=args.timeout,
                 env=dict(os.environ,
@@ -220,7 +233,7 @@ def run_test(path, repeat, type, args, exec_args):
         def report_subcause(e):
             print('  with error {e}\n'.format(e=e), file=file)
         report_error(e, e, report_subcause=report_subcause)
-    return (path, boost_args + exec_args, type, success, file.getvalue())
+    return (test.path, boost_args + exec_args, test.kind, success, file.getvalue())
 
 
 class Alarm(Exception):
@@ -277,16 +290,9 @@ def find_tests(args):
 
     for mode in args.modes:
         prefix = os.path.join('build', mode, 'tests')
-        standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
-        seastar_args = '-c2 -m2G'
-        def add_test(test, kind):
-            if type(test) is str:
-                test = (test, seastar_args)
-            tests_to_run.append((os.path.join(prefix, test[0]), kind, test[1].split() + standard_args))
-
         def add_test_list(lst, kind):
             for t in lst:
-                add_test(t, kind)
+                tests_to_run.append(UnitTest(t, kind, prefix))
 
         add_test_list(other_tests, 'other')
         add_test_list(boost_tests, 'boost')
@@ -294,7 +300,7 @@ def find_tests(args):
             add_test_list(long_tests, 'other')
 
     if args.name:
-        tests_to_run = [t for t in tests_to_run if args.name in t[0]]
+        tests_to_run = [t for t in tests_to_run if args.name in t.name]
         if not tests_to_run:
             print("Test {} not found".format(args.name))
             sys.exit(1)
@@ -310,10 +316,7 @@ def run_all_tests(tests_to_run, args):
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
     futures = []
     for n, test in enumerate(tests_to_run):
-        path = test[0]
-        test_type = test[1]
-        exec_args = test[2] if len(test) >= 3 else []
-        futures.append(executor.submit(run_test, path, n, test_type, args, exec_args))
+        futures.append(executor.submit(run_test, test, n, args))
 
     results = []
     cookie = len(futures)
