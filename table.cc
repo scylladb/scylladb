@@ -1363,7 +1363,7 @@ future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor, boo
             // That's to prevent node from running out of space when almost all sstables
             // need cleanup, so if sstables are cleaned in parallel, we may need almost
             // twice the disk space used by those sstables.
-            static thread_local semaphore sem(1);
+            static thread_local named_semaphore sem(1, named_semaphore_exception_factory{"cleanup sstables"});
 
             return with_semaphore(sem, 1, [this, &sst, &release_fn, is_actual_cleanup] {
                 // release reference to sstables cleaned up, otherwise space usage from their data and index
@@ -1675,9 +1675,9 @@ logalloc::occupancy_stats table::occupancy() const {
 // group of shards only, this code will have to be updated to account for that.
 struct snapshot_manager {
     std::unordered_set<sstring> files;
-    semaphore requests;
-    semaphore manifest_write;
-    snapshot_manager() : requests(0), manifest_write(0) {}
+    named_semaphore requests = {0, named_semaphore_exception_factory{"snapshot manager requests"}};
+    named_semaphore manifest_write = {0, named_semaphore_exception_factory{"snapshot manager manifest write"}};
+    snapshot_manager() {}
 };
 static thread_local std::unordered_map<sstring, lw_shared_ptr<snapshot_manager>> pending_snapshots;
 

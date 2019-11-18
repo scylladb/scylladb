@@ -175,7 +175,7 @@ public:
     size_t current_sub_ranges_nr_out = 0;
     int ranges_index = 0;
     // Only allow one stream_plan in flight
-    semaphore sp_parallelism_semaphore{1};
+    named_semaphore sp_parallelism_semaphore{1, named_semaphore_exception_factory{"repair sp parallelism"}};
     lw_shared_ptr<streaming::stream_plan> _sp_in;
     lw_shared_ptr<streaming::stream_plan> _sp_out;
     repair_stats _stats;
@@ -232,7 +232,7 @@ private:
     // Each element in the vector is the semaphore used to control the maximum
     // ranges that can be repaired in parallel. Each element will be accessed
     // by one shared.
-    std::vector<semaphore> _range_parallelism_semaphores;
+    std::vector<named_semaphore> _range_parallelism_semaphores;
     static const size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
     void start(int id);
     void done(int id, bool succeeded);
@@ -249,7 +249,7 @@ public:
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
-    semaphore& range_parallelism_semaphore();
+    named_semaphore& range_parallelism_semaphore();
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
     future<> run(int id, std::function<future<> ()> func);
 };

@@ -471,7 +471,7 @@ private:
     stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<ep_key_type> _eps_with_pending_hints;
-    seastar::semaphore _drain_lock = {1};
+    seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
     manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
@@ -550,7 +550,7 @@ public:
         return _hints_dir_device_id;
     }
 
-    seastar::semaphore& drain_lock() noexcept {
+    seastar::named_semaphore& drain_lock() noexcept {
         return _drain_lock;
     }
 

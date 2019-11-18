@@ -225,7 +225,7 @@ tracker::tracker(size_t nr_shards, size_t max_repair_memory)
         max_repair_memory, max_repair_memory_per_range(), nr);
     _range_parallelism_semaphores.reserve(nr_shards);
     while (nr_shards--) {
-        _range_parallelism_semaphores.emplace_back(semaphore(nr));
+        _range_parallelism_semaphores.emplace_back(named_semaphore(nr, named_semaphore_exception_factory{"repair range parallelism"}));
     }
     _the_tracker = this;
 }
@@ -319,7 +319,7 @@ void tracker::abort_all_repairs() {
     rlogger.info0("Aborted {} repair job(s)", count);
 }
 
-semaphore& tracker::range_parallelism_semaphore() {
+named_semaphore& tracker::range_parallelism_semaphore() {
     return _range_parallelism_semaphores[engine().cpu_id()];
 }
 
@@ -564,7 +564,7 @@ static future<partition_checksum> checksum_range_shard(database &db,
 // repair master, but also in the slave: The repair slave may receive many
 // checksum requests in parallel, but will only work on one or a few
 // (checksum_parallelism_semaphore) at once.
-static thread_local semaphore checksum_parallelism_semaphore(2);
+static thread_local named_semaphore checksum_parallelism_semaphore(2, named_semaphore_exception_factory{"repair checksum parallelism"});
 
 // Calculate the checksum of the data held on all shards of a column family,
 // in the given token range.
@@ -616,7 +616,7 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
 // considering ditching those semaphores for a more fine grained resource-based
 // solution, let's do the simplest thing here and change it later
 constexpr int parallelism = 100;
-static thread_local semaphore parallelism_semaphore(parallelism);
+static thread_local named_semaphore parallelism_semaphore(parallelism, named_semaphore_exception_factory{"repair parallelism"});
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range) {

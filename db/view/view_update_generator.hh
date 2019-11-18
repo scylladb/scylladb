@@ -38,7 +38,7 @@ class view_update_generator {
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
     seastar::condition_variable _pending_sstables;
-    semaphore _registration_sem{registration_queue_size};
+    named_semaphore _registration_sem{registration_queue_size, named_semaphore_exception_factory{"view update generator"}};
     struct sstable_with_table {
         sstables::shared_sstable sst;
         lw_shared_ptr<table> t;
