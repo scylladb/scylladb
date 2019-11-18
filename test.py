@@ -166,7 +166,7 @@ class UnitTest:
     standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0'.split()
     seastar_args = '-c2 -m2G'
 
-    def __init__(self, test_no, name, opts, kind, mode, args):
+    def __init__(self, test_no, name, opts, kind, mode, options):
         if opts is None:
             opts = UnitTest.seastar_args
         self.id = test_no
@@ -178,9 +178,9 @@ class UnitTest:
 
         if self.kind == 'boost':
             boost_args = []
-            if args.jenkins:
+            if options.jenkins:
                 mode = 'debug' if self.mode == 'debug' else 'release'
-                xmlout = args.jenkins + "." + mode + "." + self.name + "." + str(self.id) + ".boost.xml"
+                xmlout = options.jenkins + "." + mode + "." + self.name + "." + str(self.id) + ".boost.xml"
                 boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
             boost_args += ['--']
             self.args = boost_args + self.args
@@ -202,7 +202,7 @@ def print_progress(test_path, test_args, success, cookie, verbose):
     return (last_len, n + 1, n_total)
 
 
-def run_test(test, args):
+def run_test(test, options):
     file = io.StringIO()
 
     def report_error(exc, out, report_subcause):
@@ -215,7 +215,7 @@ def run_test(test, args):
     try:
         subprocess.check_output([test.path] + test.args,
                 stderr=subprocess.STDOUT,
-                timeout=args.timeout,
+                timeout=options.timeout,
                 env=dict(os.environ,
                     UBSAN_OPTIONS='print_stacktrace=1',
                     BOOST_TEST_CATCH_SYSTEM_ERRORS='no'),
@@ -244,7 +244,7 @@ def alarm_handler(signum, frame):
     raise Alarm
 
 
-def usage():
+def parse_cmd_line():
     """ Print usage and process command line options. """
     all_modes = ['debug', 'release', 'dev', 'sanitize']
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
@@ -284,11 +284,11 @@ def usage():
     return args
 
 
-def find_tests(args):
+def find_tests(options):
 
     tests_to_run = []
 
-    for mode in args.modes:
+    for mode in options.modes:
         def add_test_list(lst, kind):
             for t in lst:
                 tests_to_run.append((t, None, kind, mode) if type(t) == str else (*t, kind, mode))
@@ -298,25 +298,25 @@ def find_tests(args):
         if mode in ['release', 'dev']:
             add_test_list(long_tests, 'other')
 
-    if args.name:
-        tests_to_run = [t for t in tests_to_run if args.name in t[0]]
+    if options.name:
+        tests_to_run = [t for t in tests_to_run if options.name in t[0]]
         if not tests_to_run:
-            print("Test {} not found".format(args.name))
+            print("Test {} not found".format(options.name))
             sys.exit(1)
 
-    tests_to_run = [t for t in tests_to_run for _ in range(args.repeat)]
-    tests_to_run = [UnitTest(test_no, *t, args) for test_no, t in enumerate(tests_to_run)]
+    tests_to_run = [t for t in tests_to_run for _ in range(options.repeat)]
+    tests_to_run = [UnitTest(test_no, *t, options) for test_no, t in enumerate(tests_to_run)]
 
     return tests_to_run
 
 
-def run_all_tests(tests_to_run, args):
+def run_all_tests(tests_to_run, options):
     failed_tests = []
 
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=options.jobs)
     futures = []
     for test in tests_to_run:
-        futures.append(executor.submit(run_test, test, args))
+        futures.append(executor.submit(run_test, test, options))
 
     results = []
     cookie = len(futures)
@@ -324,7 +324,7 @@ def run_all_tests(tests_to_run, args):
         result = future.result()
         results.append(result)
         test_path, test_args, _, success, out = result
-        cookie = print_progress(test_path, test_args, success, cookie, args.verbose)
+        cookie = print_progress(test_path, test_args, success, cookie, options.verbose)
         if not success:
             failed_tests.append((test_path, test_args, out))
     return failed_tests, results
@@ -354,20 +354,20 @@ def write_xunit_report(results):
         if not success:
             xml_fail = ET.SubElement(xml_res, 'failure')
             xml_fail.text = "Test {} {} failed:\n{}".format(test_path, ' '.join(test_args), out)
-    with open(args.xunit, "w") as f:
+    with open(options.xunit, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
 if __name__ == "__main__":
 
-    args = usage()
+    options = parse_cmd_line()
 
-    tests_to_run = find_tests(args)
+    tests_to_run = find_tests(options)
 
-    failed_tests, results = run_all_tests(tests_to_run, args)
+    failed_tests, results = run_all_tests(tests_to_run, options)
 
     print_summary(failed_tests, len(tests_to_run))
 
-    if args.xunit:
+    if options.xunit:
         write_xunit_report(results)
 
     if failed_tests:
