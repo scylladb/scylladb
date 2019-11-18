@@ -34,6 +34,8 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
+#include "database.hh"
+#include "service/storage_service.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -635,6 +637,159 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
         os << ", viewInfo=" << *s.view_info();
     }
     os << "]";
+    return os;
+}
+
+std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, sstring>& map, bool first = true) {
+    for (auto i: map) {
+        if (first) {
+            first = false;
+        } else {
+            os << ",";
+        }
+        os << "'" << i.first << "': '" << i.second << "'";
+    }
+
+    return os;
+}
+
+std::ostream& column_definition_as_cql_key(std::ostream& os, const column_definition & cd) {
+    os << cd.name_as_cql_string();
+    os << " " << cd.type->cql3_type_name();
+
+    if (cd.kind == column_kind::static_column) {
+        os << " STATIC";
+    }
+    return os;
+}
+
+static bool is_global_index(const utils::UUID& id, const schema& s) {
+    return  service::get_local_storage_service().db().local().find_column_family(id).get_index_manager().is_global_index(s);
+}
+
+static bool is_index(const utils::UUID& id, const schema& s) {
+    return  service::get_local_storage_service().db().local().find_column_family(id).get_index_manager().is_index(s);
+}
+
+
+std::ostream& schema::describe(std::ostream& os) const {
+    os << "CREATE ";
+    int n = 0;
+
+    if (is_view()) {
+        if (is_index(view_info()->base_id(), *this)) {
+            auto is_local = !is_global_index(view_info()->base_id(), *this);
+
+            os << "INDEX " << cql3::util::maybe_quote(secondary_index::index_name_from_table_name(cf_name())) << " ON "
+                    << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(view_info()->base_name()) << "(";
+            if (is_local) {
+                os << "(";
+            }
+            for (auto& pk : partition_key_columns()) {
+                if (n++ != 0) {
+                    os << ", ";
+                }
+                os << pk.name_as_cql_string();
+            }
+            if (is_local) {
+                os << ")";
+                if (!clustering_key_columns().empty()) {
+                    os << ", " << clustering_key_columns().front().name_as_cql_string();
+                }
+            }
+            os <<");\n";
+            return os;
+        } else {
+            os << "MATERIALIZED VIEW " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " AS\n";
+            os << "    SELECT ";
+            for (auto& cdef : all_columns()) {
+                if (cdef.is_hidden_from_cql()) {
+                    continue;
+                }
+                if (n++ != 0) {
+                    os << ", ";
+                }
+                os << cdef.name_as_cql_string();
+            }
+            os << "\n    FROM " << cql3::util::maybe_quote(ks_name()) << "." <<  cql3::util::maybe_quote(view_info()->base_name());
+            os << "\n    WHERE " << view_info()->where_clause();
+        }
+    } else {
+        os << " TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " (";
+        for (auto& cdef : all_columns()) {
+            os << "\n    ";
+            column_definition_as_cql_key(os, cdef);
+            os << ",";
+        }
+    }
+
+    os << "\n    PRIMARY KEY (";
+    if (partition_key_columns().size() > 1) {
+        os << "(";
+    }
+    n = 0;
+    for (auto& pk : partition_key_columns()) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << pk.name_as_cql_string();
+    }
+    if (partition_key_columns().size() > 1) {
+        os << ")";
+    }
+    for (auto& pk : clustering_key_columns()) {
+        os << ", ";
+        os << pk.name_as_cql_string();
+    }
+    os << ")";
+    if (is_view()) {
+        os << "\n    ";
+    } else {
+        os << "\n) ";
+    }
+    os << "WITH ";
+    if (!clustering_key_columns().empty()) {
+        // Adding clustering key order can be optional, but there's no harm in doing so.
+        os << "CLUSTERING ORDER BY (";
+        n = 0;
+        for (auto& pk : clustering_key_columns()) {
+            if (n++ != 0) {
+                os << ", ";
+            }
+            os << pk.name_as_cql_string();
+            if (pk.type->is_reversed()) {
+                os << " DESC";
+            } else {
+                os << " ASC";
+            }
+        }
+        os << ")\n    AND ";
+    }
+    if (is_compact_table()) {
+        os << "COMPACT STORAGE\n    AND ";
+    }
+    os << "bloom_filter_fp_chance = " << bloom_filter_fp_chance();
+    os << "\n    AND caching = {";
+    map_as_cql_param(os, caching_options().to_map());
+    os << "}";
+    os << "\n    AND comment = '" << comment()<< "'";
+    os << "\n    AND compaction = {'class': '" <<  sstables::compaction_strategy::name(compaction_strategy()) << "'";
+    map_as_cql_param(os, compaction_strategy_options()) << "}";
+    os << "\n    AND compression = {";
+    map_as_cql_param(os,  get_compressor_params().get_options());
+    os << "}";
+
+    os << "\n    AND crc_check_chance = " << crc_check_chance();
+    os << "\n    AND dclocal_read_repair_chance = " << dc_local_read_repair_chance();
+    os << "\n    AND default_time_to_live = " << default_time_to_live().count();
+    os << "\n    AND gc_grace_seconds = " << gc_grace_seconds().count();
+    os << "\n    AND max_index_interval = " << max_index_interval();
+    os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
+    os << "\n    AND min_index_interval = " << min_index_interval();
+    os << "\n    AND read_repair_chance = " << read_repair_chance();
+    os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "';";
+    os << "\n";
+
     return os;
 }
 
