@@ -387,7 +387,7 @@ public:
         if (is_missing() || _ttl == dead) {
             return false;
         }
-        if (_ttl != no_ttl && _expiry < now) {
+        if (_ttl != no_ttl && _expiry <= now) {
             return false;
         }
         return _timestamp > t.timestamp;
@@ -397,7 +397,7 @@ public:
         if (_ttl == dead) {
             return true;
         }
-        return _ttl != no_ttl && _expiry < now;
+        return _ttl != no_ttl && _expiry <= now;
     }
     // Can be called only when is_live().
     bool is_expiring() const {
@@ -435,7 +435,7 @@ public:
             _timestamp = api::missing_timestamp;
             return false;
         }
-        if (_ttl > no_ttl && _expiry < now) {
+        if (_ttl > no_ttl && _expiry <= now) {
             _expiry -= _ttl;
             _ttl = dead;
         }
