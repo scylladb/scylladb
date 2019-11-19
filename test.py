@@ -186,12 +186,12 @@ class UnitTest:
             self.args = boost_args + self.args
 
 
-def print_progress(test_path, test_args, success, cookie, verbose):
+def print_progress(test, success, cookie, verbose):
     if type(cookie) is int:
         cookie = (0, 1, cookie)
 
     last_len, n, n_total = cookie
-    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test_path, ' '.join(test_args))
+    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test.path, ' '.join(test.args))
     if verbose == False and sys.stdout.isatty():
         print('\r' + ' ' * last_len, end='')
         last_len = len(msg)
@@ -233,7 +233,7 @@ def run_test(test, options):
         def report_subcause(e):
             print('  with error {e}\n'.format(e=e), file=file)
         report_error(e, e, report_subcause=report_subcause)
-    return (test.path, test.args, test.kind, success, file.getvalue())
+    return (test, success, file.getvalue())
 
 
 class Alarm(Exception):
@@ -323,10 +323,10 @@ def run_all_tests(tests_to_run, options):
     for future in concurrent.futures.as_completed(futures):
         result = future.result()
         results.append(result)
-        test_path, test_args, _, success, out = result
-        cookie = print_progress(test_path, test_args, success, cookie, options.verbose)
+        test, success, out = result
+        cookie = print_progress(test, success, cookie, options.verbose)
         if not success:
-            failed_tests.append((test_path, test_args, out))
+            failed_tests.append((test, out))
     return failed_tests, results
 
 
@@ -335,25 +335,25 @@ def print_summary(failed_tests, total_tests):
         print('\nOK.')
     else:
         print('\n\nOutput of the failed tests:')
-        for test, test_args, out in failed_tests:
-            print("Test {} {} failed:\n{}".format(test, ' '.join(test_args), out))
+        for test, out in failed_tests:
+            print("Test {} {} failed:\n{}".format(test.path, ' '.join(test.args), out))
         print('\n\nThe following test(s) have failed:')
-        for test, test_args, _ in failed_tests:
-            print('  {} {}'.format(test, ' '.join(test_args)))
+        for test, _ in failed_tests:
+            print('  {} {}'.format(test.path, ' '.join(test.args)))
         print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
 
 def write_xunit_report(results):
-    other_results = [r for r in results if r[2] != 'boost']
-    num_other_failed = sum(1 for r in other_results if not r[3])
+    other_results = [r for r in results if r[0].kind != 'boost']
+    num_other_failed = sum(1 for r in other_results if not r[1])
 
     xml_results = ET.Element('testsuite', name='non-boost tests',
             tests=str(len(other_results)), failures=str(num_other_failed), errors='0')
 
-    for test_path, test_args, _, success, out in other_results:
-        xml_res = ET.SubElement(xml_results, 'testcase', name=test_path)
+    for test, success, out in other_results:
+        xml_res = ET.SubElement(xml_results, 'testcase', name=test.path)
         if not success:
             xml_fail = ET.SubElement(xml_res, 'failure')
-            xml_fail.text = "Test {} {} failed:\n{}".format(test_path, ' '.join(test_args), out)
+            xml_fail.text = "Test {} {} failed:\n{}".format(test.path, ' '.join(test.args), out)
     with open(options.xunit, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
