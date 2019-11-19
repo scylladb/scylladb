@@ -93,6 +93,7 @@ protected:
 
     query::partition_slice::option_set _opts;
     cql_stats& _stats;
+    const ks_selector _ks_sel;
 protected :
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options);

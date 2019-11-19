@@ -59,6 +59,8 @@
 #include "partition_slice_builder.hh"
 #include "cas_request.hh"
 
+bool is_system_keyspace(const sstring& name);
+
 namespace cql3 {
 
 namespace statements {
@@ -72,7 +74,7 @@ modification_statement_timeout(const schema& s) {
     }
 }
 
-modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, cql_stats& stats)
+modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, cql_stats& stats_)
     : cql_statement_opt_metadata(modification_statement_timeout(*schema_))
     , type{type_}
     , _bound_terms{bound_terms}
@@ -81,7 +83,8 @@ modification_statement::modification_statement(statement_type type_, uint32_t bo
     , s{schema_}
     , attrs{std::move(attrs_)}
     , _column_operations{}
-    , _stats(stats)
+    , _stats(stats_)
+    , _ks_sel(::is_system_keyspace(schema_->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
 { }
 
 bool modification_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {
@@ -304,12 +307,12 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
 
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 
+    inc_cql_stats(qs.get_client_state().is_internal());
+
     if (has_conditions()) {
-        ++_stats.cas_statements[size_t(type)];
         return execute_with_condition(proxy, qs, options);
     }
 
-    ++_stats.statements[size_t(type)];
     return execute_without_condition(proxy, qs, options).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
                 ::shared_ptr<cql_transport::messages::result_message>{});
@@ -599,7 +602,7 @@ modification_statement::prepare_conditions(database& db, schema_ptr schema, ::sh
     }
 }
 
-}
+}  // namespace raw
 
 void
 modification_statement::validate(service::storage_proxy&, const service::client_state& state) {
@@ -655,6 +658,14 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
     }
 
     _column_operations.push_back(std::move(op));
+}
+
+void modification_statement::inc_cql_stats(bool is_internal) {
+    const source_selector src_sel = is_internal
+            ? source_selector::INTERNAL : source_selector::USER;
+    const cond_selector cond_sel = has_conditions()
+            ? cond_selector::WITH_CONDITIONS : cond_selector::NO_CONDITIONS;
+    ++_stats.query_cnt(src_sel, _ks_sel, cond_sel, type);
 }
 
 void modification_statement::add_condition(::shared_ptr<column_condition> cond) {

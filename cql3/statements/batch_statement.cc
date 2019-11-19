@@ -193,7 +193,7 @@ future<std::vector<mutation>> batch_statement::get_mutations(service::storage_pr
                            boost::make_counting_iterator<size_t>(_statements.size()),
                            [this, &storage, &options, now, local, &result, timeout, &query_state] (size_t i) {
             auto&& statement = _statements[i].statement;
-            ++_stats.statements[size_t(statement->type)];
+            statement->inc_cql_stats(query_state.get_client_state().is_internal());
             auto&& statement_options = options.for_statement(i);
             auto timestamp = _attrs->get_timestamp(now, statement_options);
             return statement->get_mutations(storage, statement_options, timeout, local, timestamp, query_state).then([&result] (auto&& more) {
@@ -356,7 +356,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         modification_statement& statement = *_statements[i].statement;
         const query_options& statement_options = options.for_statement(i);
 
-        ++_stats.cas_statements[size_t(statement.type)];
+        statement.inc_cql_stats(qs.get_client_state().is_internal());
         modification_statement::json_cache_opt json_cache = statement.maybe_prepare_json_cache(statement_options);
         // At most one key
         std::vector<dht::partition_range> keys = statement.build_partition_keys(statement_options, json_cache);

@@ -60,6 +60,8 @@
 #include "database.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
+bool is_system_keyspace(const sstring& name);
+
 namespace cql3 {
 
 namespace statements {
@@ -145,6 +147,7 @@ select_statement::select_statement(schema_ptr schema,
     , _per_partition_limit(std::move(per_partition_limit))
     , _ordering_comparator(std::move(ordering_comparator))
     , _stats(stats)
+    , _ks_sel(::is_system_keyspace(schema->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
 {
     _opts = _selection->get_query_options();
     _opts.set_if<query::partition_slice::option::bypass_cache>(_parameters->bypass_cache());
@@ -304,15 +307,18 @@ select_statement::do_execute(service::storage_proxy& proxy,
     auto now = gc_clock::now();
 
     const bool restrictions_need_filtering = _restrictions->need_filtering();
-    ++_stats.statements[size_t(statement_type::SELECT)];
     _stats.filtered_reads += restrictions_need_filtering;
+
+    const source_selector src_sel = state.get_client_state().is_internal()
+            ? source_selector::INTERNAL : source_selector::USER;
+    ++_stats.query_cnt(src_sel, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
         make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, utils::UUID(), options.get_timestamp(state));
 
     int32_t page_size = options.get_page_size();
 
-    _stats.unpaged_select_queries += page_size <= 0;
+    _stats.unpaged_select_queries(_ks_sel) += page_size <= 0;
 
     // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
     // If we user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
@@ -859,12 +865,15 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
 
     auto now = gc_clock::now();
 
-    ++_stats.statements[size_t(statement_type::SELECT)];
     ++_stats.secondary_index_reads;
+
+    const source_selector src_sel = state.get_client_state().is_internal()
+            ? source_selector::INTERNAL : source_selector::USER;
+    ++_stats.query_cnt(src_sel, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
 
     assert(_restrictions->uses_secondary_indexing());
 
-    _stats.unpaged_select_queries += options.get_page_size() <= 0;
+    _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;
 
     // Secondary index search has two steps: 1. use the index table to find a
     // list of primary keys matching the query. 2. read the rows matching
