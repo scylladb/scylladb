@@ -1876,7 +1876,7 @@ bool row_marker::compact_and_expire(tombstone tomb, gc_clock::time_point now,
         _timestamp = api::missing_timestamp;
         return false;
     }
-    if (_ttl > no_ttl && _expiry < now) {
+    if (_ttl > no_ttl && _expiry <= now) {
         _expiry -= _ttl;
         _ttl = dead;
     }

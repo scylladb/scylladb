@@ -1320,6 +1320,104 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_upgrade_type_change) {
     assert_that(m).is_equal_to(m2);
 }
 
+// This test checks the behavior of row_marker::{is_live, is_dead, compact_and_expire}. Those functions have some
+// duplicated logic that decides if a row is expired, and this test verifies that they behave the same with respect
+// to TTL.
+SEASTAR_THREAD_TEST_CASE(test_row_marker_expiry) {
+    can_gc_fn never_gc = [] (tombstone) { return false; };
+
+    auto must_be_alive = [&] (row_marker mark, gc_clock::time_point t) {
+        BOOST_TEST_MESSAGE(format("must_be_alive({}, {})", mark, t));
+        BOOST_REQUIRE(mark.is_live(tombstone(), t));
+        BOOST_REQUIRE(mark.is_missing() || !mark.is_dead(t));
+        BOOST_REQUIRE(mark.compact_and_expire(tombstone(), t, never_gc, gc_clock::time_point()));
+    };
+
+    auto must_be_dead = [&] (row_marker mark, gc_clock::time_point t) {
+        BOOST_TEST_MESSAGE(format("must_be_dead({}, {})", mark, t));
+        BOOST_REQUIRE(!mark.is_live(tombstone(), t));
+        BOOST_REQUIRE(mark.is_missing() || mark.is_dead(t));
+        BOOST_REQUIRE(!mark.compact_and_expire(tombstone(), t, never_gc, gc_clock::time_point()));
+    };
+
+    const auto timestamp = api::timestamp_type(1);
+    const auto t0 = gc_clock::now();
+    const auto t1 = t0 + 1s;
+    const auto t2 = t0 + 2s;
+    const auto t3 = t0 + 3s;
+
+    // Without timestamp the marker is missing (doesn't exist)
+    const row_marker m1;
+    must_be_dead(m1, t0);
+    must_be_dead(m1, t1);
+    must_be_dead(m1, t2);
+    must_be_dead(m1, t3);
+
+    // With timestamp and without ttl, a row_marker is always alive
+    const row_marker m2(timestamp);
+    must_be_alive(m2, t0);
+    must_be_alive(m2, t1);
+    must_be_alive(m2, t2);
+    must_be_alive(m2, t3);
+
+    // A row_marker becomes dead exactly at the moment of expiry
+    // Reproduces #4263, #5290
+    const auto ttl = 1s;
+    const row_marker m3(timestamp, ttl, t2);
+    must_be_alive(m3, t0);
+    must_be_alive(m3, t1);
+    must_be_dead(m3, t2);
+    must_be_dead(m3, t3);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_querying_expired_rows) {
+    auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("ck", bytes_type, column_kind::clustering_key)
+            .build();
+
+    auto pk = partition_key::from_singular(*s, data_value(bytes("key1")));
+    auto ckey1 = clustering_key::from_singular(*s, data_value(bytes("A")));
+    auto ckey2 = clustering_key::from_singular(*s, data_value(bytes("B")));
+    auto ckey3 = clustering_key::from_singular(*s, data_value(bytes("C")));
+
+    auto ttl = 1s;
+    auto t0 = gc_clock::now();
+    auto t1 = t0 + 1s;
+    auto t2 = t0 + 2s;
+    auto t3 = t0 + 3s;
+
+    auto results_at_time = [s] (const mutation& m, gc_clock::time_point t) {
+        auto slice = partition_slice_builder(*s)
+                .without_partition_key_columns()
+                .build();
+        auto opts = query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash};
+        return query::result_set::from_raw_result(s, slice, m.query(slice, opts, t));
+    };
+
+    mutation m(s, pk);
+    m.partition().clustered_row(*m.schema(), ckey1).apply(row_marker(api::new_timestamp(), ttl, t1));
+    m.partition().clustered_row(*m.schema(), ckey2).apply(row_marker(api::new_timestamp(), ttl, t2));
+    m.partition().clustered_row(*m.schema(), ckey3).apply(row_marker(api::new_timestamp(), ttl, t3));
+
+    assert_that(results_at_time(m, t0))
+            .has_size(3)
+            .has(a_row().with_column("ck", data_value(bytes("A"))))
+            .has(a_row().with_column("ck", data_value(bytes("B"))))
+            .has(a_row().with_column("ck", data_value(bytes("C"))));
+
+    assert_that(results_at_time(m, t1))
+            .has_size(2)
+            .has(a_row().with_column("ck", data_value(bytes("B"))))
+            .has(a_row().with_column("ck", data_value(bytes("C"))));
+
+    assert_that(results_at_time(m, t2))
+            .has_size(1)
+            .has(a_row().with_column("ck", data_value(bytes("C"))));
+
+    assert_that(results_at_time(m, t3)).is_empty();
+}
+
 SEASTAR_TEST_CASE(test_querying_expired_cells) {
     return seastar::async([] {
         auto s = schema_builder("ks", "cf")
