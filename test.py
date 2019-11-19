@@ -205,12 +205,10 @@ def print_progress(test, success, cookie, verbose):
 def run_test(test, options):
     file = io.StringIO()
 
-    def report_error(exc, out, report_subcause):
-        report_subcause(exc)
-        if out:
-            print('=== stdout START ===', file=file)
-            print(out, file=file)
-            print('=== stdout END ===', file=file)
+    def report_error(out):
+        print('=== stdout START ===', file=file)
+        print(out, file=file)
+        print('=== stdout END ===', file=file)
     success = False
     try:
         subprocess.check_output([test.path] + test.args,
@@ -222,17 +220,14 @@ def run_test(test, options):
                 preexec_fn=os.setsid)
         success = True
     except subprocess.TimeoutExpired as e:
-        def report_subcause(e):
-            print('  timed out', file=file)
-        report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
+        print('  timed out', file=file)
+        report_error(e.output.decode(encoding='UTF-8'))
     except subprocess.CalledProcessError as e:
-        def report_subcause(e):
-            print('  with error code {code}\n'.format(code=e.returncode), file=file)
-        report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
+        print('  with error code {code}\n'.format(code=e.returncode), file=file)
+        report_error(e.output.decode(encoding='UTF-8'))
     except Exception as e:
-        def report_subcause(e):
-            print('  with error {e}\n'.format(e=e), file=file)
-        report_error(e, e, report_subcause=report_subcause)
+        print('  with error {e}\n'.format(e=e), file=file)
+        report_error(e)
     return (test, success, file.getvalue())
 
 
