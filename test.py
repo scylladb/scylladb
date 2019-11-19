@@ -272,7 +272,7 @@ if __name__ == "__main__":
     env['UBSAN_OPTIONS'] = 'print_stacktrace=1'
     env['BOOST_TEST_CATCH_SYSTEM_ERRORS'] = 'no'
 
-    def run_test(path, type, exec_args):
+    def run_test(path, repeat, type, exec_args):
         boost_args = []
         # avoid modifying in-place, it will change test_to_run
         exec_args = exec_args + '--collectd 0'.split()
@@ -281,7 +281,7 @@ if __name__ == "__main__":
             mode = 'release'
             if path.startswith(os.path.join('build', 'debug')):
                 mode = 'debug'
-            xmlout = (args.jenkins + "." + mode + "." + os.path.basename(path.split()[0]) + ".boost.xml")
+            xmlout = (args.jenkins + "." + mode + "." + os.path.basename(path.split()[0]) + "." + str(repeat) + ".boost.xml")
             boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
         if type == 'boost':
             boost_args += ['--']
@@ -319,8 +319,8 @@ if __name__ == "__main__":
         path = test[0]
         test_type = test[1]
         exec_args = test[2] if len(test) >= 3 else []
-        for _ in range(args.repeat):
-            futures.append(executor.submit(run_test, path, test_type, exec_args))
+        for repeat in range(args.repeat):
+            futures.append(executor.submit(run_test, path, repeat, test_type, exec_args))
 
     results = []
     cookie = len(futures)
