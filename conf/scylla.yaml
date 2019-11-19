@@ -25,15 +25,19 @@
 # multiple tokens per node, see http://cassandra.apache.org/doc/latest/operating
 num_tokens: 256
 
+# Directory where Scylla should store all its files, which are commitlog,
+# data, hints, view_hints and saved_caches subdirectories. All of these
+# subs can be overriden by the respective options below.
+# If unset, the value defaults to /var/lib/scylla
+# workdir: /var/lib/scylla
+
 # Directory where Scylla should store data on disk.
-# If not set, the default directory is /var/lib/scylla/data.
-data_file_directories:
-    - /var/lib/scylla/data
+# data_file_directories:
+#    - /var/lib/scylla/data
 
 # commit log.  when running on magnetic HDD, this should be a
 # separate spindle than the data directories.
-# If not set, the default directory is /var/lib/scylla/commitlog.
-commitlog_directory: /var/lib/scylla/commitlog
+# commitlog_directory: /var/lib/scylla/commitlog
 
 # commitlog_sync may be either "periodic" or "batch."
 #

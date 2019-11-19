@@ -27,10 +27,10 @@ Please see [HACKING.md](HACKING.md) for detailed information on building and dev
 
 ```
 
-* run Scylla with one CPU and ./tmp as data directory
+* run Scylla with one CPU and ./tmp as work directory
 
 ```
-./build/release/scylla --datadir tmp --commitlog-directory tmp --smp 1
+./build/release/scylla --workdir tmp --smp 1
 ```
 
 * For more run options:

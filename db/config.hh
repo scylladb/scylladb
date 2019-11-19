@@ -82,6 +82,7 @@ public:
 
     // Throws exception if experimental feature is disabled.
     void check_experimental(const sstring& what) const;
+    void setup_directories();
 
     /**
      * Scans the environment variables for configuration files directory
@@ -112,6 +113,7 @@ public:
     named_value<sstring> listen_address;
     named_value<sstring> listen_interface;
     named_value<bool> listen_interface_prefer_ipv6;
+    named_value<sstring> work_directory;
     named_value<sstring> commitlog_directory;
     named_value<string_list> data_file_directories;
     named_value<sstring> hints_directory;
@@ -331,6 +333,9 @@ private:
     log_legacy_value<seastar::log_level> default_log_level;
     log_legacy_value<std::unordered_map<sstring, seastar::log_level>> logger_log_level;
     log_legacy_value<bool> log_to_stdout, log_to_syslog;
+
+    void maybe_in_workdir(named_value<sstring>&, const char*);
+    void maybe_in_workdir(named_value<string_list>&, const char*);
 
     std::shared_ptr<db::extensions> _extensions;
 };

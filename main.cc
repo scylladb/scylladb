@@ -535,6 +535,7 @@ int main(int ac, char** av) {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
             configurable::init_all(opts, *cfg, *ext).get();
+            cfg->setup_directories();
 
             // We're writing to a non-atomic variable here. But bool writes are atomic
             // in all supported architectures, and the broadcast_to_all_shards().get() below
