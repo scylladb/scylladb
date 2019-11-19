@@ -87,7 +87,7 @@ fi
 %systemd_preun scylla-server.service
 
 %postun server
-%systemd_postun
+%systemd_postun scylla-server.service
 
 %posttrans server
 if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
