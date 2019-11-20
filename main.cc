@@ -70,6 +70,7 @@
 #include "cql3/cql_config.hh"
 
 #include "alternator/server.hh"
+#include "redis/service.hh"
 
 namespace fs = std::filesystem;
 
@@ -1103,6 +1104,12 @@ int main(int ac, char** av) {
                 alternator_server.init(addr, alternator_port, alternator_https_port, creds, cfg->alternator_enforce_authorization()).get();
             }
 
+            static redis_service redis;
+            if (cfg->enable_redis_protocol()) {
+                redis.init(std::ref(proxy), std::ref(db), std::ref(auth_service), *cfg).get();
+                startlog.info("Redis server listening on port {}", cfg->redis_transport_port());
+            }
+
             if (cfg->defragment_memory_on_idle()) {
                 smp::invoke_on_all([] () {
                     engine().set_idle_cpu_handler([] (reactor::work_waiting_on_reactor check_for_work) {
@@ -1122,6 +1129,7 @@ int main(int ac, char** av) {
             api::set_server_done(ctx).get();
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
+
             auto stop_repair = defer_with_log_on_error([] {
                 startlog.info("stopping repair");
                 repair_shutdown(service::get_local_storage_service().db()).get();
@@ -1150,6 +1158,14 @@ int main(int ac, char** av) {
                     return db.get_compaction_manager().stop();
                 }).get();
             });
+
+            auto stop_redis_service = defer_with_log_on_error([&cfg] {
+                if (cfg->enable_redis_protocol()) {
+                    startlog.info("stopping redis service");
+                    redis.stop().get();
+                }
+            });
+
             startlog.info("Scylla version {} initialization completed.", scylla_version());
             stop_signal.wait().get();
             startlog.info("Signal received; shutting down");
