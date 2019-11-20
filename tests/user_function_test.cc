@@ -612,7 +612,7 @@ SEASTAR_TEST_CASE(test_user_function_timestamp_return) {
 
         e.execute_cql("CREATE FUNCTION my_func6(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return {year = 10000, month = 2, day = 3, hour = 4, min = 5, sec = 6 }';").get();
         auto fut = e.execute_cql("SELECT my_func6(val) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get(), boost::wrapexcept<boost::gregorian::bad_year>, message_equals("Year is out of valid range: 1400..9999"));
+        BOOST_REQUIRE_EXCEPTION(fut.get(), boost::gregorian::bad_year, message_equals("Year is out of valid range: 1400..9999"));
 
         e.execute_cql("CREATE FUNCTION my_func3(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return \"abc\"';").get();
         fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
