@@ -238,14 +238,22 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
             auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
             ++_connects;
             ++_connections;
-            // Move connection to the background, monitor for lifetime and errors.
-            (void)conn->process().then_wrapped([this, conn] (future<> f) {
-                --_connections;
+            // Move the processing into the background.
+            (void)futurize_apply([this, conn] {
+                return advertise_new_connection(conn); // Notify any listeners about new connection.
+            }).then_wrapped([this, conn] (future<> f) {
                 try {
                     f.get();
                 } catch (...) {
-                    clogger.debug("connection error: {}", std::current_exception());
+                    clogger.info("exception while advertising new connection: {}", std::current_exception());
                 }
+                // Block while monitoring for lifetime/errors.
+                return conn->process().finally([this, conn] {
+                    --_connections;
+                    return unadvertise_connection(conn);
+                }).handle_exception([] (std::exception_ptr ep) {
+                    clogger.info("exception while processing connection: {}", ep);
+                });
             });
             return stop_iteration::no;
         }).handle_exception([] (auto ep) {
