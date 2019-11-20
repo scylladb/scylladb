@@ -25,6 +25,7 @@
 #include "error.hh"
 #include "rapidjson/writer.h"
 #include "concrete_types.hh"
+#include "cql3/type_json.hh"
 
 static logging::logger slogger("alternator-serialization");
 
@@ -77,7 +78,7 @@ struct from_json_visitor {
     }
     // default
     void operator()(const abstract_type& t) const {
-        bo.write(t.from_json_object(Json::Value(rjson::print(v)), cql_serialization_format::internal()));
+        bo.write(from_json_object(t, Json::Value(rjson::print(v)), cql_serialization_format::internal()));
     }
 };
 
@@ -107,7 +108,7 @@ struct to_json_visitor {
 
     void operator()(const reversed_type_impl& t) const { visit(*t.underlying_type(), to_json_visitor{deserialized, type_ident, bv}); };
     void operator()(const decimal_type_impl& t) const {
-        auto s = decimal_type->to_json_string(bytes(bv));
+        auto s = to_json_string(*decimal_type, bytes(bv));
         //FIXME(sarna): unnecessary copy
         rjson::set_with_string_name(deserialized, type_ident, rjson::from_string(s));
     }
@@ -194,7 +195,7 @@ rjson::value json_key_column_value(bytes_view cell, const column_definition& col
         // FIXME: use specialized Alternator number type, not the more
         // general "decimal_type". A dedicated type can be more efficient
         // in storage space and in parsing speed.
-        auto s = decimal_type->to_json_string(bytes(cell));
+        auto s = to_json_string(*decimal_type, bytes(cell));
         return rjson::from_string(s);
     } else {
         // We shouldn't get here, we shouldn't see such key columns.

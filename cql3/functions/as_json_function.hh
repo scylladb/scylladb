@@ -44,6 +44,7 @@
 #include "cql3/functions/function.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/cql3_type.hh"
+#include "cql3/type_json.hh"
 
 #include "bytes_ostream.hh"
 #include "types.hh"
@@ -92,7 +93,7 @@ public:
                 encoded_row.write("\\\"", 2);
             }
             encoded_row.write("\": ", 3);
-            sstring row_sstring = _selector_types[i]->to_json_string(parameters[i]);
+            sstring row_sstring = to_json_string(*_selector_types[i], parameters[i]);
             encoded_row.write(row_sstring.c_str(), row_sstring.size());
         }
         encoded_row.write("}", 1);

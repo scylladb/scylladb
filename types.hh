@@ -54,10 +54,6 @@
 class tuple_type_impl;
 class big_decimal;
 
-namespace Json {
-class Value;
-}
-
 namespace cql3 {
 
 class cql3_type;
@@ -552,14 +548,6 @@ public:
     }
     sstring to_string_impl(const data_value& v) const;
     bytes from_string(sstring_view text) const;
-    sstring to_json_string(bytes_view bv) const;
-    sstring to_json_string(const bytes& b) const {
-        return to_json_string(bytes_view(b));
-    }
-    sstring to_json_string(const bytes_opt& b) const {
-        return b ? to_json_string(*b) : "null";
-    }
-    bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const;
     bool is_counter() const;
     bool is_string() const;
     bool is_collection() const;
