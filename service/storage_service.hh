@@ -213,6 +213,10 @@ public:
         return _db;
     }
 
+    shared_ptr<distributed<cql_transport::cql_server>> get_dist_cql_server() const {
+        return _cql_server;
+    }
+
 private:
     bool is_auto_bootstrap();
     inet_address get_broadcast_address() const {

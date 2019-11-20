@@ -93,6 +93,7 @@ static constexpr auto LARGE_PARTITIONS = "large_partitions";
 static constexpr auto LARGE_ROWS = "large_rows";
 static constexpr auto LARGE_CELLS = "large_cells";
 static constexpr auto SCYLLA_LOCAL = "scylla_local";
+static constexpr auto CLIENTS = "clients";
 
 namespace v3 {
 static constexpr auto BATCHES = "batches";
