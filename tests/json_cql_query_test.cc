@@ -286,7 +286,7 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
                 decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(123) }),
                 byte_type->decompose(int8_t(3)),
                 short_type->decompose(int16_t(3)),
-                simple_date_type->decompose(int32_t(0x80000001)),
+                serialized(simple_date_native_type{0x80000001}),
                 time_type->decompose(int64_t(0x0000000000000001)),
                 duration_type->decompose(cql_duration("1y2mo3w4d5h6m7s8ms9us10ns"))
             }

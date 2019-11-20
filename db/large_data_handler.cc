@@ -62,7 +62,7 @@ static future<> try_record(std::string_view large_table, const sstables::sstable
     auto cf_name = s.cf_name();
     const auto sstable_name = sst.get_filename();
     std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
-    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
+    auto timestamp = db_clock::now();
     large_data_logger.warn("Writing large {} {}/{}: {}{} ({} bytes)", desc, ks_name, cf_name, pk_str, extra_path, size);
     return db::execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
             .discard_result()

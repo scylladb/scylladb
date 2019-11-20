@@ -54,7 +54,7 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
         for (uint32_t i = 1; i <= 1000; ++i) {
             auto pkey = partition_key::from_single_value(*s, to_bytes(sprint("key%d", i)));
             mutation m(s, pkey);
-            m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", data_value(bytes("v1")), {});
+            m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});
             pranges.emplace_back(dht::partition_range::make_singular(dht::global_partitioner().decorate_key(*s, std::move(pkey))));
             db.apply(s, freeze(m)).get();
         }
@@ -97,7 +97,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
             for (uint32_t i = 3; i <= 8; ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
                 mutation m(s, pkey);
-                m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", data_value(bytes("v1")), 1);
+                m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), 1);
                 db.apply(s, freeze(m)).get();
                 pranges.emplace_back(dht::partition_range::make_singular(dht::global_partitioner().decorate_key(*s, std::move(pkey))));
             }

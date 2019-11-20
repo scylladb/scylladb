@@ -1900,7 +1900,8 @@ future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compa
     sstring req = format("INSERT INTO system.{} (id, keyspace_name, columnfamily_name, compacted_at, bytes_in, bytes_out, rows_merged) VALUES (?, ?, ?, ?, ?, ?, ?)"
                     , COMPACTION_HISTORY);
 
-    return execute_cql(req, utils::UUID_gen::get_time_UUID(), ksname, cfname, compacted_at, bytes_in, bytes_out,
+    db_clock::time_point tp{db_clock::duration{compacted_at}};
+    return execute_cql(req, utils::UUID_gen::get_time_UUID(), ksname, cfname, tp, bytes_in, bytes_out,
                        make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result().handle_exception([] (auto ep) {
         slogger.error("update compaction history failed: {}: ignored", ep);
     });

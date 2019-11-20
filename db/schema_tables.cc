@@ -1721,7 +1721,8 @@ static data_type expand_user_type(data_type original) {
 
 static void add_dropped_column_to_schema_mutation(schema_ptr table, const sstring& name, const schema::dropped_column& column, api::timestamp_type timestamp, mutation& m) {
     auto ckey = clustering_key::from_exploded(*dropped_columns(), {utf8_type->decompose(table->cf_name()), utf8_type->decompose(name)});
-    m.set_clustered_cell(ckey, "dropped_time", column.timestamp, timestamp);
+    db_clock::time_point tp(db_clock::duration(column.timestamp));
+    m.set_clustered_cell(ckey, "dropped_time", tp, timestamp);
 
     /*
      * From origin:

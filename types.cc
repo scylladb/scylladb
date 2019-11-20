@@ -3544,7 +3544,7 @@ std::function<data_value(data_value)> make_castas_fctn_from_date_to_timestamp() 
 std::function<data_value(data_value)> make_castas_fctn_from_timeuuid_to_timestamp() {
     return [](data_value from) -> data_value {
         const auto val_from = value_cast<utils::UUID>(from);
-        return utils::UUID_gen::unix_timestamp(val_from);
+        return db_clock::time_point{db_clock::duration{utils::UUID_gen::unix_timestamp(val_from)}};
     };
 }
 

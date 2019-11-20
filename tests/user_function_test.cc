@@ -44,11 +44,6 @@ static shared_ptr<cql_transport::event::schema_change> get_schema_change(
     return schema_change_msg->get_change();
 }
 
-template<typename T>
-static bytes serialized(T v) {
-    return data_value(v).serialize();
-}
-
 SEASTAR_TEST_CASE(test_user_function_disabled) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto fut = e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2';");

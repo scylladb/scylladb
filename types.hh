@@ -428,6 +428,11 @@ public:
     friend inline auto visit(const data_value& v, Func&& f);
 };
 
+template<typename T>
+inline bytes serialized(T v) {
+    return data_value(v).serialize();
+}
+
 class serialized_compare;
 class serialized_tri_compare;
 class user_type_impl;
