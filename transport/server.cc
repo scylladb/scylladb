@@ -45,6 +45,7 @@
 #include "service/query_state.hh"
 #include "service/client_state.hh"
 #include "exceptions/exceptions.hh"
+#include "connection_notifier.hh"
 
 #include "auth/authenticator.hh"
 
@@ -252,6 +253,21 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
             return stop_iteration::no;
         });
     });
+}
+
+future<>
+cql_server::advertise_new_connection(shared_ptr<connection> conn) {
+    client_data cd = conn->make_client_data();
+    clogger.trace("Advertising new connection from CQL client {}:{}", cd.ip, cd.port);
+    return notify_new_client(std::move(cd));
+}
+
+future<>
+cql_server::unadvertise_connection(shared_ptr<connection> conn) {
+    const auto ip = conn->get_client_state().get_client_address().addr();
+    const auto port = conn->get_client_state().get_client_port();
+    clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
+    return notify_disconnected_client(ip, client_type::cql, port);
 }
 
 unsigned
@@ -513,6 +529,19 @@ future<> cql_server::connection::shutdown()
     } catch (...) {
     }
     return make_ready_future<>();
+}
+
+client_data cql_server::connection::make_client_data() const {
+    client_data cd;
+    cd.ip = _client_state.get_client_address().addr();
+    cd.port = _client_state.get_client_port();
+    cd.ct = client_type::cql;
+    cd.shard_id = engine().cpu_id();
+    cd.protocol_version = _version;
+    if (const auto user_ptr = _client_state.user(); user_ptr) {
+        cd.username = user_ptr->name;
+    }
+    return cd;
 }
 
 thread_local cql_server::connection::execution_stage_type

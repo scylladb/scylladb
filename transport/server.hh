@@ -47,6 +47,7 @@ class registrations;
 }
 
 class database;
+struct client_data;
 
 namespace cql_transport {
 
@@ -181,6 +182,8 @@ private:
         future<> process();
         future<> process_request();
         future<> shutdown();
+        client_data make_client_data() const;
+        const service::client_state& get_client_state() const { return _client_state; }
     private:
         const ::timeout_config& timeout_config() const { return _server.timeout_config(); }
         friend class process_request_executor;
@@ -237,6 +240,9 @@ private:
     uint64_t _current_connections = 0;
     uint64_t _connections_being_accepted = 0;
 private:
+    future<> advertise_new_connection(shared_ptr<connection> conn);
+    future<> unadvertise_connection(shared_ptr<connection> conn);
+
     void maybe_idle() {
         if (_stopping && !_connections_being_accepted && !_current_connections) {
             _all_connections_stopped.set_value();
