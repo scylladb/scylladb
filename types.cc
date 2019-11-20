@@ -841,42 +841,8 @@ bool abstract_type::is_compatible_with(const abstract_type& previous) const {
     return visit(*this, visitor{previous});
 }
 
-abstract_type::cql3_kind abstract_type::get_cql3_kind_impl() const {
-    struct visitor {
-        cql3_kind operator()(const ascii_type_impl&) { return cql3_kind::ASCII; }
-        cql3_kind operator()(const byte_type_impl&) { return cql3_kind::TINYINT; }
-        cql3_kind operator()(const bytes_type_impl&) { return cql3_kind::BLOB; }
-        cql3_kind operator()(const boolean_type_impl&) { return cql3_kind::BOOLEAN; }
-        cql3_kind operator()(const counter_type_impl&) { return cql3_kind::COUNTER; }
-        cql3_kind operator()(const decimal_type_impl&) { return cql3_kind::DECIMAL; }
-        cql3_kind operator()(const double_type_impl&) { return cql3_kind::DOUBLE; }
-        cql3_kind operator()(const duration_type_impl&) { return cql3_kind::DURATION; }
-        cql3_kind operator()(const empty_type_impl&) { return cql3_kind::EMPTY; }
-        cql3_kind operator()(const float_type_impl&) { return cql3_kind::FLOAT; }
-        cql3_kind operator()(const inet_addr_type_impl&) { return cql3_kind::INET; }
-        cql3_kind operator()(const int32_type_impl&) { return cql3_kind::INT; }
-        cql3_kind operator()(const long_type_impl&) { return cql3_kind::BIGINT; }
-        cql3_kind operator()(const short_type_impl&) { return cql3_kind::SMALLINT; }
-        cql3_kind operator()(const simple_date_type_impl&) { return cql3_kind::DATE; }
-        cql3_kind operator()(const utf8_type_impl&) { return cql3_kind::TEXT; }
-        cql3_kind operator()(const time_type_impl&) { return cql3_kind::TIME; }
-        cql3_kind operator()(const timestamp_date_base_class&) { return cql3_kind::TIMESTAMP; }
-        cql3_kind operator()(const timeuuid_type_impl&) { return cql3_kind::TIMEUUID; }
-        cql3_kind operator()(const uuid_type_impl&) { return cql3_kind::UUID; }
-        cql3_kind operator()(const varint_type_impl&) { return cql3_kind::VARINT; }
-        cql3_kind operator()(const reversed_type_impl& r) { return r.underlying_type()->get_cql3_kind_impl(); }
-        cql3_kind operator()(const tuple_type_impl&) { assert(0 && "no kind for this type"); }
-        cql3_kind operator()(const collection_type_impl&) { assert(0 && "no kind for this type"); }
-    };
-    return visit(*this, visitor{});
-}
-
 cql3::cql3_type abstract_type::as_cql3_type() const {
     return cql3::cql3_type(shared_from_this());
-}
-
-abstract_type::cql3_kind_enum_set::prepared abstract_type::get_cql3_kind() const {
-    return cql3_kind_enum_set::prepare(get_cql3_kind_impl());
 }
 
 static sstring quote_json_string(const sstring& s) {

@@ -478,33 +478,6 @@ private:
 public:
     kind get_kind() const { return _kind; }
 
-    enum class cql3_kind : int8_t {
-        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, EMPTY, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARINT, TIMEUUID, DATE, TIME, DURATION
-    };
-    using cql3_kind_enum = super_enum<cql3_kind,
-        cql3_kind::ASCII,
-        cql3_kind::BIGINT,
-        cql3_kind::BLOB,
-        cql3_kind::BOOLEAN,
-        cql3_kind::COUNTER,
-        cql3_kind::DECIMAL,
-        cql3_kind::DOUBLE,
-        cql3_kind::EMPTY,
-        cql3_kind::FLOAT,
-        cql3_kind::INET,
-        cql3_kind::INT,
-        cql3_kind::SMALLINT,
-        cql3_kind::TINYINT,
-        cql3_kind::TEXT,
-        cql3_kind::TIMESTAMP,
-        cql3_kind::UUID,
-        cql3_kind::VARINT,
-        cql3_kind::TIMEUUID,
-        cql3_kind::DATE,
-        cql3_kind::TIME,
-        cql3_kind::DURATION>;
-    using cql3_kind_enum_set = enum_set<cql3_kind_enum>;
-
     abstract_type(kind k, sstring name, std::optional<uint32_t> value_length_if_fixed, data::type_info ti)
         : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti), _kind(k) {}
     virtual ~abstract_type() {}
@@ -604,11 +577,9 @@ public:
     bool is_native() const;
     cql3::cql3_type as_cql3_type() const;
     const sstring& cql3_type_name() const;
-    cql3_kind_enum_set::prepared get_cql3_kind() const;
     virtual shared_ptr<const abstract_type> freeze() const { return shared_from_this(); }
     friend class list_type_impl;
 private:
-    cql3_kind get_cql3_kind_impl() const;
     mutable sstring _cql3_type_name;
 protected:
     // native_value_* methods are virualized versions of native_type's

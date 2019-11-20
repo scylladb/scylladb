@@ -103,6 +103,33 @@ private:
     }
 
 public:
+    enum class kind : int8_t {
+        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, EMPTY, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARINT, TIMEUUID, DATE, TIME, DURATION
+    };
+    using kind_enum = super_enum<kind,
+        kind::ASCII,
+        kind::BIGINT,
+        kind::BLOB,
+        kind::BOOLEAN,
+        kind::COUNTER,
+        kind::DECIMAL,
+        kind::DOUBLE,
+        kind::EMPTY,
+        kind::FLOAT,
+        kind::INET,
+        kind::INT,
+        kind::SMALLINT,
+        kind::TINYINT,
+        kind::TEXT,
+        kind::TIMESTAMP,
+        kind::UUID,
+        kind::VARINT,
+        kind::TIMEUUID,
+        kind::DATE,
+        kind::TIME,
+        kind::DURATION>;
+    using kind_enum_set = enum_set<kind_enum>;
+
     static thread_local cql3_type ascii;
     static thread_local cql3_type bigint;
     static thread_local cql3_type blob;
@@ -127,9 +154,7 @@ public:
 
     static const std::vector<cql3_type>& values();
 public:
-    using kind = abstract_type::cql3_kind;
-    using kind_enum_set = abstract_type::cql3_kind_enum_set;
-    kind_enum_set::prepared get_kind() const { return _type->get_cql3_kind(); }
+    kind_enum_set::prepared get_kind() const;
 };
 
 inline bool operator==(const cql3_type& a, const cql3_type& b) {

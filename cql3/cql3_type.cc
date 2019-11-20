@@ -31,8 +31,43 @@
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
+#include "concrete_types.hh"
 
 namespace cql3 {
+
+static cql3_type::kind get_cql3_kind(const abstract_type& t) {
+    struct visitor {
+        cql3_type::kind operator()(const ascii_type_impl&) { return cql3_type::kind::ASCII; }
+        cql3_type::kind operator()(const byte_type_impl&) { return cql3_type::kind::TINYINT; }
+        cql3_type::kind operator()(const bytes_type_impl&) { return cql3_type::kind::BLOB; }
+        cql3_type::kind operator()(const boolean_type_impl&) { return cql3_type::kind::BOOLEAN; }
+        cql3_type::kind operator()(const counter_type_impl&) { return cql3_type::kind::COUNTER; }
+        cql3_type::kind operator()(const decimal_type_impl&) { return cql3_type::kind::DECIMAL; }
+        cql3_type::kind operator()(const double_type_impl&) { return cql3_type::kind::DOUBLE; }
+        cql3_type::kind operator()(const duration_type_impl&) { return cql3_type::kind::DURATION; }
+        cql3_type::kind operator()(const empty_type_impl&) { return cql3_type::kind::EMPTY; }
+        cql3_type::kind operator()(const float_type_impl&) { return cql3_type::kind::FLOAT; }
+        cql3_type::kind operator()(const inet_addr_type_impl&) { return cql3_type::kind::INET; }
+        cql3_type::kind operator()(const int32_type_impl&) { return cql3_type::kind::INT; }
+        cql3_type::kind operator()(const long_type_impl&) { return cql3_type::kind::BIGINT; }
+        cql3_type::kind operator()(const short_type_impl&) { return cql3_type::kind::SMALLINT; }
+        cql3_type::kind operator()(const simple_date_type_impl&) { return cql3_type::kind::DATE; }
+        cql3_type::kind operator()(const utf8_type_impl&) { return cql3_type::kind::TEXT; }
+        cql3_type::kind operator()(const time_type_impl&) { return cql3_type::kind::TIME; }
+        cql3_type::kind operator()(const timestamp_date_base_class&) { return cql3_type::kind::TIMESTAMP; }
+        cql3_type::kind operator()(const timeuuid_type_impl&) { return cql3_type::kind::TIMEUUID; }
+        cql3_type::kind operator()(const uuid_type_impl&) { return cql3_type::kind::UUID; }
+        cql3_type::kind operator()(const varint_type_impl&) { return cql3_type::kind::VARINT; }
+        cql3_type::kind operator()(const reversed_type_impl& r) { return get_cql3_kind(*r.underlying_type()); }
+        cql3_type::kind operator()(const tuple_type_impl&) { assert(0 && "no kind for this type"); }
+        cql3_type::kind operator()(const collection_type_impl&) { assert(0 && "no kind for this type"); }
+    };
+    return visit(t, visitor{});
+}
+
+cql3_type::kind_enum_set::prepared cql3_type::get_kind() const {
+    return kind_enum_set::prepare(get_cql3_kind(*_type));
+}
 
 cql3_type cql3_type::raw::prepare(database& db, const sstring& keyspace) {
     try {
