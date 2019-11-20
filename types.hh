@@ -602,13 +602,7 @@ data_value::make_new(data_type type, T&& v) {
 
 template <typename T>
 const T& value_cast(const data_value& value) {
-    if (typeid(maybe_empty<T>) != value.type()->native_typeid()) {
-        throw std::bad_cast();
-    }
-    if (value.is_null()) {
-        throw std::runtime_error("value is null");
-    }
-    return *reinterpret_cast<maybe_empty<T>*>(value._value);
+    return value_cast<T>(const_cast<data_value&&>(value));
 }
 
 template <typename T>
