@@ -68,6 +68,7 @@
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
 #include "cql3/cql_config.hh"
+#include "connection_notifier.hh"
 
 #include "alternator/server.hh"
 
@@ -1055,6 +1056,9 @@ int main(int ac, char** av) {
                 view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm)).get();
                 view_builder.invoke_on_all(&db::view::view_builder::start).get();
             }
+
+            // Truncate `clients' CF - this table should not persist between server restarts.
+            clear_clientlist().get();
 
             supervisor::notify("starting native transport");
             with_scheduling_group(dbcfg.statement_scheduling_group, [] {
