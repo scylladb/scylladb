@@ -2607,7 +2607,8 @@ struct to_json_string_visitor {
         if (bv.empty()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
-        T d = deserialize_value(t, bv);
+        auto v = t.deserialize(bv);
+        T d = value_cast<T>(v);
         if (std::isnan(d) || std::isinf(d)) {
             return "null";
         }
@@ -2643,15 +2644,15 @@ struct to_json_string_visitor {
         if (bv.empty()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
-        auto v = deserialize_value(t, bv);
-        return v.to_string();
+        auto v = t.deserialize(bv);
+        return value_cast<big_decimal>(v).to_string();
     }
     sstring operator()(const varint_type_impl& t) {
         if (bv.empty()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
-        auto v = deserialize_value(t, bv);
-        return v.str();
+        auto v = t.deserialize(bv);
+        return value_cast<boost::multiprecision::cpp_int>(v).str();
     }
 };
 }
