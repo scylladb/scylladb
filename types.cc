@@ -3133,40 +3133,9 @@ std::function<data_value(data_value)> make_castas_fctn_from_timeuuid_to_date() {
     };
 }
 
-std::function<data_value(data_value)> make_castas_fctn_from_timestamp_to_string() {
+static std::function<data_value(data_value)> make_castas_fctn_from_dv_to_string() {
     return [](data_value from) -> data_value {
-        const auto val_from = value_cast<db_clock::time_point>(from);
-        return time_point_to_string(val_from);
-    };
-}
-
-std::function<data_value(data_value)> make_castas_fctn_from_simple_date_to_string() {
-    return [](data_value from) -> data_value {
-        return simple_date_to_string(value_cast<uint32_t>(from));
-    };
-}
-
-std::function<data_value(data_value)> make_castas_fctn_from_time_to_string() {
-    return [](data_value from) -> data_value {
-        return time_to_string(value_cast<int64_t>(from));
-    };
-}
-
-std::function<data_value(data_value)> make_castas_fctn_from_uuid_to_string() {
-    return [](data_value from) -> data_value {
-        return value_cast<utils::UUID>(from).to_sstring();
-    };
-}
-
-std::function<data_value(data_value)> make_castas_fctn_from_boolean_to_string() {
-    return [](data_value from) -> data_value {
-        return boolean_to_string(value_cast<bool>(from));
-    };
-}
-
-std::function<data_value(data_value)> make_castas_fctn_from_inet_to_string() {
-    return [](data_value from) -> data_value {
-        return inet_addr_type_impl::to_sstring(value_cast<inet_address>(from));
+        return from.type()->to_string_impl(from);
     };
 }
 
@@ -3279,23 +3248,22 @@ thread_local castas_fctns_map castas_fctns {
     { {timestamp_type, simple_date_type}, make_castas_fctn_from_date_to_timestamp() },
     { {timestamp_type, timeuuid_type}, make_castas_fctn_from_timeuuid_to_timestamp() },
 
-    { {ascii_type, timestamp_type}, make_castas_fctn_from_timestamp_to_string() },
-    { {ascii_type, simple_date_type}, make_castas_fctn_from_simple_date_to_string() },
-    { {ascii_type, time_type}, make_castas_fctn_from_time_to_string() },
-    { {ascii_type, timeuuid_type}, make_castas_fctn_from_uuid_to_string() },
-    { {ascii_type, uuid_type}, make_castas_fctn_from_uuid_to_string() },
-    { {ascii_type, boolean_type}, make_castas_fctn_from_boolean_to_string() },
-    { {ascii_type, inet_addr_type}, make_castas_fctn_from_inet_to_string() },
+    { {ascii_type, timestamp_type}, make_castas_fctn_from_dv_to_string() },
+    { {ascii_type, simple_date_type}, make_castas_fctn_from_dv_to_string() },
+    { {ascii_type, time_type}, make_castas_fctn_from_dv_to_string() },
+    { {ascii_type, timeuuid_type}, make_castas_fctn_from_dv_to_string() },
+    { {ascii_type, uuid_type}, make_castas_fctn_from_dv_to_string() },
+    { {ascii_type, boolean_type}, make_castas_fctn_from_dv_to_string() },
+    { {ascii_type, inet_addr_type}, make_castas_fctn_from_dv_to_string() },
     { {ascii_type, ascii_type}, make_castas_fctn_simple<sstring, sstring>() },
 
-    { {utf8_type, timestamp_type}, make_castas_fctn_from_timestamp_to_string() },
-    { {utf8_type, simple_date_type}, make_castas_fctn_from_simple_date_to_string() },
-    { {utf8_type, time_type}, make_castas_fctn_from_time_to_string() },
-    { {utf8_type, timeuuid_type}, make_castas_fctn_from_uuid_to_string() },
-    { {utf8_type, uuid_type}, make_castas_fctn_from_uuid_to_string() },
-    { {utf8_type, boolean_type}, make_castas_fctn_from_boolean_to_string() },
-    { {utf8_type, boolean_type}, make_castas_fctn_from_boolean_to_string() },
-    { {utf8_type, inet_addr_type}, make_castas_fctn_from_inet_to_string() },
+    { {utf8_type, timestamp_type}, make_castas_fctn_from_dv_to_string() },
+    { {utf8_type, simple_date_type}, make_castas_fctn_from_dv_to_string() },
+    { {utf8_type, time_type}, make_castas_fctn_from_dv_to_string() },
+    { {utf8_type, timeuuid_type}, make_castas_fctn_from_dv_to_string() },
+    { {utf8_type, uuid_type}, make_castas_fctn_from_dv_to_string() },
+    { {utf8_type, boolean_type}, make_castas_fctn_from_dv_to_string() },
+    { {utf8_type, inet_addr_type}, make_castas_fctn_from_dv_to_string() },
     { {utf8_type, ascii_type}, make_castas_fctn_simple<sstring, sstring>() },
     { {utf8_type, utf8_type}, make_castas_fctn_simple<sstring, sstring>() },
 };
