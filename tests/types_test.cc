@@ -48,6 +48,18 @@ void test_parsing_fails(const shared_ptr<const abstract_type>& type, sstring str
     }
 }
 
+BOOST_AUTO_TEST_CASE(test_value_cast) {
+    BOOST_REQUIRE_EXCEPTION(value_cast<uint32_t>(data_value(int32_t(42))), std::bad_cast,
+            exception_predicate::message_equals("std::bad_cast"));
+
+    data_value dv(sstring("foo"));
+    const sstring& v1 = value_cast<sstring>(dv);
+    BOOST_REQUIRE_EQUAL(v1, "foo");
+    sstring v2 = value_cast<sstring>(std::move(dv));
+    BOOST_REQUIRE_EQUAL(v2, "foo");
+    BOOST_REQUIRE_EQUAL(v1, "");
+}
+
 BOOST_AUTO_TEST_CASE(test_bytes_type_string_conversions) {
     BOOST_REQUIRE(bytes_type->equal(bytes_type->from_string("616263646566"), bytes_type->decompose(data_value(bytes{"abcdef"}))));
 }
