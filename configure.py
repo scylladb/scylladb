@@ -144,8 +144,12 @@ def flag_supported(flag, compiler):
 
 def gold_supported(compiler):
     src_main = 'int main(int argc, char **argv) { return 0; }'
-    if try_compile_and_link(source=src_main, flags=['-fuse-ld=gold'], compiler=compiler):
-        return '-fuse-ld=gold'
+    link_flags = ['-fuse-ld=gold']
+    if try_compile_and_link(source=src_main, flags=link_flags, compiler=compiler):
+        threads_flag = '-Wl,--threads'
+        if try_compile_and_link(source=src_main, flags=link_flags + [threads_flag], compiler=compiler):
+            link_flags.append(threads_flag)
+        return ' '.join(link_flags)
     else:
         print('Note: gold not found; using default system linker')
         return ''
