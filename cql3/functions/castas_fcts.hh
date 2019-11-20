@@ -54,6 +54,14 @@
 namespace cql3 {
 namespace functions {
 
+/*
+ * Support for CAST(. AS .) functions.
+ */
+
+using castas_fctn = std::function<data_value(data_value)>;
+
+castas_fctn get_castas_fctn(data_type to_type, data_type from_type);
+
 class castas_functions {
 public:
     static shared_ptr<function> get(data_type to_type, const std::vector<shared_ptr<cql3::selection::selector>>& provided_args, schema_ptr s);

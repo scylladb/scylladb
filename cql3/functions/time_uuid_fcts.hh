@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include "castas_fcts.hh"
 #include "native_scalar_function.hh"
 #include "utils/UUID_gen.hh"
 #include <boost/uuid/uuid.hpp>
