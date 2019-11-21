@@ -2695,12 +2695,11 @@ void sstable::move_to_new_dir_in_thread(sstring new_dir, int64_t new_generation)
     sync_directory(old_dir).get();
 }
 
+std::regex entry_descriptor::la_mc_filename_pattern("(la|mc)-(\\d+)-(\\w+)-(.*)");
+std::regex entry_descriptor::ka_filename_pattern("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
+std::regex entry_descriptor::sst_dir_pattern(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
+
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
-    static std::regex la_mc("(la|mc)-(\\d+)-(\\w+)-(.*)");
-    static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
-
-    static std::regex dir(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
-
     std::smatch match;
 
     sstable::version_types version;
@@ -2713,10 +2712,10 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
 
     sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
-    if (std::regex_match(s, match, la_mc)) {
+    if (std::regex_match(s, match, la_mc_filename_pattern)) {
         std::string sdir(sstdir);
         std::smatch dirmatch;
-        if (std::regex_match(sdir, dirmatch, dir)) {
+        if (std::regex_match(sdir, dirmatch, sst_dir_pattern)) {
             ks = dirmatch[1].str();
             cf = dirmatch[2].str();
         } else {
@@ -2726,7 +2725,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
         generation = match[2].str();
         format = sstring(match[3].str());
         component = sstring(match[4].str());
-    } else if (std::regex_match(s, match, ka)) {
+    } else if (std::regex_match(s, match, ka_filename_pattern)) {
         ks = match[1].str();
         cf = match[2].str();
         version = sstable::version_types::ka;

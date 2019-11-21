@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <regex>
+
 #include <seastar/core/sstring.hh>
 
 #include "sstables/component_type.hh"
@@ -30,7 +32,10 @@ using namespace seastar;
 
 namespace sstables {
 
-struct entry_descriptor {
+class sstable;
+
+class entry_descriptor {
+public:
     sstring sstdir;
     sstring ks;
     sstring cf;
@@ -45,6 +50,12 @@ struct entry_descriptor {
                      sstable_version_types version, sstable_format_types format,
                      component_type component)
         : sstdir(sstdir), ks(ks), cf(cf), generation(generation), version(version), format(format), component(component) {}
+private:
+    friend class sstable;
+
+    static std::regex la_mc_filename_pattern;
+    static std::regex ka_filename_pattern;
+    static std::regex sst_dir_pattern;
 };
 
 }
