@@ -169,6 +169,51 @@ def print_progress(test_path, test_args, success, cookie, verbose):
     return (last_len, n + 1, n_total)
 
 
+def run_test(path, repeat, type, args, exec_args):
+    boost_args = []
+    # avoid modifying in-place, it will change test_to_run
+    exec_args = exec_args + '--collectd 0'.split()
+    file = io.StringIO()
+    if args.jenkins and type == 'boost':
+        mode = 'release'
+        if path.startswith(os.path.join('build', 'debug')):
+            mode = 'debug'
+        xmlout = (args.jenkins + "." + mode + "." + os.path.basename(path.split()[0]) + "." + str(repeat) + ".boost.xml")
+        boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
+    if type == 'boost':
+        boost_args += ['--']
+
+    def report_error(exc, out, report_subcause):
+        report_subcause(exc)
+        if out:
+            print('=== stdout START ===', file=file)
+            print(out, file=file)
+            print('=== stdout END ===', file=file)
+    success = False
+    try:
+        subprocess.check_output([path] + boost_args + exec_args,
+                stderr=subprocess.STDOUT,
+                timeout=args.timeout,
+                env=dict(os.environ,
+                    UBSAN_OPTIONS='print_stacktrace=1',
+                    BOOST_TEST_CATCH_SYSTEM_ERRORS='no'),
+                preexec_fn=os.setsid)
+        success = True
+    except subprocess.TimeoutExpired as e:
+        def report_subcause(e):
+            print('  timed out', file=file)
+        report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
+    except subprocess.CalledProcessError as e:
+        def report_subcause(e):
+            print('  with error code {code}\n'.format(code=e.returncode), file=file)
+        report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
+    except Exception as e:
+        def report_subcause(e):
+            print('  with error {e}\n'.format(e=e), file=file)
+        report_error(e, e, report_subcause=report_subcause)
+    return (path, boost_args + exec_args, type, success, file.getvalue())
+
+
 class Alarm(Exception):
     pass
 
@@ -267,50 +312,6 @@ if __name__ == "__main__":
     failed_tests = []
 
     n_total = len(test_to_run)
-    env = os.environ
-    env['UBSAN_OPTIONS'] = 'print_stacktrace=1'
-    env['BOOST_TEST_CATCH_SYSTEM_ERRORS'] = 'no'
-
-    def run_test(path, repeat, type, exec_args):
-        boost_args = []
-        # avoid modifying in-place, it will change test_to_run
-        exec_args = exec_args + '--collectd 0'.split()
-        file = io.StringIO()
-        if args.jenkins and type == 'boost':
-            mode = 'release'
-            if path.startswith(os.path.join('build', 'debug')):
-                mode = 'debug'
-            xmlout = (args.jenkins + "." + mode + "." + os.path.basename(path.split()[0]) + "." + str(repeat) + ".boost.xml")
-            boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
-        if type == 'boost':
-            boost_args += ['--']
-
-        def report_error(exc, out, report_subcause):
-            report_subcause(exc)
-            if out:
-                print('=== stdout START ===', file=file)
-                print(out, file=file)
-                print('=== stdout END ===', file=file)
-        success = False
-        try:
-            subprocess.check_output([path] + boost_args + exec_args,
-                                    stderr=subprocess.STDOUT,
-                                    timeout=args.timeout,
-                                    env=env, preexec_fn=os.setsid)
-            success = True
-        except subprocess.TimeoutExpired as e:
-            def report_subcause(e):
-                print('  timed out', file=file)
-            report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
-        except subprocess.CalledProcessError as e:
-            def report_subcause(e):
-                print('  with error code {code}\n'.format(code=e.returncode), file=file)
-            report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
-        except Exception as e:
-            def report_subcause(e):
-                print('  with error {e}\n'.format(e=e), file=file)
-            report_error(e, e, report_subcause=report_subcause)
-        return (path, boost_args + exec_args, type, success, file.getvalue())
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
     futures = []
@@ -319,7 +320,7 @@ if __name__ == "__main__":
         test_type = test[1]
         exec_args = test[2] if len(test) >= 3 else []
         for repeat in range(args.repeat):
-            futures.append(executor.submit(run_test, path, repeat, test_type, exec_args))
+            futures.append(executor.submit(run_test, path, repeat, test_type, args, exec_args))
 
     results = []
     cookie = len(futures)
