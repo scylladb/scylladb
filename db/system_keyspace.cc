@@ -2067,9 +2067,7 @@ future<service::paxos::paxos_state> load_paxos_state(partition_key key, schema_p
     static auto cql = format("SELECT * FROM system.{} WHERE row_key = ? AND cf_id = ?", PAXOS);
     // FIXME: we need execute_cql_with_now()
     (void)now;
-    // FIXME: we need execute_cql_with_timeout()
-    (void)timeout;
-    auto f = execute_cql(cql, to_legacy(*key.get_compound_type(*s), key.representation()), s->id());
+    auto f = execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()), s->id());
     return f.then([key = std::move(key), s] (shared_ptr<cql3::untyped_result_set> results) mutable {
         if (results->empty()) {
             return service::paxos::paxos_state();
@@ -2102,36 +2100,32 @@ static int32_t paxos_ttl_sec(const schema& s) {
 }
 
 future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
-    // FIXME: we need execute_cql_with_timeout()
-    (void)timeout;
     static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET in_progress_ballot = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
-    return execute_cql(cql,
-                       utils::UUID_gen::micros_timestamp(ballot),
-                       paxos_ttl_sec(s),
-                       ballot,
-                       to_legacy(*key.get_compound_type(s), key.representation()),
-                       s.id()
-                      ).discard_result();
+    return execute_cql_with_timeout(cql,
+            timeout,
+            utils::UUID_gen::micros_timestamp(ballot),
+            paxos_ttl_sec(s),
+            ballot,
+            to_legacy(*key.get_compound_type(s), key.representation()),
+            s.id()
+        ).discard_result();
 }
 
 future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout) {
-    // FIXME: we need execute_cql_with_timeout()
-    (void)timeout;
     static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = ?, proposal = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
     partition_key_view key = proposal.update.key(s);
-    return execute_cql(cql,
-                       utils::UUID_gen::micros_timestamp(proposal.ballot),
-                       paxos_ttl_sec(s),
-                       proposal.ballot,
-                       ser::serialize_to_buffer<bytes>(proposal.update),
-                       to_legacy(*key.get_compound_type(s), key.representation()),
-                       s.id()
-                      ).discard_result();
+    return execute_cql_with_timeout(cql,
+            timeout,
+            utils::UUID_gen::micros_timestamp(proposal.ballot),
+            paxos_ttl_sec(s),
+            proposal.ballot,
+            ser::serialize_to_buffer<bytes>(proposal.update),
+            to_legacy(*key.get_compound_type(s), key.representation()),
+            s.id()
+        ).discard_result();
 }
 
 future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout) {
-    // FIXME: we need execute_cql_with_timeout()
-    (void)timeout;
     // We always erase the last proposal when we learn about a new Paxos decision. The ballot
     // timestamp of the decision is used for entire mutation, so if the "erased" proposal is more
     // recent it will naturally stay on top.
@@ -2141,14 +2135,15 @@ future<> save_paxos_decision(const schema& s, const service::paxos::proposal& de
     static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null,"
             " most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
     partition_key_view key = decision.update.key(s);
-    return execute_cql(cql,
-                       utils::UUID_gen::micros_timestamp(decision.ballot),
-                       paxos_ttl_sec(s),
-                       decision.ballot,
-                       ser::serialize_to_buffer<bytes>(decision.update),
-                       to_legacy(*key.get_compound_type(s), key.representation()),
-                       s.id()
-                      ).discard_result();
+    return execute_cql_with_timeout(cql,
+            timeout,
+            utils::UUID_gen::micros_timestamp(decision.ballot),
+            paxos_ttl_sec(s),
+            decision.ballot,
+            ser::serialize_to_buffer<bytes>(decision.update),
+            to_legacy(*key.get_compound_type(s), key.representation()),
+            s.id()
+        ).discard_result();
 }
 
 } // namespace system_keyspace
