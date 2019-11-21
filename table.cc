@@ -1720,7 +1720,10 @@ seal_snapshot(sstring jsondir) {
 future<> table::snapshot(sstring name) {
     return flush().then([this, name = std::move(name)]() {
        return with_semaphore(_sstable_deletion_sem, 1, [this, name = std::move(name)]() {
-        auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
+        auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all()
+                | boost::adaptors::filtered([] (sstables::shared_sstable sst) {
+                    return sst->get_location() == sstables::sstable::location_types::base;
+                }));
         return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
             return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([this, name, jsondir, &tables] {
