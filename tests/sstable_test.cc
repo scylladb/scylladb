@@ -29,6 +29,7 @@
 #include "sstables/key.hh"
 #include "sstable_utils.hh"
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "schema.hh"
 #include "compress.hh"
 #include "database.hh"
@@ -39,6 +40,7 @@
 #include "tests/test_services.hh"
 #include "cell_locking.hh"
 #include "sstables/data_consume_context.hh"
+#include "exceptions/exceptions.hh"
 
 using namespace sstables;
 
@@ -1302,4 +1304,23 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         in.skip(opts.buffer_size).get();
         expect_eof(in);
     });
+}
+
+static future<sstables::sstable::location_types> get_location(const char* subdir = nullptr) {
+    auto schema = uncompressed_schema();
+    fs::path path = get_test_dir("get_location", schema).c_str();
+    if (subdir) {
+        path /= subdir;
+    }
+    return test_using_reusable_sst(std::move(schema), path.string(), 1, [] (sstable_ptr ptr) {
+        return ptr->get_location();
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_location) {
+    BOOST_REQUIRE(get_location().get0() == sstables::sstable::location_types::base);
+    BOOST_REQUIRE(get_location("staging").get0() == sstables::sstable::location_types::staging);
+    BOOST_REQUIRE(get_location("upload").get0() == sstables::sstable::location_types::upload);
+    BOOST_REQUIRE(get_location("snapshots/1574343111").get0() == sstables::sstable::location_types::snapshots);
+    BOOST_REQUIRE(get_location("other").get0() == sstables::sstable::location_types::unknown);
 }
