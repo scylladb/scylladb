@@ -4420,7 +4420,8 @@ void storage_proxy::init_messaging_service() {
         });
     };
 
-    ms.register_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
+    auto receive_mutation_handler = [] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward,
+            gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
@@ -4437,7 +4438,9 @@ void storage_proxy::init_messaging_service() {
                     auto& ms = netw::get_local_messaging_service();
                     return ms.send_mutation(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
                 });
-    });
+    };
+    ms.register_mutation(receive_mutation_handler);
+
     ms.register_paxos_learn([] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
             std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
