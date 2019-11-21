@@ -783,7 +783,9 @@ class scylla_task_histogram(gdb.Command):
                 addr = gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference()
                 if addr >= text_start and addr <= text_end:
                     vptr_count[int(addr)] += 1
-            if (not args.all or args.samples > 0) and (scanned_pages >= args.samples or len(vptr_count) >= args.samples):
+            if args.all or args.samples == 0:
+                continue
+            if scanned_pages >= args.samples or len(vptr_count) >= args.samples:
                 break
 
         sorted_counts = sorted(vptr_count.items(), key=lambda e: -e[1])
