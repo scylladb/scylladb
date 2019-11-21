@@ -477,6 +477,52 @@ def test_gsi_5(test_table_gsi_5):
         KeyConditions={'p': {'AttributeValueList': [p2], 'ComparisonOperator': 'EQ'},
                        'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
 
+# Verify that DescribeTable correctly returns the schema of both base-table
+# and secondary indexes. KeySchema is given for each of the base table and
+# indexes, and AttributeDefinitions is merged for all of them together.
+def test_gsi_5_describe_table_schema(test_table_gsi_5):
+    got = test_table_gsi_5.meta.client.describe_table(TableName=test_table_gsi_5.name)['Table']
+    # Copied from test_table_gsi_5 fixture
+    expected_base_keyschema = [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' } ]
+    expected_gsi_keyschema = [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' } ]
+    expected_all_attribute_definitions = [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' } ]
+    assert got['KeySchema'] == expected_base_keyschema
+    gsis = got['GlobalSecondaryIndexes']
+    assert len(gsis) == 1
+    assert gsis[0]['KeySchema'] == expected_gsi_keyschema
+    # The list of attribute definitions may be arbitrarily reordered
+    assert multiset(got['AttributeDefinitions']) == multiset(expected_all_attribute_definitions)
+
+# Similar DescribeTable schema test for test_table_gsi_2. The peculiarity
+# in that table is that the base table has only a hash key p, and index
+# only hash hash key x; Now, while internally Scylla needs to add "p" as a
+# clustering key in the materialized view (in Scylla the view key always
+# contains the base key), when describing the table, "p" shouldn't be
+# returned as a range key, because the user didn't ask for it.
+# This test reproduces issue #5320.
+@pytest.mark.xfail(reason="GSI DescribeTable spurious range key (#5320)")
+def test_gsi_2_describe_table_schema(test_table_gsi_2):
+    got = test_table_gsi_2.meta.client.describe_table(TableName=test_table_gsi_2.name)['Table']
+    # Copied from test_table_gsi_2 fixture
+    expected_base_keyschema = [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ]
+    expected_gsi_keyschema = [ { 'AttributeName': 'x', 'KeyType': 'HASH' } ]
+    expected_all_attribute_definitions = [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' } ]
+    assert got['KeySchema'] == expected_base_keyschema
+    gsis = got['GlobalSecondaryIndexes']
+    assert len(gsis) == 1
+    assert gsis[0]['KeySchema'] == expected_gsi_keyschema
+    # The list of attribute definitions may be arbitrarily reordered
+    assert multiset(got['AttributeDefinitions']) == multiset(expected_all_attribute_definitions)
+
 # All tests above involved "ProjectionType: ALL". This test checks how
 # "ProjectionType:: KEYS_ONLY" works. We note that it projects both
 # the index's key, *and* the base table's key. So items which had different
