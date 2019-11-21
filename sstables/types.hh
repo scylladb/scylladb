@@ -49,6 +49,14 @@ static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
 
 namespace sstables {
 
+enum class sstable_location_types {
+    unknown,
+    base,
+    staging,
+    upload,
+    snapshots,
+};
+
 GCC6_CONCEPT(
 template<typename T>
 concept bool Writer() {

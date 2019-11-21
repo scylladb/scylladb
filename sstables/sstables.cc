@@ -2584,6 +2584,29 @@ std::vector<sstring> sstable::component_filenames() const {
     return res;
 }
 
+sstable::location_types sstable::sstable_location(const sstring& dir) {
+    static const std::map<std::string, sstable::location_types> dir_to_location = {
+        { "", sstable::location_types::base },
+        { "staging", sstable::location_types::staging },
+        { "upload", sstable::location_types::upload },
+        { "snapshots", sstable::location_types::snapshots },
+    };
+    std::smatch dirmatch;
+    std::string sst_dir(dir);
+    auto loc = sstable::location_types::unknown;
+    auto match = std::regex_match(sst_dir, dirmatch, entry_descriptor::sst_dir_pattern);
+    if (match && dirmatch.size() > 4) {
+        auto subdir = dirmatch[4].str();
+        try {
+            loc = dir_to_location.at(subdir);
+        } catch (...) {
+            auto msg = format("Could not detect SSTable location {}: {}: {}", dir, subdir, std::current_exception());
+            throw std::logic_error(std::move(msg));
+        }
+    }
+    return loc;
+}
+
 bool sstable::requires_view_building() const {
     return boost::algorithm::ends_with(_dir, "staging");
 }
@@ -2697,7 +2720,7 @@ void sstable::move_to_new_dir_in_thread(sstring new_dir, int64_t new_generation)
 
 std::regex entry_descriptor::la_mc_filename_pattern("(la|mc)-(\\d+)-(\\w+)-(.*)");
 std::regex entry_descriptor::ka_filename_pattern("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
-std::regex entry_descriptor::sst_dir_pattern(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
+std::regex entry_descriptor::sst_dir_pattern(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(/(staging|upload|snapshots)(/[^/]+)?)?/*");
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
     std::smatch match;
@@ -3435,6 +3458,7 @@ sstable::sstable(schema_ptr schema,
     : sstable_buffer_size(buffer_size)
     , _schema(std::move(schema))
     , _dir(std::move(dir))
+    , _location(sstable_location(_dir))
     , _generation(generation)
     , _version(v)
     , _format(f)

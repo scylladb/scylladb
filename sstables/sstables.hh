@@ -134,6 +134,7 @@ public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
     using tracker_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    using location_types = sstable_location_types;
 public:
     sstable(schema_ptr schema,
             sstring dir,
@@ -411,6 +412,11 @@ public:
         return temp_sst_dir(_dir, _generation);
     }
 
+    static location_types sstable_location(const sstring& dir);
+    location_types get_location() const {
+        return _location;
+    }
+
     bool requires_view_building() const;
 
     metadata_collector& get_metadata_collector() {
@@ -523,6 +529,7 @@ private:
 
     schema_ptr _schema;
     sstring _dir;
+    location_types _location = location_types::unknown;
     std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
     unsigned long _generation = 0;
     version_types _version;
