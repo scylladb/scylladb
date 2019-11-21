@@ -62,6 +62,7 @@
 #include "stats.hh"
 #include "utils/observable.hh"
 #include "sstables/shareable_components.hh"
+#include "sstables/entry_descriptor.hh"
 
 #include <seastar/util/optimized_optional.hh>
 #include <boost/intrusive/list.hpp>
@@ -847,23 +848,6 @@ public:
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&);
-};
-
-struct entry_descriptor {
-    sstring sstdir;
-    sstring ks;
-    sstring cf;
-    int64_t generation;
-    sstable::version_types version;
-    sstable::format_types format;
-    component_type component;
-
-    static entry_descriptor make_descriptor(sstring sstdir, sstring fname);
-
-    entry_descriptor(sstring sstdir, sstring ks, sstring cf, int64_t generation,
-                     sstable::version_types version, sstable::format_types format,
-                     component_type component)
-        : sstdir(sstdir), ks(ks), cf(cf), generation(generation), version(version), format(format), component(component) {}
 };
 
 // Waits for all prior tasks started on current shard related to sstable management to finish.
