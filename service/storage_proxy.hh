@@ -466,6 +466,11 @@ public:
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats, allow_hints allow_hints = allow_hints::yes);
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, allow_hints allow_hints = allow_hints::yes);
 
+    // Send a mutation to a specific remote target as a hint.
+    // Unlike regular mutations during write operations, hints are sent on the streaming connection
+    // and use different RPC verb.
+    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target);
+
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
      * the column family cfname
@@ -541,6 +546,7 @@ public:
     friend class mutation_holder;
     friend class per_destination_mutation;
     friend class shared_mutation;
+    friend class hint_mutation;
     friend class cas_mutation;
 };
 
