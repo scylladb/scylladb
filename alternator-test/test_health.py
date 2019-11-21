@@ -29,6 +29,7 @@ def test_health_works(dynamodb):
 # Test that a health check only works for the root URL ('/')
 def test_health_only_works_for_root_path(dynamodb):
     url = dynamodb.meta.client._endpoint.host
-    for suffix in ['/abc', '/..', '/-', '/index.htm', '/health']:
+    for suffix in ['/abc', '/-', '/index.htm', '/health']:
+        print(url + suffix)
         response = requests.get(url + suffix)
         assert response.status_code in range(400, 405)
