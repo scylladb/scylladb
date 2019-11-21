@@ -2608,7 +2608,7 @@ sstable::location_types sstable::sstable_location(const sstring& dir) {
 }
 
 bool sstable::requires_view_building() const {
-    return boost::algorithm::ends_with(_dir, "staging");
+    return get_location() == sstable::location_types::staging;
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
