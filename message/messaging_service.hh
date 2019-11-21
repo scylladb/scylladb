@@ -138,7 +138,8 @@ enum class messaging_verb : int32_t {
     PAXOS_PREPARE = 39,
     PAXOS_ACCEPT = 40,
     PAXOS_LEARN = 41,
-    LAST = 42,
+    HINT_MUTATION = 42,
+    LAST = 43,
 };
 
 } // namespace netw
@@ -489,6 +490,12 @@ public:
     future<> send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
             std::vector<inet_address> forward, inet_address reply_to, unsigned shard, response_id_type response_id,
             std::optional<tracing::trace_info> trace_info = std::nullopt);
+
+    void register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
+        inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
+    void unregister_hint_mutation();
+    future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
+        inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:

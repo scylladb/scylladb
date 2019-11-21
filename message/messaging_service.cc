@@ -480,6 +480,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM:
     case messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM:
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
+    case messaging_verb::HINT_MUTATION:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -1273,6 +1274,19 @@ future<> messaging_service::send_paxos_learn(msg_addr id, clock_type::time_point
     std::vector<inet_address> forward, inet_address reply_to, unsigned shard, response_id_type response_id,
     std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::PAXOS_LEARN, std::move(id), decision, std::move(forward),
+        std::move(reply_to), std::move(shard), std::move(response_id), std::move(trace_info));
+}
+
+void messaging_service::register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
+        inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func) {
+    register_handler(this, netw::messaging_verb::HINT_MUTATION, std::move(func));
+}
+void messaging_service::unregister_hint_mutation() {
+    _rpc->unregister_handler(netw::messaging_verb::HINT_MUTATION);
+}
+future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
+        inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
+    return send_message_oneway_timeout(this, timeout, messaging_verb::HINT_MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), std::move(shard), std::move(response_id), std::move(trace_info));
 }
 
