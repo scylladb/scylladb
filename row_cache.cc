@@ -931,7 +931,6 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
     });
 
     return seastar::async([this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
-        coroutine update;
         size_t size_entry;
         // In case updater fails, we must bring the cache to consistency without deferring.
         auto cleanup = defer([&m, this] {
@@ -939,6 +938,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
             _prev_snapshot_pos = {};
             _prev_snapshot = {};
         });
+        coroutine update; // Destroy before cleanup to release snapshots before invalidating.
         partition_presence_checker is_present = _prev_snapshot->make_partition_presence_checker();
         while (!m.partitions.empty()) {
             with_allocator(_tracker.allocator(), [&] () {
