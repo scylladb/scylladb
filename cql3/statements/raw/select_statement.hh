@@ -48,7 +48,7 @@ public:
     class parameters final {
     public:
         using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering>>;
-        enum class statement_subtype { REGULAR, JSON };
+        enum class statement_subtype { REGULAR, JSON, PRUNE_MATERIALIZED_VIEW };
     private:
         const orderings_type _orderings;
         const bool _is_distinct;
@@ -69,6 +69,7 @@ public:
         bool allow_filtering() const;
         bool is_json() const;
         bool bypass_cache() const;
+        bool is_prune_materialized_view() const;
         orderings_type const& orderings() const;
     };
     template<typename T>

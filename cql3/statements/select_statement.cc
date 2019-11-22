@@ -12,6 +12,8 @@
 #include "cql3/expr/expression.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/prune_materialized_view_statement.hh"
+
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
@@ -126,6 +128,10 @@ bool select_statement::parameters::allow_filtering() const {
 
 bool select_statement::parameters::bypass_cache() const {
     return _bypass_cache;
+}
+
+bool select_statement::parameters::is_prune_materialized_view() const {
+    return _statement_subtype == statement_subtype::PRUNE_MATERIALIZED_VIEW;
 }
 
 select_statement::parameters::orderings_type const& select_statement::parameters::orderings() const {
@@ -1634,7 +1640,21 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             && db.get_config().enable_parallelized_aggregation();
     };
 
-    if (restrictions->uses_secondary_indexing()) {
+    if (_parameters->is_prune_materialized_view()) {
+        stmt = ::make_shared<cql3::statements::prune_materialized_view_statement>(
+                schema,
+                ctx.bound_variables_size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                std::move(group_by_cell_indices),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                std::move(prepared_attrs));
+    } else if (restrictions->uses_secondary_indexing()) {
         stmt = indexed_table_select_statement::prepare(
                 db,
                 schema,
