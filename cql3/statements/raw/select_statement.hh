@@ -48,11 +48,12 @@ public:
     class parameters final {
     public:
         using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering>>;
+        enum class statement_subtype { REGULAR, JSON };
     private:
         const orderings_type _orderings;
         const bool _is_distinct;
         const bool _allow_filtering;
-        const bool _is_json;
+        const statement_subtype _statement_subtype;
         bool _bypass_cache = false;
     public:
         parameters();
@@ -62,7 +63,7 @@ public:
         parameters(orderings_type orderings,
             bool is_distinct,
             bool allow_filtering,
-            bool is_json,
+            statement_subtype statement_subtype,
             bool bypass_cache);
         bool is_distinct() const;
         bool allow_filtering() const;
