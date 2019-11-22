@@ -21,13 +21,13 @@
 
 #pragma once
 
-#include "schema.hh"
 #include "bytes.hh"
 #include "types.hh"
 #include "compound_compat.hh"
 #include "utils/managed_bytes.hh"
 #include "hashing.hh"
 #include "database_fwd.hh"
+#include "schema_fwd.hh"
 
 //
 // This header defines type system for primary key holders.
