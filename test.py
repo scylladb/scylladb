@@ -40,7 +40,7 @@ boost_tests = [
     'mvcc_test',
     'schema_registry_test',
     'range_test',
-    'mutation_reader_test',
+    ('mutation_reader_test', '-c{} -m2G'.format(min(os.cpu_count(), 3))),
     'serialized_action_test',
     'cdc_test',
     'cql_query_test',
@@ -114,10 +114,10 @@ boost_tests = [
     'cql_auth_syntax_test',
     'querier_cache',
     'limiting_data_source_test',
-    'sstable_test',
-    'sstable_datafile_test',
+    ('sstable_test', '-c1 -m2G'),
+    ('sstable_datafile_test', '-c1 -m2G'),
     'broken_sstable_test',
-    'sstable_3_x_test',
+    ('sstable_3_x_test', '-c1 -m2G'),
     'meta_test',
     'reusable_buffer_test',
     'mutation_writer_test',
@@ -138,6 +138,15 @@ other_tests = [
     'memory_footprint',
 ]
 
+long_tests = [
+    ('lsa_async_eviction_test', '-c1 -m200M --size 1024 --batch 3000 --count 2000000'),
+    ('lsa_sync_eviction_test', '-c1 -m100M --count 10 --standard-object-size 3000000'),
+    ('lsa_sync_eviction_test', '-c1 -m100M --count 24000 --standard-object-size 2048'),
+    ('lsa_sync_eviction_test', '-c1 -m1G --count 4000000 --standard-object-size 128'),
+    ('row_cache_alloc_stress', '-c1 -m2G'),
+    ('row_cache_stress_test', '-c1 -m1G --seconds 10'),
+]
+
 CONCOLORS = {'green': '\033[1;32m', 'red': '\033[1;31m', 'nocolor': '\033[0m'}
 
 def colorformat(msg, **kwargs):
@@ -153,13 +162,37 @@ def status_to_string(success):
 
     return status
 
-def print_progress_succint(test_path, test_args, success, cookie):
+class UnitTest:
+    standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0'.split()
+    seastar_args = '-c2 -m2G'
+
+    def __init__(self, test_no, name, opts, kind, mode, options):
+        if opts is None:
+            opts = UnitTest.seastar_args
+        self.id = test_no
+        self.name = name
+        self.mode = mode
+        self.path = os.path.join('build', self.mode, 'tests', self.name)
+        self.kind = kind
+        self.args = opts.split() + UnitTest.standard_args
+
+        if self.kind == 'boost':
+            boost_args = []
+            if options.jenkins:
+                mode = 'debug' if self.mode == 'debug' else 'release'
+                xmlout = options.jenkins + "." + mode + "." + self.name + "." + str(self.id) + ".boost.xml"
+                boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
+            boost_args += ['--']
+            self.args = boost_args + self.args
+
+
+def print_progress(test, success, cookie, verbose):
     if type(cookie) is int:
         cookie = (0, 1, cookie)
 
     last_len, n, n_total = cookie
-    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test_path, ' '.join(test_args))
-    if sys.stdout.isatty():
+    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test.path, ' '.join(test.args))
+    if verbose == False and sys.stdout.isatty():
         print('\r' + ' ' * last_len, end='')
         last_len = len(msg)
         print('\r' + msg, end='')
@@ -169,15 +202,33 @@ def print_progress_succint(test_path, test_args, success, cookie):
     return (last_len, n + 1, n_total)
 
 
-def print_status_verbose(test_path, test_args, success, cookie):
-    if type(cookie) is int:
-        cookie = (1, cookie)
+def run_test(test, options):
+    file = io.StringIO()
 
-    n, n_total = cookie
-    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test_path, ' '.join(test_args))
-    print(msg)
-
-    return (n + 1, n_total)
+    def report_error(out):
+        print('=== stdout START ===', file=file)
+        print(out, file=file)
+        print('=== stdout END ===', file=file)
+    success = False
+    try:
+        subprocess.check_output([test.path] + test.args,
+                stderr=subprocess.STDOUT,
+                timeout=options.timeout,
+                env=dict(os.environ,
+                    UBSAN_OPTIONS='print_stacktrace=1',
+                    BOOST_TEST_CATCH_SYSTEM_ERRORS='no'),
+                preexec_fn=os.setsid)
+        success = True
+    except subprocess.TimeoutExpired as e:
+        print('  timed out', file=file)
+        report_error(e.output.decode(encoding='UTF-8'))
+    except subprocess.CalledProcessError as e:
+        print('  with error code {code}\n'.format(code=e.returncode), file=file)
+        report_error(e.output.decode(encoding='UTF-8'))
+    except Exception as e:
+        print('  with error {e}\n'.format(e=e), file=file)
+        report_error(e)
+    return (test, success, file.getvalue())
 
 
 class Alarm(Exception):
@@ -188,9 +239,9 @@ def alarm_handler(signum, frame):
     raise Alarm
 
 
-if __name__ == "__main__":
+def parse_cmd_line():
+    """ Print usage and process command line options. """
     all_modes = ['debug', 'release', 'dev', 'sanitize']
-
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     testmem = 2e9
     cpus_per_test_job = 1
@@ -219,144 +270,100 @@ if __name__ == "__main__":
                         help="Name of a file to write results of non-boost tests to in xunit format")
     args = parser.parse_args()
 
-    print_progress = print_status_verbose if args.verbose else print_progress_succint
-
-    custom_seastar_args = {
-        "sstable_test": ['-c1', '-m2G'],
-        'sstable_datafile_test': ['-c1', '-m2G'],
-        "sstable_3_x_test": ['-c1', '-m2G'],
-        "mutation_reader_test": ['-c{}'.format(min(os.cpu_count(), 3)), '-m2G'],
-    }
-
-    test_to_run = []
-    modes_to_run =  args.modes
-    if not modes_to_run:
+    if not args.modes:
         out = subprocess.Popen(['ninja', 'mode_list'], stdout=subprocess.PIPE).communicate()[0].decode()
         # [1/1] List configured modes
         # debug release dev
-        modes_to_run = out.split('\n')[1].split(' ')
+        args.modes = out.split('\n')[1].split(' ')
 
-    for mode in modes_to_run:
-        prefix = os.path.join('build', mode, 'tests')
-        standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000'.split()
-        seastar_args = '-c2 -m2G'.split()
-        for test in other_tests:
-            test_to_run.append((os.path.join(prefix, test), 'other', custom_seastar_args.get(test, seastar_args) + standard_args))
-        for test in boost_tests:
-            test_to_run.append((os.path.join(prefix, test), 'boost', custom_seastar_args.get(test, seastar_args) + standard_args))
+    return args
 
-    for m in ['release', 'dev']:
-        if m in modes_to_run:
-            test_to_run.append(('build/' + m + '/tests/lsa_async_eviction_test', 'other',
-                                '-c1 -m200M --size 1024 --batch 3000 --count 2000000'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
-                                '-c1 -m100M --count 10 --standard-object-size 3000000'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
-                                '-c1 -m100M --count 24000 --standard-object-size 2048'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/lsa_sync_eviction_test', 'other',
-                                '-c1 -m1G --count 4000000 --standard-object-size 128'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/row_cache_alloc_stress', 'other',
-                                '-c1 -m2G'.split() + standard_args))
-            test_to_run.append(('build/' + m + '/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split() + standard_args))
 
-    if args.name:
-        test_to_run = [t for t in test_to_run if args.name in t[0]]
-        if not test_to_run:
-            print("Test {} not found".format(args.name))
+def find_tests(options):
+
+    tests_to_run = []
+
+    for mode in options.modes:
+        def add_test_list(lst, kind):
+            for t in lst:
+                tests_to_run.append((t, None, kind, mode) if type(t) == str else (*t, kind, mode))
+
+        add_test_list(other_tests, 'other')
+        add_test_list(boost_tests, 'boost')
+        if mode in ['release', 'dev']:
+            add_test_list(long_tests, 'other')
+
+    if options.name:
+        tests_to_run = [t for t in tests_to_run if options.name in t[0]]
+        if not tests_to_run:
+            print("Test {} not found".format(options.name))
             sys.exit(1)
 
+    tests_to_run = [t for t in tests_to_run for _ in range(options.repeat)]
+    tests_to_run = [UnitTest(test_no, *t, options) for test_no, t in enumerate(tests_to_run)]
+
+    return tests_to_run
+
+
+def run_all_tests(tests_to_run, options):
     failed_tests = []
 
-    n_total = len(test_to_run)
-    env = os.environ
-    env['UBSAN_OPTIONS'] = 'print_stacktrace=1'
-    env['BOOST_TEST_CATCH_SYSTEM_ERRORS'] = 'no'
-
-    def run_test(path, repeat, type, exec_args):
-        boost_args = []
-        # avoid modifying in-place, it will change test_to_run
-        exec_args = exec_args + '--collectd 0'.split()
-        file = io.StringIO()
-        if args.jenkins and type == 'boost':
-            mode = 'release'
-            if path.startswith(os.path.join('build', 'debug')):
-                mode = 'debug'
-            xmlout = (args.jenkins + "." + mode + "." + os.path.basename(path.split()[0]) + "." + str(repeat) + ".boost.xml")
-            boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
-        if type == 'boost':
-            boost_args += ['--']
-
-        def report_error(exc, out, report_subcause):
-            report_subcause(exc)
-            if out:
-                print('=== stdout START ===', file=file)
-                print(out, file=file)
-                print('=== stdout END ===', file=file)
-        success = False
-        try:
-            subprocess.check_output([path] + boost_args + exec_args,
-                                    stderr=subprocess.STDOUT,
-                                    timeout=args.timeout,
-                                    env=env, preexec_fn=os.setsid)
-            success = True
-        except subprocess.TimeoutExpired as e:
-            def report_subcause(e):
-                print('  timed out', file=file)
-            report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
-        except subprocess.CalledProcessError as e:
-            def report_subcause(e):
-                print('  with error code {code}\n'.format(code=e.returncode), file=file)
-            report_error(e, e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
-        except Exception as e:
-            def report_subcause(e):
-                print('  with error {e}\n'.format(e=e), file=file)
-            report_error(e, e, report_subcause=report_subcause)
-        return (path, boost_args + exec_args, type, success, file.getvalue())
-
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=options.jobs)
     futures = []
-    for n, test in enumerate(test_to_run):
-        path = test[0]
-        test_type = test[1]
-        exec_args = test[2] if len(test) >= 3 else []
-        for repeat in range(args.repeat):
-            futures.append(executor.submit(run_test, path, repeat, test_type, exec_args))
+    for test in tests_to_run:
+        futures.append(executor.submit(run_test, test, options))
 
     results = []
     cookie = len(futures)
     for future in concurrent.futures.as_completed(futures):
         result = future.result()
         results.append(result)
-        test_path, test_args, _, success, out = result
-        cookie = print_progress(test_path, test_args, success, cookie)
+        test, success, out = result
+        cookie = print_progress(test, success, cookie, options.verbose)
         if not success:
-            failed_tests.append((test_path, test_args, out))
+            failed_tests.append((test, out))
+    return failed_tests, results
 
+
+def print_summary(failed_tests, total_tests):
     if not failed_tests:
         print('\nOK.')
     else:
         print('\n\nOutput of the failed tests:')
-        for test, test_args, out in failed_tests:
-            print("Test {} {} failed:\n{}".format(test, ' '.join(test_args), out))
+        for test, out in failed_tests:
+            print("Test {} {} failed:\n{}".format(test.path, ' '.join(test.args), out))
         print('\n\nThe following test(s) have failed:')
-        for test, test_args, _ in failed_tests:
-            print('  {} {}'.format(test, ' '.join(test_args)))
-        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(results)))
+        for test, _ in failed_tests:
+            print('  {} {}'.format(test.path, ' '.join(test.args)))
+        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
 
-    if args.xunit:
-        other_results = [r for r in results if r[2] != 'boost']
-        num_other_failed = sum(1 for r in other_results if not r[3])
+def write_xunit_report(results):
+    other_results = [r for r in results if r[0].kind != 'boost']
+    num_other_failed = sum(1 for r in other_results if not r[1])
 
-        xml_results = ET.Element('testsuite', name='non-boost tests',
-                tests=str(len(other_results)), failures=str(num_other_failed), errors='0')
+    xml_results = ET.Element('testsuite', name='non-boost tests',
+            tests=str(len(other_results)), failures=str(num_other_failed), errors='0')
 
-        for test_path, test_args, _, success, out in other_results:
-            xml_res = ET.SubElement(xml_results, 'testcase', name=test_path)
-            if not success:
-                xml_fail = ET.SubElement(xml_res, 'failure')
-                xml_fail.text = "Test {} {} failed:\n{}".format(test_path, ' '.join(test_args), out)
-        with open(args.xunit, "w") as f:
-            ET.ElementTree(xml_results).write(f, encoding="unicode")
+    for test, success, out in other_results:
+        xml_res = ET.SubElement(xml_results, 'testcase', name=test.path)
+        if not success:
+            xml_fail = ET.SubElement(xml_res, 'failure')
+            xml_fail.text = "Test {} {} failed:\n{}".format(test.path, ' '.join(test.args), out)
+    with open(options.xunit, "w") as f:
+        ET.ElementTree(xml_results).write(f, encoding="unicode")
+
+if __name__ == "__main__":
+
+    options = parse_cmd_line()
+
+    tests_to_run = find_tests(options)
+
+    failed_tests, results = run_all_tests(tests_to_run, options)
+
+    print_summary(failed_tests, len(tests_to_run))
+
+    if options.xunit:
+        write_xunit_report(results)
 
     if failed_tests:
         sys.exit(1)
