@@ -1230,8 +1230,8 @@ future<std::vector<row_level_diff_detect_algorithm>> messaging_service::send_rep
 
 void
 messaging_service::register_paxos_prepare(std::function<future<service::paxos::prepare_response>(
-        const rpc::client_info&, rpc::opt_time_point, utils::UUID schema_version, partition_key key, utils::UUID ballot,
-        std::optional<tracing::trace_info>)>&& func) {
+        const rpc::client_info&, rpc::opt_time_point, query::read_command cmd, partition_key key, utils::UUID ballot,
+        bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info>)>&& func) {
     register_handler(this, messaging_verb::PAXOS_PREPARE, std::move(func));
 }
 void messaging_service::unregister_paxos_prepare() {
@@ -1239,9 +1239,10 @@ void messaging_service::unregister_paxos_prepare() {
 }
 future<service::paxos::prepare_response>
 messaging_service::send_paxos_prepare(gms::inet_address peer, clock_type::time_point timeout,
-    utils::UUID schema_version, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+        const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
+        bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info> trace_info) {
     return send_message_timeout<service::paxos::prepare_response>(this,
-        messaging_verb::PAXOS_PREPARE, netw::msg_addr(peer), timeout, schema_version, key, ballot, std::move(trace_info));
+        messaging_verb::PAXOS_PREPARE, netw::msg_addr(peer), timeout, cmd, key, ballot, only_digest, da, std::move(trace_info));
 }
 
 void messaging_service::register_paxos_accept(std::function<future<bool>(

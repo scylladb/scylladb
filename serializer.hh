@@ -232,6 +232,11 @@ inline void serialize(Output& out, const T& v) {
     serializer<T>::write(out, v);
 };
 
+template<typename T, typename Output>
+inline void serialize(Output& out, const std::reference_wrapper<T> v) {
+    serializer<T>::write(out, v.get());
+}
+
 template<typename T, typename Input>
 inline auto deserialize(Input& in, boost::type<T> t) {
     return serializer<T>::read(in);
@@ -302,6 +307,38 @@ struct normalize<bytes_ostream> {
 
 template <typename T, typename U>
 struct is_equivalent : std::is_same<typename normalize<std::remove_const_t<std::remove_reference_t<T>>>::type, typename normalize<std::remove_const_t <std::remove_reference_t<U>>>::type> {
+};
+
+template <typename T, typename U>
+struct is_equivalent<std::reference_wrapper<T>, U> : is_equivalent<T, U> {
+};
+
+template <typename T, typename U>
+struct is_equivalent<T, std::reference_wrapper<U>> : is_equivalent<T, U> {
+};
+
+template <typename T, typename U>
+struct is_equivalent<std::optional<T>, std::optional<U>> : is_equivalent<T, U> {
+};
+
+template <typename T, typename U, bool>
+struct is_equivalent_arity;
+
+template <typename ...T, typename ...U>
+struct is_equivalent_arity<std::tuple<T...>, std::tuple<U...>, false> : std::false_type {
+};
+
+template <typename ...T, typename ...U>
+struct is_equivalent_arity<std::tuple<T...>, std::tuple<U...>, true> {
+    static constexpr bool value = (is_equivalent<T, U>::value && ...);
+};
+
+template <typename ...T, typename ...U>
+struct is_equivalent<std::tuple<T...>, std::tuple<U...>> : is_equivalent_arity<std::tuple<T...>, std::tuple<U...>, sizeof...(T) == sizeof...(U)> {
+};
+
+template <typename ...T, typename ...U>
+struct is_equivalent<std::variant<T...>, std::variant<U...>> : is_equivalent<std::tuple<T...>, std::tuple<U...>> {
 };
 
 // gc_clock duration values were serialized as 32-bit prior to 3.1, and

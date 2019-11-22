@@ -58,13 +58,13 @@ struct query_context {
                 // let the `storage_proxy` time out the query down the call chain
                 db::timeout_clock::duration::zero();
 
-        const timeout_config tcfg{d, d, d, d, d, d, d};
-
-        return _qp.local().process(req,
-            cql3::query_options::DEFAULT.get_consistency(),
-            tcfg,
-            { data_value(std::forward<Args>(args))... },
-            true);
+        return do_with(timeout_config{d, d, d, d, d, d, d}, [this, req = std::move(req), &args...] (auto& tcfg) {
+            return _qp.local().process(req,
+                cql3::query_options::DEFAULT.get_consistency(),
+                tcfg,
+                { data_value(std::forward<Args>(args))... },
+                true);
+        });
     }
 
     database& db() {

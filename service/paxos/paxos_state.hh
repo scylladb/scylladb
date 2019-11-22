@@ -42,6 +42,7 @@
 #pragma once
 #include "service/paxos/proposal.hh"
 #include "log.hh"
+#include "digest_algorithm.hh"
 #include "db/timeout_clock.hh"
 #include <unordered_map>
 #include "utils/UUID_gen.hh"
@@ -79,10 +80,11 @@ class paxos_state {
     std::optional<proposal> _accepted_proposal;
     std::optional<proposal> _most_recent_commit;
 
-    static future<prepare_response> prepare_impl(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token,
-            partition_key key, utils::UUID ballot, clock_type::time_point timeout);
-    static future<bool> accept_impl(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token,
-            proposal proposal, clock_type::time_point timeout);
+    static future<prepare_response> prepare_impl(tracing::trace_state_ptr tr_state, schema_ptr schema,
+            const query::read_command& cmd, const dht::token& token, const partition_key& key, utils::UUID ballot,
+            bool only_digest, query::digest_algorithm da, clock_type::time_point timeout);
+    static future<bool> accept_impl(tracing::trace_state_ptr tr_state, schema_ptr schema,
+            const dht::token& token, const proposal& proposal, clock_type::time_point timeout);
 
 public:
     static logging::logger logger;
@@ -95,7 +97,8 @@ public:
         , _most_recent_commit(std::move(commit)) {}
     // Replica RPC endpoint for Paxos "prepare" phase.
     static future<prepare_response> prepare(tracing::trace_state_ptr tr_state, schema_ptr schema,
-        partition_key key, utils::UUID ballot, clock_type::time_point timeout);
+            lw_shared_ptr<query::read_command> cmd, partition_key key, utils::UUID ballot,
+            bool only_digest, query::digest_algorithm da, clock_type::time_point timeout);
     // Replica RPC endpoint for Paxos "accept" phase.
     static future<bool> accept(tracing::trace_state_ptr tr_state, schema_ptr schema, proposal proposal,
             clock_type::time_point timeout);

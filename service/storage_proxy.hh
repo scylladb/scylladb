@@ -301,6 +301,7 @@ private:
     bool hints_enabled(db::write_type type) noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
     std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
+    static void sort_endpoints_by_proximity(std::vector<gms::inet_address>& eps);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
@@ -555,6 +556,8 @@ private:
     shared_ptr<storage_proxy> _proxy;
     // The schema for the table the operation works upon.
     schema_ptr _schema;
+    // Read command used by this CAS request.
+    lw_shared_ptr<query::read_command> _cmd;
     // SERIAL or LOCAL SERIAL - influences what endpoints become Paxos protocol participants,
     // as well as Paxos quorum size. Is either set explicitly in the query or derived from
     // the value set by SERIAL CONSISTENCY [SERIAL|LOCAL SERIAL] control statement.
@@ -587,12 +590,13 @@ public:
 public:
     paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, tracing::trace_state_ptr tr_state_arg,
         service_permit permit_arg,
-        dht::decorated_key key_arg, schema_ptr schema_arg,
+        dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
         db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
         storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg)
 
         : _proxy(proxy_arg)
         , _schema(std::move(schema_arg))
+        , _cmd(cmd_arg)
         , _cl_for_paxos(cl_for_paxos_arg)
         , _cl_for_learn(cl_for_learn_arg)
         , _timeout(timeout_arg)
@@ -605,8 +609,16 @@ public:
         _required_participants = pp.required_participants;
     }
 
+    // Result of PREPARE step, i.e. begin_and_repair_paxos().
+    struct ballot_and_data {
+        // Accepted ballot.
+        utils::UUID ballot;
+        // Current value of the requested key or none.
+        foreign_ptr<lw_shared_ptr<query::result>> data;
+    };
+
     // Steps of the Paxos protocol
-    future<utils::UUID> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
+    future<ballot_and_data> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
     future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
     future<bool> accept_proposal(const paxos::proposal& proposal, bool timeout_if_partially_accepted = true);
     future<> learn_decision(paxos::proposal decision, bool allow_hints = false);
