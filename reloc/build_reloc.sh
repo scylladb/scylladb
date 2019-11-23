@@ -2,7 +2,14 @@
 
 . /etc/os-release
 
-DEFAULT_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=."
+# The default build-id used by lld is xxhash, which is 8 bytes
+# long. rpm requires build-ids to be at least 16 bytes long
+# (https://github.com/rpm-software-management/rpm/issues/950). We
+# force using sha1 for now. That has no impact in gold and bfd since
+# that is their default. We set it in here instead of configure.py to
+# not slow down regular builds.
+DEFAULT_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=. --ldflags=-Wl,--build-id=sha1"
+
 DEFAULT_MODE="release"
 
 print_usage() {
