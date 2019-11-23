@@ -436,8 +436,6 @@ arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', def
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
                         help='Enable(1)/disable(0)compiler debug information generation')
-arg_parser.add_argument('--compress-exec-debuginfo', action='store', dest='compress_exec_debuginfo', type=int, default=1,
-                        help='Enable(1)/disable(0) debug information compression in executables')
 arg_parser.add_argument('--static-stdc++', dest='staticcxx', action='store_true',
                         help='Link libgcc and libstdc++ statically')
 arg_parser.add_argument('--static-thrift', dest='staticthrift', action='store_true',
@@ -1009,7 +1007,7 @@ modes['release']['cxx_ld_flags'] += ' ' + ' '.join(optimization_flags)
 
 gold_linker_flag = gold_supported(compiler=args.cxx)
 
-dbgflag = '-g' if args.debuginfo else ''
+dbgflag = '-g -gz' if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
 
 if args.so:
@@ -1121,12 +1119,6 @@ file = open('build/SCYLLA-RELEASE-FILE', 'r')
 scylla_release = file.read().strip()
 
 extra_cxxflags["release.cc"] = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
-
-# We never compress debug info in debug mode
-modes['debug']['cxxflags'] += ' -gz'
-# We compress it by default in release mode
-flag_dest = 'cxx_ld_flags' if args.compress_exec_debuginfo else 'cxxflags'
-modes['release'][flag_dest] += ' -gz'
 
 for m in ['debug', 'release', 'sanitize']:
     modes[m]['cxxflags'] += ' ' + dbgflag
