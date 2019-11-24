@@ -1,4 +1,4 @@
-FROM fedora:30
+FROM fedora:31
 ADD ./install-dependencies.sh ./
 ADD ./seastar/install-dependencies.sh ./seastar/
 ADD ./tools/toolchain/system-auth ./

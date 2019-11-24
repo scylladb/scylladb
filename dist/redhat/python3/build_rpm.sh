@@ -91,4 +91,4 @@ mkdir -p "$RPMBUILD"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
 ln -fv "$RELOC_PKG" "$RPMBUILD"/SOURCES/
 pystache dist/redhat/python3/python.spec.mustache "{ \"version\": \"${SCYLLA_VERSION}\", \"release\": \"${SCYLLA_RELEASE}\", \"reloc_pkg\": \"${RELOC_PKG_BASENAME}\", \"name\": \"$PRODUCT-python3\", \"target\": \"/opt/scylladb/python3\" }" > "$RPMBUILD"/SPECS/python.spec
-rpmbuild --nodebuginfo -ba --define "_build_id_links none" --define "_topdir ${RPMBUILD}" --define "dist .el7" "$RPMBUILD"/SPECS/python.spec
+rpmbuild --nodebuginfo -ba --define '_binary_payload w2.xzdio' --define "_build_id_links none" --define "_topdir ${RPMBUILD}" --define "dist .el7" "$RPMBUILD"/SPECS/python.spec
