@@ -2474,7 +2474,7 @@ table::make_reader_excluding_sstable(schema_ptr s,
 
 void table::move_sstable_from_staging_in_thread(sstables::shared_sstable sst) {
     try {
-        sst->move_to_new_dir_in_thread(dir(), sst->generation());
+        sst->move_to_new_dir(dir(), sst->generation()).get();
     } catch (...) {
         tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
         return;
