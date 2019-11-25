@@ -193,7 +193,7 @@ public:
     future<> update_info_for_opened_data();
 
     future<> set_generation(int64_t generation);
-    future<> move_to_new_dir(sstring new_dir, int64_t generation);
+    future<> move_to_new_dir(sstring new_dir, int64_t generation, bool do_sync_dirs = true);
 
     int64_t generation() const {
         return _generation;
