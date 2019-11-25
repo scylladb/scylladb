@@ -22,6 +22,7 @@
 #include <utility>
 #include <algorithm>
 
+#include <boost/range/irange.hpp>
 #include <seastar/util/defer.hh>
 #include <seastar/core/thread.hh>
 
@@ -426,7 +427,6 @@ public:
     }
 
     future<lw_shared_ptr<cql3::untyped_result_set>> pre_image_select(
-            service::storage_proxy& proxy,
             service::client_state& client_state,
             db::consistency_level cl,
             const mutation& m)
@@ -474,7 +474,7 @@ public:
         auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), selection->get_query_options());
         auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_partitions);
 
-        return proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+        return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
                 [this, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
                     cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
                     query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *selection));
@@ -578,25 +578,40 @@ static future<::shared_ptr<transformer::streams_type>> get_streams(
     });
 }
 
+template <typename Func>
+future<std::vector<mutation>>
+transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_size, Func&& f) {
+    return parallel_for_each(
+            boost::irange(static_cast<decltype(muts.size())>(0), muts.size(), batch_size),
+            std::move(f))
+        .then([&muts] () mutable { return std::move(muts); });
+}
+
 future<std::vector<mutation>> append_log_mutations(
         db_context ctx,
         schema_ptr s,
         service::storage_proxy::clock_type::time_point timeout,
         service::query_state& qs,
         std::vector<mutation> muts) {
-    auto mp = ::make_lw_shared<std::vector<mutation>>(std::move(muts));
-
-    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), mp, &qs](::shared_ptr<transformer::streams_type> streams) mutable {
-        mp->reserve(2 * mp->size());
-        auto trans = make_lw_shared<transformer>(ctx, s, std::move(streams));
-        auto i = mp->begin();
-        auto e = mp->end();
-        return parallel_for_each(i, e, [ctx, &qs, trans, mp](mutation& m) {
-            return trans->pre_image_select(ctx._proxy, qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then([trans, mp, &m](lw_shared_ptr<cql3::untyped_result_set> rs) {
-                mp->push_back(trans->transform(m, rs.get()));
-            });
-        }).then([mp] {
-            return std::move(*mp);
+    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), muts = std::move(muts), &qs](::shared_ptr<transformer::streams_type> streams) mutable {
+        return do_with(std::move(muts), transformer(ctx, s, std::move(streams)), [&qs, s] (std::vector<mutation>& muts, transformer& trans) {
+            muts.reserve(2 * muts.size());
+            if (!s->cdc_options().preimage()) {
+                constexpr int batch_size = 100;
+                int muts_len = muts.size();
+                return transform_mutations(muts, batch_size, [&muts, &trans, batch_size, muts_len] (int idx) {
+                    for (int len = std::min(idx + batch_size, muts_len); idx < len; ++idx) {
+                        muts.push_back(trans.transform(muts[idx]));
+                    }
+                    return make_ready_future<>();
+                });
+            } else {
+                return transform_mutations(muts, 1, [&qs, &trans, &muts] (int idx) mutable {
+                    return trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, muts[idx]).then([&trans, &muts, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+                        muts.push_back(trans.transform(muts[idx], rs.get()));
+                    });
+                });
+           }
         });
     });
 }
