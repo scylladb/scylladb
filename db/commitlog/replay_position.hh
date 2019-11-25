@@ -52,10 +52,10 @@ using segment_id_type = uint64_t;
 using position_type = uint32_t;
 
 struct replay_position {
-    static const constexpr size_t max_cpu_bits = 10; // 1024 cpus. should be enough for anyone
-    static const constexpr size_t max_ts_bits = 8 * sizeof(segment_id_type) - max_cpu_bits;
-    static const constexpr segment_id_type ts_mask = (segment_id_type(1) << max_ts_bits) - 1;
-    static const constexpr segment_id_type cpu_mask = ~ts_mask;
+    static constexpr size_t max_cpu_bits = 10; // 1024 cpus. should be enough for anyone
+    static constexpr size_t max_ts_bits = 8 * sizeof(segment_id_type) - max_cpu_bits;
+    static constexpr segment_id_type ts_mask = (segment_id_type(1) << max_ts_bits) - 1;
+    static constexpr segment_id_type cpu_mask = ~ts_mask;
 
     segment_id_type id;
     position_type pos;

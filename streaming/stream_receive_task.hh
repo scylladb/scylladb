@@ -61,11 +61,11 @@ public:
     stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size);
     ~stream_receive_task();
 
-    virtual int get_total_number_of_files() override {
+    virtual int get_total_number_of_files() const override {
         return total_files;
     }
 
-    virtual long get_total_size() override {
+    virtual long get_total_size() const override {
         return total_size;
     }
 

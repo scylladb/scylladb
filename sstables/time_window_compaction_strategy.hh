@@ -146,7 +146,7 @@ public:
     // The maximum amount of buckets we segregate data into when writing into sstables.
     // To prevent an explosion in the number of sstables we cap it.
     // Better co-locate some windows into the same sstables than OOM.
-    static const uint64_t max_data_segregation_window_count = 100;
+    static constexpr uint64_t max_data_segregation_window_count = 100;
 
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);

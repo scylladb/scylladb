@@ -700,7 +700,7 @@ private:
         }
         _row->_columns.advance_begin(pos);
     }
-    bool no_more_columns() { return _row->_columns.empty(); }
+    bool no_more_columns() const { return _row->_columns.empty(); }
     void move_to_next_column() {
         size_t current_pos = _row->_columns_selector.size() - _row->_columns.size();
         size_t next_pos = _row->_columns_selector.find_next(current_pos);
@@ -708,12 +708,12 @@ private:
                                                                                   : next_pos - current_pos;
         _row->_columns.advance_begin(jump_to_next);
     }
-    bool is_column_simple() { return !_row->_columns.front().is_collection; }
-    bool is_column_counter() { return _row->_columns.front().is_counter; }
-    const column_translation::column_info& get_column_info() {
+    bool is_column_simple() const { return !_row->_columns.front().is_collection; }
+    bool is_column_counter() const { return _row->_columns.front().is_counter; }
+    const column_translation::column_info& get_column_info() const {
         return _row->_columns.front();
     }
-    std::optional<uint32_t> get_column_value_length() {
+    std::optional<uint32_t> get_column_value_length() const {
         return _row->_columns.front().value_length;
     }
     void setup_ck(const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
@@ -727,7 +727,7 @@ private:
         }
         _ck_blocks_header_offset = 0u;
     }
-    bool no_more_ck_blocks() { return _ck_column_value_fix_lengths.empty(); }
+    bool no_more_ck_blocks() const { return _ck_column_value_fix_lengths.empty(); }
     void move_to_next_ck_block() {
         _ck_column_value_fix_lengths.advance_begin(1);
         ++_ck_blocks_header_offset;
@@ -735,16 +735,16 @@ private:
             _ck_blocks_header_offset = 0u;
         }
     }
-    std::optional<uint32_t> get_ck_block_value_length() {
+    std::optional<uint32_t> get_ck_block_value_length() const {
         return _ck_column_value_fix_lengths.front();
     }
-    bool is_block_empty() {
+    bool is_block_empty() const {
         return (_ck_blocks_header & (uint64_t(1) << (2 * _ck_blocks_header_offset))) != 0;
     }
-    bool is_block_null() {
+    bool is_block_null() const {
         return (_ck_blocks_header & (uint64_t(1) << (2 * _ck_blocks_header_offset + 1))) != 0;
     }
-    bool should_read_block_header() {
+    bool should_read_block_header() const {
         return _ck_blocks_header_offset == 0u;
     }
 public:

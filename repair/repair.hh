@@ -233,7 +233,7 @@ private:
     // ranges that can be repaired in parallel. Each element will be accessed
     // by one shared.
     std::vector<semaphore> _range_parallelism_semaphores;
-    static const size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
+    static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
     void start(int id);
     void done(int id, bool succeeded);
 public:

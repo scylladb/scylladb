@@ -173,7 +173,7 @@ public:
         // column_name as seen by the row consumer. This means that if our
         // exploded clustering keys has more rows than expected, we are dealing
         // with a collection.
-        bool is_collection(const schema& s) {
+        bool is_collection(const schema& s) const {
             auto expected_normal = s.clustering_key_size() + 1;
             // Note that we can have less than the expected. That is the case for
             // incomplete prefixes, for instance.
@@ -247,7 +247,7 @@ private:
 
         collection_mutation() : _cdef(nullptr) {}
 
-        bool is_new_collection(const column_definition *c) {
+        bool is_new_collection(const column_definition *c) const {
             if (!_cdef || ((_cdef->id != c->id) || (_cdef->kind != c->kind))) {
                 return true;
             }
@@ -872,7 +872,7 @@ class mp_row_consumer_m : public consumer_m {
         bound_kind kind;
         tombstone tomb;
 
-        position_in_partition_view position() {
+        position_in_partition_view position() const {
             return position_in_partition_view(position_in_partition_view::range_tag_t{}, bound_view(ck, kind));
         }
     };
@@ -919,7 +919,7 @@ class mp_row_consumer_m : public consumer_m {
         return maybe_push_range_tombstone(std::move(rt));
     }
 
-    const column_definition& get_column_definition(std::optional<column_id> column_id) {
+    const column_definition& get_column_definition(std::optional<column_id> column_id) const {
         auto column_type = _inside_static_row ? column_kind::static_column : column_kind::regular_column;
         return _schema->column_at(column_type, *column_id);
     }
@@ -956,7 +956,7 @@ class mp_row_consumer_m : public consumer_m {
         _opened_range_tombstone.reset();
     }
 
-    void check_schema_mismatch(const column_translation::column_info& column_info, const column_definition& column_def) {
+    void check_schema_mismatch(const column_translation::column_info& column_info, const column_definition& column_def) const {
         if (column_info.schema_mismatch) {
             throw malformed_sstable_exception(
                     format("{} definition in serialization header does not match schema. Expected {} but got {}",
@@ -967,7 +967,7 @@ class mp_row_consumer_m : public consumer_m {
     }
 
     void check_column_missing_in_current_schema(const column_translation::column_info& column_info,
-                                                api::timestamp_type timestamp) {
+                                                api::timestamp_type timestamp) const {
         if (!column_info.id) {
             sstring name = sstring(to_sstring_view(*column_info.name));
             auto it = _schema->dropped_columns().find(name);

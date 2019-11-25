@@ -244,7 +244,7 @@ lists::marker::bind(const query_options& options) {
     }
 }
 
-constexpr const db_clock::time_point lists::precision_time::REFERENCE_TIME;
+constexpr db_clock::time_point lists::precision_time::REFERENCE_TIME;
 thread_local lists::precision_time lists::precision_time::_last = {db_clock::time_point::max(), 0};
 
 lists::precision_time

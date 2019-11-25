@@ -27,9 +27,9 @@
 
 namespace tests::data_model {
 
-static constexpr const api::timestamp_type previously_removed_column_timestamp = 100;
-static constexpr const api::timestamp_type data_timestamp = 200;
-static constexpr const api::timestamp_type column_removal_timestamp = 300;
+static constexpr api::timestamp_type previously_removed_column_timestamp = 100;
+static constexpr api::timestamp_type data_timestamp = 200;
+static constexpr api::timestamp_type column_removal_timestamp = 300;
 
 class mutation_description {
 public:

@@ -60,8 +60,8 @@ public:
         , sessions(std::move(sessions_)) {
     }
 
-    bool has_failed_session() {
-        for (auto& x : sessions) {
+    bool has_failed_session() const {
+        for (auto const& x : sessions) {
             if (x.is_failed()) {
                 return true;
             }

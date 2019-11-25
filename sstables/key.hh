@@ -47,7 +47,7 @@ public:
     bool operator==(const key_view& k) const { return k._bytes == _bytes; }
     bool operator!=(const key_view& k) const { return !(k == *this); }
 
-    bool empty() { return _bytes.empty(); }
+    bool empty() const { return _bytes.empty(); }
 
     explicit operator bytes_view() const {
         return _bytes;

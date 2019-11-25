@@ -340,7 +340,7 @@ public:
     }
 
     // Returns the total bytes of all components.
-    uint64_t bytes_on_disk();
+    uint64_t bytes_on_disk() const;
 
     const partition_key& get_first_partition_key() const;
     const partition_key& get_last_partition_key() const;
@@ -712,7 +712,7 @@ public:
         return (_version == sstable_version_types::mc) || has_scylla_component();
     }
 
-    bool filter_has_key(const key& key) {
+    bool filter_has_key(const key& key) const {
         return _components->filter->is_present(bytes_view(key));
     }
 
@@ -724,11 +724,11 @@ public:
      */
     future<bool> has_partition_key(const utils::hashed_key& hk, const dht::decorated_key& dk);
 
-    bool filter_has_key(utils::hashed_key key) {
+    bool filter_has_key(utils::hashed_key key) const {
         return _components->filter->is_present(key);
     }
 
-    bool filter_has_key(const schema& s, partition_key_view key) {
+    bool filter_has_key(const schema& s, partition_key_view key) const {
         return filter_has_key(key::from_partition_key(s, key));
     }
 
@@ -736,10 +736,10 @@ public:
 
     filter_tracker& get_filter_tracker() { return _filter_tracker; }
 
-    uint64_t filter_get_false_positive() {
+    uint64_t filter_get_false_positive() const {
         return _filter_tracker.false_positive;
     }
-    uint64_t filter_get_true_positive() {
+    uint64_t filter_get_true_positive() const {
         return _filter_tracker.true_positive;
     }
     uint64_t filter_get_recent_false_positive() {

@@ -47,8 +47,8 @@ extern logging::logger sslog;
 
 using gms::inet_address;
 
-bool stream_coordinator::has_active_sessions() {
-    for (auto& x : _peer_sessions) {
+bool stream_coordinator::has_active_sessions() const {
+    for (auto const& x : _peer_sessions) {
         auto state = x.second->get_state();
         if (state != stream_session_state::COMPLETE && state != stream_session_state::FAILED) {
             return true;
@@ -57,40 +57,40 @@ bool stream_coordinator::has_active_sessions() {
     return false;
 }
 
-std::vector<shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessions() {
+std::vector<shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessions() const {
     std::vector<shared_ptr<stream_session>> results;
-    for (auto& x : _peer_sessions) {
+    for (auto const& x : _peer_sessions) {
         results.push_back(x.second);
     }
     return results;
 }
 
-std::vector<session_info> stream_coordinator::get_all_session_info() {
+std::vector<session_info> stream_coordinator::get_all_session_info() const {
     std::vector<session_info> results;
-    for (auto& x : _peer_sessions) {
+    for (auto const& x : _peer_sessions) {
         auto& session = x.second;
         results.push_back(session->get_session_info());
     }
     return results;
 }
 
-std::vector<session_info> stream_coordinator::get_peer_session_info(inet_address peer) {
+std::vector<session_info> stream_coordinator::get_peer_session_info(inet_address peer) const {
     std::vector<session_info> results;
     auto it = _peer_sessions.find(peer);
     if (it != _peer_sessions.end()) {
-        auto& session = it->second;
+        auto const& session = it->second;
         results.push_back(session->get_session_info());
     }
     return results;
 }
 
-bool stream_coordinator::is_receiving() {
+bool stream_coordinator::is_receiving() const {
     return _is_receiving;
 }
 
-std::set<inet_address> stream_coordinator::get_peers() {
+std::set<inet_address> stream_coordinator::get_peers() const {
     std::set<inet_address> results;
-    for (auto& x : _peer_sessions) {
+    for (auto const& x : _peer_sessions) {
         results.insert(x.first);
     }
     return results;

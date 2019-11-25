@@ -202,15 +202,15 @@ private:
             ADD_BLOCK,
         } state = state::CLUSTERING_START;
 
-        bool is_block_empty() {
+        bool is_block_empty() const {
             return (ck_blocks_header & (uint64_t(1) << (2 * ck_blocks_header_offset))) != 0;
         }
 
-        bool is_block_null() {
+        bool is_block_null() const {
             return (ck_blocks_header & (uint64_t(1) << (2 * ck_blocks_header_offset + 1))) != 0;
         }
 
-        bool no_more_ck_blocks() { return ck_range.empty(); }
+        bool no_more_ck_blocks() const { return ck_range.empty(); }
 
         void move_to_next_ck_block() {
             ck_range.advance_begin(1);
@@ -220,10 +220,10 @@ private:
             }
         }
 
-        bool should_read_block_header() {
+        bool should_read_block_header() const {
             return ck_blocks_header_offset == 0u;
         }
-        std::optional<uint32_t> get_ck_block_value_length() {
+        std::optional<uint32_t> get_ck_block_value_length() const {
             return ck_range.front();
         }
 
@@ -428,7 +428,7 @@ private:
     }
 
 public:
-    void verify_end_state() {
+    void verify_end_state() const {
         if (_num_blocks_left != 0) {
             throw std::runtime_error("promoted_index_blocks_reader - no more data but parsing is incomplete");
         }

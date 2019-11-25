@@ -55,12 +55,12 @@ class error_collector : public error_listener<RecognizerType, ExceptionBaseType>
     /**
      * The offset of the first token of the snippet.
      */
-    static const int32_t FIRST_TOKEN_OFFSET = 10;
+    static constexpr int32_t FIRST_TOKEN_OFFSET = 10;
 
     /**
      * The offset of the last token of the snippet.
      */
-    static const int32_t LAST_TOKEN_OFFSET = 2;
+    static constexpr int32_t LAST_TOKEN_OFFSET = 2;
 
     /**
      * The CQL query.

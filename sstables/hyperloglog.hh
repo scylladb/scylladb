@@ -71,8 +71,8 @@
 
 namespace hll {
 
-static const double pow_2_32 = 4294967296.0; ///< 2^32
-static const double neg_pow_2_32 = -4294967296.0; ///< -(2^32)
+static constexpr double pow_2_32 = 4294967296.0; ///< 2^32
+static constexpr double neg_pow_2_32 = -4294967296.0; ///< -(2^32)
 
 
 static inline size_t size_unsigned_var_int(unsigned int value) {
