@@ -47,13 +47,25 @@ future<> view_update_generator::start() {
                     break;
                 }
                 try {
-                    t->move_sstable_from_staging_in_thread(sst);
+                    // collect all staging sstables to move in a map, grouped by table.
+                    _sstables_to_move[t].push_back(sst);
                 } catch (...) {
                     // Move from staging will be retried upon restart.
                     vug_logger.warn("Moving {} from staging failed: {}. Ignoring...", sst->get_filename(), std::current_exception());
                 }
                 _registration_sem.signal();
                 _sstables_with_tables.pop_front();
+            }
+            // For each table, move the processed staging sstables into the table's base dir.
+            for (auto it = _sstables_to_move.begin(); it != _sstables_to_move.end(); ) {
+                auto& [t, sstables] = *it;
+                try {
+                    t->move_sstables_from_staging(sstables).get();
+                } catch (...) {
+                    // Move from staging will be retried upon restart.
+                    vug_logger.warn("Moving some sstable from staging failed: {}. Ignoring...", std::current_exception());
+                }
+                it = _sstables_to_move.erase(it);
             }
         }
     });
