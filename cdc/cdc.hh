@@ -33,7 +33,6 @@
 #include <seastar/core/sstring.hh>
 
 #include "exceptions/exceptions.hh"
-#include "json.hh"
 #include "timestamp.hh"
 
 class schema;
@@ -72,49 +71,18 @@ class options final {
     int _ttl = 86400; // 24h in seconds
 public:
     options() = default;
-    options(const std::map<sstring, sstring>& map) {
-        if (map.find("enabled") == std::end(map)) {
-            throw exceptions::configuration_exception("Missing enabled CDC option");
-        }
+    options(const std::map<sstring, sstring>& map);
 
-        for (auto& p : map) {
-            if (p.first == "enabled") {
-                _enabled = p.second == "true";
-            } else if (p.first == "preimage") {
-                _preimage = p.second == "true";
-            } else if (p.first == "postimage") {
-                _postimage = p.second == "true";
-            } else if (p.first == "ttl") {
-                _ttl = std::stoi(p.second);
-            } else {
-                throw exceptions::configuration_exception("Invalid CDC option: " + p.first);
-            }
-        }
-    }
-    std::map<sstring, sstring> to_map() const {
-        return {
-            { "enabled", _enabled ? "true" : "false" },
-            { "preimage", _preimage ? "true" : "false" },
-            { "postimage", _postimage ? "true" : "false" },
-            { "ttl", std::to_string(_ttl) },
-        };
-    }
-
-    sstring to_sstring() const {
-        return json::to_json(to_map());
-    }
+    std::map<sstring, sstring> to_map() const;
+    sstring to_sstring() const;
 
     bool enabled() const { return _enabled; }
     bool preimage() const { return _preimage; }
     bool postimage() const { return _postimage; }
     int ttl() const { return _ttl; }
 
-    bool operator==(const options& o) const {
-        return _enabled == o._enabled && _preimage == o._preimage && _postimage == o._postimage && _ttl == o._ttl;
-    }
-    bool operator!=(const options& o) const {
-        return !(*this == o);
-    }
+    bool operator==(const options& o) const;
+    bool operator!=(const options& o) const;
 };
 
 struct db_context final {
@@ -131,27 +99,12 @@ struct db_context final {
         std::optional<std::reference_wrapper<locator::snitch_ptr>> _snitch;
         std::optional<std::reference_wrapper<dht::i_partitioner>> _partitioner;
     public:
-        builder(service::storage_proxy& proxy) : _proxy(proxy) { }
+        builder(service::storage_proxy& proxy);
 
-        builder& with_migration_manager(service::migration_manager& migration_manager) {
-            _migration_manager = migration_manager;
-            return *this;
-        }
-
-        builder& with_token_metadata(locator::token_metadata& token_metadata) {
-            _token_metadata = token_metadata;
-            return *this;
-        }
-
-        builder& with_snitch(locator::snitch_ptr& snitch) {
-            _snitch = snitch;
-            return *this;
-        }
-
-        builder& with_partitioner(dht::i_partitioner& partitioner) {
-            _partitioner = partitioner;
-            return *this;
-        }
+        builder& with_migration_manager(service::migration_manager& migration_manager);
+        builder& with_token_metadata(locator::token_metadata& token_metadata);
+        builder& with_snitch(locator::snitch_ptr& snitch);
+        builder& with_partitioner(dht::i_partitioner& partitioner);
 
         db_context build();
     };

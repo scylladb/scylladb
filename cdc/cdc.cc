@@ -41,6 +41,7 @@
 #include "cql3/multi_column_relation.hh"
 #include "cql3/tuples.hh"
 #include "log.hh"
+#include "json.hh"
 
 using locator::snitch_ptr;
 using locator::token_metadata;
@@ -62,6 +63,46 @@ template<> struct hash<std::pair<net::inet_address, unsigned int>> {
 using namespace std::chrono_literals;
 
 static logging::logger cdc_log("cdc");
+
+cdc::options::options(const std::map<sstring, sstring>& map) {
+    if (map.find("enabled") == std::end(map)) {
+        throw exceptions::configuration_exception("Missing enabled CDC option");
+    }
+
+    for (auto& p : map) {
+        if (p.first == "enabled") {
+            _enabled = p.second == "true";
+        } else if (p.first == "preimage") {
+            _preimage = p.second == "true";
+        } else if (p.first == "postimage") {
+            _postimage = p.second == "true";
+        } else if (p.first == "ttl") {
+            _ttl = std::stoi(p.second);
+        } else {
+            throw exceptions::configuration_exception("Invalid CDC option: " + p.first);
+        }
+    }
+}
+
+std::map<sstring, sstring> cdc::options::to_map() const {
+    return {
+        { "enabled", _enabled ? "true" : "false" },
+        { "preimage", _preimage ? "true" : "false" },
+        { "postimage", _postimage ? "true" : "false" },
+        { "ttl", std::to_string(_ttl) },
+    };
+}
+
+sstring cdc::options::to_sstring() const {
+    return json::to_json(to_map());
+}
+
+bool cdc::options::operator==(const options& o) const {
+    return _enabled == o._enabled && _preimage == o._preimage && _postimage == o._postimage && _ttl == o._ttl;
+}
+bool cdc::options::operator!=(const options& o) const {
+    return !(*this == o);
+}
 
 namespace cdc {
 
@@ -212,6 +253,30 @@ future<> setup(db_context ctx, schema_ptr s) {
         desc_guard.cancel();
         log_guard.cancel();
     });
+}
+
+db_context::builder::builder(service::storage_proxy& proxy) 
+    : _proxy(proxy) 
+{}
+
+db_context::builder& db_context::builder::with_migration_manager(service::migration_manager& migration_manager) {
+    _migration_manager = migration_manager;
+    return *this;
+}
+
+db_context::builder& db_context::builder::with_token_metadata(locator::token_metadata& token_metadata) {
+    _token_metadata = token_metadata;
+    return *this;
+}
+
+db_context::builder& db_context::builder::with_snitch(locator::snitch_ptr& snitch) {
+    _snitch = snitch;
+    return *this;
+}
+
+db_context::builder& db_context::builder::with_partitioner(dht::i_partitioner& partitioner) {
+    _partitioner = partitioner;
+    return *this;
 }
 
 db_context db_context::builder::build() {
