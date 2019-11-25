@@ -1352,7 +1352,9 @@ public:
             auto source_op = get_full_row_hashes_source_op(current_hashes, remote_node, node_idx, source);
             auto sink_op = get_full_row_hashes_sink_op(sink);
             return when_all_succeed(std::move(source_op), std::move(sink_op));
-        }).then([current_hashes] () mutable {
+        }).then([this, current_hashes] () mutable {
+            stats().rx_hashes_nr += current_hashes->size();
+            _metrics.rx_hashes_nr += current_hashes->size();
             return std::move(*current_hashes);
         });
     }
@@ -1763,6 +1765,7 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
             return make_exception_future<stop_iteration>(std::runtime_error("get_row_diff_with_rpc_stream: Inject error in handler loop"));
         }
         bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
+        _metrics.rx_hashes_nr += current_set_diff.size();
         auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(current_set_diff)));
         return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, fp = std::move(fp)] {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
@@ -2067,6 +2070,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
                 std::unordered_set<repair_hash> set_diff, bool needs_all_rows) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            _metrics.rx_hashes_nr += set_diff.size();
             auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(set_diff)));
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp), needs_all_rows] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
