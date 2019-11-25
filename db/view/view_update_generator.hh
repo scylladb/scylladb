@@ -42,7 +42,7 @@ class view_update_generator {
     struct sstable_with_table {
         sstables::shared_sstable sst;
         lw_shared_ptr<table> t;
-        sstable_with_table(sstables::shared_sstable sst, lw_shared_ptr<table> t) : sst(sst), t(t) { }
+        sstable_with_table(sstables::shared_sstable sst, lw_shared_ptr<table> t) : sst(std::move(sst)), t(std::move(t)) { }
     };
     std::deque<sstable_with_table> _sstables_with_tables;
 public:
