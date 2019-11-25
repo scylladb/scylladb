@@ -858,8 +858,10 @@ int main(int ac, char** av) {
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
             mm.start().get();
-            // #293 - do not stop anything
-            // engine().at_exit([&mm] { return mm.stop(); });
+            auto stop_migration_manager = defer_with_log_on_error([&mm] {
+                startlog.info("shutdown migration manager");
+                mm.stop().get();
+            });
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             qp.start(std::ref(proxy), std::ref(db), qp_mcfg).get();
@@ -959,7 +961,7 @@ int main(int ac, char** av) {
             //FIXME: discarded future
             (void)mtg.start(cfg->large_memory_allocation_warning_threshold());
             supervisor::notify("initializing migration manager RPC verbs");
-            service::get_migration_manager().invoke_on_all([] (auto& mm) {
+            mm.invoke_on_all([] (auto& mm) {
                 mm.init_messaging_service();
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");

@@ -70,6 +70,7 @@ migration_manager::migration_manager()
 
 future<> migration_manager::stop()
 {
+    mlogger.info("stopping migration service");
     uninit_messaging_service();
     return parallel_for_each(_schema_pulls.begin(), _schema_pulls.end(), [] (auto&& e) {
         serialized_action& sp = e.second;

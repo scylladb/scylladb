@@ -2591,6 +2591,9 @@ future<> storage_service::drain() {
     CommitLog.instance.forceRecycleAllSegments();
 #endif
 
+            ss.set_mode(mode::DRAINING, "shutting down migration manager", false);
+            service::get_migration_manager().stop().get();
+
             ss.db().invoke_on_all([] (auto& db) {
                 return db.commitlog()->shutdown();
             }).get();
