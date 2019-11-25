@@ -65,6 +65,17 @@ class partition_key;
 
 namespace cdc {
 
+class db_context;
+
+class cdc_service {
+    class impl;
+    std::unique_ptr<impl> _impl;
+public:
+    cdc_service(service::storage_proxy&);
+    cdc_service(db_context);
+    ~cdc_service();
+};
+
 struct db_context final {
     service::storage_proxy& _proxy;
     service::migration_manager& _migration_manager;

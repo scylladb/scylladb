@@ -64,6 +64,24 @@ using namespace std::chrono_literals;
 
 static logging::logger cdc_log("cdc");
 
+class cdc::cdc_service::impl {
+    db_context _ctxt;
+public:
+    impl(db_context ctxt)
+        : _ctxt(std::move(ctxt))
+    {}
+};
+
+cdc::cdc_service::cdc_service(service::storage_proxy& proxy)
+    : cdc_service(db_context::builder(proxy).build())
+{}
+
+cdc::cdc_service::cdc_service(db_context ctxt)
+    : _impl(std::make_unique<impl>(std::move(ctxt)))
+{}
+
+cdc::cdc_service::~cdc_service() = default;
+
 cdc::options::options(const std::map<sstring, sstring>& map) {
     if (map.find("enabled") == std::end(map)) {
         throw exceptions::configuration_exception("Missing enabled CDC option");
