@@ -20,11 +20,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
+import asyncio
 import os
 import sys
+import signal
 import argparse
 import subprocess
-import concurrent.futures
 import io
 import multiprocessing
 import xml.etree.ElementTree as ET
@@ -202,7 +203,7 @@ def print_progress(test, success, cookie, verbose):
     return (last_len, n + 1, n_total)
 
 
-def run_test(test, options):
+async def run_test(test, options):
     file = io.StringIO()
 
     def report_error(out):
@@ -210,33 +211,52 @@ def run_test(test, options):
         print(out, file=file)
         print('=== stdout END ===', file=file)
     success = False
+    process = None
+    stdout = None
     try:
-        subprocess.check_output([test.path] + test.args,
-                stderr=subprocess.STDOUT,
-                timeout=options.timeout,
-                env=dict(os.environ,
-                    UBSAN_OPTIONS='print_stacktrace=1',
-                    BOOST_TEST_CATCH_SYSTEM_ERRORS='no'),
-                preexec_fn=os.setsid)
-        success = True
-    except subprocess.TimeoutExpired as e:
-        print('  timed out', file=file)
-        report_error(e.output.decode(encoding='UTF-8'))
-    except subprocess.CalledProcessError as e:
-        print('  with error code {code}\n'.format(code=e.returncode), file=file)
-        report_error(e.output.decode(encoding='UTF-8'))
+        process = await asyncio.create_subprocess_exec(
+            test.path,
+            *test.args,
+            stderr=asyncio.subprocess.STDOUT,
+            stdout=asyncio.subprocess.PIPE,
+            env=dict(os.environ,
+                UBSAN_OPTIONS='print_stacktrace=1',
+                BOOST_TEST_CATCH_SYSTEM_ERRORS='no'),
+                preexec_fn=os.setsid,
+            )
+        stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
+        success = process.returncode == 0
+        if process.returncode != 0:
+            print('  with error code {code}\n'.format(code=process.returncode), file=file)
+            report_error(stdout.decode(encoding='UTF-8'))
+
+    except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+        if process is not None:
+            process.kill()
+            stdout, _ = await process.communicate()
+        if type(e) == asyncio.TimeoutError:
+            print('  timed out', file=file)
+            report_error(stdout.decode(encoding='UTF-8') if stdout else "No output")
+        elif type(e) == asyncio.CancelledError:
+            print(test.name, end=" ")
     except Exception as e:
         print('  with error {e}\n'.format(e=e), file=file)
         report_error(e)
     return (test, success, file.getvalue())
 
+def setup_signal_handlers(loop, signaled):
 
-class Alarm(Exception):
-    pass
+    async def shutdown(loop, signo, signaled):
+        print("\nShutdown requested... Aborting tests:"),
+        signaled.signo = signo
+        signaled.set()
 
-
-def alarm_handler(signum, frame):
-    raise Alarm
+    # Use a lambda to avoid creating a coroutine until
+    # the signal is delivered to the loop - otherwise
+    # the coroutine will be dangling when the loop is over,
+    # since it's never going to be invoked
+    for signo in [signal.SIGINT, signal.SIGTERM]:
+        loop.add_signal_handler(signo, lambda: asyncio.create_task(shutdown(loop, signo, signaled)))
 
 
 def parse_cmd_line():
@@ -305,23 +325,50 @@ def find_tests(options):
     return tests_to_run
 
 
-def run_all_tests(tests_to_run, options):
+async def run_all_tests(tests_to_run, signaled, options):
     failed_tests = []
-
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=options.jobs)
-    futures = []
-    for test in tests_to_run:
-        futures.append(executor.submit(run_test, test, options))
-
     results = []
-    cookie = len(futures)
-    for future in concurrent.futures.as_completed(futures):
-        result = future.result()
-        results.append(result)
-        test, success, out = result
-        cookie = print_progress(test, success, cookie, options.verbose)
-        if not success:
-            failed_tests.append((test, out))
+    cookie = len(tests_to_run)
+    signaled_task = asyncio.create_task(signaled.wait())
+    pending = set([signaled_task])
+
+    async def cancel(pending):
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        print("... done.")
+        raise asyncio.CancelledError
+
+    async def reap(done, pending, signaled):
+        nonlocal cookie
+        if signaled.is_set():
+            await cancel(pending)
+        for coro in done:
+            result = coro.result()
+            if type(result) == bool:
+                continue # skip signaled task result
+            results.append(result)
+            test, success, out = result
+            cookie = print_progress(test, success, cookie, options.verbose)
+            if not success:
+                failed_tests.append((test, out))
+    try:
+        for test in tests_to_run:
+            # +1 for 'signaled' event
+            if len(pending) > options.jobs:
+                # Wait for some task to finish
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                await reap(done, pending, signaled)
+            pending.add(asyncio.create_task(run_test(test, options)))
+        # Wait & reap ALL tasks but signaled_task
+        # Do not use asyncio.ALL_COMPLETED to print a nice progress report
+        while len(pending) > 1:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            await reap(done, pending, signaled)
+
+    except asyncio.CancelledError:
+        return None, None
+
     return failed_tests, results
 
 
@@ -352,18 +399,28 @@ def write_xunit_report(results):
     with open(options.xunit, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
-if __name__ == "__main__":
+async def main():
 
     options = parse_cmd_line()
 
     tests_to_run = find_tests(options)
+    signaled = asyncio.Event()
 
-    failed_tests, results = run_all_tests(tests_to_run, options)
+    setup_signal_handlers(asyncio.get_event_loop(), signaled)
+
+    failed_tests, results = await run_all_tests(tests_to_run, signaled, options)
+
+    if signaled.is_set():
+        return -signaled.signo
 
     print_summary(failed_tests, len(tests_to_run))
 
     if options.xunit:
         write_xunit_report(results)
+    return 0
 
-    if failed_tests:
-        sys.exit(1)
+if __name__ == "__main__":
+    if sys.version_info < (3, 7):
+        print("Python 3.7 or newer is required to run this program")
+        sys.exit(-1)
+    sys.exit(asyncio.run(main()))
