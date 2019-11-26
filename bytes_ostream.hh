@@ -38,6 +38,7 @@ class bytes_ostream {
 public:
     using size_type = bytes::size_type;
     using value_type = bytes::value_type;
+    using fragment_type = bytes_view;
     static constexpr size_type max_chunk_size() { return 128 * 1024; }
 private:
     static_assert(sizeof(value_type) == 1, "value_type is assumed to be one byte long");
@@ -93,6 +94,8 @@ public:
             return _current != other._current;
         }
     };
+    using const_iterator = fragment_iterator;
+
     class output_iterator {
     public:
         using iterator_category = std::output_iterator_tag;
@@ -307,6 +310,11 @@ public:
 
     // Returns the amount of bytes written so far
     size_type size() const {
+        return _size;
+    }
+
+    // For the FragmentRange concept
+    size_type size_bytes() const {
         return _size;
     }
 
