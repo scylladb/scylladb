@@ -46,7 +46,7 @@ namespace cql3 {
 namespace selection {
 
 ::shared_ptr<selector>
-simple_selector_factory::new_instance() {
+simple_selector_factory::new_instance() const {
     return ::make_shared<simple_selector>(_column_name, _idx, _type);
 }
 

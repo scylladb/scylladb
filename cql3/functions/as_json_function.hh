@@ -113,15 +113,15 @@ public:
         return utf8_type;
     }
 
-    virtual bool is_pure() override {
+    virtual bool is_pure() const override {
         return true;
     }
 
-    virtual bool is_native() override {
+    virtual bool is_native() const override {
         return true;
     }
 
-    virtual bool is_aggregate() override {
+    virtual bool is_aggregate() const override {
         // Aggregates of aggregates are currently not supported, but JSON handles them
         return false;
     }
@@ -140,15 +140,15 @@ public:
         os << ") -> " << utf8_type->as_cql3_type().to_string();
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return false;
     }
 
-    virtual bool has_reference_to(function& f) override {
+    virtual bool has_reference_to(function& f) const override {
         return false;
     }
 
-    virtual sstring column_name(const std::vector<sstring>& column_names) override {
+    virtual sstring column_name(const std::vector<sstring>& column_names) const override {
         return "[json]";
     }
 

@@ -63,28 +63,28 @@ public:
                     : _type(std::move(type)), _field(field), _factory(std::move(factory)) {
             }
 
-            virtual sstring column_name() override {
+            virtual sstring column_name() const override {
                 auto&& name = _type->field_name(_field);
                 auto sname = sstring(reinterpret_cast<const char*>(name.begin()), name.size());
                 return format("{}.{}", _factory->column_name(), sname);
             }
 
-            virtual data_type get_return_type() override {
+            virtual data_type get_return_type() const override {
                 return _type->field_type(_field);
             }
 
-            shared_ptr<selector> new_instance() override {
+            shared_ptr<selector> new_instance() const override {
                 return make_shared<field_selector>(_type, _field, _factory->new_instance());
             }
 
-            bool is_aggregate_selector_factory() override {
+            bool is_aggregate_selector_factory() const override {
                 return _factory->is_aggregate_selector_factory();
             }
         };
         return make_shared<field_selector_factory>(std::move(type), field, std::move(factory));
     }
 
-    virtual bool is_aggregate() override {
+    virtual bool is_aggregate() const override {
         return false;
     }
 
@@ -105,7 +105,7 @@ public:
         return ret;
     }
 
-    virtual data_type get_type() override {
+    virtual data_type get_type() const override {
         return _type->field_type(_field);
     }
 

@@ -87,9 +87,9 @@ public:
      *
      * @return the <code>selector</code> output type.
      */
-    virtual data_type get_type() = 0;
+    virtual data_type get_type() const = 0;
 
-    virtual bool requires_thread();
+    virtual bool requires_thread() const;
 
     /**
      * Checks if this <code>selector</code> is creating aggregates.
@@ -97,7 +97,7 @@ public:
      * @return <code>true</code> if this <code>selector</code> is creating aggregates <code>false</code>
      * otherwise.
      */
-    virtual bool is_aggregate() {
+    virtual bool is_aggregate() const {
         return false;
     }
 
@@ -126,7 +126,7 @@ class selector::factory {
 public:
     virtual ~factory() {}
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         return false;
     }
 
@@ -137,14 +137,14 @@ public:
      * @param schema the column family schema
      * @return a column specification
      */
-    ::shared_ptr<column_specification> get_column_specification(schema_ptr schema);
+    ::shared_ptr<column_specification> get_column_specification(schema_ptr schema) const;
 
     /**
      * Creates a new <code>selector</code> instance.
      *
      * @return a new <code>selector</code> instance
      */
-    virtual ::shared_ptr<selector> new_instance() = 0;
+    virtual ::shared_ptr<selector> new_instance() const = 0;
 
     /**
      * Checks if this factory creates selectors instances that creates aggregates.
@@ -152,7 +152,7 @@ public:
      * @return <code>true</code> if this factory creates selectors instances that creates aggregates,
      * <code>false</code> otherwise
      */
-    virtual bool is_aggregate_selector_factory() {
+    virtual bool is_aggregate_selector_factory() const {
         return false;
     }
 
@@ -162,7 +162,7 @@ public:
      * @return <code>true</code> if this factory creates <code>writetime</code> selectors instances,
      * <code>false</code> otherwise
      */
-    virtual bool is_write_time_selector_factory() {
+    virtual bool is_write_time_selector_factory() const {
         return false;
     }
 
@@ -172,7 +172,7 @@ public:
      * @return <code>true</code> if this factory creates <code>TTL</code> selectors instances,
      * <code>false</code> otherwise
      */
-    virtual bool is_ttl_selector_factory() {
+    virtual bool is_ttl_selector_factory() const {
         return false;
     }
 
@@ -182,14 +182,14 @@ public:
      *
      * @return a column name
      */
-    virtual sstring column_name() = 0;
+    virtual sstring column_name() const = 0;
 
     /**
      * Returns the type of the values returned by the selector instances created by this factory.
      *
      * @return the selector output type
      */
-    virtual data_type get_return_type() = 0;
+    virtual data_type get_return_type() const = 0;
 };
 
 }

@@ -122,7 +122,7 @@ protected:
             _first = true;
         }
 
-        virtual bool requires_thread() override { return false; }
+        virtual bool requires_thread() const override { return false; }
 
         virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
             return std::move(_current);
@@ -138,7 +138,7 @@ protected:
             }
         }
 
-        virtual bool is_aggregate() {
+        virtual bool is_aggregate() const {
             return false;
         }
     };
@@ -186,7 +186,7 @@ protected:
             , _requires_thread(boost::algorithm::any_of(_selectors, [] (auto& s) { return s->requires_thread(); }))
         { }
 
-        virtual bool requires_thread() override {
+        virtual bool requires_thread() const override {
             return _requires_thread;
         }
 
@@ -196,7 +196,7 @@ protected:
             }
         }
 
-        virtual bool is_aggregate() override {
+        virtual bool is_aggregate() const override {
             return _factories->does_aggregation();
         }
 

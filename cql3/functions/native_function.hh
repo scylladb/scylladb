@@ -58,11 +58,11 @@ protected:
 
 public:
     // Most of our functions are pure, the other ones should override this
-    virtual bool is_pure() override {
+    virtual bool is_pure() const override {
         return true;
     }
 
-    virtual bool is_native() override {
+    virtual bool is_native() const override {
         return true;
     }
 };

@@ -62,14 +62,14 @@ public:
      *
      * @return <code>true</code> if the function is a pure function, <code>false</code> otherwise.
      */
-    virtual bool is_pure() = 0;
+    virtual bool is_pure() const = 0;
 
     /**
      * Checks whether the function is a native/hard coded one or not.
      *
      * @return <code>true</code> if the function is a native/hard coded one, <code>false</code> otherwise.
      */
-    virtual bool is_native() = 0;
+    virtual bool is_native() const = 0;
 
     virtual bool requires_thread() const = 0;
 
@@ -78,11 +78,11 @@ public:
      *
      * @return <code>true</code> if the function is an aggregate function, <code>false</code> otherwise.
      */
-    virtual bool is_aggregate() = 0;
+    virtual bool is_aggregate() const = 0;
 
     virtual void print(std::ostream& os) const = 0;
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) = 0;
-    virtual bool has_reference_to(function& f) = 0;
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
+    virtual bool has_reference_to(function& f) const = 0;
 
     /**
      * Returns the name of the function to use within a ResultSet.
@@ -90,7 +90,7 @@ public:
      * @param column_names the names of the columns used to call the function
      * @return the name of the function to use within a ResultSet
      */
-    virtual sstring column_name(const std::vector<sstring>& column_names) = 0;
+    virtual sstring column_name(const std::vector<sstring>& column_names) const = 0;
 
     friend class function_call;
     friend std::ostream& operator<<(std::ostream& os, const function& f);

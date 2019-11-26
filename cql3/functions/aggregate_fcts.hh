@@ -75,7 +75,7 @@ public:
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_count_function>();
     }
-    virtual sstring column_name(const std::vector<sstring>& column_names) override {
+    virtual sstring column_name(const std::vector<sstring>& column_names) const override {
         return "count";
     }
 };

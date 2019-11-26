@@ -60,15 +60,15 @@ public:
         , _type(type)
     { }
 
-    virtual sstring column_name() override {
+    virtual sstring column_name() const override {
         return _column_name;
     }
 
-    virtual data_type get_return_type() override {
+    virtual data_type get_return_type() const override {
         return _type;
     }
 
-    virtual ::shared_ptr<selector> new_instance() override;
+    virtual ::shared_ptr<selector> new_instance() const override;
 };
 
 class simple_selector : public selector {
@@ -110,7 +110,7 @@ public:
         _first = true;
     }
 
-    virtual data_type get_type() override {
+    virtual data_type get_type() const override {
         return _type;
     }
 

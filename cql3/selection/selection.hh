@@ -63,9 +63,9 @@ class selectors {
 public:
     virtual ~selectors() {}
 
-    virtual bool requires_thread() = 0;
+    virtual bool requires_thread() const = 0;
 
-    virtual bool is_aggregate() = 0;
+    virtual bool is_aggregate() const = 0;
 
     /**
     * Adds the current row of the specified <code>ResultSetBuilder</code>.

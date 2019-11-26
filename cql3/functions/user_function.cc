@@ -32,11 +32,11 @@ user_function::user_function(function_name name, std::vector<data_type> arg_type
       _called_on_null_input(called_on_null_input), _bitcode(std::move(bitcode)),
       _cfg(std::move(cfg)) {}
 
-bool user_function::is_pure() { return true; }
+bool user_function::is_pure() const { return true; }
 
-bool user_function::is_native() { return false; }
+bool user_function::is_native() const { return false; }
 
-bool user_function::is_aggregate() { return false; }
+bool user_function::is_aggregate() const { return false; }
 
 bool user_function::requires_thread() const { return true; }
 

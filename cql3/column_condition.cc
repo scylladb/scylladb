@@ -114,7 +114,7 @@ uint32_t read_and_check_list_index(const cql3::raw_value_view& key) {
 namespace cql3 {
 
 bool
-column_condition::uses_function(const sstring& ks_name, const sstring& function_name) {
+column_condition::uses_function(const sstring& ks_name, const sstring& function_name) const {
     if (bool(_collection_element) && _collection_element->uses_function(ks_name, function_name)) {
         return true;
     }

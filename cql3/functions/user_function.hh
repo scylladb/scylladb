@@ -59,9 +59,9 @@ public:
 
     bool called_on_null_input() const { return _called_on_null_input; }
 
-    virtual bool is_pure() override;
-    virtual bool is_native() override;
-    virtual bool is_aggregate() override;
+    virtual bool is_pure() const override;
+    virtual bool is_native() const override;
+    virtual bool is_aggregate() const override;
     virtual bool requires_thread() const override;
     virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override;
 };
