@@ -437,16 +437,19 @@ public:
 };
 
 template <typename Func>
-inline auto defer_with_log_on_error(Func&& func) {
-    auto func_with_log = [func = std::forward<Func>(func)] () mutable {
+inline auto defer_verbose_shutdown(const char* what, Func&& func) {
+    auto vfunc = [what, func = std::forward<Func>(func)] () mutable {
+        startlog.info("Shutting down {}", what);
         try {
-            std::forward<Func>(func)();
+            func();
         } catch (...) {
-            startlog.error("Unexpected error on shutdown from {}: {}", typeid(func).name(), std::current_exception());
+            startlog.error("Unexpected error shutting down {}: {}", what, std::current_exception());
             throw;
         }
+        startlog.info("Shutting down {} was successful", what);
     };
-    return deferred_action(std::move(func_with_log));
+
+    return deferred_action(std::move(vfunc));
 }
 
 int main(int ac, char** av) {
@@ -544,9 +547,9 @@ int main(int ac, char** av) {
 
             cfg->broadcast_to_all_shards().get();
 
-            ::sighup_handler sigup_handler(opts, *cfg);
-            auto stop_sighup_handler = defer_with_log_on_error([&] {
-                sigup_handler.stop().get();
+            ::sighup_handler sighup_handler(opts, *cfg);
+            auto stop_sighup_handler = defer_verbose_shutdown("sighup", [&] {
+                sighup_handler.stop().get();
             });
 
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
@@ -601,10 +604,10 @@ int main(int ac, char** av) {
             std::any stop_prometheus;
             if (pport) {
                 prometheus_server.start("prometheus").get();
-                stop_prometheus = ::make_shared(defer([&prometheus_server] {
-                    startlog.info("stopping prometheus API server");
+                stop_prometheus = ::make_shared(defer_verbose_shutdown("prometheus API server", [&prometheus_server, pport] {
                     prometheus_server.stop().get();
                 }));
+
                 //FIXME discarded future
                 prometheus::config pctx;
                 pctx.metric_help = "Scylla server statistics";
@@ -732,17 +735,16 @@ int main(int ac, char** av) {
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
             dbcfg.available_memory = memory::stats().total_memory();
             db.start(std::ref(*cfg), dbcfg).get();
-            auto stop_database_and_sstables = defer_with_log_on_error([&db] {
+            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
                 // call stop on each db instance, but leave the shareded<database> pointers alive.
-                startlog.info("Shutdown database started");
                 stop_database(db).then([&db] {
                     return db.invoke_on_all([](auto& db) {
                         return db.stop();
                     });
                 }).then([] {
-                    startlog.info("Shutdown database finished");
+                    startlog.info("Shutting down database: waiting for background jobs...");
                     return sstables::await_background_jobs_on_all_shards();
                 }).get();
             });
@@ -858,8 +860,7 @@ int main(int ac, char** av) {
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
             mm.start().get();
-            auto stop_migration_manager = defer_with_log_on_error([&mm] {
-                startlog.info("shutdown migration manager");
+            auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
             supervisor::notify("starting query processor");
@@ -1016,24 +1017,23 @@ int main(int ac, char** av) {
             auto lb = make_shared<service::load_broadcaster>(db, gms::get_local_gossiper());
             lb->start_broadcasting();
             service::get_local_storage_service().set_load_broadcaster(lb);
-            auto stop_load_broadcater = defer_with_log_on_error([lb = std::move(lb)] () {
-                startlog.info("stopping load broadcaster");
+            auto stop_load_broadcater = defer_verbose_shutdown("broadcaster", [lb = std::move(lb)] () {
                 lb->stop_broadcasting().get();
             });
             supervisor::notify("starting cf cache hit rate calculator");
             cf_cache_hitrate_calculator.start(std::ref(db), std::ref(cf_cache_hitrate_calculator)).get();
-            auto stop_cache_hitrate_calculator = defer_with_log_on_error([&cf_cache_hitrate_calculator] {
-                startlog.info("stopping cf cache hit rate calculator");
-                return cf_cache_hitrate_calculator.stop().get();
-            });
+            auto stop_cache_hitrate_calculator = defer_verbose_shutdown("cf cache hit rate calculator",
+                    [&cf_cache_hitrate_calculator] {
+                        return cf_cache_hitrate_calculator.stop().get();
+                    }
+            );
             cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
 
             supervisor::notify("starting view update backlog broker");
             static sharded<service::view_update_backlog_broker> view_backlog_broker;
             view_backlog_broker.start(std::ref(proxy), std::ref(gms::get_gossiper())).get();
             view_backlog_broker.invoke_on_all(&service::view_update_backlog_broker::start).get();
-            auto stop_view_backlog_broker = defer_with_log_on_error([] {
-                startlog.info("stopping view update backlog broker");
+            auto stop_view_backlog_broker = defer_verbose_shutdown("view update backlog broker", [] {
                 view_backlog_broker.stop().get();
             });
 
@@ -1133,38 +1133,32 @@ int main(int ac, char** av) {
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
 
-            auto stop_repair = defer_with_log_on_error([] {
-                startlog.info("stopping repair");
+            auto stop_repair = defer_verbose_shutdown("repair", [] {
                 repair_shutdown(service::get_local_storage_service().db()).get();
             });
 
-            auto stop_view_update_generator = defer_with_log_on_error([] {
-                startlog.info("stopping view update generator");
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
                 view_update_generator.stop().get();
             });
 
-            auto do_drain = defer_with_log_on_error([] {
-                startlog.info("draining local storage");
+            auto do_drain = defer_verbose_shutdown("local storage", [] {
                 service::get_local_storage_service().drain_on_shutdown().get();
             });
 
-            auto stop_view_builder = defer_with_log_on_error([cfg] {
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 if (cfg->view_building()) {
-                    startlog.info("stopping view builder");
                     view_builder.stop().get();
                 }
             });
 
-            auto stop_compaction_manager = defer_with_log_on_error([&db] {
+            auto stop_compaction_manager = defer_verbose_shutdown("compaction manager", [&db] {
                 db.invoke_on_all([](auto& db) {
-                    startlog.info("stopping compaction manager");
                     return db.get_compaction_manager().stop();
                 }).get();
             });
 
-            auto stop_redis_service = defer_with_log_on_error([&cfg] {
+            auto stop_redis_service = defer_verbose_shutdown("redis service", [&cfg] {
                 if (cfg->enable_redis_protocol()) {
-                    startlog.info("stopping redis service");
                     redis.stop().get();
                 }
             });

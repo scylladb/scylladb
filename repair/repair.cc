@@ -1465,12 +1465,9 @@ future<repair_status> repair_get_status(seastar::sharded<database>& db, int id) 
 }
 
 future<> repair_shutdown(seastar::sharded<database>& db) {
-    rlogger.info("Starting shutdown of repair");
     return db.invoke_on(0, [] (database& localdb) {
         return repair_tracker().shutdown().then([] {
             return shutdown_all_row_level_repair();
-        }).then([] {
-            rlogger.info("Completed shutdown of repair");
         });
     });
 }
