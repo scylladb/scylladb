@@ -1108,9 +1108,9 @@ int main(int ac, char** av) {
             }
 
             static redis_service redis;
-            if (cfg->enable_redis_protocol()) {
+            if (cfg->redis_port()) {
                 redis.init(std::ref(proxy), std::ref(db), std::ref(auth_service), *cfg).get();
-                startlog.info("Redis server listening on port {}", cfg->redis_transport_port());
+                startlog.info("Redis server listening on port {}", cfg->redis_port());
             }
 
             if (cfg->defragment_memory_on_idle()) {
@@ -1158,7 +1158,7 @@ int main(int ac, char** av) {
             });
 
             auto stop_redis_service = defer_verbose_shutdown("redis service", [&cfg] {
-                if (cfg->enable_redis_protocol()) {
+                if (cfg->redis_port()) {
                     redis.stop().get();
                 }
             });

@@ -715,21 +715,20 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address")
     , alternator_enforce_authorization(this, "alternator_enforce_authorization", value_status::Used, false, "Enforce checking the authorization header for every request in Alternator")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
-    , redis_transport_port(this, "redis_transport_port", value_status::Used, 6379, "Port on which the REDIS transport listens for clients.")
-    // FIXME: 9142 has been used by native_transport_port_ssl
-    , redis_transport_port_ssl(this, "redis_transport_port_ssl", value_status::Used, 9142, "Port on which the REDIS TLS native transport listens for clients.")
-    , enable_redis_protocol(this, "enable_redis_protocol", value_status::Used, false, "Enable redis protocol; Scylla will process redis protocol as a redis cluster if enable.")
-    , redis_read_consistency_level(this, "redis_read_consistency_level", value_status::Used, "ONE", "Consistency level for read operations for redis.")
-    , redis_write_consistency_level(this, "redis_write_consistency_level", value_status::Used, "ANY", "Consistency level for write operations for redis.")
-    , redis_default_database_count(this, "redis_default_database_count", value_status::Used, 16, "Default database count for the redis cluster.")
-    , redis_keyspace_options(this, "redis_keyspace_options", value_status::Used, {}, 
-            "Enable redis protocol, list of properties of replication of redis keyspace. The available options are:\n"
-            "\n"
-            "\tclass : (Default: SimpleStrategy ).\n"
-            "\treplication_factor: (Default: 1) If the class is SimpleStrategy, set the replication factor for the strategy.\n"
-            "\tdatacenter_i: (Default: 1) If the class is NetworkTopologyStrategy, set the replication factor per datacenter.\n"
-            "\n"
-            "The properties of replication for redis keyspace.")
+    , redis_port(this, "redis_port", value_status::Used, 6379, "Port on which the REDIS transport listens for clients.")
+    , redis_ssl_port(this, "redis_ssl_port", value_status::Used, 9142, "Port on which the REDIS TLS native transport listens for clients.")
+    , redis_read_consistency_level(this, "redis_read_consistency_level", value_status::Used, "LOCAL_QUORUM", "Consistency level for read operations for redis.")
+    , redis_write_consistency_level(this, "redis_write_consistency_level", value_status::Used, "LOCAL_QUORUM", "Consistency level for write operations for redis.")
+    , redis_database_count(this, "redis_database_count", value_status::Used, 16, "Database count for the redis. You can use the default settings (16).")
+    , redis_keyspace_replication_strategy_options(this, "redis_keyspace_replication_strategy", value_status::Used, {}, 
+        "Set the replication strategy for the redis keyspace. The setting is used by the first node in the boot phase when the keyspace is not exists to create keyspace for redis.\n"
+        "The replication strategy determines how many copies of the data are kept in a given data center. This setting impacts consistency, availability and request speed.\n"
+        "Two strategies are available: SimpleStrategy and NetworkTopologyStrategy.\n\n"
+        "\tclass: (Default: SimpleStrategy ). Set the replication strategy for redis keyspace.\n"
+        "\t'replication_factor':N, (Default: 'replication_factor':1) IFF the class is SimpleStrategy, assign the same replication factor to the entire cluster.\n"
+        "\t'datacenter_name':N [,...], (Default: 'dc1:1') IFF the class is NetworkTopologyStrategy, assign replication factors to each data center in a comma separated list.\n"
+        "\n"
+        "Related information: About replication strategy.")
 
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
