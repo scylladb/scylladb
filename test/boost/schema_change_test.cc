@@ -664,45 +664,45 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("492719e5-0169-30b1-a15e-3447674c0c0c"),
-        utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"),
-        utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"),
-        utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"),
-        utils::UUID("be3c0af4-417f-31d5-8e0e-4ac257ec00ad"),
-        utils::UUID("4198e26c-f214-3888-9c49-c396eb01b8d7"),
-        utils::UUID("5c9cadec-e5df-357e-81d0-0261530af64b"),
-        utils::UUID("1d91ad22-ea7c-3e7f-9557-87f0f3bb94d7"),
-        utils::UUID("2dcd4a37-cbb5-399b-b3c9-8eb1398b096b")
+        utils::UUID("8182496e-4baf-3a07-91e6-caa140388846"),
+        utils::UUID("a65ea746-4d8a-3e5c-8fbf-5f70c14dbcbc"),
+        utils::UUID("a65ea746-4d8a-3e5c-8fbf-5f70c14dbcbc"),
+        utils::UUID("4c138336-4677-3520-8556-4aab007cfedb"),
+        utils::UUID("4c138336-4677-3520-8556-4aab007cfedb"),
+        utils::UUID("62e1e586-6eec-3ff5-882a-89386664694b"),
+        utils::UUID("daf6ded5-c294-3b07-b6a0-1b318a3c2e17"),
+        utils::UUID("370c7d8e-0a4a-394d-b627-318805c64584"),
+        utils::UUID("74bcc842-6a3f-35cd-84ea-3b330ed83c4c")
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS", "CDC"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("ddd2b841-1bbb-374a-972c-037d6bc14d28"),
-        utils::UUID("ea8433b3-d150-3c93-8249-a584537c1b4e"),
-        utils::UUID("ea8433b3-d150-3c93-8249-a584537c1b4e"),
-        utils::UUID("9837e11f-13b8-32ba-9171-5563248dc198"),
-        utils::UUID("9837e11f-13b8-32ba-9171-5563248dc198"),
-        utils::UUID("774d63ef-2f75-39f8-a2be-418d28d35a97"),
-        utils::UUID("5217fc3a-308f-32aa-8b9c-41a6f2bcc448"),
-        utils::UUID("d58e5214-516e-3d0b-95b5-01ab71584a8d"),
-        utils::UUID("e1b50bed-2ab8-3759-92c7-1f4288046ae6")
+        utils::UUID("a33bc2a7-33b7-335d-8644-ecfdd23d1ca6"),
+        utils::UUID("8ec3169e-33f9-356e-9a20-172ddf4261dc"),
+        utils::UUID("8ec3169e-33f9-356e-9a20-172ddf4261dc"),
+        utils::UUID("6d3a2294-0e82-33b8-943a-459cc9f3bf76"),
+        utils::UUID("6d3a2294-0e82-33b8-943a-459cc9f3bf76"),
+        utils::UUID("e4c2bd0d-5f02-3d6f-9a43-de38b152b1fd"),
+        utils::UUID("3b2c4957-4434-3078-ae42-fedcd81ac8cd"),
+        utils::UUID("90518efe-88e6-39bd-a0a6-d32efc80777a"),
+        utils::UUID("61f0fd97-7de7-3449-b32a-b1f41ef14cb2")
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test_computed_columns", std::set<sstring>{"CDC"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("2ed81876-3870-349e-a1fe-56c2db5d887a"),
-        utils::UUID("c8deb566-5669-339f-84f7-b27ef42a7c9b"),
-        utils::UUID("c8deb566-5669-339f-84f7-b27ef42a7c9b"),
-        utils::UUID("e1b63e8d-c209-3f4f-9ceb-64b646658b19"),
-        utils::UUID("e1b63e8d-c209-3f4f-9ceb-64b646658b19"),
-        utils::UUID("58934682-1b73-3ab7-ac9d-4129f9ddf147"),
-        utils::UUID("c5b294c5-8f50-3be1-be39-2e2e21e6957c"),
-        utils::UUID("467c27ed-a979-3705-afbf-105233220846"),
-        utils::UUID("0678bd76-3b67-3901-bad1-424d51b13d7b")
+        utils::UUID("e8879c0e-a731-3ac5-9b43-d2ed33b331f2"),
+        utils::UUID("4a20c241-583c-334e-9fe9-b906280f724f"),
+        utils::UUID("4a20c241-583c-334e-9fe9-b906280f724f"),
+        utils::UUID("9711e6c4-dfcd-3c09-bf8b-f02811f73730"),
+        utils::UUID("9711e6c4-dfcd-3c09-bf8b-f02811f73730"),
+        utils::UUID("e96eb4ca-4f90-3b47-bfed-81e4a441734c"),
+        utils::UUID("14f6c60f-8ba3-3141-8958-dd74366ee1ca"),
+        utils::UUID("987a3386-83d1-3436-b3fc-1d2a3cfdd659"),
+        utils::UUID("9b8baa5b-b09a-34e1-b845-c81da52d4d12")
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_with_functions_test",
@@ -711,21 +711,20 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
         [] (cql_test_env& e) {
             e.execute_cql("create function twice(val int) called on null input returns int language lua as 'return 2 * val';").get();
             e.execute_cql("create function my_add(a int, b int) called on null input returns int language lua as 'return a + b';").get();
-            e.execute_cql("create aggregate my_agg(int) sfunc my_add stype int finalfunc twice;").get();
         });
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("a1f07f31-59d6-372a-8c94-7ea467354b39"),
-        utils::UUID("524d418d-a2e2-3fc3-bf45-5fb79b33c7e4"),
-        utils::UUID("524d418d-a2e2-3fc3-bf45-5fb79b33c7e4"),
-        utils::UUID("018fccba-8050-3bb9-a0a5-2b3c5f0371fe"),
-        utils::UUID("018fccba-8050-3bb9-a0a5-2b3c5f0371fe"),
-        utils::UUID("58f4254e-cc3b-3d56-8a45-167f9a3ea423"),
-        utils::UUID("48fda4f8-d7b5-3e59-a47a-7397989a9bf8"),
-        utils::UUID("8049bcfe-eb01-3a59-af33-16cef8a34b45"),
-        utils::UUID("2195a821-b2b8-3cb8-a179-2f5042e90841")
+        utils::UUID("07d3ffb8-b7f5-367d-b128-d34b2033b788"),
+        utils::UUID("9500fd95-abeb-32ea-b7af-568021eee217"),
+        utils::UUID("9500fd95-abeb-32ea-b7af-568021eee217"),
+        utils::UUID("9bd2ee49-f6db-37c7-a81f-1c2524dec3bf"),
+        utils::UUID("9bd2ee49-f6db-37c7-a81f-1c2524dec3bf"),
+        utils::UUID("549d0735-3087-3cf5-b4b6-23518a803246"),
+        utils::UUID("612eaafb-27a4-3c01-b292-5d4424585ff7"),
+        utils::UUID("01ea7d67-6f30-3215-aaf0-b7e2266daec5"),
+        utils::UUID("1392a698-e4b2-3a2c-936d-dbd7bf962d08")
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_cdc_options",
