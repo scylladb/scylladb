@@ -248,15 +248,16 @@ private:
     static size_t size(const data_value& val) {
         return val.serialized_size();
     }
-    template<typename Value, typename = std::enable_if_t<!std::is_same<data_value, std::decay_t<Value>>::value>>
-    static void write_value(Value&& val, bytes::iterator& out) {
+    template<typename Value, typename CharOutputIterator, typename = std::enable_if_t<!std::is_same<data_value, std::decay_t<Value>>::value>>
+    static void write_value(Value&& val, CharOutputIterator& out) {
         out = std::copy(val.begin(), val.end(), out);
     }
-    static void write_value(const data_value& val, bytes::iterator& out) {
+    template <typename CharOutputIterator>
+    static void write_value(const data_value& val, CharOutputIterator& out) {
         val.serialize(out);
     }
-    template<typename RangeOfSerializedComponents>
-    static void serialize_value(RangeOfSerializedComponents&& values, bytes::iterator& out, bool is_compound) {
+    template<typename RangeOfSerializedComponents, typename CharOutputIterator>
+    static void serialize_value(RangeOfSerializedComponents&& values, CharOutputIterator& out, bool is_compound) {
         if (!is_compound) {
             auto it = values.begin();
             write_value(std::forward<decltype(*it)>(*it), out);
