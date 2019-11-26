@@ -130,7 +130,7 @@ if [ "$PWD" != "$toplevel" ]; then
      docker_common_args+=(-v "$toplevel:$toplevel$z")
 fi
 
-docker_common_args=(
+docker_common_args+=(
        --network host \
        --cap-add SYS_PTRACE \
        -v "$PWD:$PWD$z" \
