@@ -34,23 +34,23 @@ future<> view_update_generator::start() {
                 _pending_sstables.wait().get();
             }
             while (!_sstables_with_tables.empty()) {
-                auto& entry = _sstables_with_tables.front();
+                auto& [sst, t] = _sstables_with_tables.front();
                 try {
-                    schema_ptr s = entry.t->schema();
-                    flat_mutation_reader staging_sstable_reader = entry.sst->read_rows_flat(s);
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _proxy, entry.sst, _as), db::no_timeout);
+                    schema_ptr s = t->schema();
+                    flat_mutation_reader staging_sstable_reader = sst->read_rows_flat(s);
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _proxy, sst, _as), db::no_timeout);
                     if (result == stop_iteration::yes) {
                         break;
                     }
                 } catch (...) {
-                    vug_logger.warn("Processing {} failed: {}. Will retry...", entry.sst->get_filename(), std::current_exception());
+                    vug_logger.warn("Processing {} failed: {}. Will retry...", sst->get_filename(), std::current_exception());
                     break;
                 }
                 try {
-                    entry.t->move_sstable_from_staging_in_thread(entry.sst);
+                    t->move_sstable_from_staging_in_thread(sst);
                 } catch (...) {
                     // Move from staging will be retried upon restart.
-                    vug_logger.warn("Moving {} from staging failed: {}. Ignoring...", entry.sst->get_filename(), std::current_exception());
+                    vug_logger.warn("Moving {} from staging failed: {}. Ignoring...", sst->get_filename(), std::current_exception());
                 }
                 _registration_sem.signal();
                 _sstables_with_tables.pop_front();
