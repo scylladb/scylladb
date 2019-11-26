@@ -91,7 +91,7 @@ protected:
      */
     ordering_comparator_type _ordering_comparator;
 
-    mutable query::partition_slice::option_set _opts;
+    query::partition_slice::option_set _opts;
     cql_stats& _stats;
     const ks_selector _ks_sel;
 protected :

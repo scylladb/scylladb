@@ -151,6 +151,8 @@ select_statement::select_statement(schema_ptr schema,
 {
     _opts = _selection->get_query_options();
     _opts.set_if<query::partition_slice::option::bypass_cache>(_parameters->bypass_cache());
+    _opts.set_if<query::partition_slice::option::distinct>(_parameters->is_distinct());
+    _opts.set_if<query::partition_slice::option::reversed>(_is_reversed);
 }
 
 bool select_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {
@@ -220,7 +222,6 @@ select_statement::make_partition_slice(const query_options& options) const
     }
 
     if (_parameters->is_distinct()) {
-        _opts.set(query::partition_slice::option::distinct);
         return query::partition_slice({ query::clustering_range::make_open_ended_both_sides() },
             std::move(static_columns), {}, _opts, nullptr, options.get_cql_serialization_format());
     }
@@ -234,7 +235,6 @@ select_statement::make_partition_slice(const query_options& options) const
         std::sort(bounds.begin(), bounds.end(), bounds_sorter);
     }
     if (_is_reversed) {
-        _opts.set(query::partition_slice::option::reversed);
         std::reverse(bounds.begin(), bounds.end());
         ++_stats.reverse_queries;
     }
