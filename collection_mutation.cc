@@ -32,8 +32,8 @@
 collection_mutation::collection_mutation(const abstract_type& type, collection_mutation_view v)
     : _data(imr_object_type::make(data::cell::make_collection(v.data), &type.imr_state().lsa_migrator())) {}
 
-collection_mutation::collection_mutation(const abstract_type& type, bytes_view v)
-    : _data(imr_object_type::make(data::cell::make_collection(v), &type.imr_state().lsa_migrator())) {}
+collection_mutation::collection_mutation(const abstract_type& type, const bytes_ostream& data)
+	: _data(imr_object_type::make(data::cell::make_collection(data), &type.imr_state().lsa_migrator())) {}
 
 static collection_mutation_view get_collection_mutation_view(const uint8_t* ptr)
 {
@@ -245,8 +245,9 @@ static collection_mutation serialize_collection_mutation(
     if (tomb) {
         size += sizeof(tomb.timestamp) + sizeof(tomb.deletion_time);
     }
-    bytes ret(bytes::initialized_later(), size);
-    bytes::iterator out = ret.begin();
+    bytes_ostream ret;
+    ret.reserve(size);
+    auto out = ret.write_begin();
     *out++ = bool(tomb);
     if (tomb) {
         write(out, tomb.timestamp);

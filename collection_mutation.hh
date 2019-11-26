@@ -28,6 +28,7 @@
 #include "cql_serialization_format.hh"
 
 class abstract_type;
+class bytes_ostream;
 class compaction_garbage_collector;
 class row_tombstone;
 
@@ -112,7 +113,7 @@ public:
 
     collection_mutation() {}
     collection_mutation(const abstract_type&, collection_mutation_view);
-    collection_mutation(const abstract_type&, bytes_view);
+    collection_mutation(const abstract_type& type, const bytes_ostream& data);
     operator collection_mutation_view() const;
 };
 
