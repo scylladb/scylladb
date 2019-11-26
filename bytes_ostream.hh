@@ -93,6 +93,27 @@ public:
             return _current != other._current;
         }
     };
+    class output_iterator {
+    public:
+        using iterator_category = std::output_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = bytes_ostream::value_type;
+        using pointer = bytes_ostream::value_type*;
+        using reference = bytes_ostream::value_type&;
+
+        friend class bytes_ostream;
+
+    private:
+        bytes_ostream* _ostream = nullptr;
+
+    private:
+        explicit output_iterator(bytes_ostream& os) : _ostream(&os) { }
+
+    public:
+        reference operator*() const { return *_ostream->write_place_holder(1); }
+        output_iterator& operator++() { return *this; }
+        output_iterator operator++(int) { return *this; }
+    };
 private:
     inline size_type current_space_left() const {
         if (!_current) {
@@ -325,6 +346,8 @@ public:
     // Any modification of this instance invalidates iterators.
     fragment_iterator begin() const { return { _begin.get() }; }
     fragment_iterator end() const { return { nullptr }; }
+
+    output_iterator write_begin() { return output_iterator(*this); }
 
     boost::iterator_range<fragment_iterator> fragments() const {
         return { begin(), end() };
