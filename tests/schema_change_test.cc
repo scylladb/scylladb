@@ -716,3 +716,24 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
             e.execute_cql("create aggregate my_agg(int) sfunc my_add stype int finalfunc twice;").get();
         });
 }
+
+SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
+    std::vector<utils::UUID> expected_digests{
+        utils::UUID("a1f07f31-59d6-372a-8c94-7ea467354b39"),
+        utils::UUID("524d418d-a2e2-3fc3-bf45-5fb79b33c7e4"),
+        utils::UUID("524d418d-a2e2-3fc3-bf45-5fb79b33c7e4"),
+        utils::UUID("018fccba-8050-3bb9-a0a5-2b3c5f0371fe"),
+        utils::UUID("018fccba-8050-3bb9-a0a5-2b3c5f0371fe"),
+        utils::UUID("58f4254e-cc3b-3d56-8a45-167f9a3ea423"),
+        utils::UUID("48fda4f8-d7b5-3e59-a47a-7397989a9bf8"),
+        utils::UUID("8049bcfe-eb01-3a59-af33-16cef8a34b45"),
+        utils::UUID("2195a821-b2b8-3cb8-a179-2f5042e90841")
+    };
+    return test_schema_digest_does_not_change_with_disabled_features(
+        "./tests/sstables/schema_digest_test_cdc_options",
+        std::set<sstring>{},
+        std::move(expected_digests),
+        [] (cql_test_env& e) {
+            e.execute_cql("create table tests.table_cdc (pk int primary key, c1 int, c2 int) with cdc = {'enabled':'true'};").get();
+        });
+}
