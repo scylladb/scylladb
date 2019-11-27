@@ -23,6 +23,8 @@
 
 import os
 
+from scylla_util import parse_scylla_dirs_with_default
+
 
 # try to write data to a sysfs path, expect problems
 def try_write(path, data):
@@ -93,8 +95,7 @@ def tune_fs(path, nomerges):
 
 # tunes all filesystems referenced from a scylla.yaml
 def tune_yaml(path, nomerges):
-    import yaml
-    y = yaml.safe_load(open(path))
+    y = parse_scylla_dirs_with_default(conf=path)
     for fs in y['data_file_directories']:
         tune_fs(fs, nomerges)
     tune_fs(y['commitlog_directory'], nomerges)

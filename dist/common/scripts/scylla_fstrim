@@ -26,6 +26,9 @@ import yaml
 import argparse
 import subprocess
 
+from scylla_util import parse_scylla_dirs_with_default
+
+
 def find_mount_point(path):
     path = os.path.abspath(path)
     while not os.path.ismount(path):
@@ -38,8 +41,7 @@ def main():
                         default='/etc/scylla/scylla.yaml',
                         help='path to scylla.yaml')
     args = parser.parse_args()
-    s = open(args.config).read()
-    cfg = yaml.safe_load(s)
+    cfg = parse_scylla_dirs_with_default(conf=args.config)
     mountpoints = set()
     for d in cfg['data_file_directories']:
         mountpoints.add(find_mount_point(d))
