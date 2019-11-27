@@ -1137,8 +1137,12 @@ void storage_service::bootstrap() {
     _gossiper.check_seen_seeds();
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    if (is_repair_based_node_ops_enabled() & db().local().is_replacing()) {
-        replace_with_repair(_db, _token_metadata).get();
+    if (is_repair_based_node_ops_enabled()) {
+        if (db().local().is_replacing()) {
+            replace_with_repair(_db, _token_metadata).get();
+        } else {
+            bootstrap_with_repair(_db, _token_metadata, _bootstrap_tokens).get();
+        }
         finish_bootstrapping();
     } else {
         dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
