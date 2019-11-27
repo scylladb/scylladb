@@ -52,7 +52,7 @@ public:
         utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
         _abort_source.start().get();
         _feature_service.start().get();
-        _gossiper.start(std::ref(_feature_service), std::ref(_cfg)).get();
+        _gossiper.start(std::ref(_abort_source), std::ref(_feature_service), std::ref(_cfg)).get();
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false).get();
         service::storage_service_config sscfg;
         sscfg.available_memory = memory::stats().total_memory();

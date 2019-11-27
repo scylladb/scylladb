@@ -125,8 +125,9 @@ public:
     void on_restart(inet_address, endpoint_state) override {}
 };
 
-gossiper::gossiper(feature_service& features, db::config& cfg)
-        : _feature_service(features)
+gossiper::gossiper(abort_source& as, feature_service& features, db::config& cfg)
+        : _abort_source(as)
+        , _feature_service(features)
         , _cfg(cfg)
         , _fd(cfg.phi_convict_threshold()) {
     // Gossiper's stuff below runs only on CPU0
@@ -1072,7 +1073,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
         logger.info("Removing host: {}", host_id);
         auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
         logger.info("Sleeping for {}ms to ensure {} does not change", ring_delay.count(), endpoint);
-        sleep(ring_delay).get();
+        sleep_abortable(ring_delay, _abort_source).get();
         // make sure it did not change
         auto& eps = get_endpoint_state(endpoint);
         if (eps.get_heart_beat_state().get_generation() != generation) {
@@ -1102,7 +1103,7 @@ future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID ho
         endpoint_state_map[endpoint] = eps;
         replicate(endpoint, eps).get();
         // ensure at least one gossip round occurs before returning
-        sleep(INTERVAL * 2).get();
+        sleep_abortable(INTERVAL * 2, _abort_source).get();
     });
 }
 
@@ -1136,7 +1137,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
                 auto ring_delay = std::chrono::milliseconds(gossiper._cfg.ring_delay_ms());
                 logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
                 // make sure it did not change
-                sleep(ring_delay).get();
+                sleep_abortable(ring_delay, gossiper._abort_source).get();
 
                 es = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
                 if (!es) {
@@ -1158,7 +1159,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
             auto expire_time = gossiper.compute_expire_time();
             ep_state.add_application_state(application_state::STATUS, gossiper._value_factory.left(tokens_set, expire_time.time_since_epoch().count()));
             gossiper.handle_major_state_change(endpoint, ep_state);
-            sleep(INTERVAL * 4).get();
+            sleep_abortable(INTERVAL * 4, gossiper._abort_source).get();
             logger.warn("Finished assassinating {}", endpoint);
         });
     });
@@ -1773,7 +1774,7 @@ future<> gossiper::do_shadow_round() {
                     logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
                 });
             }
-            sleep(std::chrono::seconds(1)).get();
+            sleep_abortable(std::chrono::seconds(1), _abort_source).get();
             if (this->_in_shadow_round) {
                 if (clk::now() > t + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
                     throw std::runtime_error(format("Unable to gossip with any seeds (ShadowRound)"));
@@ -2112,9 +2113,9 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 
         auto delay = initial_delay;
 
-        sleep(GOSSIP_SETTLE_MIN_WAIT_MS).get();
+        sleep_abortable(GOSSIP_SETTLE_MIN_WAIT_MS, _abort_source).get();
         while (num_okay < GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
-            sleep(delay).get();
+            sleep_abortable(delay, _abort_source).get();
             delay = GOSSIP_SETTLE_POLL_INTERVAL_MS;
 
             int32_t current_size = endpoint_state_map.size();

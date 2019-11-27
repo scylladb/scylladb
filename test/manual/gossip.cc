@@ -92,7 +92,7 @@ int main(int ac, char ** av) {
             auto port = server.port();
             auto listen = server.listen_address();
             fmt::print("Messaging server listening on ip {} port {:d} ...\n", listen, port);
-            gms::get_gossiper().start(std::ref(feature_service), std::ref(cfg)).get();
+            gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(cfg)).get();
             std::set<gms::inet_address> seeds;
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 seeds.emplace(std::move(s));
