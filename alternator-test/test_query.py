@@ -20,7 +20,7 @@
 
 import random
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 from decimal import Decimal
 from util import random_string, random_bytes, full_query, multiset
 from boto3.dynamodb.conditions import Key, Attr
@@ -409,3 +409,51 @@ def test_query_select(test_table_sn):
     # Select with some unknown string generates a validation exception:
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='UNKNOWN')
+
+# Test that the "Limit" parameter can be used to return only some of the
+# items in a single partition. The items returned are the first in the
+# sorted order.
+def test_query_limit(test_table_sn):
+    numbers = [Decimal(i) for i in range(10)]
+    # Insert these numbers, in random order, into one partition:
+    p = random_string()
+    items = [{'p': p, 'c': num} for num in random.sample(numbers, len(numbers))]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Verify that we get back the numbers in their sorted order.
+    # First, no Limit so we should get all numbers (we have few of them, so
+    # it all fits in the default 1MB limitation)
+    got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})['Items']
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == numbers
+    # Now try a few different Limit values, and verify that the query
+    # returns exactly the first Limit sorted numbers.
+    for limit in [1, 2, 3, 7, 10, 17, 100, 10000]:
+        got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=limit)['Items']
+        assert len(got_items) == min(limit, len(numbers))
+        got_sort_keys = [x['c'] for x in got_items]
+        assert got_sort_keys == numbers[0:limit]
+    # Unfortunately, the boto3 library forbids a Limit of 0 on its own,
+    # before even sending a request, so we can't test how the server responds.
+    with pytest.raises(ParamValidationError):
+        test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=0)
+
+# In test_query_limit we tested just that Limit allows to stop the result
+# after right right number of items. Here we test that such a stopped result
+# can be resumed, via the LastEvaluatedKey/ExclusiveStartKey paging mechanism.
+def test_query_limit_paging(test_table_sn):
+    numbers = [Decimal(i) for i in range(20)]
+    # Insert these numbers, in random order, into one partition:
+    p = random_string()
+    items = [{'p': p, 'c': num} for num in random.sample(numbers, len(numbers))]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Verify that full_query() returns all these numbers, in sorted order.
+    # full_query() will do a query with the given limit, and resume it again
+    # and again until the last page.
+    for limit in [1, 2, 3, 7, 10, 17, 100, 10000]:
+        got_items = full_query(test_table_sn, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=limit)
+        got_sort_keys = [x['c'] for x in got_items]
+        assert got_sort_keys == numbers
