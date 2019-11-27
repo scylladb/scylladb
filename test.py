@@ -193,7 +193,7 @@ def print_progress(test, success, cookie, verbose):
 
     last_len, n, n_total = cookie
     msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test.path, ' '.join(test.args))
-    if verbose == False and sys.stdout.isatty():
+    if verbose is False and sys.stdout.isatty():
         print('\r' + ' ' * last_len, end='')
         last_len = len(msg)
         print('\r' + msg, end='')
