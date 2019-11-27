@@ -34,6 +34,7 @@
 
 #include "exceptions/exceptions.hh"
 #include "timestamp.hh"
+#include "cdc_options.hh"
 
 class schema;
 using schema_ptr = seastar::lw_shared_ptr<const schema>;
@@ -63,27 +64,6 @@ class mutation;
 class partition_key;
 
 namespace cdc {
-
-class options final {
-    bool _enabled = false;
-    bool _preimage = false;
-    bool _postimage = false;
-    int _ttl = 86400; // 24h in seconds
-public:
-    options() = default;
-    options(const std::map<sstring, sstring>& map);
-
-    std::map<sstring, sstring> to_map() const;
-    sstring to_sstring() const;
-
-    bool enabled() const { return _enabled; }
-    bool preimage() const { return _preimage; }
-    bool postimage() const { return _postimage; }
-    int ttl() const { return _ttl; }
-
-    bool operator==(const options& o) const;
-    bool operator!=(const options& o) const;
-};
 
 struct db_context final {
     service::storage_proxy& _proxy;

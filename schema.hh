@@ -41,7 +41,7 @@
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
 #include "column_computation.hh"
-#include "cdc/cdc.hh"
+#include "cdc/cdc_options.hh"
 
 using column_count_type = uint32_t;
 
