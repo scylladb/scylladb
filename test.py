@@ -384,7 +384,7 @@ def print_summary(failed_tests, total_tests):
             print('  {} {}'.format(test.path, ' '.join(test.args)))
         print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
 
-def write_xunit_report(results):
+def write_xunit_report(options, results):
     other_results = [r for r in results if r[0].kind != 'boost']
     num_other_failed = sum(1 for r in other_results if not r[1])
 
@@ -416,7 +416,7 @@ async def main():
     print_summary(failed_tests, len(tests_to_run))
 
     if options.xunit:
-        write_xunit_report(results)
+        write_xunit_report(options, results)
     return 0
 
 if __name__ == "__main__":
