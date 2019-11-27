@@ -101,8 +101,8 @@ if __name__ == "__main__":
                 key = "%s_directory" % t
                 if key in cfg:
                     data_dirs += [ cfg[key] ]
-                elif os.path.isdir(default_path + key):
-                    data_dirs += [ default_path + key ]
+                elif os.path.isdir(os.path.join(default_path, t)):
+                    data_dirs += [ os.path.join(default_path, t) ]
 
             iotune_args = []
             for data_dir in data_dirs:
