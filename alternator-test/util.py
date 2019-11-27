@@ -39,6 +39,26 @@ def full_scan(table, **kwargs):
         items.extend(response['Items'])
     return items
 
+# full_scan_and_count returns both items and count as returned by the server.
+# Note that count isn't simply len(items) - the server returns them
+# independently. e.g., with Select='COUNT' the items are not returned, but
+# count is.
+def full_scan_and_count(table, **kwargs):
+    response = table.scan(**kwargs)
+    items = []
+    count = 0
+    if 'Items' in response:
+        items.extend(response['Items'])
+    if 'Count' in response:
+        count = count + response['Count']
+    while 'LastEvaluatedKey' in response:
+        response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
+        if 'Items' in response:
+            items.extend(response['Items'])
+        if 'Count' in response:
+            count = count + response['Count']
+    return (count, items)
+
 # Utility function for fetching the entire results of a query into an array of items
 def full_query(table, **kwargs):
     response = table.query(**kwargs)

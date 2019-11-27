@@ -356,3 +356,56 @@ def test_query_which_key(test_table):
             'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'},
             'z': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}
         })
+
+# Test the "Select" parameter of Query. The default Select mode,
+# ALL_ATTRIBUTES, returns items with all their attributes. Other modes
+# allow returning just specific attributes or just counting the results
+# without returning items at all.
+@pytest.mark.xfail(reason="Select not supported yet")
+def test_query_select(test_table_sn):
+    numbers = [Decimal(i) for i in range(10)]
+    # Insert these numbers, in random order, into one partition:
+    p = random_string()
+    items = [{'p': p, 'c': num, 'x': num} for num in random.sample(numbers, len(numbers))]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Verify that we get back the numbers in their sorted order. By default,
+    # query returns all attributes:
+    got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})['Items']
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == numbers
+    got_x_attributes = [x['x'] for x in got_items]
+    assert got_x_attributes == numbers
+    # Select=ALL_ATTRIBUTES does exactly the same as the default - return
+    # all attributes:
+    got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='ALL_ATTRIBUTES')['Items']
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == numbers
+    got_x_attributes = [x['x'] for x in got_items]
+    assert got_x_attributes == numbers
+    # Select=ALL_PROJECTED_ATTRIBUTES is not allowed on a base table (it
+    # is just for indexes, when IndexName is specified)
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='ALL_PROJECTED_ATTRIBUTES')
+    # Select=SPECIFIC_ATTRIBUTES requires that either a AttributesToGet
+    # or ProjectionExpression appears, but then really does nothing:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='SPECIFIC_ATTRIBUTES')
+    got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='SPECIFIC_ATTRIBUTES', AttributesToGet=['x'])['Items']
+    expected_items = [{'x': i} for i in numbers]
+    assert got_items == expected_items
+    got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='SPECIFIC_ATTRIBUTES', ProjectionExpression='x')['Items']
+    assert got_items == expected_items
+    # Select=COUNT just returns a count - not any items
+    got = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='COUNT')
+    assert got['Count'] == len(numbers)
+    assert not 'Items' in got
+    # Check again that we also get a count - not just with Select=COUNT,
+    # but without Select=COUNT we also get the items:
+    got = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    assert got['Count'] == len(numbers)
+    assert 'Items' in got
+    # Select with some unknown string generates a validation exception:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='UNKNOWN')

@@ -19,7 +19,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from util import random_string, full_scan, multiset
+from util import random_string, full_scan, full_scan_and_count, multiset
 from boto3.dynamodb.conditions import Attr
 
 # Test that scanning works fine with/without pagination
@@ -189,3 +189,47 @@ def test_scan_with_key_equality_filtering(dynamodb, filled_test_table):
     got_items = full_scan(table, ScanFilter=scan_filter_c_and_another)
     expected_items = [item for item in items if "c" in item.keys() and "another" in item.keys() and item["c"] == "9" and item["another"] == "y"*16]
     assert multiset(expected_items) == multiset(got_items)
+
+# Test the "Select" parameter of Scan. The default Select mode,
+# ALL_ATTRIBUTES, returns items with all their attributes. Other modes
+# allow returning just specific attributes or just counting the results
+# without returning items at all.
+@pytest.mark.xfail(reason="Select not supported yet")
+def test_scan_select(filled_test_table):
+    test_table, items = filled_test_table
+    got_items = full_scan(test_table)
+    # By default, a scan returns all the items, with all their attributes:
+    # query returns all attributes:
+    got_items = full_scan(test_table)
+    assert multiset(items) == multiset(got_items)
+    # Select=ALL_ATTRIBUTES does exactly the same as the default - return
+    # all attributes:
+    got_items = full_scan(test_table, Select='ALL_ATTRIBUTES')
+    assert multiset(items) == multiset(got_items)
+    # Select=ALL_PROJECTED_ATTRIBUTES is not allowed on a base table (it
+    # is just for indexes, when IndexName is specified)
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_scan(test_table, Select='ALL_PROJECTED_ATTRIBUTES')
+    # Select=SPECIFIC_ATTRIBUTES requires that either a AttributesToGet
+    # or ProjectionExpression appears, but then really does nothing beyond
+    # what AttributesToGet and ProjectionExpression already do:
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_scan(test_table, Select='SPECIFIC_ATTRIBUTES')
+    wanted = ['c', 'another']
+    got_items = full_scan(test_table, Select='SPECIFIC_ATTRIBUTES', AttributesToGet=wanted)
+    expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
+    assert multiset(expected_items) == multiset(got_items)
+    got_items = full_scan(test_table, Select='SPECIFIC_ATTRIBUTES', ProjectionExpression=','.join(wanted))
+    assert multiset(expected_items) == multiset(got_items)
+    # Select=COUNT just returns a count - not any items
+    (got_count, got_items) = full_scan_and_count(test_table, Select='COUNT')
+    assert got_count == len(items)
+    assert got_items == []
+    # Check that we also get a count in regular scans - not just with
+    # Select=COUNT, but without Select=COUNT we both items and count:
+    (got_count, got_items) = full_scan_and_count(test_table)
+    assert got_count == len(items)
+    assert multiset(items) == multiset(got_items)
+    # Select with some unknown string generates a validation exception:
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_scan(test_table, Select='UNKNOWN')
