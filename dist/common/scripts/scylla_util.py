@@ -471,13 +471,15 @@ def get_scylla_dirs():
     y = yaml.safe_load(open(scylla_yaml_name))
 
     # Check that mandatory fields are set
+    if 'workdir' not in y or not y['workdir']:
+        y['workdir'] = '/var/lib/scylla'
     if 'data_file_directories' not in y or \
             not y['data_file_directories'] or \
             not len(y['data_file_directories']) or \
             not " ".join(y['data_file_directories']).strip():
-        raise Exception("{}: at least one directory has to be set in 'data_file_directory'".format(scylla_yaml_name))
+        y['data_file_directories'] = [os.path.join(y['workdir'], 'data')]
     if 'commitlog_directory' not in y or not y['commitlog_directory']:
-        raise Exception("{}: 'commitlog_directory' has to be set".format(scylla_yaml_name))
+        y['commitlog_directory'] = os.path.join(y['workdir'], 'commitlog')
 
     dirs = []
     dirs.extend(y['data_file_directories'])
