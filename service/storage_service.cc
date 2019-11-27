@@ -80,6 +80,7 @@
 #include "database.hh"
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
+#include "repair/repair.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -2591,24 +2592,28 @@ future<> storage_service::drain() {
 future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-        auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss._abort_source,
-                ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
-        streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
-        if (source_dc != "") {
-            streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
-        }
-        auto keyspaces = make_lw_shared<std::vector<sstring>>(ss._db.local().get_non_system_keyspaces());
-        return do_for_each(*keyspaces, [keyspaces, streamer, &ss] (sstring& keyspace_name) {
-            return streamer->add_ranges(keyspace_name, ss.get_local_ranges(keyspace_name));
-        }).then([streamer] {
-            return streamer->stream_async().then([streamer] {
-                slogger.info("Streaming for rebuild successful");
-            }).handle_exception([] (auto ep) {
-                // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-                slogger.warn("Error while rebuilding node: {}", std::current_exception());
-                return make_exception_future<>(std::move(ep));
+        if (ss.is_repair_based_node_ops_enabled()) {
+            return rebuild_with_repair(ss._db, ss._token_metadata, std::move(source_dc));
+        } else {
+            auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss._abort_source,
+                    ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
+            streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
+            if (source_dc != "") {
+                streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+            }
+            auto keyspaces = make_lw_shared<std::vector<sstring>>(ss._db.local().get_non_system_keyspaces());
+            return do_for_each(*keyspaces, [keyspaces, streamer, &ss] (sstring& keyspace_name) {
+                return streamer->add_ranges(keyspace_name, ss.get_local_ranges(keyspace_name));
+            }).then([streamer] {
+                return streamer->stream_async().then([streamer] {
+                    slogger.info("Streaming for rebuild successful");
+                }).handle_exception([] (auto ep) {
+                    // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+                    slogger.warn("Error while rebuilding node: {}", std::current_exception());
+                    return make_exception_future<>(std::move(ep));
+                });
             });
-        });
+        }
     });
 }
 
