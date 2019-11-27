@@ -94,6 +94,10 @@
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;
 
+
+static logging::logger diff_logger("schema_diff");
+
+
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 
@@ -640,8 +644,15 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
         }
     };
     return do_with(md5_hasher(), all_table_names(features), [features, map, reduce] (auto& hash, auto& tables) {
-        return do_for_each(tables, [&hash, map, reduce] (auto& table) {
-            return map(table).then([&hash, reduce] (auto&& mutations) {
+        return do_for_each(tables, [&hash, map, reduce, features] (auto& table) {
+            return map(table).then([&hash, reduce, features] (auto&& mutations) {
+                if (diff_logger.is_enabled(logging::log_level::trace)) {
+                    for (const mutation& m : mutations) {
+                        md5_hasher h;
+                        feed_hash_for_schema_digest(h, m, features);
+                        diff_logger.trace("Digest {} for {}, compacted={}", h.finalize(), m, compact_for_schema_digest(m));
+                    }
+                }
                 reduce(hash, mutations);
             });
         }).then([&hash] {
