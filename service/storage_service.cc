@@ -2739,6 +2739,11 @@ void storage_service::unbootstrap() {
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
+    if (is_repair_based_node_ops_enabled()) {
+        return removenode_with_repair(_db, _token_metadata, endpoint).finally([this, notify_endpoint] () {
+            return send_replication_notification(notify_endpoint);
+        });
+    }
   return seastar::async([this, endpoint, notify_endpoint] {
     auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
