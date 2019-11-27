@@ -462,6 +462,22 @@ def get_mode_cpuset(nic, mode):
         return '-1'
 
 
+def parse_scylla_dirs_with_default(conf='/etc/scylla/scylla.yaml'):
+    y = yaml.safe_load(open(conf))
+    if 'workdir' not in y or not y['workdir']:
+        y['workdir'] = datadir()
+    if 'data_file_directories' not in y or \
+            not y['data_file_directories'] or \
+            not len(y['data_file_directories']) or \
+            not " ".join(y['data_file_directories']).strip():
+        y['data_file_directories'] = [os.path.join(y['workdir'], 'data')]
+    for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
+        key = "%s_directory" % t
+        if key not in y or not y[k]:
+            y[k] = os.path.join(y['workdir'], t)
+    return y
+
+
 def get_scylla_dirs():
     """
     Returns a list of scylla directories configured in /etc/scylla/scylla.yaml.
