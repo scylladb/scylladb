@@ -909,6 +909,7 @@ private:
     void notify_cql_change(inet_address endpoint, bool ready);
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
+    bool is_repair_based_node_ops_enabled();
 };
 
 future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service,

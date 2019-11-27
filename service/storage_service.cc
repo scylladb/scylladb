@@ -3480,5 +3480,9 @@ future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
     });
 }
 
+bool storage_service::is_repair_based_node_ops_enabled() {
+    return _db.local().get_config().enable_repair_based_node_ops();
+}
+
 } // namespace service
 
