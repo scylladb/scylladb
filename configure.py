@@ -386,6 +386,7 @@ scylla_tests = [
     'tests/data_listeners_test',
     'tests/truncation_migration_test',
     'tests/like_matcher_test',
+    'tests/linearizing_input_stream_test',
 ]
 
 perf_tests = [
@@ -907,6 +908,7 @@ pure_boost_tests = set([
     'tests/top_k_test',
     'tests/small_vector_test',
     'tests/like_matcher_test',
+    'tests/linearizing_input_stream_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
@@ -964,6 +966,7 @@ deps['tests/utf8_test'] = ['utils/utf8.cc', 'tests/utf8_test.cc']
 deps['tests/small_vector_test'] = ['tests/small_vector_test.cc']
 deps['tests/multishard_mutation_query_test'] += ['tests/test_table.cc']
 deps['tests/vint_serialization_test'] = ['tests/vint_serialization_test.cc', 'vint-serialization.cc', 'bytes.cc']
+deps['tests/linearizing_input_stream_test'] = ['tests/linearizing_input_stream_test.cc']
 
 deps['tests/duration_test'] += ['tests/exception_utils.cc']
 
