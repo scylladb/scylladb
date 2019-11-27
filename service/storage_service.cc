@@ -524,7 +524,8 @@ void storage_service::join_token_ring(int delay) {
         slogger.info("This node will not auto bootstrap because it is configured to be a seed node.");
     }
     if (should_bootstrap()) {
-        if (db::system_keyspace::bootstrap_in_progress()) {
+        bool resume_bootstrap = db::system_keyspace::bootstrap_in_progress();
+        if (resume_bootstrap) {
             slogger.warn("Detected previous bootstrap failure; retrying");
         } else {
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
@@ -577,7 +578,18 @@ void storage_service::join_token_ring(int delay) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
             set_mode(mode::JOINING, "getting bootstrap token", true);
-            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+            if (resume_bootstrap) {
+                _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
+                if (!_bootstrap_tokens.empty()) {
+                    slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
+                } else {
+                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+                    slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+                }
+            } else {
+                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+                slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+            }
         } else {
             auto replace_addr = db().local().get_replace_address();
             if (replace_addr && *replace_addr != get_broadcast_address()) {
