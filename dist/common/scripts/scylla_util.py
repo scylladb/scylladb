@@ -472,7 +472,7 @@ def get_scylla_dirs():
 
     # Check that mandatory fields are set
     if 'workdir' not in y or not y['workdir']:
-        y['workdir'] = '/var/lib/scylla'
+        y['workdir'] = datadir()
     if 'data_file_directories' not in y or \
             not y['data_file_directories'] or \
             not len(y['data_file_directories']) or \
