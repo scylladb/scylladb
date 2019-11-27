@@ -48,7 +48,6 @@
 #include "db/extensions.hh"
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include "cdc/cdc.hh"
 #include "cql3/util.hh"
 #include "view_info.hh"
 #include "database.hh"
@@ -312,8 +311,6 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
          }
     };
 
-    bool create_cdc = false;
-    bool delete_cdc = false;
     switch (_type) {
     case alter_table_statement::type::add:
         assert(_column_changes.size());
@@ -355,12 +352,6 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         if (schema->is_counter() && _properties->get_default_time_to_live() > 0) {
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
         }
-
-        {
-            bool enable_cdc = _properties->get_cdc_options() && cdc::options(*_properties->get_cdc_options()).enabled();
-            create_cdc = enable_cdc && !schema->cdc_options().enabled();
-            delete_cdc = !enable_cdc && schema->cdc_options().enabled();
-        }
         _properties->apply_to_builder(cfm, db.extensions());
         break;
 
@@ -397,24 +388,15 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         break;
     }
 
-    auto f = service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), is_local_only);
-    if (create_cdc) {
-        f = f.then([&proxy, schema = std::move(schema)] {
-            return cdc::setup(cdc::db_context::builder(proxy).build(), schema);
+    return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), is_local_only)
+        .then([this] {
+            using namespace cql_transport;
+            return make_shared<event::schema_change>(
+                    event::schema_change::change_type::UPDATED,
+                    event::schema_change::target_type::TABLE,
+                    keyspace(),
+                    column_family());
         });
-    } else if (delete_cdc) {
-        f = f.then([&proxy, schema = std::move(schema)] {
-            return cdc::remove(cdc::db_context::builder(proxy).build(), schema->ks_name(), schema->cf_name());
-        });
-    }
-    return f.then([this] {
-        using namespace cql_transport;
-        return make_shared<event::schema_change>(
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::TABLE,
-                keyspace(),
-                column_family());
-    });
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

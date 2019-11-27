@@ -67,6 +67,11 @@ namespace cdc {
 
 class db_context;
 
+/// \brief CDC service, responsible for schema listeners
+///
+/// CDC service will listen for schema changes and iff CDC is enabled/changed
+/// create/modify/delete corresponding log tables etc as part of the schema change. 
+///
 class cdc_service {
     class impl;
     std::unique_ptr<impl> _impl;
@@ -101,15 +106,6 @@ struct db_context final {
     };
 };
 
-/// \brief Sets up CDC related tables for a given table
-///
-/// This function not only creates CDC Log and CDC Description for a given table
-/// but also populates CDC Description with a list of change streams.
-///
-/// param[in] ctx object with references to database components
-/// param[in] schema schema of a table for which CDC tables are being created
-seastar::future<> setup(db_context ctx, schema_ptr schema);
-
 // cdc log table operation
 enum class operation : int8_t {
     // note: these values will eventually be read by a third party, probably not privvy to this
@@ -122,21 +118,6 @@ enum class column_op : int8_t {
     // same as "operation". Do not edit values or type/type unless you _really_ want to.
     set = 0, del = 1, add = 2,
 };
-
-/// \brief Deletes CDC Log and CDC Description tables for a given table
-///
-/// This function cleans up all CDC related tables created for a given table.
-/// At the moment, CDC Log and CDC Description are the only affected tables.
-/// It's ok if some/all of them don't exist.
-///
-/// \param[in] ctx object with references to database components
-/// \param[in] ks_name keyspace name of a table for which CDC tables are removed
-/// \param[in] table_name name of a table for which CDC tables are removed
-///
-/// \pre This function works correctly no matter if CDC Log and/or CDC Description
-///      exist.
-seastar::future<>
-remove(db_context ctx, const seastar::sstring& ks_name, const seastar::sstring& table_name);
 
 seastar::sstring log_name(const seastar::sstring& table_name);
 
