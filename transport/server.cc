@@ -139,10 +139,9 @@ event::event_type parse_event_type(const sstring& value)
     }
 }
 
-cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, auth::service& auth_service,
+cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
         const cql3::cql_config& cql_config, cql_server_config config)
-    : _proxy(proxy)
-    , _query_processor(qp)
+    : _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
     , _memory_available(config.get_service_memory_limiter_semaphore())

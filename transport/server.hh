@@ -113,7 +113,6 @@ private:
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
 
     std::vector<server_socket> _listeners;
-    distributed<service::storage_proxy>& _proxy;
     distributed<cql3::query_processor>& _query_processor;
     cql_server_config _config;
     size_t _max_request_size;
@@ -129,7 +128,7 @@ private:
     auth::service& _auth_service;
     const cql3::cql_config& _cql_config;
 public:
-    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, auth::service&,
+    cql_server(distributed<cql3::query_processor>& qp, auth::service&,
             const cql3::cql_config& cql_config, cql_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
