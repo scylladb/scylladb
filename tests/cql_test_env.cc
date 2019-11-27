@@ -460,6 +460,13 @@ public:
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
             distributed_loader::init_non_system_keyspaces(*db, proxy).get();
+
+            sharded<cdc::cdc_service> cdc;
+            cdc.start(std::ref(proxy)).get();
+            auto stop_cdc_service = defer([&] {
+                cdc.stop().get();
+            });
+
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
             db::system_keyspace::minimal_setup(*db, qp);
