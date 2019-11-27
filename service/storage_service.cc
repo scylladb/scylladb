@@ -953,9 +953,13 @@ void storage_service::bootstrap() {
     _gossiper.check_seen_seeds();
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
-    // Does the actual streaming of newly replicated token ranges.
-    bs.bootstrap().get();
+    if (is_repair_based_node_ops_enabled() & db().local().is_replacing()) {
+        replace_with_repair(_db, _token_metadata).get();
+    } else {
+        dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
+        // Does the actual streaming of newly replicated token ranges.
+        bs.bootstrap().get();
+    }
     slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
 }
 
