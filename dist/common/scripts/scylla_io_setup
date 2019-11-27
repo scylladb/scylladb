@@ -91,12 +91,11 @@ if __name__ == "__main__":
             else:
                 conf_dir = etcdir() + "/scylla"
             cfg = yaml.safe_load(open(os.path.join(conf_dir, "scylla.yaml")))
+            default_path = cfg.get('workdir') or datadir()
             if not "data_file_directories" in cfg:
-                logging.error("No data directories found. Please check the configuration and run scylla_io_setup again.\n")
-                sys.exit(1)
+                cfg["data_file_directories"] = [os.path.join(default_path, 'data')]
             data_dirs = cfg["data_file_directories"]
 
-            default_path = datadir()
             for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
                 key = "%s_directory" % t
                 if key in cfg:
